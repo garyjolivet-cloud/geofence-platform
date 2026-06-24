@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chase Life — Fence Editor</title>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
+         --snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow)}
+  #map{position:absolute;inset:0}
+  .cond{font-family:"Barlow Condensed",sans-serif}
+  .panel{position:absolute;top:10px;left:10px;width:300px;max-height:calc(100vh - 20px);overflow-y:auto;
+         background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
+         backdrop-filter:blur(6px)}
+  .panel h1{font-family:"Black Han Sans";font-size:17px;margin:0 0 8px}
+  .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+         font-size:13px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:9px;
+         padding:8px 10px;cursor:pointer;flex:1 1 auto}
+  button:focus-visible{outline:2px solid var(--coral);outline-offset:2px}
+  button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  button.ghost{flex:0 0 auto}
+  label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:11px;letter-spacing:.6px;color:var(--fog);display:block;margin:2px 0}
+  input,textarea,select{width:100%;font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
+         color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px}
+  textarea{height:120px;resize:vertical;font-family:ui-monospace,monospace;font-size:11px;line-height:1.4}
+  .zone{background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:8px;margin-bottom:6px}
+  .zone .t{display:flex;justify-content:space-between;align-items:center;gap:6px}
+  .zone .tag{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+             color:var(--ice);border:1px solid var(--rim);border-radius:6px;padding:1px 6px}
+  .zone .del{flex:0 0 auto;background:none;border:none;color:var(--fog);font-size:16px;padding:0 4px;cursor:pointer}
+  .hint{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin:4px 0}
+  .status{position:absolute;bottom:10px;left:10px;z-index:5;background:rgba(10,16,24,.9);border:1px solid var(--rim);
+          border-radius:9px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice)}
+  .base{position:absolute;top:10px;right:10px;z-index:5}
+  .base select{width:auto}
+  .maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim);font-family:"Barlow Condensed"}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="base"><select id="baseSel" title="base map">
+  <option value="sat">Satellite</option><option value="topo">Topo</option><option value="street">Street</option>
+</select></div>
+<div class="status" id="status">click the map to read coordinates</div>
+
+<div class="panel">
+  <h1>Fence Editor</h1>
+  <div class="hint">1 — name a stop, pick a shape, draw it on the map. 2 — export the bundle and paste it into the engine.</div>
+
+  <label class="k">stop name</label>
+  <input id="zname" placeholder="Mountain Flower Garden">
+  <label class="k">spoken line (optional)</label>
+  <input id="zsay" placeholder="Turn and look. This is…">
+
+  <label class="k" style="margin-top:8px">draw shape</label>
+  <div class="row">
+    <button data-tool="circle">● Circle</button>
+    <button data-tool="polygon">⬡ Polygon</button>
+    <button data-tool="tripline">／ Tripline</button>
+  </div>
+  <div class="row" id="circleRow" style="display:none">
+    <label class="k" style="flex:0 0 auto;align-self:center">radius m</label>
+    <input id="zradius" type="number" value="8" style="flex:1">
+  </div>
+  <div class="row">
+    <button id="finishBtn" class="ghost" style="flex:1">Finish shape</button>
+    <button id="cancelBtn" class="ghost" style="flex:0 0 auto">✕</button>
+  </div>
+  <div class="hint" id="drawHint">pick a shape to start drawing</div>
+
+  <div class="row"><button id="loadPois" class="ghost" style="flex:1">Show existing chutes</button></div>
+
+  <label class="k" style="margin-top:6px">stops (<span id="zcount">0</span>)</label>
+  <div id="zlist"></div>
+
+  <div class="row" style="margin-top:8px">
+    <button id="exportBtn" class="on" style="flex:1">Export bundle</button>
+    <button id="copyBtn" class="ghost" style="flex:0 0 auto">copy</button>
+  </div>
+  <textarea id="out" readonly placeholder="exported BUNDLE JSON appears here — paste it into the engine's BUNDLE block"></textarea>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   CHASE LIFE — FENCE EDITOR
+   Draw circle / polygon / tripline fences on a map; export the engine's
+   BUNDLE JSON. MapLibre uses [lon,lat]; the engine uses [lat,lon] — we
+   convert on export. No build step, no API key.
+   ===================================================================== */
+
+const REF=[-117.0470,51.2980];            // [lon,lat] near KH base — initial view
+const BASES={
+  sat:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],attr:"Esri, Maxar"},
+  topo:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],attr:"Esri"},
+  street:{tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],attr:"© OpenStreetMap"}
+};
+function styleFor(k){ return {version:8,
+  sources:{base:{type:"raster",tiles:BASES[k].tiles,tileSize:256,attribution:BASES[k].attr}},
+  layers:[{id:"base",type:"raster",source:"base"}]}; }
+
+const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:15});
+map.addControl(new maplibregl.NavigationControl());
+
+let zones=[];               // {id,name,say,shape}
+let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
+
+/* ---- geometry helpers ---- */
+function circleRing(center,radiusM,n){            // center=[lon,lat] -> ring [lon,lat]
+  const [lon,lat]=center, out=[];
+  const dLat=radiusM/111320, dLon=radiusM/(111320*Math.cos(lat*Math.PI/180));
+  for(let i=0;i<=n;i++){ const a=2*Math.PI*i/n; out.push([lon+dLon*Math.cos(a), lat+dLat*Math.sin(a)]); }
+  return out;
+}
+const slug=s=>(s||"stop").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"stop";
+
+/* ---- render all committed fences + the draft ---- */
+function fc(features){ return {type:"FeatureCollection",features}; }
+function render(){
+  const feats=[];
+  zones.forEach(z=>{
+    const s=z.shape;
+    if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",name:z.name},
+        geometry:{type:"Polygon",coordinates:[circleRing(s.center,s.radiusM,64)]}});
+    else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",name:z.name},
+        geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
+    else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",name:z.name},
+        geometry:{type:"LineString",coordinates:[s.from,s.to]}});
+  });
+  map.getSource("fences").setData(fc(feats));
+
+  // draft preview
+  const d=[];
+  if(tool==="polygon"&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
+  if(tool==="tripline"&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
+  if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
+        geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("zradius").value||8,64)]}});
+  const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
+  map.getSource("draft").setData(fc(d.concat(pts)));
+  drawList();
+}
+
+map.on("load",()=>{
+  map.addSource("fences",{type:"geojson",data:fc([])});
+  map.addSource("draft",{type:"geojson",data:fc([])});
+  map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==","kind","fill"],
+     paint:{"fill-color":"#ff6a3d","fill-opacity":0.25}});
+  map.addLayer({id:"fence-out",type:"line",source:"fences",
+     paint:{"line-color":"#ff6a3d","line-width":2}});
+  map.addLayer({id:"draft-line",type:"line",source:"draft",
+     paint:{"line-color":"#38e0a6","line-width":2,"line-dasharray":[2,1]}});
+  map.addLayer({id:"draft-pts",type:"circle",source:"draft",filter:["==","$type","Point"],
+     paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
+  map.addSource("pois",{type:"geojson",data:fc([])});
+  map.addLayer({id:"poi-pts",type:"circle",source:"pois",
+     paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-opacity":0.8}});
+  map.addLayer({id:"poi-lbl",type:"symbol",source:"pois",
+     layout:{"text-field":["get","name"],"text-size":10,"text-offset":[0,1]},
+     paint:{"text-color":"#8fb6d4","text-halo-color":"#0a1018","text-halo-width":1}});
+});
+
+/* ---- map clicks: read coords + add draft points ---- */
+map.on("mousemove",e=>{ document.getElementById("status").textContent=
+   `lat ${e.lngLat.lat.toFixed(6)}, lon ${e.lngLat.lng.toFixed(6)}  ·  zoom ${map.getZoom().toFixed(1)}`; });
+map.on("click",e=>{
+  const p=[e.lngLat.lng,e.lngLat.lat];
+  if(!tool) return;
+  if(tool==="circle"){ draft=[p]; finishShape(); }
+  else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
+  else if(tool==="polygon"){ draft.push(p); render(); }
+});
+
+/* ---- tools ---- */
+document.querySelectorAll("[data-tool]").forEach(b=>b.onclick=()=>{
+  tool=b.dataset.tool; draft=[];
+  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.toggle("on",x===b));
+  document.getElementById("circleRow").style.display = tool==="circle"?"flex":"none";
+  const h={circle:"click the center on the map (radius set above)",
+           polygon:"click each corner; press Finish to close it",
+           tripline:"click two points — the crossing line"}[tool];
+  document.getElementById("drawHint").textContent=h; render();
+});
+document.getElementById("finishBtn").onclick=()=>{ if(tool==="polygon"&&draft.length>=3) finishShape(); };
+document.getElementById("cancelBtn").onclick=()=>{ draft=[]; render(); };
+
+function finishShape(){
+  const name=document.getElementById("zname").value.trim()||"Stop "+(zones.length+1);
+  const say=document.getElementById("zsay").value.trim();
+  let shape;
+  if(tool==="circle") shape={type:"circle",center:draft[0],radiusM:+document.getElementById("zradius").value||8};
+  else if(tool==="polygon") shape={type:"polygon",coords:draft.slice()};
+  else if(tool==="tripline") shape={type:"tripline",from:draft[0],to:draft[1]};
+  zones.push({id:slug(name),name,say,shape});
+  draft=[]; tool=null;
+  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
+  document.getElementById("circleRow").style.display="none";
+  document.getElementById("zname").value=""; document.getElementById("zsay").value="";
+  document.getElementById("drawHint").textContent="saved — name the next stop and draw again";
+  render();
+}
+
+/* ---- zone list ---- */
+function drawList(){
+  const wrap=document.getElementById("zlist"); wrap.innerHTML="";
+  document.getElementById("zcount").textContent=zones.length;
+  zones.forEach((z,i)=>{
+    const d=document.createElement("div"); d.className="zone";
+    d.innerHTML=`<div class="t"><b class="cond">${z.name}</b>
+      <span class="tag">${z.shape.type}</span>
+      <button class="del" title="delete">✕</button></div>`;
+    d.querySelector(".del").onclick=()=>{ zones.splice(i,1); render(); };
+    d.querySelector(".t").onclick=(ev)=>{ if(ev.target.classList.contains("del"))return;
+       const c=z.shape.center||z.shape.from||z.shape.coords[0]; map.flyTo({center:c,zoom:17}); };
+    wrap.appendChild(d);
+  });
+}
+
+/* ---- export to the engine's BUNDLE format ([lat,lon]) ---- */
+const LL=p=>[+p[1].toFixed(6),+p[0].toFixed(6)];     // [lon,lat] -> [lat,lon]
+function exportBundle(){
+  const out={ project:"kh-village-walk", name:"KH Village Walk", ref:[REF[1],REF[0]], zones:[] };
+  zones.forEach(z=>{
+    const s=z.shape; const zo={id:z.id,name:z.name};
+    const trig=[{fires_on:"enter",oncePerVisit:true}];
+    if(z.say) trig[0].say=z.say;
+    if(s.type==="circle"){ zo.center=LL(s.center); zo.layers=[{kind:"target",radiusM:s.radiusM}]; }
+    else if(s.type==="polygon"){ zo.center=LL(s.coords[0]);
+       zo.layers=[{kind:"target",geometry:{type:"polygon",coords:s.coords.map(LL)}}]; }
+    else if(s.type==="tripline"){ zo.center=LL(s.from);
+       zo.layers=[{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}]; }
+    zo.triggers=trig; out.zones.push(zo);
+  });
+  document.getElementById("out").value=JSON.stringify(out,null,2);
+  return out;
+}
+document.getElementById("exportBtn").onclick=exportBundle;
+document.getElementById("copyBtn").onclick=()=>{ exportBundle();
+  navigator.clipboard.writeText(document.getElementById("out").value); };
+
+/* ---- base map switch ---- */
+document.getElementById("baseSel").onchange=e=>{
+  const k=e.target.value;
+  map.getSource("base").setTiles(BASES[k].tiles);
+};
+
+/* ---- load existing chutes for reference (same-origin when deployed) ---- */
+document.getElementById("loadPois").onclick=async()=>{
+  try{
+    const r=await fetch("/api/pois"); const j=await r.json();
+    const feats=(j.pois||[]).filter(p=>p.topLatLon).map(p=>({type:"Feature",
+      properties:{name:p.name},geometry:{type:"Point",coordinates:[p.topLatLon[1],p.topLatLon[0]]}}));
+    map.getSource("pois").setData(fc(feats));
+    document.getElementById("status").textContent=`loaded ${feats.length} existing chutes for reference`;
+  }catch(e){ document.getElementById("status").textContent="couldn't load /api/pois (deploy this on your Pages site, same origin)"; }
+};
+</script>
+</body>
+</html>
