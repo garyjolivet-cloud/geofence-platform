@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Chase Life — Geofence Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --night:#0a1018; --slate:#141d2b; --slate-2:#1b2738; --rim:#26344a;
+    --coral:#ff6a3d; --coral-dim:#b8492a; --snow:#eef4fb; --ice:#8fb6d4;
+    --fog:#5b7088; --hazard:#ff2f4e; --go:#38e0a6; --amber:#ffc24d;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  body{margin:0; background:var(--night); color:var(--snow);
+       font-family:"Barlow",system-ui,sans-serif; overscroll-behavior:none}
+  h1,.disp{font-family:"Black Han Sans",sans-serif; font-weight:400}
+  .cond{font-family:"Barlow Condensed",sans-serif}
+  .wrap{max-width:430px; margin:0 auto; padding:14px 14px 28px; min-height:100vh}
+  header{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px}
+  header h1{font-size:20px; margin:0; letter-spacing:.3px}
+  .pill{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:13px;
+        text-transform:uppercase; letter-spacing:.5px; padding:4px 10px; border-radius:999px;
+        background:var(--slate); color:var(--fog); border:1px solid var(--rim)}
+  .pill.live{color:var(--go); border-color:var(--go)}
+  .pill.sim{color:var(--amber); border-color:var(--amber)}
+
+  /* Needle / compass */
+  .needle-card{background:var(--slate); border:1px solid var(--rim); border-radius:18px;
+               padding:16px; text-align:center; margin-bottom:12px}
+  svg.compass{width:220px; height:220px; touch-action:none}
+  .ring{fill:none; stroke:var(--slate-2); stroke-width:10}
+  .tick{stroke:var(--fog); stroke-width:2}
+  .card-N{stroke:var(--ice)}
+  .needle{fill:var(--coral)}
+  .needle.low{fill:var(--fog)}
+  .target-name{font-family:"Black Han Sans"; font-size:22px; margin:6px 0 0}
+  .target-sub{font-family:"Barlow Condensed"; text-transform:uppercase; letter-spacing:1px;
+              color:var(--ice); font-size:14px}
+  .state-line{font-family:"Barlow Condensed"; font-weight:600; font-size:16px;
+              text-transform:uppercase; letter-spacing:.5px; margin-top:8px}
+  .state-in{color:var(--go)} .state-near{color:var(--amber)} .state-out{color:var(--fog)}
+
+  /* Readout grid */
+  .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:12px}
+  .cell{background:var(--slate); border:1px solid var(--rim); border-radius:12px; padding:9px 10px}
+  .cell .k{font-family:"Barlow Condensed"; text-transform:uppercase; font-size:11px;
+           letter-spacing:.6px; color:var(--fog)}
+  .cell .v{font-family:"Barlow Condensed"; font-weight:700; font-size:20px; color:var(--snow); line-height:1.1}
+  .cell .v small{font-size:12px; color:var(--ice); font-weight:500}
+  .conf-3{color:var(--go)} .conf-2{color:var(--amber)} .conf-1{color:var(--hazard)}
+
+  /* Controls */
+  .controls{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}
+  button{font-family:"Barlow Condensed"; font-weight:600; text-transform:uppercase;
+         letter-spacing:.5px; font-size:14px; color:var(--snow); background:var(--slate);
+         border:1px solid var(--rim); border-radius:10px; padding:10px 14px; cursor:pointer; flex:1 1 auto}
+  button:focus-visible{outline:2px solid var(--coral); outline-offset:2px}
+  button.primary{background:var(--coral); border-color:var(--coral); color:#1a0d07}
+  button.on{border-color:var(--go); color:var(--go)}
+
+  /* Sim */
+  .sim{display:none; background:var(--slate-2); border:1px dashed var(--amber); border-radius:12px;
+       padding:10px; margin-bottom:12px}
+  .sim.show{display:block}
+  .sim .pad{display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:180px; margin:6px auto}
+  .sim .pad button{padding:8px}
+  .sim .pad .blank{visibility:hidden}
+
+  /* Log */
+  .logwrap .k{font-family:"Barlow Condensed"; text-transform:uppercase; font-size:12px;
+              letter-spacing:.6px; color:var(--fog); margin:0 0 4px}
+  .log{background:#070b11; border:1px solid var(--rim); border-radius:12px; padding:8px;
+       height:200px; overflow-y:auto; font-family:"Barlow Condensed"; font-size:13px; line-height:1.5}
+  .log div{white-space:nowrap}
+  .ev-enter{color:var(--go)} .ev-exit{color:var(--ice)} .ev-dwell{color:var(--amber)}
+  .ev-say{color:var(--coral)} .ev-flick{color:var(--fog)} .ev-warn{color:var(--hazard)}
+  .ev-sys{color:var(--fog)}
+  .hint{color:var(--fog); font-family:"Barlow Condensed"; font-size:12px; margin-top:8px; text-align:center}
+
+  @media (prefers-reduced-motion: reduce){ *{transition:none!important; animation:none!important} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Geofence Engine</h1>
+    <span id="pill" class="pill">OFF</span>
+  </header>
+
+  <div class="needle-card">
+    <svg class="compass" viewBox="-110 -110 220 220" aria-label="direction to next stop">
+      <circle class="ring" r="92"></circle>
+      <g id="ticks"></g>
+      <text id="northN" class="card-N cond" x="0" y="-78" text-anchor="middle"
+            font-size="13" fill="#8fb6d4">N</text>
+      <polygon id="needle" class="needle" points="0,-66 9,16 0,6 -9,16"></polygon>
+      <circle r="5" fill="#26344a"></circle>
+    </svg>
+    <div id="targetName" class="target-name">—</div>
+    <div id="targetSub" class="target-sub">no fix yet</div>
+    <div id="stateLine" class="state-line state-out">standby</div>
+  </div>
+
+  <div class="grid">
+    <div class="cell"><div class="k">Accuracy</div><div class="v" id="vAcc">— <small>m</small></div></div>
+    <div class="cell"><div class="k">Speed</div><div class="v" id="vSpd">— <small>m/s</small></div></div>
+    <div class="cell"><div class="k">Heading</div><div class="v" id="vHdg">— <small>°</small></div></div>
+    <div class="cell"><div class="k">Pos conf</div><div class="v" id="vPC">—</div></div>
+    <div class="cell"><div class="k">Head conf</div><div class="v" id="vHC">—</div></div>
+    <div class="cell"><div class="k">Fixes</div><div class="v" id="vFix">0</div></div>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart" class="primary">Start GPS</button>
+    <button id="btnCompass">Compass</button>
+    <button id="btnSim">Sim</button>
+  </div>
+
+  <div id="simPanel" class="sim">
+    <div class="cond" style="text-align:center;color:var(--amber);text-transform:uppercase;letter-spacing:1px;font-size:12px">
+      Simulator — nudge a virtual position (no GPS needed)
+    </div>
+    <div class="pad">
+      <span class="blank"></span><button data-dir="N">▲</button><span class="blank"></span>
+      <button data-dir="W">◄</button><button id="simHere">center</button><button data-dir="E">►</button>
+      <span class="blank"></span><button data-dir="S">▼</button><span class="blank"></span>
+    </div>
+    <div class="hint">each nudge ≈ 5 m · pick a stop to center on:</div>
+    <div id="simZones" class="controls" style="margin:6px 0 0"></div>
+  </div>
+
+  <div class="logwrap">
+    <p class="k">Event log</p>
+    <div id="log" class="log"></div>
+  </div>
+  <div class="hint" id="srcHint">bundle: built-in sample · open over https on your phone for GPS + compass</div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   CHASE LIFE — GEOFENCE ENGINE  (Phase 1, Step 2)
+   Single-file production engine + field-test HUD. Plain JS, no build step.
+   Deploy like everything else: paste into GitHub, Cloudflare rebuilds.
+   MUST be opened over https on iOS for GPS + compass (Apple rule).
+
+   Tuning constants below are FIELD-VALIDATED from the 2026-06-23 walk:
+   - EXIT_BUFFER_M 20  : false exits never strayed >~1 m past the edge.
+   - commit a visit by MOVEMENT, not dwell-time : a real 7 s pass moved 26 m,
+     while jitter-flickers moved ~1 m. ENTER_DWELL keeps a momentary edge
+     touch from announcing; the movement check labels flickers in the log.
+   ===================================================================== */
+
+const TUNING = {
+  EXIT_BUFFER_M: 20,     // hysteresis: exit only past R + this
+  ENTER_DWELL_S: 3,      // must persist inside R this long before ENTER fires
+  ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
+  MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
+  SHORT_VISIT_S: 12,
+  LOWPASS: 0.35,         // position smoothing (0..1, higher = less smoothing)
+  HEAD_WINDOW: 8         // compass readings used for heading-confidence variance
+};
+
+/* ---------- BUNDLE (the project the engine runs). Edit coords with real
+   captures from fieldtest.html. Built-in sample = the KH village walk. ---------- */
+const BUNDLE = {
+  project: "kh-village-walk",
+  name: "KH Village Walk",
+  ref: [51.2980, -117.0470],          // map reference (near base) for planar math
+  zones: [
+    { id:"boardwalk-gate", name:"Boardwalk Trailhead",
+      layers:[ {kind:"target", geometry:{type:"tripline",
+                 from:[51.2977,-117.0472], to:[51.2979,-117.0468]}} ],
+      triggers:[ {fires_on:"enter", say:"Welcome to the village walk. Follow the boardwalk to your first stop.", oncePerVisit:true} ] },
+    { id:"mountain-flower-garden", name:"Mountain Flower Garden", center:[51.2980,-117.0470],
+      layers:[ {kind:"general", radiusM:15}, {kind:"target", radiusM:8} ],
+      triggers:[
+        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+        {fires_on:"enter", layer:"target", say:"Turn and look. This is the mountain flower garden.",
+         requires:{accuracyM:10, onLowAccuracy:"suppress"}, oncePerVisit:true} ] },
+    { id:"lookout", name:"Ridge Lookout", center:[51.2984,-117.0462],
+      layers:[ {kind:"general", radiusM:20}, {kind:"target", radiusM:10} ],
+      triggers:[
+        {fires_on:"enter", layer:"target", say:"You've reached the ridge lookout.", oncePerVisit:true},
+        {fires_on:"dwell", layer:"target", delayS:20, say:"Now that you've stood here a moment, notice the peaks across the valley.", oncePerVisit:true} ] }
+  ]
+};
+
+/* ============================ GEO MATH ============================ */
+const Geo = {
+  R: 6371000,
+  // local planar metres relative to ref [lat,lon]
+  mPerDegLat: 111320,
+  mPerDegLon(lat){ return 111320 * Math.cos(lat*Math.PI/180); },
+  toXY(p, ref){ return { x:(p[1]-ref[1])*this.mPerDegLon(ref[0]), y:(p[0]-ref[0])*this.mPerDegLat }; },
+  hav(a,b){ const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,
+            dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
+            const x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+            return 2*this.R*Math.asin(Math.sqrt(x)); },
+  bearing(a,b){ const y=Math.sin((b[1]-a[1])*Math.PI/180)*Math.cos(b[0]*Math.PI/180);
+            const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-
+                    Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
+            return (Math.atan2(y,x)*180/Math.PI+360)%360; },
+  // signed distance to a circle: + outside, − inside
+  sdCircle(p, center, R){ return this.hav(p,center) - R; },
+  // point-to-segment distance in metres (planar)
+  segDist(P,A,B){ const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
+            const c1=vx*wx+vy*wy; if(c1<=0) return Math.hypot(wx,wy);
+            const c2=vx*vx+vy*vy; if(c2<=c1) return Math.hypot(P.x-B.x,P.y-B.y);
+            const t=c1/c2; return Math.hypot(P.x-(A.x+t*vx), P.y-(A.y+t*vy)); },
+  inPoly(P, pts){ let inside=false;
+            for(let i=0,j=pts.length-1;i<pts.length;j=i++){
+              const xi=pts[i].x,yi=pts[i].y,xj=pts[j].x,yj=pts[j].y;
+              if(((yi>P.y)!==(yj>P.y)) && (P.x<(xj-xi)*(P.y-yi)/(yj-yi)+xi)) inside=!inside;
+            } return inside; },
+  // signed distance to polygon: + outside, − inside
+  sdPolygon(p, coords, ref){ const P=this.toXY(p,ref);
+            const pts=coords.map(c=>this.toXY(c,ref));
+            let best=Infinity;
+            for(let i=0,j=pts.length-1;i<pts.length;j=i++) best=Math.min(best,this.segDist(P,pts[j],pts[i]));
+            return this.inPoly(P,pts) ? -best : best; },
+  // did segment prev->cur cross the line from->to? returns {crossed, side}
+  lineCross(prev,cur,from,to,ref){
+            const A=this.toXY(prev,ref),B=this.toXY(cur,ref),C=this.toXY(from,ref),D=this.toXY(to,ref);
+            const ccw=(p,q,r)=>(r.y-p.y)*(q.x-p.x)-(q.y-p.y)*(r.x-p.x);
+            const d1=ccw(C,D,A), d2=ccw(C,D,B), d3=ccw(A,B,C), d4=ccw(A,B,D);
+            const crossed = ((d1>0)!==(d2>0)) && ((d3>0)!==(d4>0));
+            return { crossed, side: d2<0 ? "L":"R" }; }
+};
+
+/* ======================== POSITION SMOOTHER ====================== */
+const Smoother = {
+  s:null, prev:null, t0:null,
+  push(fix){
+    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; }
+    const a=TUNING.LOWPASS;
+    this.s={ lat:this.s.lat+a*(fix.lat-this.s.lat), lon:this.s.lon+a*(fix.lon-this.s.lon) };
+    let speed=0, headingTravel=null;
+    if(this.prev){
+      const d=Geo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
+      const dt=Math.max(0.001,(fix.t-this.prev.t)/1000);
+      speed=d/dt;
+      if(d>1) headingTravel=Geo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
+    }
+    this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
+    return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed, headingTravel };
+  },
+  reset(){ this.s=null; this.prev=null; }
+};
+
+/* ========================== GEOFENCER ========================== */
+const Geofencer = {
+  state:{},                 // per-layer state machine
+  onEvent:null,             // callback(evt)
+  key(z,l,i){ return z.id+":"+(l.kind)+":"+i; },
+
+  // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
+  sd(p, prev, zone, layer){
+    if(layer.radiusM!=null) return Geo.sdCircle(p, zone.center, layer.radiusM);
+    const g=layer.geometry;
+    if(g && g.type==="polygon") return Geo.sdPolygon(p, g.coords, BUNDLE.ref);
+    if(g && g.type==="corridor") {
+      const P=Geo.toXY(p,BUNDLE.ref); let best=Infinity;
+      const pts=g.path.map(c=>Geo.toXY(c,BUNDLE.ref));
+      for(let i=1;i<pts.length;i++) best=Math.min(best,Geo.segDist(P,pts[i-1],pts[i]));
+      return best-(g.widthM||10)/2;
+    }
+    return null; // tripline handled separately
+  },
+
+  update(p, prev, now){
+    const active=[];                       // zones with any active ring (for the needle)
+    BUNDLE.zones.forEach(zone=>{
+      zone.layers.forEach((layer,i)=>{
+        const k=this.key(zone,layer,i);
+        const st=this.state[k] || (this.state[k]={phase:"out",delivered:{},move:0});
+
+        // --- TRIPLINE: crossing-based, direction-aware ---
+        if(layer.geometry && layer.geometry.type==="tripline"){
+          if(prev){
+            const c=Geo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],
+                                   layer.geometry.from, layer.geometry.to, BUNDLE.ref);
+            if(c.crossed && st.phase!=="cooldown"){
+              st.phase="cooldown"; setTimeout(()=>{st.phase="out";},4000);
+              this._fire(zone,layer,"enter",{side:c.side});
+            }
+          }
+          return;
+        }
+
+        // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
+        const d=this.sd(p,prev,zone,layer);
+        if(d==null) return;
+        // accuracy gate (warn content is exempt — handled at fire time)
+        const holding = p.acc>TUNING.ACCURACY_CAP_M;
+
+        if(d<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d});
+
+        if(st.phase==="out"){
+          if(d<0 && !holding){ st.phase="pending"; st.since=now; }
+        } else if(st.phase==="pending"){
+          if(d>=0){ st.phase="out"; }
+          else if((now-st.since)/1000 >= TUNING.ENTER_DWELL_S){
+            st.phase="in"; st.t0=now; st.move=0; st.delivered={};
+            this._fire(zone,layer,"enter",{});
+          }
+        } else if(st.phase==="in"){
+          if(prev) st.move += Geo.hav([prev.lat,prev.lon],[p.lat,p.lon]);
+          // dwell triggers
+          layer && zone.triggers && zone.triggers.forEach(t=>{
+            if(t.fires_on==="dwell" && (!t.layer||t.layer===layer.kind) && t.delayS &&
+               (now-st.t0)/1000>=t.delayS && !st.delivered["dwell"+t.delayS]){
+              st.delivered["dwell"+t.delayS]=1; this._deliver(zone,t,{});
+            }
+          });
+          if(d>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer
+            const dur=(now-st.t0)/1000;
+            const flick = st.move<TUNING.MOVE_MIN_M && dur<TUNING.SHORT_VISIT_S;
+            this._fire(zone,layer,"exit",{dur,move:st.move,flick});
+            st.phase="out";
+          }
+        }
+      });
+    });
+    return active;
+  },
+
+  _fire(zone,layer,kind,info){
+    if(this.onEvent) this.onEvent({zone,layer,kind,info});
+    // deliver matching triggers
+    (zone.triggers||[]).forEach(t=>{
+      if(t.fires_on===kind && (!t.layer || t.layer===layer.kind)){
+        if(kind==="exit") return;            // exit triggers rare; skip for now
+        this._deliver(zone,t,info);
+      }
+    });
+  },
+  _deliver(zone,t,info){
+    // once-per-visit handled by caller's delivered map for dwell; enter handled here
+    if(t.needle){ if(this.onEvent) this.onEvent({zone,kind:"arm-needle"}); }
+    if(t.say){
+      const lowAcc = window.__lastAcc>(t.requires?.accuracyM ?? TUNING.ACCURACY_CAP_M);
+      const mode = t.requires?.onLowAccuracy || "suppress";
+      if(lowAcc && mode==="suppress"){
+        if(this.onEvent) this.onEvent({zone,kind:"suppressed",text:t.say});
+      } else {
+        const warn = lowAcc && mode==="warn";
+        Audio.say(t.say, warn);
+        if(this.onEvent) this.onEvent({zone,kind:"say",text:t.say,warn});
+      }
+    }
+  },
+  reset(){ this.state={}; }
+};
+
+/* ============================ AUDIO ============================ */
+const Audio = {
+  unlocked:false,
+  unlock(){ if(this.unlocked) return; try{ const u=new SpeechSynthesisUtterance(" ");
+            u.volume=0; speechSynthesis.speak(u); this.unlocked=true; }catch(e){} },
+  say(text, warn){
+    try{ const u=new SpeechSynthesisUtterance(
+            text.replace(/–/g,' to ').replace(/°/g,' degrees '));
+         u.rate=1; u.pitch=warn?1.1:1; speechSynthesis.cancel(); speechSynthesis.speak(u);
+    }catch(e){} }
+};
+
+/* ============================ COMPASS ============================ */
+const Compass = {
+  heading:null, samples:[], confidence:0, on:false,
+  enable(){
+    const start=()=>{ window.addEventListener('deviceorientationabsolute', e=>this._read(e), true);
+                      window.addEventListener('deviceorientation', e=>this._read(e), true);
+                      this.on=true; };
+    if(typeof DeviceOrientationEvent!=='undefined' && DeviceOrientationEvent.requestPermission){
+      DeviceOrientationEvent.requestPermission().then(s=>{ if(s==='granted') start(); }).catch(()=>{});
+    } else start();
+  },
+  _read(e){
+    let h=null;
+    if(e.webkitCompassHeading!=null) h=e.webkitCompassHeading;          // iOS
+    else if(e.alpha!=null) h=(360-e.alpha)%360;                          // Android
+    if(h==null) return;
+    this.heading=h;
+    this.samples.push(h); if(this.samples.length>TUNING.HEAD_WINDOW) this.samples.shift();
+    // confidence from circular spread of recent samples
+    const rad=this.samples.map(d=>d*Math.PI/180);
+    const cx=rad.reduce((s,a)=>s+Math.cos(a),0)/rad.length;
+    const cy=rad.reduce((s,a)=>s+Math.sin(a),0)/rad.length;
+    const Rlen=Math.hypot(cx,cy);                    // 1 = steady, 0 = noisy
+    this.confidence = Rlen>0.97?3 : Rlen>0.85?2 : 1;
+  }
+};
+
+/* ============================== HUD ============================== */
+const HUD = {
+  pos:null, prev:null, fixes:0, needleZone:null,
+  el(id){ return document.getElementById(id); },
+  log(cls,msg){ const l=this.el('log'); const t=new Date().toLocaleTimeString();
+                const d=document.createElement('div'); d.className=cls;
+                d.textContent=t+'  '+msg; l.prepend(d); },
+  posConf(acc,R){ if(R==null) return 2; return acc*1.0<R?3 : acc<R+15?2 : 1; },
+
+  onFix(fix){               // fix = {lat,lon,acc,t}
+    window.__lastAcc=fix.acc;
+    const sm=Smoother.push(fix);
+    this.fixes++;
+    const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+    const active=Geofencer.update(p,this.prev,fix.t);
+    this.prev=p; this.pos=p;
+
+    // pick nearest active target ring for the needle (or nearest zone center)
+    let pick=null,best=Infinity;
+    active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
+    if(!pick){ // nothing active: aim at nearest zone center for "next stop"
+      BUNDLE.zones.forEach(z=>{ if(!z.center) return;
+        const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} });
+    }
+
+    // ---- render ----
+    this.el('vAcc').innerHTML = fix.acc.toFixed(0)+' <small>m</small>';
+    this.el('vSpd').innerHTML = sm.speed.toFixed(1)+' <small>m/s</small>';
+    this.el('vHdg').innerHTML = (Compass.heading==null?'—':Compass.heading.toFixed(0))+' <small>°</small>';
+    this.el('vFix').textContent = this.fixes;
+
+    let R = pick && pick.layer ? pick.layer.radiusM : null;
+    const pc=this.posConf(fix.acc,R);
+    this.el('vPC').innerHTML='<span class="conf-'+pc+'">'+['','low','med','high'][pc]+'</span>';
+    const hc=Compass.confidence;
+    this.el('vHC').innerHTML = hc?('<span class="conf-'+hc+'">'+['','low','med','high'][hc]+'</span>'):'—';
+
+    // needle + state
+    if(pick){
+      const tgt=pick.center || pick.zone.center;
+      this.el('targetName').textContent=pick.zone.name;
+      const dist=Math.max(0, (pick.layer? Geo.hav([p.lat,p.lon],pick.zone.center): pick.d));
+      const inside = pick.layer && pick.d<0;
+      this.el('targetSub').textContent = inside? 'inside' : (dist.toFixed(0)+' m away');
+      const sl=this.el('stateLine');
+      if(inside){ sl.textContent='inside '+pick.layer.kind; sl.className='state-line state-in'; }
+      else if(dist<60){ sl.textContent='approaching'; sl.className='state-line state-near'; }
+      else { sl.textContent='walking'; sl.className='state-line state-out'; }
+      // rotate needle: bearing to target minus phone heading (if known)
+      if(tgt){
+        const brg=Geo.bearing([p.lat,p.lon],tgt);
+        const head=Compass.heading||0;
+        const rot=(brg-head+360)%360;
+        const n=this.el('needle');
+        if(Compass.confidence>=2 || Compass.heading==null){
+          n.setAttribute('transform','rotate('+rot+')'); n.classList.remove('low');
+        } else { n.setAttribute('transform','rotate(0)'); n.classList.add('low'); } // degrade
+      }
+    }
+  }
+};
+
+/* compass ticks */
+(function(){ const g=document.getElementById('ticks');
+  for(let a=0;a<360;a+=30){ const r1=84,r2=92, rad=a*Math.PI/180;
+    const l=document.createElementNS('http://www.w3.org/2000/svg','line');
+    l.setAttribute('class','tick');
+    l.setAttribute('x1',(Math.sin(rad)*r1).toFixed(1)); l.setAttribute('y1',(-Math.cos(rad)*r1).toFixed(1));
+    l.setAttribute('x2',(Math.sin(rad)*r2).toFixed(1)); l.setAttribute('y2',(-Math.cos(rad)*r2).toFixed(1));
+    g.appendChild(l);} })();
+
+/* Geofencer -> HUD log wiring */
+Geofencer.onEvent=(e)=>{
+  if(e.kind==='enter') HUD.log('ev-enter','ENTER  '+e.zone.name+(e.info.side?' ('+e.info.side+')':''));
+  else if(e.kind==='exit'){ HUD.log('ev-exit','EXIT   '+e.zone.name+'  '+e.info.dur.toFixed(0)+'s, moved '+e.info.move.toFixed(0)+'m');
+       if(e.info.flick) HUD.log('ev-flick','       ^ flicker (barely moved) — ignore'); }
+  else if(e.kind==='say') HUD.log(e.warn?'ev-warn':'ev-say','SAY    "'+e.text+'"'+(e.warn?' [approx]':''));
+  else if(e.kind==='suppressed') HUD.log('ev-flick','HOLD   reveal suppressed (fix too loose)');
+  else if(e.kind==='arm-needle') HUD.log('ev-sys','NEEDLE armed → '+e.zone.name);
+};
+
+/* ===================== INPUTS: GPS / SIM / UI ===================== */
+let watchId=null, simMode=false, simPos=BUNDLE.ref.slice();
+
+function startGPS(){
+  Audio.unlock(); Audio.unlocked=true;
+  if(!navigator.geolocation){ HUD.log('ev-warn','no geolocation on this device'); return; }
+  HUD.el('pill').textContent='GPS'; HUD.el('pill').className='pill live';
+  HUD.log('ev-sys','GPS started — walk the stops');
+  watchId=navigator.geolocation.watchPosition(
+    p=>HUD.onFix({lat:p.coords.latitude,lon:p.coords.longitude,
+                  acc:p.coords.accuracy||99,t:p.timestamp||Date.now()}),
+    err=>HUD.log('ev-warn','GPS error: '+err.message),
+    {enableHighAccuracy:true, maximumAge:0, timeout:15000});
+}
+
+function tickSim(){ HUD.onFix({lat:simPos[0],lon:simPos[1],acc:5,t:Date.now()}); }
+
+document.getElementById('btnStart').onclick=()=>{ if(simMode) toggleSim(); startGPS(); };
+document.getElementById('btnCompass').onclick=(e)=>{ Compass.enable();
+  e.target.classList.add('on'); e.target.textContent='Compass on';
+  HUD.log('ev-sys','compass enabled (tilt-calibrate by moving in a figure-8)'); };
+
+function toggleSim(){
+  simMode=!simMode;
+  document.getElementById('simPanel').classList.toggle('show',simMode);
+  document.getElementById('btnSim').classList.toggle('on',simMode);
+  HUD.el('pill').textContent=simMode?'SIM':'OFF';
+  HUD.el('pill').className='pill '+(simMode?'sim':'');
+  if(simMode){ if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;}
+    Smoother.reset(); Geofencer.reset(); HUD.prev=null;
+    Audio.unlock(); Audio.unlocked=true;
+    buildSimZones(); tickSim(); HUD.log('ev-sys','sim mode — nudge the pad to walk a virtual position'); }
+}
+document.getElementById('btnSim').onclick=toggleSim;
+
+document.querySelectorAll('.sim .pad [data-dir]').forEach(b=>{
+  b.onclick=()=>{ const step=5/Geo.mPerDegLat, stepLon=5/Geo.mPerDegLon(simPos[0]);
+    const d=b.dataset.dir;
+    if(d==='N')simPos[0]+=step; if(d==='S')simPos[0]-=step;
+    if(d==='E')simPos[1]+=stepLon; if(d==='W')simPos[1]-=stepLon;
+    tickSim(); };
+});
+function buildSimZones(){ const wrap=document.getElementById('simZones'); wrap.innerHTML='';
+  BUNDLE.zones.forEach(z=>{ const c=z.center||z.layers[0].geometry?.from; if(!c) return;
+    const b=document.createElement('button'); b.textContent=z.name.split(' ')[0];
+    b.onclick=()=>{ simPos=[c[0]-0.0004,c[1]]; Smoother.reset(); HUD.prev=null; tickSim();
+                    HUD.log('ev-sys','teleported near '+z.name); };
+    wrap.appendChild(b); }); }
+document.getElementById('simHere').onclick=()=>{ simPos=BUNDLE.ref.slice(); tickSim(); };
+
+HUD.log('ev-sys','engine loaded · '+BUNDLE.name+' · '+BUNDLE.zones.length+' stops');
+HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
+</script>
+</body>
+</html>
