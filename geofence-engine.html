@@ -94,7 +94,7 @@
       <circle class="ring" r="92"></circle>
       <g id="ticks"></g>
       <text id="northN" class="card-N cond" x="0" y="-78" text-anchor="middle"
-            font-size="13" fill="#8fb6d4">N</text>
+            dominant-baseline="central" font-size="13" fill="#8fb6d4">N</text>
       <polygon id="needle" class="needle" points="0,-66 9,16 0,6 -9,16"></polygon>
       <circle r="5" fill="#26344a"></circle>
     </svg>
@@ -116,6 +116,7 @@
     <button id="btnStart" class="primary">Start GPS</button>
     <button id="btnCompass">Compass</button>
     <button id="btnSim">Sim</button>
+    <button id="btnAudio">Audio</button>
   </div>
 
   <div id="simPanel" class="sim">
@@ -174,13 +175,13 @@ const BUNDLE = {
       layers:[ {kind:"target", geometry:{type:"tripline",
                  from:[51.2977,-117.0472], to:[51.2979,-117.0468]}} ],
       triggers:[ {fires_on:"enter", say:"Welcome to the village walk. Follow the boardwalk to your first stop.", oncePerVisit:true} ] },
-    { id:"mountain-flower-garden", name:"Mountain Flower Garden", center:[51.2980,-117.0470],
+    { id:"mountain-flower-garden", name:"Mountain Flower Garden", center:[51.2980,-117.0470], audibleFromM:45,
       layers:[ {kind:"general", radiusM:15}, {kind:"target", radiusM:8} ],
       triggers:[
         {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
         {fires_on:"enter", layer:"target", say:"Turn and look. This is the mountain flower garden.",
          requires:{accuracyM:10, onLowAccuracy:"suppress"}, oncePerVisit:true} ] },
-    { id:"lookout", name:"Ridge Lookout", center:[51.2984,-117.0462],
+    { id:"lookout", name:"Ridge Lookout", center:[51.2984,-117.0462], audibleFromM:60,
       layers:[ {kind:"general", radiusM:20}, {kind:"target", radiusM:10} ],
       triggers:[
         {fires_on:"enter", layer:"target", say:"You've reached the ridge lookout.", oncePerVisit:true},
@@ -232,22 +233,24 @@ const Geo = {
 
 /* ======================== POSITION SMOOTHER ====================== */
 const Smoother = {
-  s:null, prev:null, t0:null,
+  s:null, prev:null, spd:0, t0:null,
   push(fix){
-    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; }
+    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; this.spd=0; }
     const a=TUNING.LOWPASS;
     this.s={ lat:this.s.lat+a*(fix.lat-this.s.lat), lon:this.s.lon+a*(fix.lon-this.s.lon) };
-    let speed=0, headingTravel=null;
+    let headingTravel=null;
     if(this.prev){
       const d=Geo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
-      const dt=Math.max(0.001,(fix.t-this.prev.t)/1000);
-      speed=d/dt;
+      const dt=(fix.t-this.prev.t)/1000;
+      let inst = (dt<0.4) ? this.spd : d/dt;        // ignore sub-0.4 s gaps (GPS double-fix)
+      if(inst>25) inst = this.spd;                  // reject a lone >90 km/h spike
+      this.spd = this.spd + 0.35*(inst-this.spd);   // low-pass the speed
       if(d>1) headingTravel=Geo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
     }
     this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
-    return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed, headingTravel };
+    return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed:this.spd, headingTravel };
   },
-  reset(){ this.s=null; this.prev=null; }
+  reset(){ this.s=null; this.prev=null; this.spd=0; }
 };
 
 /* ========================== GEOFENCER ========================== */
@@ -394,6 +397,57 @@ const Compass = {
   }
 };
 
+/* =================== PROXIMITY AUDIO — distance-clarity (§5a) ===================
+   Mono graph: chime -> low-pass(cutoff=f(dist)) -> [dry + reverb*wet] -> gain(dist).
+   One distance value drives treble, reverb wash, and loudness together, so a stop
+   sounds dull & distant far off and crisp & present as you arrive. Mono-safe — works
+   on phone/laptop speakers, no headphones. Synth chime stands in until real clips. */
+const Clarity = {
+  ctx:null, on:false, ready:false, inBus:null, lpf:null, dry:null, wet:null,
+  conv:null, master:null, timer:null,
+  cutoffFor(d){ return Math.max(1500, Math.min(18000, 8000*Math.pow(25/d,0.7))); },
+  wetFor(d){    return Math.max(0.05, Math.min(0.72, 0.05+0.65*Math.pow(d/200,0.6))); },
+  gainDbFor(d){ return Math.max(-24, -20*Math.log10(d/2)); },
+  init(){ if(this.ready) return;
+    const C=window.AudioContext||window.webkitAudioContext; this.ctx=new C();
+    this.inBus=this.ctx.createGain();
+    this.lpf=this.ctx.createBiquadFilter(); this.lpf.type='lowpass'; this.lpf.Q.value=0.707;
+    this.dry=this.ctx.createGain(); this.wet=this.ctx.createGain();
+    this.conv=this.ctx.createConvolver(); this.conv.buffer=this._ir(2.2,2.6);
+    this.master=this.ctx.createGain(); this.master.gain.value=0;
+    this.inBus.connect(this.lpf);
+    this.lpf.connect(this.dry);  this.dry.connect(this.master);
+    this.lpf.connect(this.conv); this.conv.connect(this.wet); this.wet.connect(this.master);
+    this.master.connect(this.ctx.destination);
+    const sh=this.ctx.createOscillator(); sh.type='sine'; sh.frequency.value=7200;
+    const shg=this.ctx.createGain(); shg.gain.value=0.015;       // faint "air" shimmer
+    sh.connect(shg); shg.connect(this.inBus); sh.start();
+    this.ready=true; },
+  _ir(sec,decay){ const r=this.ctx.sampleRate, n=Math.floor(r*sec);
+    const b=this.ctx.createBuffer(2,n,r);
+    for(let ch=0;ch<2;ch++){ const d=b.getChannelData(ch);
+      for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,decay); } return b; },
+  _chime(){ const t=this.ctx.currentTime+0.03, base=523;
+    [[1,0.12,'triangle'],[2,0.05,'sine'],[3,0.03,'sine']].forEach(function(v){
+      const o=Clarity.ctx.createOscillator(); o.type=v[2]; o.frequency.value=base*v[0];
+      const g=Clarity.ctx.createGain(); g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(v[1],t+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+1.1);
+      o.connect(g); g.connect(Clarity.inBus); o.start(t); o.stop(t+1.2); }); },
+  enable(){ this.init(); this.ctx.resume(); this.on=true;
+    this._chime(); this.timer=setInterval(()=>this._chime(),1600); },
+  disable(){ this.on=false; if(this.timer){clearInterval(this.timer);this.timer=null;}
+    if(this.master) this.master.gain.setTargetAtTime(0,this.ctx.currentTime,0.05); },
+  update(dist,inRange){ if(!this.on||!this.ready) return;
+    const now=this.ctx.currentTime, tc=0.06;
+    if(!inRange){ this.master.gain.setTargetAtTime(0,now,0.12); return; }
+    const d=Math.max(2,dist), w=this.wetFor(d);
+    this.lpf.frequency.setTargetAtTime(this.cutoffFor(d),now,tc);
+    this.wet.gain.setTargetAtTime(w,now,tc);
+    this.dry.gain.setTargetAtTime(1-0.4*w,now,tc);
+    this.master.gain.setTargetAtTime(0.85*Math.pow(10,this.gainDbFor(d)/20),now,tc); }
+};
+
 /* ============================== HUD ============================== */
 const HUD = {
   pos:null, prev:null, fixes:0, needleZone:null,
@@ -419,11 +473,30 @@ const HUD = {
         const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} });
     }
 
+    // proximity audio: nearest audio-enabled stop drives distance-clarity (§5a)
+    if(Clarity.on){
+      let aD=Infinity, aIn=false;
+      BUNDLE.zones.forEach(z=>{ if(!z.center||z.audio===false) return;
+        const d=Geo.hav([p.lat,p.lon],z.center), range=z.audibleFromM||60;
+        if(d<range && d<aD){ aD=d; aIn=true; } });
+      Clarity.update(aD, aIn);
+    }
+
     // ---- render ----
     this.el('vAcc').innerHTML = fix.acc.toFixed(0)+' <small>m</small>';
     this.el('vSpd').innerHTML = sm.speed.toFixed(1)+' <small>m/s</small>';
     this.el('vHdg').innerHTML = (Compass.heading==null?'—':Compass.heading.toFixed(0))+' <small>°</small>';
     this.el('vFix').textContent = this.fixes;
+
+    // honest north: place the N marker where true north is, relative to your facing
+    { const nN=this.el('northN');
+      if(Compass.heading!=null && Compass.confidence>=2){
+        const a=(-Compass.heading)*Math.PI/180, R=78;
+        nN.setAttribute('x',(Math.sin(a)*R).toFixed(1));
+        nN.setAttribute('y',(-Math.cos(a)*R).toFixed(1));
+        nN.style.opacity='1';
+      } else { nN.setAttribute('x','0'); nN.setAttribute('y','-78');
+        nN.style.opacity=(Compass.heading==null?'0.3':'0.6'); } }
 
     let R = pick && pick.layer ? pick.layer.radiusM : null;
     const pc=this.posConf(fix.acc,R);
@@ -509,6 +582,11 @@ function toggleSim(){
     buildSimZones(); tickSim(); HUD.log('ev-sys','sim mode — nudge the pad to walk a virtual position'); }
 }
 document.getElementById('btnSim').onclick=toggleSim;
+document.getElementById('btnAudio').onclick=function(){
+  if(Clarity.on){ Clarity.disable(); this.classList.remove('on'); HUD.log('ev-sys','clarity audio OFF'); }
+  else { Clarity.enable(); this.classList.add('on');
+    HUD.log('ev-sys','clarity audio ON — move toward a stop to hear it bloom'); }
+};
 
 document.querySelectorAll('.sim .pad [data-dir]').forEach(b=>{
   b.onclick=()=>{ const step=5/Geo.mPerDegLat, stepLon=5/Geo.mPerDegLon(simPos[0]);
