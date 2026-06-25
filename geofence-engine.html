@@ -382,18 +382,15 @@ const Compass = {
     } else start();
   },
   _read(e){
-    let h=null;
-    if(e.webkitCompassHeading!=null) h=e.webkitCompassHeading;          // iOS
-    else if(e.alpha!=null) h=(360-e.alpha)%360;                          // Android
+    let h=null, accDeg=null;
+    if(e.webkitCompassHeading!=null){ h=e.webkitCompassHeading; accDeg=e.webkitCompassAccuracy; }  // iOS
+    else if(e.alpha!=null){ h=(360-e.alpha)%360; }                                                  // Android
     if(h==null) return;
     this.heading=h;
-    this.samples.push(h); if(this.samples.length>TUNING.HEAD_WINDOW) this.samples.shift();
-    // confidence from circular spread of recent samples
-    const rad=this.samples.map(d=>d*Math.PI/180);
-    const cx=rad.reduce((s,a)=>s+Math.cos(a),0)/rad.length;
-    const cy=rad.reduce((s,a)=>s+Math.sin(a),0)/rad.length;
-    const Rlen=Math.hypot(cx,cy);                    // 1 = steady, 0 = noisy
-    this.confidence = Rlen>0.97?3 : Rlen>0.85?2 : 1;
+    // confidence from sensor accuracy (degrees), NOT from how fast you turn.
+    // iOS reports webkitCompassAccuracy; negative or large = needs calibration.
+    if(accDeg!=null) this.confidence = (accDeg<0)?1 : (accDeg<=15?3 : accDeg<=30?2 : 1);
+    else this.confidence = 2;                          // Android: no accuracy reported, assume usable
     if(typeof HUD!=='undefined' && HUD.paintCompass) HUD.paintCompass();  // live repaint as you turn
   }
 };
@@ -515,24 +512,22 @@ const HUD = {
   },
 
   paintCompass(){
-    // N marker: place where true north actually is, relative to the way you're facing
+    // N marker tracks true north whenever a heading exists (NOT gated on turn speed)
     const nN=this.el('northN');
-    if(Compass.heading!=null && Compass.confidence>=2){
+    if(Compass.heading!=null){
       const a=(-Compass.heading)*Math.PI/180, R=78;
       nN.setAttribute('x',(Math.sin(a)*R).toFixed(1));
       nN.setAttribute('y',(-Math.cos(a)*R).toFixed(1));
       nN.style.opacity='1';
-    } else { nN.setAttribute('x','0'); nN.setAttribute('y','-78');
-      nN.style.opacity=(Compass.heading==null?'0.3':'0.6'); }
+    } else { nN.setAttribute('x','0'); nN.setAttribute('y','-78'); nN.style.opacity='0.3'; }
     this.el('vHdg').innerHTML=(Compass.heading==null?'—':Compass.heading.toFixed(0))+' <small>°</small>';
     // red arrow points at the NEXT STOP, relative to the way you're facing
     const n=this.el('needle');
     if(this.needleTarget && this.pos){
       const brg=Geo.bearing([this.pos.lat,this.pos.lon],this.needleTarget);
       const rot=(brg-(Compass.heading||0)+360)%360;
-      if(Compass.confidence>=2 || Compass.heading==null){
-        n.setAttribute('transform','rotate('+rot+')'); n.classList.remove('low');
-      } else { n.setAttribute('transform','rotate(0)'); n.classList.add('low'); }
+      n.setAttribute('transform','rotate('+rot+')');
+      n.classList.toggle('low', Compass.heading!=null && Compass.confidence<2);
     } else { n.setAttribute('transform','rotate(0)'); }
   }
 };
