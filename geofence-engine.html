@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v6 · fires + chime</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v8 · shapes fixed</span></h1>
     <span id="pill" class="pill">OFF</span>
   </header>
 
@@ -131,6 +131,8 @@
     <div class="hint">each nudge ≈ 5 m · pick a stop to center on:</div>
     <div id="simZones" class="controls" style="margin:6px 0 0"></div>
   </div>
+
+  <div id="coord" class="hint" style="text-align:center;cursor:pointer;padding:9px;border:1px solid var(--rim);border-radius:9px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:14px;color:var(--ice)">📍 start GPS, then tap here to capture your position</div>
 
   <div class="logwrap">
     <p class="k">Event log</p>
@@ -278,11 +280,12 @@ const Geofencer = {
 
   // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
   sd(p, prev, zone, layer){
-    if(layer.radiusM!=null) return Geo.sdCircle(p, zone.center, layer.radiusM);
+    const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
+    if(layer.radiusM!=null) return Geo.sdCircle(PT, zone.center, layer.radiusM);
     const g=layer.geometry;
-    if(g && g.type==="polygon") return Geo.sdPolygon(p, g.coords, BUNDLE.ref);
+    if(g && g.type==="polygon") return Geo.sdPolygon(PT, g.coords, BUNDLE.ref);
     if(g && g.type==="corridor") {
-      const P=Geo.toXY(p,BUNDLE.ref); let best=Infinity;
+      const P=Geo.toXY(PT,BUNDLE.ref); let best=Infinity;
       const pts=g.path.map(c=>Geo.toXY(c,BUNDLE.ref));
       for(let i=1;i<pts.length;i++) best=Math.min(best,Geo.segDist(P,pts[i-1],pts[i]));
       return best-(g.widthM||10)/2;
@@ -525,6 +528,7 @@ const HUD = {
     this.el('vFix').textContent = this.fixes;
 
     this.pos = p;                 // remember position so the compass can repaint live
+    this.el('coord').textContent='📍 '+p.lat.toFixed(6)+', '+p.lon.toFixed(6)+'  ·  tap to copy';
     this.needleTarget = null;     // cleared here; set below when there is a target
 
     let R = pick && pick.layer ? pick.layer.radiusM : null;
@@ -611,9 +615,14 @@ function startGPS(){
 function tickSim(){ HUD.onFix({lat:simPos[0],lon:simPos[1],acc:5,t:Date.now()}); }
 
 document.getElementById('btnStart').onclick=()=>{ if(simMode) toggleSim(); startGPS(); };
-document.getElementById('btnCompass').onclick=(e)=>{ Compass.enable();
+document.getElementById('btnCompass').onclick=(e)=>{ Compass.enable(); Audio.unlock();
   e.target.classList.add('on'); e.target.textContent='Compass on';
   HUD.log('ev-sys','compass enabled (tilt-calibrate by moving in a figure-8)'); };
+document.getElementById('coord').onclick=()=>{
+  if(!HUD.pos){ HUD.log('ev-warn','no GPS fix yet — tap Start GPS first'); return; }
+  const s=HUD.pos.lat.toFixed(6)+', '+HUD.pos.lon.toFixed(6);
+  try{ navigator.clipboard && navigator.clipboard.writeText(s); }catch(err){}
+  HUD.log('ev-sys','CAPTURED  '+s+'  (copied)'); };
 
 function toggleSim(){
   simMode=!simMode;
