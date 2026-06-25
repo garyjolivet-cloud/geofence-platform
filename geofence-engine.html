@@ -394,6 +394,7 @@ const Compass = {
     const cy=rad.reduce((s,a)=>s+Math.sin(a),0)/rad.length;
     const Rlen=Math.hypot(cx,cy);                    // 1 = steady, 0 = noisy
     this.confidence = Rlen>0.97?3 : Rlen>0.85?2 : 1;
+    if(typeof HUD!=='undefined' && HUD.paintCompass) HUD.paintCompass();  // live repaint as you turn
   }
 };
 
@@ -450,7 +451,7 @@ const Clarity = {
 
 /* ============================== HUD ============================== */
 const HUD = {
-  pos:null, prev:null, fixes:0, needleZone:null,
+  pos:null, prev:null, fixes:0, needleZone:null, needleTarget:null,
   el(id){ return document.getElementById(id); },
   log(cls,msg){ const l=this.el('log'); const t=new Date().toLocaleTimeString();
                 const d=document.createElement('div'); d.className=cls;
@@ -488,15 +489,8 @@ const HUD = {
     this.el('vHdg').innerHTML = (Compass.heading==null?'—':Compass.heading.toFixed(0))+' <small>°</small>';
     this.el('vFix').textContent = this.fixes;
 
-    // honest north: place the N marker where true north is, relative to your facing
-    { const nN=this.el('northN');
-      if(Compass.heading!=null && Compass.confidence>=2){
-        const a=(-Compass.heading)*Math.PI/180, R=78;
-        nN.setAttribute('x',(Math.sin(a)*R).toFixed(1));
-        nN.setAttribute('y',(-Math.cos(a)*R).toFixed(1));
-        nN.style.opacity='1';
-      } else { nN.setAttribute('x','0'); nN.setAttribute('y','-78');
-        nN.style.opacity=(Compass.heading==null?'0.3':'0.6'); } }
+    this.pos = p;                 // remember position so the compass can repaint live
+    this.needleTarget = null;     // cleared here; set below when there is a target
 
     let R = pick && pick.layer ? pick.layer.radiusM : null;
     const pc=this.posConf(fix.acc,R);
@@ -515,17 +509,31 @@ const HUD = {
       if(inside){ sl.textContent='inside '+pick.layer.kind; sl.className='state-line state-in'; }
       else if(dist<60){ sl.textContent='approaching'; sl.className='state-line state-near'; }
       else { sl.textContent='walking'; sl.className='state-line state-out'; }
-      // rotate needle: bearing to target minus phone heading (if known)
-      if(tgt){
-        const brg=Geo.bearing([p.lat,p.lon],tgt);
-        const head=Compass.heading||0;
-        const rot=(brg-head+360)%360;
-        const n=this.el('needle');
-        if(Compass.confidence>=2 || Compass.heading==null){
-          n.setAttribute('transform','rotate('+rot+')'); n.classList.remove('low');
-        } else { n.setAttribute('transform','rotate(0)'); n.classList.add('low'); } // degrade
-      }
+      this.needleTarget = tgt;       // the arrow aims here; paintCompass draws it live
     }
+    this.paintCompass();             // draw red arrow + true-north marker now
+  },
+
+  paintCompass(){
+    // N marker: place where true north actually is, relative to the way you're facing
+    const nN=this.el('northN');
+    if(Compass.heading!=null && Compass.confidence>=2){
+      const a=(-Compass.heading)*Math.PI/180, R=78;
+      nN.setAttribute('x',(Math.sin(a)*R).toFixed(1));
+      nN.setAttribute('y',(-Math.cos(a)*R).toFixed(1));
+      nN.style.opacity='1';
+    } else { nN.setAttribute('x','0'); nN.setAttribute('y','-78');
+      nN.style.opacity=(Compass.heading==null?'0.3':'0.6'); }
+    this.el('vHdg').innerHTML=(Compass.heading==null?'—':Compass.heading.toFixed(0))+' <small>°</small>';
+    // red arrow points at the NEXT STOP, relative to the way you're facing
+    const n=this.el('needle');
+    if(this.needleTarget && this.pos){
+      const brg=Geo.bearing([this.pos.lat,this.pos.lon],this.needleTarget);
+      const rot=(brg-(Compass.heading||0)+360)%360;
+      if(Compass.confidence>=2 || Compass.heading==null){
+        n.setAttribute('transform','rotate('+rot+')'); n.classList.remove('low');
+      } else { n.setAttribute('transform','rotate(0)'); n.classList.add('low'); }
+    } else { n.setAttribute('transform','rotate(0)'); }
   }
 };
 
