@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v4 · live-compass</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v5 · village walk</span></h1>
     <span id="pill" class="pill">OFF</span>
   </header>
 
@@ -169,23 +169,40 @@ const TUNING = {
 const BUNDLE = {
   project: "kh-village-walk",
   name: "KH Village Walk",
-  ref: [51.2980, -117.0470],          // map reference (near base) for planar math
+  ref: [51.3027, -117.0547],          // near the village stops, for planar math
   zones: [
-    { id:"boardwalk-gate", name:"Boardwalk Trailhead",
-      layers:[ {kind:"target", geometry:{type:"tripline",
-                 from:[51.2977,-117.0472], to:[51.2979,-117.0468]}} ],
-      triggers:[ {fires_on:"enter", say:"Welcome to the village walk. Follow the boardwalk to your first stop.", oncePerVisit:true} ] },
-    { id:"mountain-flower-garden", name:"Mountain Flower Garden", center:[51.2980,-117.0470], audibleFromM:45,
-      layers:[ {kind:"general", radiusM:15}, {kind:"target", radiusM:8} ],
+    { id:"mclauglin-house", name:"Mclauglin House", center:[51.302757,-117.054644], audibleFromM:30,
+      layers:[ {kind:"general", radiusM:25}, {kind:"target", radiusM:15} ],
       triggers:[
         {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
-        {fires_on:"enter", layer:"target", say:"Turn and look. This is the mountain flower garden.",
-         requires:{accuracyM:10, onLowAccuracy:"suppress"}, oncePerVisit:true} ] },
-    { id:"lookout", name:"Ridge Lookout", center:[51.2984,-117.0462], audibleFromM:60,
-      layers:[ {kind:"general", radiusM:20}, {kind:"target", radiusM:10} ],
+        {fires_on:"enter", layer:"target", say:"Look at Mclauglan house", oncePerVisit:true} ] },
+
+    { id:"jolivet-house", name:"Jolivet House", center:[51.303025,-117.054772], audibleFromM:30,
+      layers:[ {kind:"general", radiusM:30},
+               {kind:"target", geometry:{type:"polygon", coords:[
+                 [51.303166,-117.055064],[51.303020,-117.055012],
+                 [51.303023,-117.054798],[51.303166,-117.054840]]}} ],
       triggers:[
-        {fires_on:"enter", layer:"target", say:"You've reached the ridge lookout.", oncePerVisit:true},
-        {fires_on:"dwell", layer:"target", delayS:20, say:"Now that you've stood here a moment, notice the peaks across the valley.", oncePerVisit:true} ] }
+        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+        {fires_on:"enter", layer:"target", say:"Turn to Gary and Karens House", oncePerVisit:true} ] },
+
+    { id:"james-janice-house", name:"James Janice House", center:[51.303361,-117.054911], audibleFromM:25,
+      layers:[ {kind:"general", radiusM:25},
+               {kind:"target", geometry:{type:"tripline",
+                 from:[51.303365,-117.055022], to:[51.303357,-117.054800]}} ],
+      triggers:[
+        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+        {fires_on:"enter", layer:"target", say:"Turn and Look at James House", oncePerVisit:true} ] },
+
+    { id:"carols-house", name:"Carols House", center:[51.302089,-117.054256], audibleFromM:60,
+      layers:[ {kind:"general", radiusM:60},
+               {kind:"target", geometry:{type:"polygon", coords:[
+                 [51.302194,-117.054592],[51.302100,-117.054634],
+                 [51.301853,-117.054437],[51.302064,-117.053818],
+                 [51.302224,-117.053918],[51.302266,-117.054306]]}} ],
+      triggers:[
+        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+        {fires_on:"enter", layer:"target", say:"Look at Carols House", oncePerVisit:true} ] }
   ]
 };
 
