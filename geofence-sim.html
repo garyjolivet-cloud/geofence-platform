@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geofence Simulator</title>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --night:#0a1018; --slate:#141d2b; --rim:#26344a; --coral:#ff6a3d; --snow:#eef4fb;
+  --ice:#8fb6d4; --fog:#5b7088; --hazard:#ff2f4e; --go:#38e0a6; --amber:#ffc24d;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--night);color:var(--snow);
+  font-family:"Barlow",system-ui,sans-serif;overflow:hidden}
+header{display:flex;align-items:baseline;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rim);background:var(--slate)}
+header h1{margin:0;font-family:"Barlow Condensed";font-weight:700;font-size:22px;letter-spacing:.5px}
+header .v{color:var(--coral);font-family:"Barlow Condensed";font-size:13px}
+header .sub{margin-left:auto;color:var(--fog);font-family:"Barlow Condensed";font-size:13px;text-transform:uppercase;letter-spacing:1px}
+#wrap{display:grid;grid-template-columns:1fr 344px;grid-template-rows:1fr 210px;gap:10px;
+  height:calc(100vh - 49px);padding:10px}
+#map{grid-column:1;grid-row:1;border:1px solid var(--rim);border-radius:12px;overflow:hidden}
+#side{grid-column:2;grid-row:1 / span 2;overflow:auto;display:flex;flex-direction:column;gap:10px;padding-right:4px}
+#console{grid-column:1;grid-row:2;border:1px solid var(--rim);border-radius:12px;background:#0c1421;
+  overflow:auto;padding:8px 10px;font-family:"Barlow Condensed";font-size:13px;line-height:1.5}
+.card{background:var(--slate);border:1px solid var(--rim);border-radius:12px;padding:12px}
+.card h2{margin:0 0 8px;font-family:"Barlow Condensed";font-size:12px;letter-spacing:1.4px;
+  text-transform:uppercase;color:var(--ice);font-weight:600}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+button{font-family:"Barlow Condensed";font-weight:600;font-size:14px;letter-spacing:.4px;
+  background:transparent;color:var(--snow);border:1px solid var(--rim);border-radius:9px;
+  padding:8px 12px;cursor:pointer;transition:.15s}
+button:hover{border-color:var(--coral)}
+button.go{background:var(--coral);border-color:var(--coral);color:#231007}
+button.on{border-color:var(--go);color:var(--go)}
+button.sm{padding:6px 9px;font-size:13px}
+textarea{width:100%;height:90px;resize:vertical;background:#0c1421;color:var(--snow);
+  border:1px solid var(--rim);border-radius:9px;padding:8px;font-family:"Barlow Condensed";font-size:12px}
+label.fld{font-family:"Barlow Condensed";font-size:12px;color:var(--ice);text-transform:uppercase;letter-spacing:1px;
+  display:flex;flex-direction:column;gap:3px;flex:1}
+input[type=range]{width:100%;accent-color:var(--coral)}
+.val{font-family:"Barlow Condensed";color:var(--snow);font-size:14px}
+.hint{color:var(--fog);font-size:12px;font-family:"Barlow Condensed";margin-top:6px;line-height:1.4}
+.chips{display:flex;flex-direction:column;gap:5px}
+.chip{display:flex;justify-content:space-between;align-items:center;font-family:"Barlow Condensed";
+  font-size:13px;padding:5px 9px;border:1px solid var(--rim);border-radius:8px;background:#0c1421}
+.chip b{font-weight:600}
+.tag{font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:2px 7px;border-radius:20px;border:1px solid}
+.tag.out{color:var(--fog);border-color:var(--fog)}
+.tag.pending{color:var(--amber);border-color:var(--amber)}
+.tag.in{color:var(--go);border-color:var(--go);background:rgba(56,224,166,.12)}
+.tag.cooldown{color:var(--ice);border-color:var(--ice)}
+.stat{display:flex;justify-content:space-between;font-family:"Barlow Condensed";font-size:14px;padding:2px 0}
+.stat span:first-child{color:var(--ice);text-transform:uppercase;font-size:12px;letter-spacing:1px}
+.ev-enter{color:var(--go)} .ev-exit{color:var(--ice)} .ev-say{color:var(--coral)}
+.ev-warn{color:var(--amber)} .ev-sys{color:var(--fog)} .ev-flick{color:var(--hazard)} .ev-tick{color:#3a4a63}
+.avatar{width:18px;height:18px;border-radius:50%;background:var(--coral);
+  border:2px solid #fff;box-shadow:0 0 0 4px rgba(255,106,61,.3);cursor:grab}
+.lbl{font-family:"Barlow Condensed";font-size:12px;color:var(--snow);white-space:nowrap;
+  background:rgba(10,16,24,.7);padding:1px 6px;border-radius:6px;border:1px solid var(--rim);transform:translateY(-22px)}
+.maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Geofence Simulator</h1><span class="v">v1</span>
+  <span class="sub">general-purpose test bench · runs the real engine core</span>
+</header>
+
+<div id="wrap">
+  <div id="map"></div>
+
+  <div id="side">
+    <div class="card">
+      <h2>Project bundle</h2>
+      <textarea id="bundleText" placeholder="Paste an engine BUNDLE or fence-editor export here…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="sm" id="btnLoad">Load pasted</button>
+        <button class="sm" id="btnSample">Load sample walk</button>
+        <button class="sm" id="btnFile">Import file…</button>
+        <button class="sm" id="btnFit">Fit to data</button>
+      </div>
+      <input type="file" id="file" accept=".json,application/json" hidden>
+      <div class="row" style="margin-top:6px">
+        <button class="sm" id="btnSat" class="on">Satellite</button>
+        <button class="sm" id="btnTopo">Topo</button>
+        <button class="sm" id="btnOSM">Streets</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Walk a path</h2>
+      <div class="row">
+        <button id="btnDraw">Draw path</button>
+        <button class="sm" id="btnClearPath">Clear path</button>
+        <button class="go" id="btnPlay">▶ Play</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="fld">Speed <span class="val" id="spdVal">1.4 m/s</span>
+          <input type="range" id="spd" min="0.4" max="3" step="0.1" value="1.4"></label>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label class="fld">GPS jitter <span class="val" id="jitVal">±5 m</span>
+          <input type="range" id="jit" min="0" max="12" step="1" value="5"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="sm" id="btnLoop">Loop ▢</button>
+        <button class="sm" id="btnMute">Sound ◼</button>
+        <button class="sm" id="btnReset">Reset engine</button>
+      </div>
+      <div class="hint" id="drawHint">Draw path, then Play — or just drag the coral dot around the map. Jitter adds realistic GPS noise so you test the logic the way the field actually behaves.</div>
+    </div>
+
+    <div class="card">
+      <h2>Engine state</h2>
+      <div class="stat"><span>Needle →</span><span id="sNeedle">—</span></div>
+      <div class="stat"><span>Speed</span><span id="sSpeed">—</span></div>
+      <div class="stat"><span>Reported acc</span><span id="sAcc">—</span></div>
+      <div class="stat"><span>Fixes fed</span><span id="sFix">0</span></div>
+      <div class="chips" id="chips" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="console"></div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   GEOFENCE SIMULATOR — desk test bench
+   The block marked ENGINE CORE below is a VERBATIM MIRROR of the same
+   modules in geofence-engine.html. Do NOT hand-edit it here; if the
+   engine's logic changes, re-copy TUNING/Geo/Smoother/Geofencer so the
+   simulator always tests exactly what ships. (Later: extract to a shared
+   engine-core.js that both files load.)
+   ===================================================================== */
+
+/* ----- sim-side globals the core reads ----- */
+let BUNDLE = { ref:[0,0], zones:[] };
+const Audio = {
+  on:true, ctx:null,
+  unlock(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+            if(this.ctx && this.ctx.state==='suspended') this.ctx.resume(); },
+  ding(){ if(!this.on) return; try{ this.unlock(); const t=this.ctx.currentTime;
+            [784,1175].forEach((f,i)=>{ const o=this.ctx.createOscillator(),g=this.ctx.createGain(),s=t+i*0.09;
+              o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(0.0001,s);
+              g.gain.exponentialRampToValueAtTime(0.25,s+0.01); g.gain.exponentialRampToValueAtTime(0.0001,s+0.25);
+              o.connect(g); g.connect(this.ctx.destination); o.start(s); o.stop(s+0.3); }); }catch(e){} },
+  say(text){ if(!this.on) return; try{ const u=new SpeechSynthesisUtterance(text);
+            speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){} }
+};
+
+/* ========================= ENGINE CORE (mirror) ========================= */
+const TUNING = {
+  EXIT_BUFFER_M: 20,     // hysteresis: exit only past R + this
+  ENTER_DWELL_S: 3,      // must persist inside R this long before ENTER fires
+  ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
+  MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
+  SHORT_VISIT_S: 12,
+  LOWPASS: 0.35,         // position smoothing (0..1, higher = less smoothing)
+  HEAD_WINDOW: 8         // compass readings used for heading-confidence variance
+};
+
+/* ============================ GEO MATH ============================ */
+const Geo = {
+  R: 6371000,
+  // local planar metres relative to ref [lat,lon]
+  mPerDegLat: 111320,
+  mPerDegLon(lat){ return 111320 * Math.cos(lat*Math.PI/180); },
+  toXY(p, ref){ return { x:(p[1]-ref[1])*this.mPerDegLon(ref[0]), y:(p[0]-ref[0])*this.mPerDegLat }; },
+  hav(a,b){ const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,
+            dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
+            const x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+            return 2*this.R*Math.asin(Math.sqrt(x)); },
+  bearing(a,b){ const y=Math.sin((b[1]-a[1])*Math.PI/180)*Math.cos(b[0]*Math.PI/180);
+            const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-
+                    Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
+            return (Math.atan2(y,x)*180/Math.PI+360)%360; },
+  // signed distance to a circle: + outside, − inside
+  sdCircle(p, center, R){ return this.hav(p,center) - R; },
+  // point-to-segment distance in metres (planar)
+  segDist(P,A,B){ const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
+            const c1=vx*wx+vy*wy; if(c1<=0) return Math.hypot(wx,wy);
+            const c2=vx*vx+vy*vy; if(c2<=c1) return Math.hypot(P.x-B.x,P.y-B.y);
+            const t=c1/c2; return Math.hypot(P.x-(A.x+t*vx), P.y-(A.y+t*vy)); },
+  inPoly(P, pts){ let inside=false;
+            for(let i=0,j=pts.length-1;i<pts.length;j=i++){
+              const xi=pts[i].x,yi=pts[i].y,xj=pts[j].x,yj=pts[j].y;
+              if(((yi>P.y)!==(yj>P.y)) && (P.x<(xj-xi)*(P.y-yi)/(yj-yi)+xi)) inside=!inside;
+            } return inside; },
+  // signed distance to polygon: + outside, − inside
+  sdPolygon(p, coords, ref){ const P=this.toXY(p,ref);
+            const pts=coords.map(c=>this.toXY(c,ref));
+            let best=Infinity;
+            for(let i=0,j=pts.length-1;i<pts.length;j=i++) best=Math.min(best,this.segDist(P,pts[j],pts[i]));
+            return this.inPoly(P,pts) ? -best : best; },
+  // did segment prev->cur cross the line from->to? returns {crossed, side}
+  lineCross(prev,cur,from,to,ref){
+            const A=this.toXY(prev,ref),B=this.toXY(cur,ref),C=this.toXY(from,ref),D=this.toXY(to,ref);
+            const ccw=(p,q,r)=>(r.y-p.y)*(q.x-p.x)-(q.y-p.y)*(r.x-p.x);
+            const d1=ccw(C,D,A), d2=ccw(C,D,B), d3=ccw(A,B,C), d4=ccw(A,B,D);
+            const crossed = ((d1>0)!==(d2>0)) && ((d3>0)!==(d4>0));
+            return { crossed, side: d2<0 ? "L":"R" }; }
+};
+
+const Smoother = {
+  s:null, prev:null, spd:0, t0:null,
+  push(fix){
+    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; this.spd=0; }
+    const a=TUNING.LOWPASS;
+    this.s={ lat:this.s.lat+a*(fix.lat-this.s.lat), lon:this.s.lon+a*(fix.lon-this.s.lon) };
+    let headingTravel=null;
+    if(this.prev){
+      const d=Geo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
+      const dt=(fix.t-this.prev.t)/1000;
+      let inst = (dt<0.4) ? this.spd : d/dt;        // ignore sub-0.4 s gaps (GPS double-fix)
+      if(inst>25) inst = this.spd;                  // reject a lone >90 km/h spike
+      this.spd = this.spd + 0.35*(inst-this.spd);   // low-pass the speed
+      if(d>1) headingTravel=Geo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
+    }
+    this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
+    return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed:this.spd, headingTravel };
+  },
+  reset(){ this.s=null; this.prev=null; this.spd=0; }
+};
+
+const Geofencer = {
+  state:{},                 // per-layer state machine
+  onEvent:null,             // callback(evt)
+  key(z,l,i){ return z.id+":"+(l.kind)+":"+i; },
+
+  // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
+  sd(p, prev, zone, layer){
+    const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
+    if(layer.radiusM!=null) return Geo.sdCircle(PT, zone.center, layer.radiusM);
+    const g=layer.geometry;
+    if(g && g.type==="polygon") return Geo.sdPolygon(PT, g.coords, BUNDLE.ref);
+    if(g && g.type==="corridor") {
+      const P=Geo.toXY(PT,BUNDLE.ref); let best=Infinity;
+      const pts=g.path.map(c=>Geo.toXY(c,BUNDLE.ref));
+      for(let i=1;i<pts.length;i++) best=Math.min(best,Geo.segDist(P,pts[i-1],pts[i]));
+      return best-(g.widthM||10)/2;
+    }
+    return null; // tripline handled separately
+  },
+
+  update(p, prev, now){
+    const active=[];                       // zones with any active ring (for the needle)
+    BUNDLE.zones.forEach(zone=>{
+      zone.layers.forEach((layer,i)=>{
+        const k=this.key(zone,layer,i);
+        const st=this.state[k] || (this.state[k]={phase:"out",delivered:{},move:0});
+
+        // --- TRIPLINE: crossing-based, direction-aware ---
+        if(layer.geometry && layer.geometry.type==="tripline"){
+          if(prev){
+            const c=Geo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],
+                                   layer.geometry.from, layer.geometry.to, BUNDLE.ref);
+            if(c.crossed && st.phase!=="cooldown"){
+              st.phase="cooldown"; setTimeout(()=>{st.phase="out";},4000);
+              this._fire(zone,layer,"enter",{side:c.side});
+            }
+          }
+          return;
+        }
+
+        // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
+        const d=this.sd(p,prev,zone,layer);
+        if(d==null) return;
+        // accuracy gate (warn content is exempt — handled at fire time)
+        const holding = p.acc>TUNING.ACCURACY_CAP_M;
+
+        if(d<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d});
+
+        if(st.phase==="out"){
+          if(d<0 && !holding){ st.phase="pending"; st.since=now; }
+        } else if(st.phase==="pending"){
+          if(d>=0){ st.phase="out"; }                  // popped back out — was a single-fix blip
+          else {                                        // 2nd consecutive inside fix confirms entry
+            st.phase="in"; st.t0=now; st.move=0; st.delivered={};  // §4a: commit on movement, not a dwell clock
+            this._fire(zone,layer,"enter",{});
+          }
+        } else if(st.phase==="in"){
+          if(prev) st.move += Geo.hav([prev.lat,prev.lon],[p.lat,p.lon]);
+          // dwell triggers
+          layer && zone.triggers && zone.triggers.forEach(t=>{
+            if(t.fires_on==="dwell" && (!t.layer||t.layer===layer.kind) && t.delayS &&
+               (now-st.t0)/1000>=t.delayS && !st.delivered["dwell"+t.delayS]){
+              st.delivered["dwell"+t.delayS]=1; this._deliver(zone,t,{});
+            }
+          });
+          if(d>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer
+            const dur=(now-st.t0)/1000;
+            const flick = st.move<TUNING.MOVE_MIN_M && dur<TUNING.SHORT_VISIT_S;
+            this._fire(zone,layer,"exit",{dur,move:st.move,flick});
+            st.phase="out";
+          }
+        }
+      });
+    });
+    return active;
+  },
+
+  _fire(zone,layer,kind,info){
+    if(this.onEvent) this.onEvent({zone,layer,kind,info});
+    // deliver matching triggers
+    (zone.triggers||[]).forEach(t=>{
+      if(t.fires_on===kind && (!t.layer || t.layer===layer.kind)){
+        if(kind==="exit") return;            // exit triggers rare; skip for now
+        this._deliver(zone,t,info);
+      }
+    });
+  },
+  _deliver(zone,t,info){
+    // once-per-visit handled by caller's delivered map for dwell; enter handled here
+    if(t.needle){ if(this.onEvent) this.onEvent({zone,kind:"arm-needle"}); }
+    if(t.say){
+      const lowAcc = window.__lastAcc>(t.requires?.accuracyM ?? TUNING.ACCURACY_CAP_M);
+      const mode = t.requires?.onLowAccuracy || "suppress";
+      if(lowAcc && mode==="suppress"){
+        if(this.onEvent) this.onEvent({zone,kind:"suppressed",text:t.say});
+      } else {
+        const warn = lowAcc && mode==="warn";
+        Audio.ding();
+        Audio.say(t.say, warn);
+        if(this.onEvent) this.onEvent({zone,kind:"say",text:t.say,warn});
+      }
+    }
+  },
+  reset(){ this.state={}; }
+};
+/* ======================= END ENGINE CORE (mirror) ======================= */
+
+/* =============================== SAMPLE =============================== */
+const SAMPLE = {
+  project:"kh-village-walk", name:"KH Village Walk", ref:[51.3027,-117.0547],
+  zones:[
+    { id:"mclauglin-house", name:"Mclauglin House", center:[51.302757,-117.054644], audibleFromM:30,
+      layers:[ {kind:"general", radiusM:25}, {kind:"target", radiusM:15} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Look at Mclauglan house", oncePerVisit:true} ] },
+    { id:"jolivet-house", name:"Jolivet House", center:[51.303025,-117.054772], audibleFromM:30,
+      layers:[ {kind:"general", radiusM:30},
+               {kind:"target", geometry:{type:"polygon", coords:[
+                 [51.303166,-117.055064],[51.303020,-117.055012],
+                 [51.303023,-117.054798],[51.303166,-117.054840]]}} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Turn to Gary and Karens House", oncePerVisit:true} ] },
+    { id:"james-janice-house", name:"James Janice House", center:[51.303361,-117.054911], audibleFromM:25,
+      layers:[ {kind:"general", radiusM:25},
+               {kind:"target", geometry:{type:"tripline",
+                 from:[51.303365,-117.055022], to:[51.303357,-117.054800]}} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Turn and Look at James House", oncePerVisit:true} ] },
+    { id:"carols-house", name:"Carols House", center:[51.302089,-117.054256], audibleFromM:60,
+      layers:[ {kind:"general", radiusM:60},
+               {kind:"target", geometry:{type:"polygon", coords:[
+                 [51.302194,-117.054592],[51.302100,-117.054634],
+                 [51.301853,-117.054437],[51.302064,-117.053818],
+                 [51.302224,-117.053918],[51.302266,-117.054306]]}} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Look at Carols House", oncePerVisit:true} ] }
+  ]
+};
+
+/* =============================== MAP =============================== */
+const BASES = {
+  sat:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],attr:"Esri, Maxar"},
+  topo:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],attr:"Esri"},
+  osm:{tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],attr:"© OpenStreetMap"}
+};
+function styleFor(k){ return {version:8,
+  sources:{base:{type:"raster",tiles:BASES[k].tiles,tileSize:256,attribution:BASES[k].attr}},
+  layers:[{id:"base",type:"raster",source:"base"}]}; }
+
+const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:[-117.0547,51.3027],zoom:16});
+map.addControl(new maplibregl.NavigationControl());
+map.addControl(new maplibregl.ScaleControl({maxWidth:120,unit:"metric"}));
+
+let labelMarkers=[];        // HTML markers for zone names + live phase
+let PATH=[];                // [[lat,lon],...] drawn path
+let drawMode=false;
+
+map.on("load",()=>{
+  map.addSource("fences",{type:"geojson",data:fc([])});
+  map.addLayer({id:"fence-fill",type:"fill",source:"fences",
+    filter:["==",["geometry-type"],"Polygon"],
+    paint:{"fill-color":phaseColor(),
+      "fill-opacity":["case",["==",["get","state"],"in"],0.28,
+                      ["==",["get","kind"],"target"],0.14, 0.05]}});
+  map.addLayer({id:"fence-out",type:"line",source:"fences",
+    filter:["==",["geometry-type"],"Polygon"],
+    paint:{"line-color":phaseColor(),
+      "line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
+      "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
+  map.addLayer({id:"fence-line",type:"line",source:"fences",
+    filter:["==",["geometry-type"],"LineString"],
+    paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+
+  map.addSource("path",{type:"geojson",data:fc([])});
+  map.addLayer({id:"path-line",type:"line",source:"path",
+    filter:["==",["geometry-type"],"LineString"],
+    paint:{"line-color":"#8fb6d4","line-width":2,"line-dasharray":[1.5,1.5]}});
+  map.addLayer({id:"path-pts",type:"circle",source:"path",
+    filter:["==",["geometry-type"],"Point"],
+    paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-stroke-color":"#0a1018","circle-stroke-width":1}});
+
+  map.addSource("ghost",{type:"geojson",data:fc([])});
+  map.addLayer({id:"ghost",type:"circle",source:"ghost",
+    paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
+
+  loadBundle(SAMPLE,"sample walk");
+});
+
+map.on("click",(e)=>{
+  if(drawMode){ PATH.push([e.lngLat.lat,e.lngLat.lng]); drawPath(); }
+  else { placeAvatar(e.lngLat.lat,e.lngLat.lng); }
+});
+
+/* coral draggable avatar */
+const avEl=document.createElement("div"); avEl.className="avatar";
+const avatar=new maplibregl.Marker({element:avEl,draggable:true}).setLngLat([-117.0547,51.3027]).addTo(map);
+let dragT=0;
+avatar.on("drag",()=>{ const n=performance.now(); if(n-dragT<200) return; dragT=n;
+  const ll=avatar.getLngLat(); feed(ll.lat,ll.lng,(+jit.value)||5,Date.now()); });
+avatar.on("dragstart",()=>{ Audio.unlock(); });
+
+/* =========================== GEOJSON HELPERS =========================== */
+function fc(f){ return {type:"FeatureCollection",features:f}; }
+function phaseColor(){ return ["case",
+  ["==",["get","state"],"in"],"#38e0a6",
+  ["==",["get","state"],"pending"],"#ffc24d",
+  ["==",["get","state"],"cooldown"],"#8fb6d4",
+  ["==",["get","kind"],"target"],"#ff6a3d", "#5b7088"]; }
+
+function circleRing(center,rM){ const pts=[],lat=center[0],lon=center[1];
+  for(let i=0;i<=64;i++){ const a=i/64*2*Math.PI;
+    const dLat=(rM*Math.cos(a))/111320, dLon=(rM*Math.sin(a))/(111320*Math.cos(lat*Math.PI/180));
+    pts.push([lon+dLon,lat+dLat]); } return [pts]; }
+
+function phaseOf(zone,layer,i){ const st=Geofencer.state[zone.id+":"+layer.kind+":"+i];
+  return st?st.phase:"out"; }
+
+function zonesGeoJSON(){
+  const feats=[];
+  BUNDLE.zones.forEach(z=>{
+    z.layers.forEach((L,i)=>{
+      const state=phaseOf(z,L,i), props={zone:z.id,kind:L.kind,state};
+      if(L.radiusM!=null && z.center){
+        feats.push({type:"Feature",properties:props,geometry:{type:"Polygon",coordinates:circleRing(z.center,L.radiusM)}});
+      } else if(L.geometry){
+        const g=L.geometry;
+        if(g.type==="polygon"){ const ring=g.coords.map(c=>[c[1],c[0]]); ring.push(ring[0]);
+          feats.push({type:"Feature",properties:props,geometry:{type:"Polygon",coordinates:[ring]}}); }
+        else if(g.type==="tripline")
+          feats.push({type:"Feature",properties:props,geometry:{type:"LineString",coordinates:[[g.from[1],g.from[0]],[g.to[1],g.to[0]]]}});
+        else if(g.type==="corridor")
+          feats.push({type:"Feature",properties:props,geometry:{type:"LineString",coordinates:g.path.map(c=>[c[1],c[0]])}});
+      }
+    });
+  });
+  return fc(feats);
+}
+
+function refreshZones(){
+  if(map.getSource("fences")) map.getSource("fences").setData(zonesGeoJSON());
+  // live phase on the label chips + markers
+  const chips=document.getElementById("chips"); chips.innerHTML="";
+  BUNDLE.zones.forEach(z=>{
+    let ph="out";
+    z.layers.forEach((L,i)=>{ const p=phaseOf(z,L,i); if(p==="in")ph="in"; else if(p==="pending"&&ph!=="in")ph="pending"; else if(p==="cooldown"&&ph==="out")ph="cooldown"; });
+    const c=document.createElement("div"); c.className="chip";
+    c.innerHTML='<b>'+z.name+'</b><span class="tag '+ph+'">'+ph+'</span>';
+    chips.appendChild(c);
+  });
+  labelMarkers.forEach((m,idx)=>{ const z=BUNDLE.zones[idx]; if(!z||!z.center) return; });
+}
+
+/* =========================== ENGINE PIPELINE =========================== */
+/* mirrors HUD.onFix: smooth -> geofence -> needle pick */
+let prevP=null, fixCount=0;
+function feed(lat,lon,acc,t){
+  window.__lastAcc=acc;
+  const sm=Smoother.push({lat,lon,acc,t});
+  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+  const active=Geofencer.update(p,prevP,t);
+  prevP=p; fixCount++;
+  let pick=null,best=Infinity;
+  active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
+  if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center) return;
+      const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} }); }
+  // ghost = where the engine thinks you are (smoothed)
+  if(map.getSource("ghost")) map.getSource("ghost").setData(fc([{type:"Feature",properties:{},geometry:{type:"Point",coordinates:[p.lon,p.lat]}}]));
+  // HUD
+  document.getElementById("sNeedle").textContent = pick ? (pick.zone.name+"  ("+(pick.d<0?"inside":best.toFixed(0)+" m")+")") : "—";
+  document.getElementById("sSpeed").textContent = sm.speed.toFixed(1)+" m/s";
+  document.getElementById("sAcc").textContent = acc.toFixed(0)+" m";
+  document.getElementById("sFix").textContent = fixCount;
+  refreshZones();
+}
+
+function placeAvatar(lat,lon){ avatar.setLngLat([lon,lat]); Audio.unlock();
+  feed(lat,lon,(+jit.value)||5,Date.now()); }
+
+/* =============================== CONSOLE =============================== */
+function log(cls,msg){ const c=document.getElementById("console");
+  const d=document.createElement("div"); d.className=cls;
+  d.textContent=new Date().toLocaleTimeString()+"  "+msg; c.prepend(d);
+  while(c.childNodes.length>400) c.removeChild(c.lastChild); }
+
+Geofencer.onEvent=(e)=>{
+  if(e.kind==="enter") log("ev-enter","ENTER  "+e.zone.name+"/"+(e.layer?e.layer.kind:"")+(e.info&&e.info.side?" (cross "+e.info.side+")":""));
+  else if(e.kind==="exit"){ log("ev-exit","EXIT   "+e.zone.name+"  "+e.info.dur.toFixed(0)+"s, moved "+e.info.move.toFixed(0)+"m");
+       if(e.info.flick) log("ev-flick","       ^ flicker (barely moved) — would be ignored"); }
+  else if(e.kind==="say") log(e.warn?"ev-warn":"ev-say",'SAY    "'+e.text+'"'+(e.warn?" [approx]":""));
+  else if(e.kind==="suppressed") log("ev-flick","HOLD   reveal suppressed (fix too loose)");
+  else if(e.kind==="arm-needle") log("ev-sys","NEEDLE → "+e.zone.name);
+};
+
+/* =============================== BUNDLES =============================== */
+function centroidOf(zones){ let la=0,lo=0,n=0;
+  zones.forEach(z=>{ if(z.center){la+=z.center[0];lo+=z.center[1];n++;} });
+  return n?[la/n,lo/n]:[0,0]; }
+
+function loadBundle(b,srcLabel){
+  if(!b || !Array.isArray(b.zones)){ log("ev-warn","that doesn't look like a bundle (need a zones array)"); return; }
+  BUNDLE = b;
+  if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
+  Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+  document.getElementById("bundleText").value = JSON.stringify(b,null,2);
+  refreshZones(); fitToData();
+  log("ev-sys","loaded "+(b.name||"bundle")+" — "+BUNDLE.zones.length+" zones ("+(srcLabel||"")+")");
+}
+
+function fitToData(){
+  const pts=[];
+  BUNDLE.zones.forEach(z=>{ z.layers.forEach(L=>{
+    if(L.radiusM!=null && z.center){ circleRing(z.center,L.radiusM)[0].forEach(c=>pts.push(c)); }
+    else if(L.geometry){ const g=L.geometry;
+      if(g.type==="polygon") g.coords.forEach(c=>pts.push([c[1],c[0]]));
+      else if(g.type==="tripline"){ pts.push([g.from[1],g.from[0]]);pts.push([g.to[1],g.to[0]]); }
+      else if(g.type==="corridor") g.path.forEach(c=>pts.push([c[1],c[0]])); }
+  }); if(z.center) pts.push([z.center[1],z.center[0]]); });
+  if(!pts.length) return;
+  const b=new maplibregl.LngLatBounds(pts[0],pts[0]); pts.forEach(p=>b.extend(p));
+  map.fitBounds(b,{padding:60,maxZoom:18,duration:500});
+  const c=b.getCenter(); avatar.setLngLat(c);
+}
+fitToData(); // safe no-op until bundle loads
+
+/* =============================== PATH =============================== */
+function drawPath(){ const feats=[];
+  if(PATH.length) feats.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:PATH.map(p=>[p[1],p[0]])}});
+  PATH.forEach(p=>feats.push({type:"Feature",properties:{},geometry:{type:"Point",coordinates:[p[1],p[0]]}}));
+  if(map.getSource("path")) map.getSource("path").setData(fc(feats)); }
+
+function pathTotal(){ let s=0; for(let i=1;i<PATH.length;i++) s+=Geo.hav(PATH[i-1],PATH[i]); return s; }
+function pathPointAt(s){ if(PATH.length<2) return PATH[0]||null; let acc=0;
+  for(let i=1;i<PATH.length;i++){ const seg=Geo.hav(PATH[i-1],PATH[i]);
+    if(acc+seg>=s){ const t=seg?(s-acc)/seg:0;
+      return [PATH[i-1][0]+t*(PATH[i][0]-PATH[i-1][0]), PATH[i-1][1]+t*(PATH[i][1]-PATH[i-1][1])]; }
+    acc+=seg; } return PATH[PATH.length-1]; }
+
+function jitterPoint(lat,lon,rM){ if(rM<=0) return [lat,lon];
+  const ang=Math.random()*2*Math.PI, r=rM*Math.sqrt(Math.random());
+  return [ lat+(r*Math.cos(ang))/111320, lon+(r*Math.sin(ang))/(111320*Math.cos(lat*Math.PI/180)) ]; }
+
+/* replay: wall tick 250ms, each tick = 1 virtual second (4x watch speed, 1 Hz fixes) */
+let playing=false, sDist=0, vT=0, timer=null;
+function play(){
+  if(PATH.length<2){ log("ev-warn","draw a path first — tap Draw path, then click points on the map"); return; }
+  if(playing){ pause(); return; }
+  Audio.unlock();
+  if(sDist>=pathTotal()){ sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones(); }
+  playing=true; document.getElementById("btnPlay").textContent="⏸ Pause"; document.getElementById("btnPlay").classList.add("on");
+  vT=Date.now();
+  timer=setInterval(()=>{
+    const speed=+document.getElementById("spd").value, jitV=+document.getElementById("jit").value;
+    const total=pathTotal();
+    sDist += speed; vT += 1000;
+    const ended = sDist>=total;
+    const truePt = pathPointAt(Math.min(sDist,total));
+    const [jLat,jLon]=jitterPoint(truePt[0],truePt[1],jitV);
+    avatar.setLngLat([jLon,jLat]);
+    feed(jLat,jLon,Math.max(3,jitV||5),vT);
+    if(ended){ if(document.getElementById("btnLoop").classList.contains("on")){
+        sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; log("ev-sys","loop — restarting path"); }
+      else { pause(); log("ev-sys","path complete"); } }
+  },250);
+}
+function pause(){ playing=false; if(timer){clearInterval(timer);timer=null;}
+  document.getElementById("btnPlay").textContent="▶ Play"; document.getElementById("btnPlay").classList.remove("on"); }
+
+/* =============================== UI WIRING =============================== */
+const jitEl=document.getElementById("jit"), spdEl=document.getElementById("spd");
+spdEl.oninput=()=>document.getElementById("spdVal").textContent=(+spdEl.value).toFixed(1)+" m/s";
+jitEl.oninput=()=>document.getElementById("jitVal").textContent="±"+jitEl.value+" m";
+window.jit=jitEl; // used by avatar drag handler
+
+document.getElementById("btnSample").onclick=()=>loadBundle(JSON.parse(JSON.stringify(SAMPLE)),"sample walk");
+document.getElementById("btnLoad").onclick=()=>{ try{ loadBundle(JSON.parse(document.getElementById("bundleText").value),"pasted"); }
+  catch(e){ log("ev-warn","couldn't parse that JSON: "+e.message); } };
+document.getElementById("btnFit").onclick=fitToData;
+document.getElementById("btnFile").onclick=()=>document.getElementById("file").click();
+document.getElementById("file").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=()=>{ try{ loadBundle(JSON.parse(r.result),f.name); }catch(err){ log("ev-warn","bad file: "+err.message); } }; r.readAsText(f); };
+
+document.getElementById("btnSat").onclick=()=>setBase("sat");
+document.getElementById("btnTopo").onclick=()=>setBase("topo");
+document.getElementById("btnOSM").onclick=()=>setBase("osm");
+function setBase(k){ map.setStyle(styleFor(k));
+  map.once("styledata",()=>{ // re-add our layers after basemap swap
+    if(!map.getSource("fences")){ map.addSource("fences",{type:"geojson",data:zonesGeoJSON()});
+      map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==",["geometry-type"],"Polygon"],
+        paint:{"fill-color":phaseColor(),"fill-opacity":["case",["==",["get","state"],"in"],0.28,["==",["get","kind"],"target"],0.14,0.05]}});
+      map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==",["geometry-type"],"Polygon"],
+        paint:{"line-color":phaseColor(),"line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
+          "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
+      map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==",["geometry-type"],"LineString"],
+        paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+      map.addSource("path",{type:"geojson",data:fc([])});
+      map.addLayer({id:"path-line",type:"line",source:"path",filter:["==",["geometry-type"],"LineString"],
+        paint:{"line-color":"#8fb6d4","line-width":2,"line-dasharray":[1.5,1.5]}});
+      map.addLayer({id:"path-pts",type:"circle",source:"path",filter:["==",["geometry-type"],"Point"],
+        paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-stroke-color":"#0a1018","circle-stroke-width":1}});
+      map.addSource("ghost",{type:"geojson",data:fc([])});
+      map.addLayer({id:"ghost",type:"circle",source:"ghost",paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
+      refreshZones(); drawPath();
+    }
+  });
+  ["btnSat","btnTopo","btnOSM"].forEach(id=>document.getElementById(id).classList.remove("on"));
+  document.getElementById({sat:"btnSat",topo:"btnTopo",osm:"btnOSM"}[k]).classList.add("on");
+}
+
+document.getElementById("btnDraw").onclick=(e)=>{ drawMode=!drawMode;
+  e.target.classList.toggle("on",drawMode); e.target.textContent=drawMode?"Drawing… (click map)":"Draw path";
+  document.getElementById("drawHint").textContent=drawMode
+    ? "Click points on the map to lay down the route. Tap Draw path again when done, then Play."
+    : "Draw path, then Play — or just drag the coral dot. Jitter adds realistic GPS noise."; };
+document.getElementById("btnClearPath").onclick=()=>{ PATH=[]; sDist=0; drawPath(); log("ev-sys","path cleared"); };
+document.getElementById("btnPlay").onclick=play;
+document.getElementById("btnLoop").onclick=(e)=>{ e.target.classList.toggle("on");
+  e.target.textContent=e.target.classList.contains("on")?"Loop ▣":"Loop ▢"; };
+document.getElementById("btnMute").onclick=(e)=>{ Audio.on=!Audio.on;
+  e.target.classList.toggle("on",Audio.on); e.target.textContent=Audio.on?"Sound ◼":"Muted ◻"; };
+document.getElementById("btnReset").onclick=()=>{ Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+  document.getElementById("sFix").textContent="0"; refreshZones(); log("ev-sys","engine reset — state cleared"); };
+
+log("ev-sys","simulator ready — sample walk loaded. Drag the dot, or Draw path → Play.");
+</script>
+</body>
+</html>
