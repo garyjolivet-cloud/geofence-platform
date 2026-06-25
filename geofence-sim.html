@@ -66,7 +66,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
 </head>
 <body>
 <header>
-  <h1>Geofence Simulator</h1><span class="v">v1</span>
+  <h1>Geofence Simulator</h1><span class="v">v2</span>
   <span class="sub">general-purpose test bench · runs the real engine core</span>
 </header>
 
@@ -94,9 +94,12 @@ input[type=range]{width:100%;accent-color:var(--coral)}
     <div class="card">
       <h2>Walk a path</h2>
       <div class="row">
+        <button class="go" id="btnStops">▶ Walk all stops</button>
+      </div>
+      <div class="row" style="margin-top:6px">
         <button id="btnDraw">Draw path</button>
         <button class="sm" id="btnClearPath">Clear path</button>
-        <button class="go" id="btnPlay">▶ Play</button>
+        <button class="sm" id="btnPlay">▶ Play drawn</button>
       </div>
       <div class="row" style="margin-top:10px">
         <label class="fld">Speed <span class="val" id="spdVal">1.4 m/s</span>
@@ -568,10 +571,42 @@ function jitterPoint(lat,lon,rM){ if(rM<=0) return [lat,lon];
   const ang=Math.random()*2*Math.PI, r=rM*Math.sqrt(Math.random());
   return [ lat+(r*Math.cos(ang))/111320, lon+(r*Math.sin(ang))/(111320*Math.cos(lat*Math.PI/180)) ]; }
 
+/* a point that reliably sits INSIDE a zone's target (for the auto-walk route) */
+function innerPoint(z){
+  const tgt=z.layers.find(l=>l.kind==="target")||z.layers[0];
+  if(tgt.radiusM!=null) return z.center;                 // circle: center is inside
+  const g=tgt.geometry;
+  if(g && g.type==="polygon"){
+    if(z.center && Geo.sdPolygon(z.center,g.coords,BUNDLE.ref)<0) return z.center;
+    const avg=[g.coords.reduce((s,p)=>s+p[0],0)/g.coords.length,
+               g.coords.reduce((s,p)=>s+p[1],0)/g.coords.length];
+    if(Geo.sdPolygon(avg,g.coords,BUNDLE.ref)<0) return avg;
+    const c=z.center||avg;
+    for(let f=0.15; f<1; f+=0.15){ const q=[c[0]+f*(avg[0]-c[0]), c[1]+f*(avg[1]-c[1])];
+      if(Geo.sdPolygon(q,g.coords,BUNDLE.ref)<0) return q; }
+    return avg;
+  }
+  if(g && g.type==="tripline") return [(g.from[0]+g.to[0])/2,(g.from[1]+g.to[1])/2];
+  return z.center;
+}
+/* build a route through every stop, with a lead-in/out so we approach from outside */
+function buildStopsPath(){
+  const pts=BUNDLE.zones.filter(z=>z.center).map(innerPoint);
+  if(pts.length<1){ return false; }
+  const lead=(p,q,m)=>{ const len=Geo.hav(q,p)||1, k=m/len;
+    return [p[0]+(p[0]-q[0])*k, p[1]+(p[1]-q[1])*k]; };
+  const path=[];
+  if(pts.length>=2) path.push(lead(pts[0],pts[1],18));
+  pts.forEach(p=>path.push(p));
+  if(pts.length>=2) path.push(lead(pts[pts.length-1],pts[pts.length-2],18));
+  PATH=path; drawPath(); return PATH.length>=2;
+}
+
 /* replay: wall tick 250ms, each tick = 1 virtual second (4x watch speed, 1 Hz fixes) */
 let playing=false, sDist=0, vT=0, timer=null;
 function play(){
-  if(PATH.length<2){ log("ev-warn","draw a path first — tap Draw path, then click points on the map"); return; }
+  if(PATH.length<2){ if(buildStopsPath()) log("ev-sys","no path drawn — auto-walking all stops");
+    else { log("ev-warn","load a bundle with stops, or draw a path first"); return; } }
   if(playing){ pause(); return; }
   Audio.unlock();
   if(sDist>=pathTotal()){ sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones(); }
@@ -642,6 +677,10 @@ document.getElementById("btnDraw").onclick=(e)=>{ drawMode=!drawMode;
     : "Draw path, then Play — or just drag the coral dot. Jitter adds realistic GPS noise."; };
 document.getElementById("btnClearPath").onclick=()=>{ PATH=[]; sDist=0; drawPath(); log("ev-sys","path cleared"); };
 document.getElementById("btnPlay").onclick=play;
+document.getElementById("btnStops").onclick=()=>{ if(playing) pause();
+  if(!buildStopsPath()){ log("ev-warn","no stops with a center to route through"); return; }
+  sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones();
+  fitToData(); play(); };
 document.getElementById("btnLoop").onclick=(e)=>{ e.target.classList.toggle("on");
   e.target.textContent=e.target.classList.contains("on")?"Loop ▣":"Loop ▢"; };
 document.getElementById("btnMute").onclick=(e)=>{ Audio.on=!Audio.on;
