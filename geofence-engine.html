@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v5 · village walk</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v6 · fires + chime</span></h1>
     <span id="pill" class="pill">OFF</span>
   </header>
 
@@ -321,9 +321,9 @@ const Geofencer = {
         if(st.phase==="out"){
           if(d<0 && !holding){ st.phase="pending"; st.since=now; }
         } else if(st.phase==="pending"){
-          if(d>=0){ st.phase="out"; }
-          else if((now-st.since)/1000 >= TUNING.ENTER_DWELL_S){
-            st.phase="in"; st.t0=now; st.move=0; st.delivered={};
+          if(d>=0){ st.phase="out"; }                  // popped back out — was a single-fix blip
+          else {                                        // 2nd consecutive inside fix confirms entry
+            st.phase="in"; st.t0=now; st.move=0; st.delivered={};  // §4a: commit on movement, not a dwell clock
             this._fire(zone,layer,"enter",{});
           }
         } else if(st.phase==="in"){
@@ -367,6 +367,7 @@ const Geofencer = {
         if(this.onEvent) this.onEvent({zone,kind:"suppressed",text:t.say});
       } else {
         const warn = lowAcc && mode==="warn";
+        Audio.ding();
         Audio.say(t.say, warn);
         if(this.onEvent) this.onEvent({zone,kind:"say",text:t.say,warn});
       }
@@ -377,9 +378,29 @@ const Geofencer = {
 
 /* ============================ AUDIO ============================ */
 const Audio = {
-  unlocked:false,
-  unlock(){ if(this.unlocked) return; try{ const u=new SpeechSynthesisUtterance(" ");
-            u.volume=0; speechSynthesis.speak(u); this.unlocked=true; }catch(e){} },
+  unlocked:false, ctx:null,
+  unlock(){
+    if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+    if(this.ctx && this.ctx.state==='suspended') this.ctx.resume();
+    if(this.unlocked) return;
+    try{ const u=new SpeechSynthesisUtterance(" "); u.volume=0; speechSynthesis.speak(u); this.unlocked=true; }catch(e){}
+  },
+  ding(){                                              // the arrival "buzzer" — a two-note chime
+    try{
+      let ac=(typeof Clarity!=='undefined' && Clarity.ctx)?Clarity.ctx:this.ctx;
+      if(!ac){ ac=this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }
+      if(ac.state==='suspended') ac.resume();
+      const t=ac.currentTime;
+      [784,1175].forEach((f,i)=>{
+        const o=ac.createOscillator(), g=ac.createGain(), s=t+i*0.10;
+        o.type='sine'; o.frequency.value=f;
+        g.gain.setValueAtTime(0.0001,s);
+        g.gain.exponentialRampToValueAtTime(0.3,s+0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001,s+0.28);
+        o.connect(g); g.connect(ac.destination); o.start(s); o.stop(s+0.3);
+      });
+    }catch(e){}
+  },
   say(text, warn){
     try{ const u=new SpeechSynthesisUtterance(
             text.replace(/–/g,' to ').replace(/°/g,' degrees '));
@@ -563,7 +584,11 @@ Geofencer.onEvent=(e)=>{
   if(e.kind==='enter') HUD.log('ev-enter','ENTER  '+e.zone.name+(e.info.side?' ('+e.info.side+')':''));
   else if(e.kind==='exit'){ HUD.log('ev-exit','EXIT   '+e.zone.name+'  '+e.info.dur.toFixed(0)+'s, moved '+e.info.move.toFixed(0)+'m');
        if(e.info.flick) HUD.log('ev-flick','       ^ flicker (barely moved) — ignore'); }
-  else if(e.kind==='say') HUD.log(e.warn?'ev-warn':'ev-say','SAY    "'+e.text+'"'+(e.warn?' [approx]':''));
+  else if(e.kind==='say'){ HUD.log(e.warn?'ev-warn':'ev-say','SAY    "'+e.text+'"'+(e.warn?' [approx]':''));
+       const wrap=document.querySelector('.wrap');
+       if(wrap){ wrap.style.transition='none'; wrap.style.boxShadow='inset 0 0 0 5px #ff6a3d';
+         setTimeout(()=>{ wrap.style.transition='box-shadow .6s ease-out';
+           wrap.style.boxShadow='inset 0 0 0 0 rgba(255,106,61,0)'; },60); } }
   else if(e.kind==='suppressed') HUD.log('ev-flick','HOLD   reveal suppressed (fix too loose)');
   else if(e.kind==='arm-needle') HUD.log('ev-sys','NEEDLE armed → '+e.zone.name);
 };
