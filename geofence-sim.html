@@ -66,7 +66,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
 </head>
 <body>
 <header>
-  <h1>Geofence Simulator</h1><span class="v">v2</span>
+  <h1>Geofence Simulator</h1><span class="v">v3</span>
   <span class="sub">general-purpose test bench · runs the real engine core</span>
 </header>
 
@@ -144,9 +144,17 @@ input[type=range]{width:100%;accent-color:var(--coral)}
 /* ----- sim-side globals the core reads ----- */
 let BUNDLE = { ref:[0,0], zones:[] };
 const Audio = {
-  on:true, ctx:null,
+  on:true, ctx:null, keepAlive:null,
   unlock(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
-            if(this.ctx && this.ctx.state==='suspended') this.ctx.resume(); },
+            if(this.ctx && this.ctx.state==='suspended') this.ctx.resume();
+            if(this.ctx && !this.keepAlive){ try{ const o=this.ctx.createOscillator(),g=this.ctx.createGain();
+              g.gain.value=0.0001; o.frequency.value=30; o.connect(g); g.connect(this.ctx.destination); o.start(); this.keepAlive=o; }catch(e){} } },
+  approach(){ if(!this.on) return; try{ this.unlock(); const ac=this.ctx; if(!ac) return; const t=ac.currentTime;
+            const o=ac.createOscillator(),g=ac.createGain(); o.type='sine';
+            o.frequency.setValueAtTime(440,t); o.frequency.exponentialRampToValueAtTime(587,t+0.18);
+            g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.22,t+0.03);
+            g.gain.exponentialRampToValueAtTime(0.0001,t+0.5);
+            o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.55); }catch(e){} },
   ding(){ if(!this.on) return; try{ this.unlock(); const t=this.ctx.currentTime;
             [784,1175].forEach((f,i)=>{ const o=this.ctx.createOscillator(),g=this.ctx.createGain(),s=t+i*0.09;
               o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(0.0001,s);
@@ -319,7 +327,7 @@ const Geofencer = {
   },
   _deliver(zone,t,info){
     // once-per-visit handled by caller's delivered map for dwell; enter handled here
-    if(t.needle){ if(this.onEvent) this.onEvent({zone,kind:"arm-needle"}); }
+    if(t.needle){ Audio.approach(); if(this.onEvent) this.onEvent({zone,kind:"arm-needle"}); }
     if(t.say){
       const lowAcc = window.__lastAcc>(t.requires?.accuracyM ?? TUNING.ACCURACY_CAP_M);
       const mode = t.requires?.onLowAccuracy || "suppress";
