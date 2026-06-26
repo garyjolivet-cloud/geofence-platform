@@ -121,5 +121,59 @@ async function api(request, env, url) {
     }
   }
 
+  // --- device register (public; the device records itself, anonymously) ---
+  if (path === "/api/devices" && method === "POST") {
+    const b = await request.json();
+    if (!b.id) return json({ error: "need device id" }, 400);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO device (id,platform,lastSeen,createdAt) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET lastSeen=?"
+    ).bind(b.id, b.platform || "web", now, now, now).run();
+    return json({ ok: true, id: b.id });
+  }
+
+  // --- right to delete: purge everything tied to a device ---
+  const mf = path.match(/^\/api\/devices\/([^/]+)\/forget$/);
+  if (mf && method === "POST") {
+    const id = decodeURIComponent(mf[1]);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM event WHERE deviceId=?").bind(id),
+      env.DB.prepare("DELETE FROM consent WHERE deviceId=?").bind(id),
+      env.DB.prepare("DELETE FROM device WHERE id=?").bind(id)
+    ]);
+    return json({ ok: true, forgotten: id });
+  }
+
+  // --- consent: record (append-only) and read latest state per scope ---
+  if (path === "/api/consent" && method === "POST") {
+    const b = await request.json();
+    if (!b.deviceId || !b.scopes) return json({ error: "need deviceId and scopes" }, 400);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO device (id,platform,lastSeen,createdAt) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET lastSeen=?"
+    ).bind(b.deviceId, b.platform || "web", now, now, now).run();
+    const ver = b.version || "1";
+    const stmts = [];
+    for (const scope of Object.keys(b.scopes)) {
+      const granted = b.scopes[scope] ? 1 : 0;
+      stmts.push(env.DB.prepare(
+        "INSERT INTO consent (id,deviceId,scope,granted,version,retentionDays,grantedAt,revokedAt) VALUES (?,?,?,?,?,?,?,?)"
+      ).bind(crypto.randomUUID(), b.deviceId, scope, granted, ver,
+             b.retentionDays || null, now, granted ? null : now));
+    }
+    if (stmts.length) await env.DB.batch(stmts);
+    return json({ ok: true, recorded: stmts.length });
+  }
+  if (path === "/api/consent" && method === "GET") {
+    const dev = url.searchParams.get("device");
+    if (!dev) return json({ error: "need device param" }, 400);
+    const { results } = await env.DB
+      .prepare("SELECT scope,granted,version,grantedAt FROM consent WHERE deviceId=? ORDER BY grantedAt ASC")
+      .bind(dev).all();
+    const state = {};
+    (results || []).forEach(r => { state[r.scope] = { granted: !!r.granted, version: r.version, at: r.grantedAt }; });
+    return json({ deviceId: dev, consent: state });
+  }
+
   return json({ error: "not found: " + method + " " + path }, 404);
 }
