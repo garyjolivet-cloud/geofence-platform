@@ -85,8 +85,11 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v10 · platform</span></h1>
-    <span id="pill" class="pill">OFF</span>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v11 · consent</span></h1>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="pill" class="pill">OFF</span>
+      <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
+    </div>
   </header>
 
   <div class="needle-card">
@@ -693,6 +696,105 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
     HUD.log('ev-sys','loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' · '+b.zones.length+' stops (from platform)');
   }catch(e){ HUD.log('ev-warn','platform load failed: '+e.message+' — using built-in bundle'); }
 })();
+
+/* ---- consent + device identity (the privacy gate) ----
+   off by default; pseudonymous device id; future analytics must pass hasConsent() */
+(function(){
+  const CONSENT_VERSION="2026-06-26";
+  function lsGet(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
+  function lsSet(k,v){ try{localStorage.setItem(k,v);}catch(e){} }
+  function lsDel(k){ try{localStorage.removeItem(k);}catch(e){} }
+  function uuid(){ try{ if(crypto&&crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+    return 'd-'+Date.now().toString(16)+'-'+Math.random().toString(16).slice(2,10); }
+  function deviceId(){ let id=lsGet('gp.device'); if(!id){ id=uuid(); lsSet('gp.device',id);} return id; }
+  function stored(){ try{ return JSON.parse(lsGet('gp.consent')||'null'); }catch(e){ return null; } }
+  function current(){ const c=stored(); return c && c.version===CONSENT_VERSION; }
+
+  // the gate every future analytics/track call must check
+  window.__consent={ "store-history":false, "live-tracking":false };
+  window.hasConsent=function(scope){ return !!window.__consent[scope]; };
+  function apply(scopes){ window.__consent={ "store-history":!!(scopes&&scopes["store-history"]),
+                                             "live-tracking":!!(scopes&&scopes["live-tracking"]) }; }
+
+  async function record(scopes){
+    const id=deviceId();
+    lsSet('gp.consent', JSON.stringify({version:CONSENT_VERSION, scopes, ts:new Date().toISOString()}));
+    apply(scopes);
+    try{ await fetch('/api/consent',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({ deviceId:id, platform:'web', version:CONSENT_VERSION,
+        projectId:(new URLSearchParams(location.search).get('project')||null), scopes })}); }
+    catch(e){ /* gate still holds locally if offline */ }
+  }
+  async function forget(){
+    const id=deviceId();
+    try{ await fetch('/api/devices/'+encodeURIComponent(id)+'/forget',{method:'POST'}); }catch(e){}
+    lsDel('gp.consent'); lsDel('gp.device'); apply({});
+  }
+
+  const ov=document.getElementById('consentOverlay');
+  const tA=document.getElementById('tStore'), tB=document.getElementById('tTrack');
+  function open(){ const c=stored()||{scopes:{}};
+    tA.checked=!!(c.scopes&&c.scopes["store-history"]);
+    tB.checked=!!(c.scopes&&c.scopes["live-tracking"]);
+    ov.style.display='flex'; }
+  function close(){ ov.style.display='none'; }
+
+  document.getElementById('consentStart').onclick=async function(){
+    await record({ "store-history":tA.checked, "live-tracking":tB.checked }); close();
+    HUD.log('ev-sys','privacy set · analytics '+(tA.checked?'on':'off')+' · route '+(tB.checked?'on':'off')); };
+  document.getElementById('consentForget').onclick=async function(){
+    if(confirm('Erase this device id and all of its data from the platform?')){
+      await forget(); tA.checked=false; tB.checked=false;
+      HUD.log('ev-sys','privacy · device forgotten — collecting nothing'); } };
+  document.getElementById('privacyBtn').onclick=open;
+
+  // on load: apply any stored choice; show the gate first-run or when the text version changes
+  if(current()){ apply((stored()||{}).scopes); HUD.log('ev-sys','privacy · analytics '+(window.hasConsent('store-history')?'on':'off')+' · route '+(window.hasConsent('live-tracking')?'on':'off')); }
+  else { open(); }
+})();
 </script>
+
+<div id="consentOverlay" style="display:none;position:fixed;inset:0;z-index:9999;
+     background:rgba(6,10,16,.92);backdrop-filter:blur(4px);
+     align-items:center;justify-content:center;padding:20px;overflow:auto">
+  <div style="max-width:440px;width:100%;background:linear-gradient(180deg,var(--slate),#10192a);
+       border:1px solid var(--rim);border-radius:18px;padding:24px 22px;
+       font-family:'Barlow',system-ui,sans-serif;color:var(--snow)">
+    <h2 style="font-family:'Barlow Condensed';font-weight:700;font-size:22px;margin:0 0 4px">Before you start</h2>
+    <p style="color:var(--ice);font-size:14.5px;line-height:1.5;margin:0 0 16px">
+      This walk runs on your phone. It uses your location to know when you reach a stop —
+      that stays on your device. <b>Nothing is collected unless you turn it on below.</b>
+    </p>
+
+    <label style="display:flex;gap:12px;align-items:flex-start;padding:13px;border:1px solid var(--rim);
+           border-radius:12px;margin-bottom:10px;cursor:pointer">
+      <input type="checkbox" id="tStore" style="width:20px;height:20px;margin-top:2px;flex:0 0 auto;accent-color:var(--coral)">
+      <span>
+        <span style="font-family:'Barlow Condensed';font-weight:600;font-size:16px;display:block">Anonymous usage</span>
+        <span style="color:var(--fog);font-size:13px;line-height:1.45">Share which stops fire and how the audio lands, so the tour can be tuned. No name, no path, no personal info.</span>
+      </span>
+    </label>
+
+    <label style="display:flex;gap:12px;align-items:flex-start;padding:13px;border:1px solid var(--rim);
+           border-radius:12px;margin-bottom:6px;cursor:pointer">
+      <input type="checkbox" id="tTrack" style="width:20px;height:20px;margin-top:2px;flex:0 0 auto;accent-color:var(--coral)">
+      <span>
+        <span style="font-family:'Barlow Condensed';font-weight:600;font-size:16px;display:block">Record my route</span>
+        <span style="color:var(--fog);font-size:13px;line-height:1.45">Save the path you walk this time. A location trace is personal data — kept on the platform until you delete it.</span>
+      </span>
+    </label>
+
+    <p style="color:var(--fog);font-size:12px;line-height:1.45;margin:12px 0 16px">
+      Your device gets a random, anonymous id — not your name. You can change these choices or erase the device anytime under <b style="color:var(--ice)">Privacy</b>.
+    </p>
+
+    <button id="consentStart" style="width:100%;background:var(--coral);color:#1a0d07;border:none;
+        border-radius:11px;padding:13px;font-family:'Barlow Condensed';font-weight:700;font-size:17px;
+        letter-spacing:.4px;text-transform:uppercase;cursor:pointer">Start the walk</button>
+    <button id="consentForget" style="width:100%;background:transparent;color:var(--fog);border:none;
+        margin-top:8px;padding:8px;font-family:'Barlow Condensed';font-size:13px;cursor:pointer">
+        Forget this device &amp; erase its data</button>
+  </div>
+</div>
 </body>
 </html>
