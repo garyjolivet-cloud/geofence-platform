@@ -35,7 +35,19 @@ export default {
       try { return await api(request, env, url); }
       catch (e) { return json({ error: String((e && e.message) || e) }, 500); }
     }
-    // everything else: static files (the three HTML tools)
+    // friendly URLs → the real static files (query string is preserved)
+    const FRIENDLY = {
+      "/editor": "/fence-editor.html",
+      "/sim": "/geofence-sim.html",
+      "/engine": "/geofence-engine.html"
+    };
+    const clean = url.pathname.replace(/\/+$/, "");
+    if (FRIENDLY[clean] && env.ASSETS) {
+      const u = new URL(request.url);
+      u.pathname = FRIENDLY[clean];
+      return env.ASSETS.fetch(new Request(u.toString(), request));
+    }
+    // everything else: static files (the home page + the three HTML tools)
     return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
   }
 };
