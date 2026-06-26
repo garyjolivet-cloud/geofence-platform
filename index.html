@@ -3,45 +3,156 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chase Life — Geofence Platform</title>
-<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<title>Geofence Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root{--night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088}
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
+         --snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
   *{box-sizing:border-box}
-  body{margin:0;min-height:100vh;background:radial-gradient(120% 80% at 50% -10%,#16233a,#0a1018);
-       color:var(--snow);font-family:"Barlow",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}
-  .wrap{width:100%;max-width:440px}
-  .eyebrow{font-family:"Barlow Condensed";text-transform:uppercase;letter-spacing:3px;color:var(--coral);font-size:13px;font-weight:600}
-  h1{font-family:"Black Han Sans";font-size:38px;line-height:1;margin:6px 0 4px}
-  p.sub{color:var(--ice);font-family:"Barlow Condensed";font-size:16px;margin:0 0 22px}
-  a.tool{display:block;text-decoration:none;color:var(--snow);background:var(--slate);
-         border:1px solid var(--rim);border-radius:14px;padding:16px 18px;margin-bottom:12px;
-         transition:border-color .15s,transform .15s}
-  a.tool:hover{border-color:var(--coral);transform:translateY(-1px)}
-  a.tool .t{font-family:"Black Han Sans";font-size:19px}
-  a.tool .d{font-family:"Barlow Condensed";color:var(--fog);font-size:14px;margin-top:2px}
-  a.tool .go{float:right;color:var(--coral);font-family:"Barlow Condensed";font-weight:700}
-  footer{color:var(--fog);font-family:"Barlow Condensed";font-size:12px;margin-top:18px;text-align:center}
+  html,body{margin:0;min-height:100%;background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(255,106,61,.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 10%, rgba(56,224,166,.07), transparent 55%), var(--night);
+    color:var(--snow);font-family:"Barlow",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 64px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;
+         padding:14px 0 22px;border-bottom:1px solid var(--rim)}
+  .brand{display:flex;align-items:center;gap:13px}
+  .glyph{width:42px;height:42px;border-radius:12px;flex:0 0 auto;
+         background:linear-gradient(150deg,var(--coral),#ff9166);position:relative;
+         box-shadow:0 6px 22px rgba(255,106,61,.30)}
+  .glyph::after{content:"";position:absolute;inset:12px;border-radius:50%;border:2.5px solid #1a0d07}
+  .glyph::before{content:"";position:absolute;left:50%;top:7px;width:2.5px;height:13px;background:#1a0d07;transform:translateX(-50%);border-radius:2px}
+  .brand h1{font-family:"Black Han Sans";font-weight:400;font-size:22px;margin:0;letter-spacing:.3px}
+  .brand p{margin:1px 0 0;font-family:"Barlow Condensed";font-size:12.5px;letter-spacing:1.2px;
+           text-transform:uppercase;color:var(--fog)}
+  nav{display:flex;gap:8px;flex-wrap:wrap}
+  nav a{font-family:"Barlow Condensed";font-weight:600;font-size:13.5px;letter-spacing:.4px;
+        text-transform:uppercase;padding:9px 14px;border:1px solid var(--rim);border-radius:10px;
+        color:var(--ice);transition:.15s;background:rgba(20,29,43,.5)}
+  nav a:hover{border-color:var(--coral);color:var(--snow)}
+  nav a.primary{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  nav a.primary:hover{filter:brightness(1.07)}
+
+  .sect{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 14px}
+  .sect h2{font-family:"Barlow Condensed";font-weight:700;font-size:15px;letter-spacing:1.6px;
+           text-transform:uppercase;color:var(--ice);margin:0}
+  .sect .count{font-family:"Barlow Condensed";color:var(--fog);font-size:13px}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+  .card{background:linear-gradient(180deg,var(--slate),#10192680);border:1px solid var(--rim);
+        border-radius:16px;padding:17px 17px 15px;display:flex;flex-direction:column;gap:12px;
+        transition:.16s;position:relative;overflow:hidden}
+  .card:hover{border-color:#33455f;transform:translateY(-2px)}
+  .card .top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .card h3{font-family:"Barlow Condensed";font-weight:600;font-size:20px;margin:0;line-height:1.1}
+  .card .sub{font-family:"Barlow Condensed";font-size:12.5px;color:var(--fog);letter-spacing:.4px;
+             text-transform:uppercase;margin-top:3px}
+  .badge{flex:0 0 auto;font-family:"Barlow Condensed";font-size:11px;font-weight:600;letter-spacing:.6px;
+         text-transform:uppercase;padding:3px 9px;border-radius:20px;border:1px solid}
+  .badge.live{color:var(--go);border-color:rgba(56,224,166,.5);background:rgba(56,224,166,.10)}
+  .badge.draft{color:var(--amber);border-color:rgba(255,194,77,.5);background:rgba(255,194,77,.08)}
+  .actions{display:flex;gap:7px;margin-top:2px}
+  .actions a{flex:1;text-align:center;font-family:"Barlow Condensed";font-weight:600;font-size:13.5px;
+             letter-spacing:.4px;text-transform:uppercase;padding:9px 6px;border-radius:9px;
+             border:1px solid var(--rim);color:var(--ice);transition:.15s}
+  .actions a:hover{border-color:var(--coral);color:var(--snow)}
+  .actions a.walk{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  .actions a.walk:hover{filter:brightness(1.07)}
+
+  .state{border:1px dashed var(--rim);border-radius:16px;padding:34px 22px;text-align:center;color:var(--fog);
+         font-family:"Barlow Condensed";font-size:15px}
+  .state b{color:var(--snow)}
+  .state a{color:var(--coral);font-weight:600}
+  footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--rim);
+         font-family:"Barlow Condensed";font-size:12.5px;color:var(--fog);display:flex;
+         justify-content:space-between;flex-wrap:wrap;gap:8px}
+  footer a{color:var(--ice)} footer a:hover{color:var(--coral)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--fog);margin-right:6px;vertical-align:middle}
+  .dot.ok{background:var(--go)} .dot.bad{background:var(--hazard)}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="eyebrow">Chase Life</div>
-    <h1>Geofence Platform</h1>
-    <p class="sub">Location-triggered audio &amp; info experiences.</p>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="glyph" aria-hidden="true"></div>
+      <div>
+        <h1>Geofence Platform</h1>
+        <p>Author · Test · Run location-aware tours</p>
+      </div>
+    </div>
+    <nav>
+      <a href="/editor" class="primary">+ New tour</a>
+      <a href="/editor">Editor</a>
+      <a href="/sim">Simulator</a>
+      <a href="/engine">Field engine</a>
+    </nav>
+  </header>
 
-    <a class="tool" href="./fence-editor.html">
-      <span class="go">open ›</span>
-      <div class="t">Fence Editor</div>
-      <div class="d">Draw circle, polygon &amp; tripline fences on a map. Export the bundle.</div>
-    </a>
-    <a class="tool" href="./geofence-engine.html">
-      <span class="go">open ›</span>
-      <div class="t">Geofence Engine</div>
-      <div class="d">On-device engine + field-test HUD. Walk it on the trail.</div>
-    </a>
-
-    <footer>Open the engine over https on your phone for GPS + compass.</footer>
+  <div class="sect">
+    <h2>Projects</h2>
+    <span class="count" id="count"></span>
   </div>
+  <div class="grid" id="grid"></div>
+  <div class="state" id="state">Loading projects…</div>
+
+  <footer>
+    <span><span class="dot" id="apidot"></span><span id="apitext">checking platform…</span></span>
+    <span>Tools: <a href="/editor">Editor</a> · <a href="/sim">Simulator</a> · <a href="/engine">Engine</a></span>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const grid=document.getElementById("grid");
+const stateEl=document.getElementById("state");
+const countEl=document.getElementById("count");
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function when(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return "";
+  const days=Math.floor((Date.now()-d)/86400000);
+  return days<=0?"updated today":days===1?"updated yesterday":"updated "+days+" days ago"; }
+
+function card(p){
+  const id=esc(p.id);
+  const live=(p.status==="live");
+  const badge=live?'<span class="badge live">live</span>':'<span class="badge draft">draft</span>';
+  const sub=[esc(p.mode||"tour").replace(/-/g," "), "v"+(p.bundleVersion||1), when(p.updatedAt)].filter(Boolean).join(" · ");
+  return '<div class="card">'
+    + '<div class="top"><div><h3>'+esc(p.name||p.id)+'</h3><div class="sub">'+sub+'</div></div>'+badge+'</div>'
+    + '<div class="actions">'
+    +   '<a class="walk" href="/engine?project='+id+'">Walk</a>'
+    +   '<a href="/sim?project='+id+'">Test</a>'
+    +   '<a href="/editor?project='+id+'">Edit</a>'
+    + '</div></div>';
+}
+
+async function load(){
+  try{
+    const r=await fetch("/api/projects");
+    const j=await r.json();
+    const list=j.projects||[];
+    setApi(true, list.length+" projects · platform online");
+    if(!list.length){
+      stateEl.innerHTML='No projects yet. <a href="/editor">Open the editor</a> to author your first tour, then Publish it.';
+      stateEl.style.display="block"; grid.style.display="none"; countEl.textContent=""; return;
+    }
+    grid.innerHTML=list.map(card).join("");
+    grid.style.display="grid"; stateEl.style.display="none";
+    countEl.textContent=list.length+(list.length===1?" project":" projects");
+  }catch(e){
+    setApi(false,"platform unreachable");
+    stateEl.innerHTML='Couldn\u2019t reach the platform API. The tools still work directly: '
+      +'<a href="/editor">Editor</a>, <a href="/sim">Simulator</a>, <a href="/engine">Engine</a>.';
+    stateEl.style.display="block"; grid.style.display="none";
+  }
+}
+function setApi(ok,text){
+  document.getElementById("apidot").className="dot "+(ok?"ok":"bad");
+  document.getElementById("apitext").textContent=text;
+}
+load();
+</script>
 </body>
 </html>
