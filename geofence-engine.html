@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v9 · approach cue</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v10 · platform</span></h1>
     <span id="pill" class="pill">OFF</span>
   </header>
 
@@ -168,7 +168,7 @@ const TUNING = {
 
 /* ---------- BUNDLE (the project the engine runs). Edit coords with real
    captures from fieldtest.html. Built-in sample = the KH village walk. ---------- */
-const BUNDLE = {
+let BUNDLE = {
   project: "kh-village-walk",
   name: "KH Village Walk",
   ref: [51.3027, -117.0547],          // near the village stops, for planar math
@@ -674,6 +674,25 @@ document.getElementById('simHere').onclick=()=>{ simPos=BUNDLE.ref.slice(); tick
 
 HUD.log('ev-sys','engine loaded · '+BUNDLE.name+' · '+BUNDLE.zones.length+' stops');
 HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
+
+/* if opened as ?project=<id>, load that published bundle from the platform;
+   keep the built-in bundle if offline or the fetch fails */
+(async function loadProject(){
+  const pid=new URLSearchParams(location.search).get('project');
+  if(!pid) return;
+  HUD.log('ev-sys','loading project "'+pid+'" from platform…');
+  try{
+    const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle');
+    if(!r.ok){ const e=await r.json().catch(()=>({}));
+      HUD.log('ev-warn','platform: '+(e.error||('HTTP '+r.status))+' — using built-in bundle'); return; }
+    const b=await r.json();
+    if(!b || !Array.isArray(b.zones) || !b.zones.length){
+      HUD.log('ev-warn','platform bundle empty — using built-in bundle'); return; }
+    BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+    if(document.getElementById('simZones')) buildSimZones();
+    HUD.log('ev-sys','loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' · '+b.zones.length+' stops (from platform)');
+  }catch(e){ HUD.log('ev-warn','platform load failed: '+e.message+' — using built-in bundle'); }
+})();
 </script>
 </body>
 </html>
