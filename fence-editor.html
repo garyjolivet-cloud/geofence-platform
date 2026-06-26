@@ -1,438 +1,715 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chase Life — Fence Editor</title>
+<title>Geofence Simulator</title>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
-         --snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow)}
-  #map{position:absolute;inset:0}
-  .cond{font-family:"Barlow Condensed",sans-serif}
-  .panel{position:absolute;top:10px;left:10px;width:312px;max-height:calc(100vh - 20px);overflow-y:auto;
-         background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
-         backdrop-filter:blur(6px)}
-  .panel h1{font-family:"Black Han Sans";font-size:17px;margin:0 0 4px}
-  .panel h1 .v{font-family:"Barlow Condensed";font-size:12px;color:var(--coral);font-weight:600}
-  .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
-  button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
-         font-size:13px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:9px;
-         padding:8px 10px;cursor:pointer;flex:1 1 auto}
-  button:focus-visible{outline:2px solid var(--coral);outline-offset:2px}
-  button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
-  button.ghost{flex:0 0 auto}
-  label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:11px;letter-spacing:.6px;color:var(--fog);display:block;margin:6px 0 2px}
-  label.chk{display:flex;align-items:center;gap:8px;font-family:"Barlow Condensed";font-size:13px;color:var(--snow);text-transform:none;letter-spacing:0;margin:8px 0 4px;cursor:pointer}
-  label.chk input{width:auto}
-  input,textarea,select{width:100%;font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
-         color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px}
-  .half{display:flex;gap:6px} .half>div{flex:1}
-  textarea#out{height:96px;resize:vertical;font-family:ui-monospace,monospace;font-size:11px;line-height:1.4}
-  textarea.say{height:54px;resize:vertical;font-family:"Barlow Condensed";font-size:13px}
-  .zone{background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:8px;margin-bottom:6px;cursor:pointer}
-  .zone.sel{border-color:var(--coral);background:#23170f}
-  .zone .t{display:flex;justify-content:space-between;align-items:center;gap:6px}
-  .zone .tag{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.5px;
-             color:var(--ice);border:1px solid var(--rim);border-radius:6px;padding:1px 6px}
-  .zone .del{flex:0 0 auto;background:none;border:none;color:var(--fog);font-size:16px;padding:0 4px;cursor:pointer}
-  .hint{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin:4px 0}
-  hr{border:none;border-top:1px solid var(--rim);margin:10px 0}
-  .props{border:1px solid var(--coral);border-radius:12px;padding:10px;margin:8px 0;background:rgba(255,106,61,.05)}
-  .props h2{font-family:"Barlow Condensed";font-size:13px;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px;color:var(--coral)}
-  .status{position:absolute;bottom:10px;left:10px;z-index:5;background:rgba(10,16,24,.9);border:1px solid var(--rim);
-          border-radius:9px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice)}
-  .base{position:absolute;top:10px;right:10px;z-index:5}
-  .base select{width:auto}
-  .maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim);font-family:"Barlow Condensed"}
+:root{
+  --night:#0a1018; --slate:#141d2b; --rim:#26344a; --coral:#ff6a3d; --snow:#eef4fb;
+  --ice:#8fb6d4; --fog:#5b7088; --hazard:#ff2f4e; --go:#38e0a6; --amber:#ffc24d;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--night);color:var(--snow);
+  font-family:"Barlow",system-ui,sans-serif;overflow:hidden}
+header{display:flex;align-items:baseline;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rim);background:var(--slate)}
+header h1{margin:0;font-family:"Barlow Condensed";font-weight:700;font-size:22px;letter-spacing:.5px}
+header .v{color:var(--coral);font-family:"Barlow Condensed";font-size:13px}
+header .sub{margin-left:auto;color:var(--fog);font-family:"Barlow Condensed";font-size:13px;text-transform:uppercase;letter-spacing:1px}
+#wrap{display:grid;grid-template-columns:1fr 344px;grid-template-rows:1fr 210px;gap:10px;
+  height:calc(100vh - 49px);padding:10px}
+#map{grid-column:1;grid-row:1;border:1px solid var(--rim);border-radius:12px;overflow:hidden}
+#side{grid-column:2;grid-row:1 / span 2;overflow:auto;display:flex;flex-direction:column;gap:10px;padding-right:4px}
+#console{grid-column:1;grid-row:2;border:1px solid var(--rim);border-radius:12px;background:#0c1421;
+  overflow:auto;padding:8px 10px;font-family:"Barlow Condensed";font-size:13px;line-height:1.5}
+.card{background:var(--slate);border:1px solid var(--rim);border-radius:12px;padding:12px}
+.card h2{margin:0 0 8px;font-family:"Barlow Condensed";font-size:12px;letter-spacing:1.4px;
+  text-transform:uppercase;color:var(--ice);font-weight:600}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+button{font-family:"Barlow Condensed";font-weight:600;font-size:14px;letter-spacing:.4px;
+  background:transparent;color:var(--snow);border:1px solid var(--rim);border-radius:9px;
+  padding:8px 12px;cursor:pointer;transition:.15s}
+button:hover{border-color:var(--coral)}
+button.go{background:var(--coral);border-color:var(--coral);color:#231007}
+button.on{border-color:var(--go);color:var(--go)}
+button.sm{padding:6px 9px;font-size:13px}
+textarea{width:100%;height:90px;resize:vertical;background:#0c1421;color:var(--snow);
+  border:1px solid var(--rim);border-radius:9px;padding:8px;font-family:"Barlow Condensed";font-size:12px}
+label.fld{font-family:"Barlow Condensed";font-size:12px;color:var(--ice);text-transform:uppercase;letter-spacing:1px;
+  display:flex;flex-direction:column;gap:3px;flex:1}
+input[type=range]{width:100%;accent-color:var(--coral)}
+.val{font-family:"Barlow Condensed";color:var(--snow);font-size:14px}
+.hint{color:var(--fog);font-size:12px;font-family:"Barlow Condensed";margin-top:6px;line-height:1.4}
+.chips{display:flex;flex-direction:column;gap:5px}
+.chip{display:flex;justify-content:space-between;align-items:center;font-family:"Barlow Condensed";
+  font-size:13px;padding:5px 9px;border:1px solid var(--rim);border-radius:8px;background:#0c1421}
+.chip b{font-weight:600}
+.tag{font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:2px 7px;border-radius:20px;border:1px solid}
+.tag.out{color:var(--fog);border-color:var(--fog)}
+.tag.pending{color:var(--amber);border-color:var(--amber)}
+.tag.in{color:var(--go);border-color:var(--go);background:rgba(56,224,166,.12)}
+.tag.cooldown{color:var(--ice);border-color:var(--ice)}
+.stat{display:flex;justify-content:space-between;font-family:"Barlow Condensed";font-size:14px;padding:2px 0}
+.stat span:first-child{color:var(--ice);text-transform:uppercase;font-size:12px;letter-spacing:1px}
+.ev-enter{color:var(--go)} .ev-exit{color:var(--ice)} .ev-say{color:var(--coral)}
+.ev-warn{color:var(--amber)} .ev-sys{color:var(--fog)} .ev-flick{color:var(--hazard)} .ev-tick{color:#3a4a63}
+.avatar{width:18px;height:18px;border-radius:50%;background:var(--coral);
+  border:2px solid #fff;box-shadow:0 0 0 4px rgba(255,106,61,.3);cursor:grab}
+.lbl{font-family:"Barlow Condensed";font-size:12px;color:var(--snow);white-space:nowrap;
+  background:rgba(10,16,24,.7);padding:1px 6px;border-radius:6px;border:1px solid var(--rim);transform:translateY(-22px)}
+.maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim)}
 </style>
 </head>
 <body>
-<div id="map"></div>
-<div class="base"><select id="baseSel" title="base map">
-  <option value="sat">Satellite</option><option value="topo">Topo</option><option value="street">Street</option>
-</select></div>
-<div class="status" id="status">click the map to read coordinates</div>
+<header>
+  <h1>Geofence Simulator</h1><span class="v">v4</span>
+  <span class="sub">general-purpose test bench · runs the real engine core</span>
+</header>
 
-<div class="panel">
-  <h1>Fence Editor <span class="v">v2 · triggers + audio</span></h1>
-  <div class="hint">Draw a stop, set what it says and how it fires, then export — it drops straight into the engine and the simulator.</div>
+<div id="wrap">
+  <div id="map"></div>
 
-  <label class="k">add a stop — pick a shape</label>
-  <div class="row">
-    <button data-tool="circle">● Circle</button>
-    <button data-tool="polygon">⬡ Polygon</button>
-    <button data-tool="tripline">／ Tripline</button>
-  </div>
-  <div class="row" id="circleRow" style="display:none">
-    <label class="k" style="flex:0 0 auto;align-self:center;margin:0">reveal radius m</label>
-    <input id="newRadius" type="number" value="12" min="3" style="flex:1">
-  </div>
-  <div class="row">
-    <button id="finishBtn" class="ghost" style="flex:1">Finish polygon</button>
-    <button id="cancelBtn" class="ghost" style="flex:0 0 auto">✕</button>
-  </div>
-  <div class="hint" id="drawHint">pick a shape to start drawing</div>
-
-  <!-- PROPERTIES of the selected stop -->
-  <div class="props" id="props" style="display:none">
-    <h2 id="pTitle">Stop</h2>
-    <label class="k">name</label>
-    <input id="pName" placeholder="Mountain Flower Garden">
-    <label class="k">spoken line</label>
-    <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
-    <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
-
-    <label class="k">speak when</label>
-    <select id="pFires">
-      <option value="enter">I arrive</option>
-      <option value="dwell">I linger a while</option>
-    </select>
-    <div class="row" id="dwellRow" style="display:none">
-      <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
-      <input id="pDwell" type="number" value="20" min="2" style="flex:1">
+  <div id="side">
+    <div class="card">
+      <h2>Project bundle</h2>
+      <textarea id="bundleText" placeholder="Paste an engine BUNDLE or fence-editor export here…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="sm" id="btnLoad">Load pasted</button>
+        <button class="sm" id="btnSample">Load sample walk</button>
+        <button class="sm" id="btnFile">Import file…</button>
+        <button class="sm" id="btnPlatform">From platform</button>
+        <button class="sm" id="btnFit">Fit to data</button>
+      </div>
+      <input type="file" id="file" accept=".json,application/json" hidden>
+      <div class="row" style="margin-top:6px">
+        <button class="sm" id="btnSat" class="on">Satellite</button>
+        <button class="sm" id="btnTopo">Topo</button>
+        <button class="sm" id="btnOSM">Streets</button>
+      </div>
     </div>
 
-    <label class="chk"><input type="checkbox" id="pNeedle" checked> point the arrow here on approach</label>
-
-    <div class="half">
-      <div><label class="k">approach ring m</label><input id="pApproach" type="number" value="30" min="8"></div>
-      <div id="revealWrap"><label class="k">reveal radius m</label><input id="pReveal" type="number" min="3"></div>
+    <div class="card">
+      <h2>Walk a path</h2>
+      <div class="row">
+        <button class="go" id="btnStops">▶ Walk all stops</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="btnDraw">Draw path</button>
+        <button class="sm" id="btnClearPath">Clear path</button>
+        <button class="sm" id="btnPlay">▶ Play drawn</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="fld">Speed <span class="val" id="spdVal">1.4 m/s</span>
+          <input type="range" id="spd" min="0.4" max="3" step="0.1" value="1.4"></label>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label class="fld">GPS jitter <span class="val" id="jitVal">±5 m</span>
+          <input type="range" id="jit" min="0" max="12" step="1" value="5"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="sm" id="btnLoop">Loop ▢</button>
+        <button class="sm" id="btnMute">Sound ◼</button>
+        <button class="sm" id="btnReset">Reset engine</button>
+      </div>
+      <div class="hint" id="drawHint">Draw path, then Play — or just drag the coral dot around the map. Jitter adds realistic GPS noise so you test the logic the way the field actually behaves.</div>
     </div>
-    <label class="k">audio fades in from (m)</label>
-    <input id="pAudio" type="number" value="40" min="0">
 
-    <div class="row" style="margin-top:8px">
-      <button id="pDelete" class="ghost">Delete stop</button>
-      <button id="pDone" class="on">Done</button>
+    <div class="card">
+      <h2>Engine state</h2>
+      <div class="stat"><span>Needle →</span><span id="sNeedle">—</span></div>
+      <div class="stat"><span>Speed</span><span id="sSpeed">—</span></div>
+      <div class="stat"><span>Reported acc</span><span id="sAcc">—</span></div>
+      <div class="stat"><span>Fixes fed</span><span id="sFix">0</span></div>
+      <div class="chips" id="chips" style="margin-top:8px"></div>
     </div>
   </div>
 
-  <label class="k">stops (<span id="zcount">0</span>) — click to edit</label>
-  <div id="zlist"></div>
-
-  <hr>
-  <label class="k">project name</label>
-  <input id="projName" value="kh-village-walk">
-  <div class="row" style="margin-top:8px">
-    <button id="importBtn" class="ghost">Import ▲</button>
-    <button id="exportBtn" class="on" style="flex:1">Export ▼</button>
-    <button id="copyBtn" class="ghost">copy</button>
-  </div>
-  <textarea id="out" placeholder="bundle JSON — paste here then Import to edit an existing walk, or Export to fill this from your stops"></textarea>
-  <div class="row"><button id="loadPois" class="ghost" style="flex:1">Show existing chutes</button></div>
+  <div id="console"></div>
 </div>
 
 <script>
 "use strict";
 /* =====================================================================
-   CHASE LIFE — FENCE EDITOR v2
-   Draw circle / polygon / tripline stops, author triggers + spoken lines
-   + ring settings in a properties panel, and export the engine's rich
-   BUNDLE (general approach ring + target reveal + needle + audio).
-   MapLibre uses [lon,lat]; the engine uses [lat,lon] — we convert.
+   GEOFENCE SIMULATOR — desk test bench
+   The block marked ENGINE CORE below is a VERBATIM MIRROR of the same
+   modules in geofence-engine.html. Do NOT hand-edit it here; if the
+   engine's logic changes, re-copy TUNING/Geo/Smoother/Geofencer so the
+   simulator always tests exactly what ships. (Later: extract to a shared
+   engine-core.js that both files load.)
    ===================================================================== */
 
-const REF=[-117.0547,51.3027];           // [lon,lat] near the village — initial view
-const DEFAULTS={ approachM:30, audioM:40, revealRadiusM:12, dwellS:20, needle:true, fires:"enter" };
-const BASES={
+/* ----- sim-side globals the core reads ----- */
+let BUNDLE = { ref:[0,0], zones:[] };
+const Audio = {
+  on:true, ctx:null, keepAlive:null,
+  unlock(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+            if(this.ctx && this.ctx.state==='suspended') this.ctx.resume();
+            if(this.ctx && !this.keepAlive){ try{ const o=this.ctx.createOscillator(),g=this.ctx.createGain();
+              g.gain.value=0.0001; o.frequency.value=30; o.connect(g); g.connect(this.ctx.destination); o.start(); this.keepAlive=o; }catch(e){} } },
+  approach(){ if(!this.on) return; try{ this.unlock(); const ac=this.ctx; if(!ac) return; const t=ac.currentTime;
+            const o=ac.createOscillator(),g=ac.createGain(); o.type='sine';
+            o.frequency.setValueAtTime(440,t); o.frequency.exponentialRampToValueAtTime(587,t+0.18);
+            g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.22,t+0.03);
+            g.gain.exponentialRampToValueAtTime(0.0001,t+0.5);
+            o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.55); }catch(e){} },
+  ding(){ if(!this.on) return; try{ this.unlock(); const t=this.ctx.currentTime;
+            [784,1175].forEach((f,i)=>{ const o=this.ctx.createOscillator(),g=this.ctx.createGain(),s=t+i*0.09;
+              o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(0.0001,s);
+              g.gain.exponentialRampToValueAtTime(0.25,s+0.01); g.gain.exponentialRampToValueAtTime(0.0001,s+0.25);
+              o.connect(g); g.connect(this.ctx.destination); o.start(s); o.stop(s+0.3); }); }catch(e){} },
+  say(text){ if(!this.on) return; try{ const u=new SpeechSynthesisUtterance(text);
+            speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){} }
+};
+
+/* ========================= ENGINE CORE (mirror) ========================= */
+const TUNING = {
+  EXIT_BUFFER_M: 20,     // hysteresis: exit only past R + this
+  ENTER_DWELL_S: 3,      // must persist inside R this long before ENTER fires
+  ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
+  MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
+  SHORT_VISIT_S: 12,
+  LOWPASS: 0.35,         // position smoothing (0..1, higher = less smoothing)
+  HEAD_WINDOW: 8         // compass readings used for heading-confidence variance
+};
+
+/* ============================ GEO MATH ============================ */
+const Geo = {
+  R: 6371000,
+  // local planar metres relative to ref [lat,lon]
+  mPerDegLat: 111320,
+  mPerDegLon(lat){ return 111320 * Math.cos(lat*Math.PI/180); },
+  toXY(p, ref){ return { x:(p[1]-ref[1])*this.mPerDegLon(ref[0]), y:(p[0]-ref[0])*this.mPerDegLat }; },
+  hav(a,b){ const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,
+            dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
+            const x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+            return 2*this.R*Math.asin(Math.sqrt(x)); },
+  bearing(a,b){ const y=Math.sin((b[1]-a[1])*Math.PI/180)*Math.cos(b[0]*Math.PI/180);
+            const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-
+                    Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
+            return (Math.atan2(y,x)*180/Math.PI+360)%360; },
+  // signed distance to a circle: + outside, − inside
+  sdCircle(p, center, R){ return this.hav(p,center) - R; },
+  // point-to-segment distance in metres (planar)
+  segDist(P,A,B){ const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
+            const c1=vx*wx+vy*wy; if(c1<=0) return Math.hypot(wx,wy);
+            const c2=vx*vx+vy*vy; if(c2<=c1) return Math.hypot(P.x-B.x,P.y-B.y);
+            const t=c1/c2; return Math.hypot(P.x-(A.x+t*vx), P.y-(A.y+t*vy)); },
+  inPoly(P, pts){ let inside=false;
+            for(let i=0,j=pts.length-1;i<pts.length;j=i++){
+              const xi=pts[i].x,yi=pts[i].y,xj=pts[j].x,yj=pts[j].y;
+              if(((yi>P.y)!==(yj>P.y)) && (P.x<(xj-xi)*(P.y-yi)/(yj-yi)+xi)) inside=!inside;
+            } return inside; },
+  // signed distance to polygon: + outside, − inside
+  sdPolygon(p, coords, ref){ const P=this.toXY(p,ref);
+            const pts=coords.map(c=>this.toXY(c,ref));
+            let best=Infinity;
+            for(let i=0,j=pts.length-1;i<pts.length;j=i++) best=Math.min(best,this.segDist(P,pts[j],pts[i]));
+            return this.inPoly(P,pts) ? -best : best; },
+  // did segment prev->cur cross the line from->to? returns {crossed, side}
+  lineCross(prev,cur,from,to,ref){
+            const A=this.toXY(prev,ref),B=this.toXY(cur,ref),C=this.toXY(from,ref),D=this.toXY(to,ref);
+            const ccw=(p,q,r)=>(r.y-p.y)*(q.x-p.x)-(q.y-p.y)*(r.x-p.x);
+            const d1=ccw(C,D,A), d2=ccw(C,D,B), d3=ccw(A,B,C), d4=ccw(A,B,D);
+            const crossed = ((d1>0)!==(d2>0)) && ((d3>0)!==(d4>0));
+            return { crossed, side: d2<0 ? "L":"R" }; }
+};
+
+const Smoother = {
+  s:null, prev:null, spd:0, t0:null,
+  push(fix){
+    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; this.spd=0; }
+    const a=TUNING.LOWPASS;
+    this.s={ lat:this.s.lat+a*(fix.lat-this.s.lat), lon:this.s.lon+a*(fix.lon-this.s.lon) };
+    let headingTravel=null;
+    if(this.prev){
+      const d=Geo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
+      const dt=(fix.t-this.prev.t)/1000;
+      let inst = (dt<0.4) ? this.spd : d/dt;        // ignore sub-0.4 s gaps (GPS double-fix)
+      if(inst>25) inst = this.spd;                  // reject a lone >90 km/h spike
+      this.spd = this.spd + 0.35*(inst-this.spd);   // low-pass the speed
+      if(d>1) headingTravel=Geo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
+    }
+    this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
+    return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed:this.spd, headingTravel };
+  },
+  reset(){ this.s=null; this.prev=null; this.spd=0; }
+};
+
+const Geofencer = {
+  state:{},                 // per-layer state machine
+  onEvent:null,             // callback(evt)
+  key(z,l,i){ return z.id+":"+(l.kind)+":"+i; },
+
+  // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
+  sd(p, prev, zone, layer){
+    const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
+    if(layer.radiusM!=null) return Geo.sdCircle(PT, zone.center, layer.radiusM);
+    const g=layer.geometry;
+    if(g && g.type==="polygon") return Geo.sdPolygon(PT, g.coords, BUNDLE.ref);
+    if(g && g.type==="corridor") {
+      const P=Geo.toXY(PT,BUNDLE.ref); let best=Infinity;
+      const pts=g.path.map(c=>Geo.toXY(c,BUNDLE.ref));
+      for(let i=1;i<pts.length;i++) best=Math.min(best,Geo.segDist(P,pts[i-1],pts[i]));
+      return best-(g.widthM||10)/2;
+    }
+    return null; // tripline handled separately
+  },
+
+  update(p, prev, now){
+    const active=[];                       // zones with any active ring (for the needle)
+    BUNDLE.zones.forEach(zone=>{
+      zone.layers.forEach((layer,i)=>{
+        const k=this.key(zone,layer,i);
+        const st=this.state[k] || (this.state[k]={phase:"out",delivered:{},move:0});
+
+        // --- TRIPLINE: crossing-based, direction-aware ---
+        if(layer.geometry && layer.geometry.type==="tripline"){
+          if(prev){
+            const c=Geo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],
+                                   layer.geometry.from, layer.geometry.to, BUNDLE.ref);
+            if(c.crossed && st.phase!=="cooldown"){
+              st.phase="cooldown"; setTimeout(()=>{st.phase="out";},4000);
+              this._fire(zone,layer,"enter",{side:c.side});
+            }
+          }
+          return;
+        }
+
+        // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
+        const d=this.sd(p,prev,zone,layer);
+        if(d==null) return;
+        // accuracy gate (warn content is exempt — handled at fire time)
+        const holding = p.acc>TUNING.ACCURACY_CAP_M;
+
+        if(d<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d});
+
+        if(st.phase==="out"){
+          if(d<0 && !holding){ st.phase="pending"; st.since=now; }
+        } else if(st.phase==="pending"){
+          if(d>=0){ st.phase="out"; }                  // popped back out — was a single-fix blip
+          else {                                        // 2nd consecutive inside fix confirms entry
+            st.phase="in"; st.t0=now; st.move=0; st.delivered={};  // §4a: commit on movement, not a dwell clock
+            this._fire(zone,layer,"enter",{});
+          }
+        } else if(st.phase==="in"){
+          if(prev) st.move += Geo.hav([prev.lat,prev.lon],[p.lat,p.lon]);
+          // dwell triggers
+          layer && zone.triggers && zone.triggers.forEach(t=>{
+            if(t.fires_on==="dwell" && (!t.layer||t.layer===layer.kind) && t.delayS &&
+               (now-st.t0)/1000>=t.delayS && !st.delivered["dwell"+t.delayS]){
+              st.delivered["dwell"+t.delayS]=1; this._deliver(zone,t,{});
+            }
+          });
+          if(d>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer
+            const dur=(now-st.t0)/1000;
+            const flick = st.move<TUNING.MOVE_MIN_M && dur<TUNING.SHORT_VISIT_S;
+            this._fire(zone,layer,"exit",{dur,move:st.move,flick});
+            st.phase="out";
+          }
+        }
+      });
+    });
+    return active;
+  },
+
+  _fire(zone,layer,kind,info){
+    if(this.onEvent) this.onEvent({zone,layer,kind,info});
+    // deliver matching triggers
+    (zone.triggers||[]).forEach(t=>{
+      if(t.fires_on===kind && (!t.layer || t.layer===layer.kind)){
+        if(kind==="exit") return;            // exit triggers rare; skip for now
+        this._deliver(zone,t,info);
+      }
+    });
+  },
+  _deliver(zone,t,info){
+    // once-per-visit handled by caller's delivered map for dwell; enter handled here
+    if(t.needle){ Audio.approach(); if(this.onEvent) this.onEvent({zone,kind:"arm-needle"}); }
+    if(t.say){
+      const lowAcc = window.__lastAcc>(t.requires?.accuracyM ?? TUNING.ACCURACY_CAP_M);
+      const mode = t.requires?.onLowAccuracy || "suppress";
+      if(lowAcc && mode==="suppress"){
+        if(this.onEvent) this.onEvent({zone,kind:"suppressed",text:t.say});
+      } else {
+        const warn = lowAcc && mode==="warn";
+        Audio.ding();
+        Audio.say(t.say, warn);
+        if(this.onEvent) this.onEvent({zone,kind:"say",text:t.say,warn});
+      }
+    }
+  },
+  reset(){ this.state={}; }
+};
+/* ======================= END ENGINE CORE (mirror) ======================= */
+
+/* =============================== SAMPLE =============================== */
+const SAMPLE = {
+  project:"kh-village-walk", name:"KH Village Walk", ref:[51.3027,-117.0547],
+  zones:[
+    { id:"mclauglin-house", name:"Mclauglin House", center:[51.302757,-117.054644], audibleFromM:30,
+      layers:[ {kind:"general", radiusM:25}, {kind:"target", radiusM:15} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Look at Mclauglan house", oncePerVisit:true} ] },
+    { id:"jolivet-house", name:"Jolivet House", center:[51.303025,-117.054772], audibleFromM:30,
+      layers:[ {kind:"general", radiusM:30},
+               {kind:"target", geometry:{type:"polygon", coords:[
+                 [51.303166,-117.055064],[51.303020,-117.055012],
+                 [51.303023,-117.054798],[51.303166,-117.054840]]}} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Turn to Gary and Karens House", oncePerVisit:true} ] },
+    { id:"james-janice-house", name:"James Janice House", center:[51.303361,-117.054911], audibleFromM:25,
+      layers:[ {kind:"general", radiusM:25},
+               {kind:"target", geometry:{type:"tripline",
+                 from:[51.303365,-117.055022], to:[51.303357,-117.054800]}} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Turn and Look at James House", oncePerVisit:true} ] },
+    { id:"carols-house", name:"Carols House", center:[51.302089,-117.054256], audibleFromM:60,
+      layers:[ {kind:"general", radiusM:60},
+               {kind:"target", geometry:{type:"polygon", coords:[
+                 [51.302194,-117.054592],[51.302100,-117.054634],
+                 [51.301853,-117.054437],[51.302064,-117.053818],
+                 [51.302224,-117.053918],[51.302266,-117.054306]]}} ],
+      triggers:[ {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
+                 {fires_on:"enter", layer:"target", say:"Look at Carols House", oncePerVisit:true} ] }
+  ]
+};
+
+/* =============================== MAP =============================== */
+const BASES = {
   sat:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],attr:"Esri, Maxar"},
   topo:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],attr:"Esri"},
-  street:{tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],attr:"© OpenStreetMap"}
+  osm:{tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],attr:"© OpenStreetMap"}
 };
 function styleFor(k){ return {version:8,
   sources:{base:{type:"raster",tiles:BASES[k].tiles,tileSize:256,attribution:BASES[k].attr}},
   layers:[{id:"base",type:"raster",source:"base"}]}; }
 
-const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16});
+const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:[-117.0547,51.3027],zoom:16});
 map.addControl(new maplibregl.NavigationControl());
+map.addControl(new maplibregl.ScaleControl({maxWidth:120,unit:"metric"}));
 
-let zones=[];               // rich stop objects (see makeZone)
-let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
-let sel=-1;                 // selected zone index (-1 = none)
-
-/* ---- geometry helpers (all in [lon,lat]) ---- */
-function circleRing(center,radiusM,n){
-  const [lon,lat]=center, out=[];
-  const dLat=radiusM/111320, dLon=radiusM/(111320*Math.cos(lat*Math.PI/180));
-  for(let i=0;i<=n;i++){ const a=2*Math.PI*i/n; out.push([lon+dLon*Math.cos(a), lat+dLat*Math.sin(a)]); }
-  return out;
-}
-function haversineM(a,b){ const R=6371000, toR=Math.PI/180;
-  const dLat=(b[1]-a[1])*toR, dLon=(b[0]-a[0])*toR, la1=a[1]*toR, la2=b[1]*toR;
-  const x=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
-  return 2*R*Math.asin(Math.sqrt(x)); }
-function centroidLonLat(coords){
-  let A=0,cx=0,cy=0;
-  for(let i=0;i<coords.length;i++){ const j=(i+1)%coords.length;
-    const x0=coords[i][0],y0=coords[i][1],x1=coords[j][0],y1=coords[j][1];
-    const cr=x0*y1-x1*y0; A+=cr; cx+=(x0+x1)*cr; cy+=(y0+y1)*cr; }
-  A*=0.5;
-  if(Math.abs(A)<1e-13){ const n=coords.length;
-    return [coords.reduce((s,c)=>s+c[0],0)/n, coords.reduce((s,c)=>s+c[1],0)/n]; }
-  return [cx/(6*A), cy/(6*A)];
-}
-const slug=s=>(s||"stop").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"stop";
-const LL=p=>[+p[1].toFixed(6),+p[0].toFixed(6)];     // [lon,lat] -> [lat,lon]
-const LonLat=p=>[p[1],p[0]];                          // [lat,lon] -> [lon,lat]
-
-function zoneCenterLonLat(z){ const s=z.shape;
-  if(s.type==="circle") return s.center;
-  if(s.type==="tripline") return [(s.from[0]+s.to[0])/2,(s.from[1]+s.to[1])/2];
-  return centroidLonLat(s.coords);
-}
-function zoneGenR(z){ const s=z.shape;
-  if(s.type==="polygon"){ const c=centroidLonLat(s.coords);
-    const ext=Math.max.apply(null,s.coords.map(p=>haversineM(c,p)));
-    return Math.max(z.approachM, Math.round(ext+5)); }
-  return z.approachM;
-}
-
-/* ---- create a stop with defaults ---- */
-function makeZone(name,shape){
-  return { id:slug(name), name, shape, say:"",
-           fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS, needle:DEFAULTS.needle,
-           approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM };
-}
-
-/* ---- render committed fences (target + approach ring) + draft ---- */
-function fc(features){ return {type:"FeatureCollection",features}; }
-function render(){
-  const feats=[];
-  zones.forEach((z,i)=>{
-    const s=z.shape, selected=(i===sel);
-    // approach ring (dashed)
-    const c=zoneCenterLonLat(z), gr=zoneGenR(z);
-    feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
-      geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
-    // target shape
-    if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name},
-        geometry:{type:"Polygon",coordinates:[circleRing(s.center,s.radiusM,64)]}});
-    else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name},
-        geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
-    else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",sel:selected,name:z.name},
-        geometry:{type:"LineString",coordinates:[s.from,s.to]}});
-    // label point
-    feats.push({type:"Feature",properties:{kind:"label",name:z.name},geometry:{type:"Point",coordinates:c}});
-  });
-  map.getSource("fences").setData(fc(feats));
-
-  const d=[];
-  if((tool==="polygon"||tool==="tripline")&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
-  if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
-        geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
-  const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
-  map.getSource("draft").setData(fc(d.concat(pts)));
-  drawList();
-}
+let labelMarkers=[];        // HTML markers for zone names + live phase
+let PATH=[];                // [[lat,lon],...] drawn path
+let drawMode=false;
 
 map.on("load",()=>{
   map.addSource("fences",{type:"geojson",data:fc([])});
-  map.addSource("draft",{type:"geojson",data:fc([])});
-  map.addLayer({id:"approach",type:"line",source:"fences",filter:["==","kind","approach"],
-     paint:{"line-color":["case",["get","sel"],"#38e0a6","#8fb6d4"],"line-width":1.2,"line-dasharray":[2,2],"line-opacity":0.7}});
-  map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==","kind","fill"],
-     paint:{"fill-color":["case",["get","sel"],"#38e0a6","#ff6a3d"],"fill-opacity":0.22}});
-  map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==","kind","fill"],
-     paint:{"line-color":["case",["get","sel"],"#38e0a6","#ff6a3d"],"line-width":2}});
-  map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==","kind","line"],
-     paint:{"line-color":["case",["get","sel"],"#38e0a6","#ff6a3d"],"line-width":3.2,"line-dasharray":[2,1.2]}});
-  map.addLayer({id:"fence-lbl",type:"symbol",source:"fences",filter:["==","kind","label"],
-     layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
-     paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.4}});
-  map.addLayer({id:"draft-line",type:"line",source:"draft",
-     paint:{"line-color":"#ffc24d","line-width":2,"line-dasharray":[2,1]}});
-  map.addLayer({id:"draft-pts",type:"circle",source:"draft",filter:["==","$type","Point"],
-     paint:{"circle-radius":5,"circle-color":"#ffc24d","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
-  map.addSource("pois",{type:"geojson",data:fc([])});
-  map.addLayer({id:"poi-pts",type:"circle",source:"pois",
-     paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-opacity":0.8}});
-  map.addLayer({id:"poi-lbl",type:"symbol",source:"pois",
-     layout:{"text-field":["get","name"],"text-size":10,"text-offset":[0,1],"text-font":["Open Sans Regular"]},
-     paint:{"text-color":"#8fb6d4","text-halo-color":"#0a1018","text-halo-width":1}});
-  render();
+  map.addLayer({id:"fence-fill",type:"fill",source:"fences",
+    filter:["==",["geometry-type"],"Polygon"],
+    paint:{"fill-color":phaseColor(),
+      "fill-opacity":["case",["==",["get","state"],"in"],0.28,
+                      ["==",["get","kind"],"target"],0.14, 0.05]}});
+  map.addLayer({id:"fence-out",type:"line",source:"fences",
+    filter:["==",["geometry-type"],"Polygon"],
+    paint:{"line-color":phaseColor(),
+      "line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
+      "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
+  map.addLayer({id:"fence-line",type:"line",source:"fences",
+    filter:["==",["geometry-type"],"LineString"],
+    paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+
+  map.addSource("path",{type:"geojson",data:fc([])});
+  map.addLayer({id:"path-line",type:"line",source:"path",
+    filter:["==",["geometry-type"],"LineString"],
+    paint:{"line-color":"#8fb6d4","line-width":2,"line-dasharray":[1.5,1.5]}});
+  map.addLayer({id:"path-pts",type:"circle",source:"path",
+    filter:["==",["geometry-type"],"Point"],
+    paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-stroke-color":"#0a1018","circle-stroke-width":1}});
+
+  map.addSource("ghost",{type:"geojson",data:fc([])});
+  map.addLayer({id:"ghost",type:"circle",source:"ghost",
+    paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
+
+  const pid=new URLSearchParams(location.search).get("project");
+  if(pid){ loadBundle(SAMPLE,"sample walk"); loadProjectFromPlatform(pid); }
+  else loadBundle(SAMPLE,"sample walk");
 });
 
-/* ---- map clicks ---- */
-map.on("mousemove",e=>{ document.getElementById("status").textContent=
-   "lat "+e.lngLat.lat.toFixed(6)+", lon "+e.lngLat.lng.toFixed(6)+"  ·  zoom "+map.getZoom().toFixed(1); });
-map.on("click",e=>{
-  if(!tool) return;
-  const p=[e.lngLat.lng,e.lngLat.lat];
-  if(tool==="circle"){ draft=[p]; finishShape(); }
-  else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
-  else if(tool==="polygon"){ draft.push(p); render(); }
+map.on("click",(e)=>{
+  if(drawMode){ PATH.push([e.lngLat.lat,e.lngLat.lng]); drawPath(); }
+  else { placeAvatar(e.lngLat.lat,e.lngLat.lng); }
 });
 
-/* ---- tools ---- */
-function setTool(t){ tool=t; draft=[];
-  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.toggle("on",x.dataset.tool===t));
-  document.getElementById("circleRow").style.display = t==="circle"?"flex":"none";
-  document.getElementById("drawHint").textContent={
-    circle:"click the center on the map (reveal radius set above)",
-    polygon:"click each corner; press Finish to close it",
-    tripline:"click the two ends of the crossing line"}[t]||"pick a shape to start drawing";
-  render();
-}
-document.querySelectorAll("[data-tool]").forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
-document.getElementById("finishBtn").onclick=()=>{ if(tool==="polygon"&&draft.length>=3) finishShape(); };
-document.getElementById("cancelBtn").onclick=()=>{ draft=[]; tool=null;
-  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
-  document.getElementById("circleRow").style.display="none"; render(); };
+/* coral draggable avatar */
+const avEl=document.createElement("div"); avEl.className="avatar";
+const avatar=new maplibregl.Marker({element:avEl,draggable:true}).setLngLat([-117.0547,51.3027]).addTo(map);
+let dragT=0;
+avatar.on("drag",()=>{ const n=performance.now(); if(n-dragT<200) return; dragT=n;
+  const ll=avatar.getLngLat(); feed(ll.lat,ll.lng,(+jit.value)||5,Date.now()); });
+avatar.on("dragstart",()=>{ Audio.unlock(); });
 
-function finishShape(){
-  const name="Stop "+(zones.length+1);
-  let shape;
-  if(tool==="circle") shape={type:"circle",center:draft[0],radiusM:+document.getElementById("newRadius").value||12};
-  else if(tool==="polygon") shape={type:"polygon",coords:draft.slice()};
-  else if(tool==="tripline") shape={type:"tripline",from:draft[0],to:draft[1]};
-  const z=makeZone(name,shape);
-  zones.push(z); draft=[]; tool=null;
-  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
-  document.getElementById("circleRow").style.display="none";
-  document.getElementById("drawHint").textContent="stop added — set what it says below, or draw another";
-  selectZone(zones.length-1);
-}
+/* =========================== GEOJSON HELPERS =========================== */
+function fc(f){ return {type:"FeatureCollection",features:f}; }
+function phaseColor(){ return ["case",
+  ["==",["get","state"],"in"],"#38e0a6",
+  ["==",["get","state"],"pending"],"#ffc24d",
+  ["==",["get","state"],"cooldown"],"#8fb6d4",
+  ["==",["get","kind"],"target"],"#ff6a3d", "#5b7088"]; }
 
-/* ---- selection + properties panel ---- */
-function selectZone(i){ sel=i; render(); refreshProps(); }
-function refreshProps(){
-  const box=document.getElementById("props");
-  if(sel<0 || !zones[sel]){ box.style.display="none"; return; }
-  const z=zones[sel]; box.style.display="block";
-  document.getElementById("pTitle").textContent=z.shape.type.toUpperCase()+" stop";
-  document.getElementById("pName").value=z.name;
-  document.getElementById("pSay").value=z.say||"";
-  const isTrip=z.shape.type==="tripline";
-  const fires=document.getElementById("pFires");
-  fires.value = isTrip ? "enter" : z.fires;
-  fires.disabled = isTrip;
-  document.getElementById("dwellRow").style.display=(!isTrip && z.fires==="dwell")?"flex":"none";
-  document.getElementById("pDwell").value=z.dwellS;
-  document.getElementById("pNeedle").checked=z.needle;
-  document.getElementById("pApproach").value=z.approachM;
-  document.getElementById("revealWrap").style.display=z.shape.type==="circle"?"block":"none";
-  if(z.shape.type==="circle") document.getElementById("pReveal").value=z.shape.radiusM;
-  document.getElementById("pAudio").value=z.audioM;
-}
-function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
-bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
-bindProp("pSay",z=>{ z.say=document.getElementById("pSay").value; });
-bindProp("pDwell",z=>{ z.dwellS=+document.getElementById("pDwell").value||20; });
-bindProp("pApproach",z=>{ z.approachM=+document.getElementById("pApproach").value||30; });
-bindProp("pReveal",z=>{ if(z.shape.type==="circle") z.shape.radiusM=+document.getElementById("pReveal").value||12; });
-bindProp("pAudio",z=>{ z.audioM=+document.getElementById("pAudio").value||0; });
-document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
-  zones[sel].fires=document.getElementById("pFires").value;
-  document.getElementById("dwellRow").style.display=zones[sel].fires==="dwell"?"flex":"none"; });
-document.getElementById("pNeedle").addEventListener("change",()=>{ if(sel<0)return;
-  zones[sel].needle=document.getElementById("pNeedle").checked; render(); });
-document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById("pSay").value.trim();
-  if(!t)return; try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(t)); }catch(e){} };
-document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
-document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); selectZone(-1); };
+function circleRing(center,rM){ const pts=[],lat=center[0],lon=center[1];
+  for(let i=0;i<=64;i++){ const a=i/64*2*Math.PI;
+    const dLat=(rM*Math.cos(a))/111320, dLon=(rM*Math.sin(a))/(111320*Math.cos(lat*Math.PI/180));
+    pts.push([lon+dLon,lat+dLat]); } return [pts]; }
 
-/* ---- zone list ---- */
-function drawList(){
-  const wrap=document.getElementById("zlist"); wrap.innerHTML="";
-  document.getElementById("zcount").textContent=zones.length;
-  zones.forEach((z,i)=>{
-    const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
-    const cue=z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive");
-    d.innerHTML='<div class="t"><b class="cond">'+z.name+'</b>'
-      +'<span class="tag">'+z.shape.type+' · '+cue+'</span>'
-      +'<button class="del" title="delete">✕</button></div>';
-    d.querySelector(".del").onclick=(ev)=>{ ev.stopPropagation(); zones.splice(i,1); if(sel===i)sel=-1; else if(sel>i)sel--; render(); refreshProps(); };
-    d.onclick=(ev)=>{ if(ev.target.classList.contains("del"))return;
-       selectZone(i); map.flyTo({center:zoneCenterLonLat(z),zoom:17}); };
-    wrap.appendChild(d);
+function phaseOf(zone,layer,i){ const st=Geofencer.state[zone.id+":"+layer.kind+":"+i];
+  return st?st.phase:"out"; }
+
+function zonesGeoJSON(){
+  const feats=[];
+  BUNDLE.zones.forEach(z=>{
+    z.layers.forEach((L,i)=>{
+      const state=phaseOf(z,L,i), props={zone:z.id,kind:L.kind,state};
+      if(L.radiusM!=null && z.center){
+        feats.push({type:"Feature",properties:props,geometry:{type:"Polygon",coordinates:circleRing(z.center,L.radiusM)}});
+      } else if(L.geometry){
+        const g=L.geometry;
+        if(g.type==="polygon"){ const ring=g.coords.map(c=>[c[1],c[0]]); ring.push(ring[0]);
+          feats.push({type:"Feature",properties:props,geometry:{type:"Polygon",coordinates:[ring]}}); }
+        else if(g.type==="tripline")
+          feats.push({type:"Feature",properties:props,geometry:{type:"LineString",coordinates:[[g.from[1],g.from[0]],[g.to[1],g.to[0]]]}});
+        else if(g.type==="corridor")
+          feats.push({type:"Feature",properties:props,geometry:{type:"LineString",coordinates:g.path.map(c=>[c[1],c[0]])}});
+      }
+    });
   });
+  return fc(feats);
 }
 
-/* ---- export to the engine's rich BUNDLE ([lat,lon]) ---- */
-function zoneToEngine(z){
-  const s=z.shape, zo={ id:z.id, name:z.name, audibleFromM:z.audioM };
-  zo.center=LL(zoneCenterLonLat(z));
-  const genR=zoneGenR(z);
-  if(s.type==="circle")        zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM}];
-  else if(s.type==="polygon")  zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"polygon",coords:s.coords.map(LL)}}];
-  else if(s.type==="tripline") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}];
-  const trig=[];
-  if(z.needle) trig.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true});
-  const rev={ oncePerVisit:true, layer:"target" };
-  if(s.type==="tripline") rev.fires_on="enter";              // crossing
-  else if(z.fires==="dwell"){ rev.fires_on="dwell"; rev.delayS=z.dwellS; }
-  else rev.fires_on="enter";
-  if(z.say) rev.say=z.say;
-  trig.push(rev);
-  zo.triggers=trig;
-  return zo;
-}
-function exportBundle(){
-  let ref=REF.slice();
-  if(zones.length){ const cs=zones.map(zoneCenterLonLat);
-    ref=[cs.reduce((s,c)=>s+c[0],0)/cs.length, cs.reduce((s,c)=>s+c[1],0)/cs.length]; }
-  const out={ project:slug(document.getElementById("projName").value)||"project",
-              name:document.getElementById("projName").value||"Project",
-              ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)], zones:zones.map(zoneToEngine) };
-  document.getElementById("out").value=JSON.stringify(out,null,2);
-  return out;
-}
-document.getElementById("exportBtn").onclick=exportBundle;
-document.getElementById("copyBtn").onclick=()=>{ exportBundle();
-  try{ navigator.clipboard.writeText(document.getElementById("out").value); }catch(e){}
-  document.getElementById("status").textContent="bundle copied to clipboard"; };
-
-/* ---- import an existing bundle to edit (reverse of export) ---- */
-function engineToZone(zo){
-  const tgt=(zo.layers||[]).find(l=>l.kind==="target")||(zo.layers||[]).find(l=>l.radiusM!=null||l.geometry)||{};
-  const gen=(zo.layers||[]).find(l=>l.kind==="general");
-  let shape;
-  if(tgt.radiusM!=null) shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:tgt.radiusM};
-  else if(tgt.geometry&&tgt.geometry.type==="polygon") shape={type:"polygon",coords:tgt.geometry.coords.map(LonLat)};
-  else if(tgt.geometry&&tgt.geometry.type==="tripline") shape={type:"tripline",from:LonLat(tgt.geometry.from),to:LonLat(tgt.geometry.to)};
-  else shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:12};
-  const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
-  z.audioM = zo.audibleFromM!=null?zo.audibleFromM:DEFAULTS.audioM;
-  if(gen&&gen.radiusM!=null) z.approachM=gen.radiusM;
-  (zo.triggers||[]).forEach(t=>{
-    if(t.needle) z.needle=true;
-    if(t.say) z.say=t.say;
-    if(t.fires_on==="dwell"){ z.fires="dwell"; if(t.delayS) z.dwellS=t.delayS; }
+function refreshZones(){
+  if(map.getSource("fences")) map.getSource("fences").setData(zonesGeoJSON());
+  // live phase on the label chips + markers
+  const chips=document.getElementById("chips"); chips.innerHTML="";
+  BUNDLE.zones.forEach(z=>{
+    let ph="out";
+    z.layers.forEach((L,i)=>{ const p=phaseOf(z,L,i); if(p==="in")ph="in"; else if(p==="pending"&&ph!=="in")ph="pending"; else if(p==="cooldown"&&ph==="out")ph="cooldown"; });
+    const c=document.createElement("div"); c.className="chip";
+    c.innerHTML='<b>'+z.name+'</b><span class="tag '+ph+'">'+ph+'</span>';
+    chips.appendChild(c);
   });
-  if(!(zo.triggers||[]).some(t=>t.needle)) z.needle=false;
-  return z;
+  labelMarkers.forEach((m,idx)=>{ const z=BUNDLE.zones[idx]; if(!z||!z.center) return; });
 }
-document.getElementById("importBtn").onclick=()=>{
-  const raw=document.getElementById("out").value.trim();
-  if(!raw){ document.getElementById("status").textContent="paste a bundle into the box first, then Import"; return; }
-  try{ const b=JSON.parse(raw);
-    if(!Array.isArray(b.zones)) throw new Error("no zones array");
-    zones=b.zones.map(engineToZone); sel=-1;
-    if(b.name) document.getElementById("projName").value=b.name;
-    render(); refreshProps();
-    const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
-    document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
-  }catch(e){ document.getElementById("status").textContent="couldn't import: "+e.message; }
+
+/* =========================== ENGINE PIPELINE =========================== */
+/* mirrors HUD.onFix: smooth -> geofence -> needle pick */
+let prevP=null, fixCount=0;
+function feed(lat,lon,acc,t){
+  window.__lastAcc=acc;
+  const sm=Smoother.push({lat,lon,acc,t});
+  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+  const active=Geofencer.update(p,prevP,t);
+  prevP=p; fixCount++;
+  let pick=null,best=Infinity;
+  active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
+  if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center) return;
+      const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} }); }
+  // ghost = where the engine thinks you are (smoothed)
+  if(map.getSource("ghost")) map.getSource("ghost").setData(fc([{type:"Feature",properties:{},geometry:{type:"Point",coordinates:[p.lon,p.lat]}}]));
+  // HUD
+  document.getElementById("sNeedle").textContent = pick ? (pick.zone.name+"  ("+(pick.d<0?"inside":best.toFixed(0)+" m")+")") : "—";
+  document.getElementById("sSpeed").textContent = sm.speed.toFixed(1)+" m/s";
+  document.getElementById("sAcc").textContent = acc.toFixed(0)+" m";
+  document.getElementById("sFix").textContent = fixCount;
+  refreshZones();
+}
+
+function placeAvatar(lat,lon){ avatar.setLngLat([lon,lat]); Audio.unlock();
+  feed(lat,lon,(+jit.value)||5,Date.now()); }
+
+/* =============================== CONSOLE =============================== */
+function log(cls,msg){ const c=document.getElementById("console");
+  const d=document.createElement("div"); d.className=cls;
+  d.textContent=new Date().toLocaleTimeString()+"  "+msg; c.prepend(d);
+  while(c.childNodes.length>400) c.removeChild(c.lastChild); }
+
+Geofencer.onEvent=(e)=>{
+  if(e.kind==="enter") log("ev-enter","ENTER  "+e.zone.name+"/"+(e.layer?e.layer.kind:"")+(e.info&&e.info.side?" (cross "+e.info.side+")":""));
+  else if(e.kind==="exit"){ log("ev-exit","EXIT   "+e.zone.name+"  "+e.info.dur.toFixed(0)+"s, moved "+e.info.move.toFixed(0)+"m");
+       if(e.info.flick) log("ev-flick","       ^ flicker (barely moved) — would be ignored"); }
+  else if(e.kind==="say") log(e.warn?"ev-warn":"ev-say",'SAY    "'+e.text+'"'+(e.warn?" [approx]":""));
+  else if(e.kind==="suppressed") log("ev-flick","HOLD   reveal suppressed (fix too loose)");
+  else if(e.kind==="arm-needle") log("ev-sys","NEEDLE → "+e.zone.name);
 };
 
-/* ---- base map switch ---- */
-document.getElementById("baseSel").onchange=e=>{ map.getSource("base").setTiles(BASES[e.target.value].tiles); };
+/* =============================== BUNDLES =============================== */
+function centroidOf(zones){ let la=0,lo=0,n=0;
+  zones.forEach(z=>{ if(z.center){la+=z.center[0];lo+=z.center[1];n++;} });
+  return n?[la/n,lo/n]:[0,0]; }
 
-/* ---- load existing chutes for reference (same-origin when deployed) ---- */
-document.getElementById("loadPois").onclick=async()=>{
+function loadBundle(b,srcLabel){
+  if(!b || !Array.isArray(b.zones)){ log("ev-warn","that doesn't look like a bundle (need a zones array)"); return; }
+  BUNDLE = b;
+  if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
+  Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+  document.getElementById("bundleText").value = JSON.stringify(b,null,2);
+  refreshZones(); fitToData();
+  log("ev-sys","loaded "+(b.name||"bundle")+" — "+BUNDLE.zones.length+" zones ("+(srcLabel||"")+")");
+}
+
+function fitToData(){
+  const pts=[];
+  BUNDLE.zones.forEach(z=>{ z.layers.forEach(L=>{
+    if(L.radiusM!=null && z.center){ circleRing(z.center,L.radiusM)[0].forEach(c=>pts.push(c)); }
+    else if(L.geometry){ const g=L.geometry;
+      if(g.type==="polygon") g.coords.forEach(c=>pts.push([c[1],c[0]]));
+      else if(g.type==="tripline"){ pts.push([g.from[1],g.from[0]]);pts.push([g.to[1],g.to[0]]); }
+      else if(g.type==="corridor") g.path.forEach(c=>pts.push([c[1],c[0]])); }
+  }); if(z.center) pts.push([z.center[1],z.center[0]]); });
+  if(!pts.length) return;
+  const b=new maplibregl.LngLatBounds(pts[0],pts[0]); pts.forEach(p=>b.extend(p));
+  map.fitBounds(b,{padding:60,maxZoom:18,duration:500});
+  const c=b.getCenter(); avatar.setLngLat(c);
+}
+fitToData(); // safe no-op until bundle loads
+
+/* =============================== PATH =============================== */
+function drawPath(){ const feats=[];
+  if(PATH.length) feats.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:PATH.map(p=>[p[1],p[0]])}});
+  PATH.forEach(p=>feats.push({type:"Feature",properties:{},geometry:{type:"Point",coordinates:[p[1],p[0]]}}));
+  if(map.getSource("path")) map.getSource("path").setData(fc(feats)); }
+
+function pathTotal(){ let s=0; for(let i=1;i<PATH.length;i++) s+=Geo.hav(PATH[i-1],PATH[i]); return s; }
+function pathPointAt(s){ if(PATH.length<2) return PATH[0]||null; let acc=0;
+  for(let i=1;i<PATH.length;i++){ const seg=Geo.hav(PATH[i-1],PATH[i]);
+    if(acc+seg>=s){ const t=seg?(s-acc)/seg:0;
+      return [PATH[i-1][0]+t*(PATH[i][0]-PATH[i-1][0]), PATH[i-1][1]+t*(PATH[i][1]-PATH[i-1][1])]; }
+    acc+=seg; } return PATH[PATH.length-1]; }
+
+function jitterPoint(lat,lon,rM){ if(rM<=0) return [lat,lon];
+  const ang=Math.random()*2*Math.PI, r=rM*Math.sqrt(Math.random());
+  return [ lat+(r*Math.cos(ang))/111320, lon+(r*Math.sin(ang))/(111320*Math.cos(lat*Math.PI/180)) ]; }
+
+/* a point that reliably sits INSIDE a zone's target (for the auto-walk route) */
+function innerPoint(z){
+  const tgt=z.layers.find(l=>l.kind==="target")||z.layers[0];
+  if(tgt.radiusM!=null) return z.center;                 // circle: center is inside
+  const g=tgt.geometry;
+  if(g && g.type==="polygon"){
+    if(z.center && Geo.sdPolygon(z.center,g.coords,BUNDLE.ref)<0) return z.center;
+    const avg=[g.coords.reduce((s,p)=>s+p[0],0)/g.coords.length,
+               g.coords.reduce((s,p)=>s+p[1],0)/g.coords.length];
+    if(Geo.sdPolygon(avg,g.coords,BUNDLE.ref)<0) return avg;
+    const c=z.center||avg;
+    for(let f=0.15; f<1; f+=0.15){ const q=[c[0]+f*(avg[0]-c[0]), c[1]+f*(avg[1]-c[1])];
+      if(Geo.sdPolygon(q,g.coords,BUNDLE.ref)<0) return q; }
+    return avg;
+  }
+  if(g && g.type==="tripline") return [(g.from[0]+g.to[0])/2,(g.from[1]+g.to[1])/2];
+  return z.center;
+}
+/* build a route through every stop, with a lead-in/out so we approach from outside */
+function buildStopsPath(){
+  const pts=BUNDLE.zones.filter(z=>z.center).map(innerPoint);
+  if(pts.length<1){ return false; }
+  const lead=(p,q,m)=>{ const len=Geo.hav(q,p)||1, k=m/len;
+    return [p[0]+(p[0]-q[0])*k, p[1]+(p[1]-q[1])*k]; };
+  const path=[];
+  if(pts.length>=2) path.push(lead(pts[0],pts[1],18));
+  pts.forEach(p=>path.push(p));
+  if(pts.length>=2) path.push(lead(pts[pts.length-1],pts[pts.length-2],18));
+  PATH=path; drawPath(); return PATH.length>=2;
+}
+
+/* replay: wall tick 250ms, each tick = 1 virtual second (4x watch speed, 1 Hz fixes) */
+let playing=false, sDist=0, vT=0, timer=null;
+function play(){
+  if(PATH.length<2){ if(buildStopsPath()) log("ev-sys","no path drawn — auto-walking all stops");
+    else { log("ev-warn","load a bundle with stops, or draw a path first"); return; } }
+  if(playing){ pause(); return; }
+  Audio.unlock();
+  if(sDist>=pathTotal()){ sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones(); }
+  playing=true; document.getElementById("btnPlay").textContent="⏸ Pause"; document.getElementById("btnPlay").classList.add("on");
+  vT=Date.now();
+  timer=setInterval(()=>{
+    const speed=+document.getElementById("spd").value, jitV=+document.getElementById("jit").value;
+    const total=pathTotal();
+    sDist += speed; vT += 1000;
+    const ended = sDist>=total;
+    const truePt = pathPointAt(Math.min(sDist,total));
+    const [jLat,jLon]=jitterPoint(truePt[0],truePt[1],jitV);
+    avatar.setLngLat([jLon,jLat]);
+    feed(jLat,jLon,Math.max(3,jitV||5),vT);
+    if(ended){ if(document.getElementById("btnLoop").classList.contains("on")){
+        sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; log("ev-sys","loop — restarting path"); }
+      else { pause(); log("ev-sys","path complete"); } }
+  },250);
+}
+function pause(){ playing=false; if(timer){clearInterval(timer);timer=null;}
+  document.getElementById("btnPlay").textContent="▶ Play"; document.getElementById("btnPlay").classList.remove("on"); }
+
+/* =============================== UI WIRING =============================== */
+const jitEl=document.getElementById("jit"), spdEl=document.getElementById("spd");
+spdEl.oninput=()=>document.getElementById("spdVal").textContent=(+spdEl.value).toFixed(1)+" m/s";
+jitEl.oninput=()=>document.getElementById("jitVal").textContent="±"+jitEl.value+" m";
+window.jit=jitEl; // used by avatar drag handler
+
+document.getElementById("btnSample").onclick=()=>loadBundle(JSON.parse(JSON.stringify(SAMPLE)),"sample walk");
+document.getElementById("btnLoad").onclick=()=>{ try{ loadBundle(JSON.parse(document.getElementById("bundleText").value),"pasted"); }
+  catch(e){ log("ev-warn","couldn't parse that JSON: "+e.message); } };
+document.getElementById("btnFit").onclick=fitToData;
+document.getElementById("btnFile").onclick=()=>document.getElementById("file").click();
+async function loadProjectFromPlatform(pid){
+  if(!pid) return;
   try{
-    const r=await fetch("/api/pois"); const j=await r.json();
-    const feats=(j.pois||[]).filter(p=>p.topLatLon).map(p=>({type:"Feature",
-      properties:{name:p.name},geometry:{type:"Point",coordinates:[p.topLatLon[1],p.topLatLon[0]]}}));
-    map.getSource("pois").setData(fc(feats));
-    document.getElementById("status").textContent="loaded "+feats.length+" existing chutes for reference";
-  }catch(e){ document.getElementById("status").textContent="couldn't load /api/pois (same-origin only)"; }
-};
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/bundle");
+    if(!r.ok){ const e=await r.json().catch(()=>({})); log("ev-warn","platform: "+(e.error||("HTTP "+r.status))); return; }
+    const b=await r.json(); loadBundle(b,"platform · "+pid);
+  }catch(e){ log("ev-warn","platform load failed: "+e.message); }
+}
+document.getElementById("btnPlatform").onclick=()=>{
+  const pid=prompt("Project id to load (e.g. kh-village-walk):"); if(pid) loadProjectFromPlatform(pid.trim()); };
+document.getElementById("file").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=()=>{ try{ loadBundle(JSON.parse(r.result),f.name); }catch(err){ log("ev-warn","bad file: "+err.message); } }; r.readAsText(f); };
+
+document.getElementById("btnSat").onclick=()=>setBase("sat");
+document.getElementById("btnTopo").onclick=()=>setBase("topo");
+document.getElementById("btnOSM").onclick=()=>setBase("osm");
+function setBase(k){ map.setStyle(styleFor(k));
+  map.once("styledata",()=>{ // re-add our layers after basemap swap
+    if(!map.getSource("fences")){ map.addSource("fences",{type:"geojson",data:zonesGeoJSON()});
+      map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==",["geometry-type"],"Polygon"],
+        paint:{"fill-color":phaseColor(),"fill-opacity":["case",["==",["get","state"],"in"],0.28,["==",["get","kind"],"target"],0.14,0.05]}});
+      map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==",["geometry-type"],"Polygon"],
+        paint:{"line-color":phaseColor(),"line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
+          "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
+      map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==",["geometry-type"],"LineString"],
+        paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+      map.addSource("path",{type:"geojson",data:fc([])});
+      map.addLayer({id:"path-line",type:"line",source:"path",filter:["==",["geometry-type"],"LineString"],
+        paint:{"line-color":"#8fb6d4","line-width":2,"line-dasharray":[1.5,1.5]}});
+      map.addLayer({id:"path-pts",type:"circle",source:"path",filter:["==",["geometry-type"],"Point"],
+        paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-stroke-color":"#0a1018","circle-stroke-width":1}});
+      map.addSource("ghost",{type:"geojson",data:fc([])});
+      map.addLayer({id:"ghost",type:"circle",source:"ghost",paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
+      refreshZones(); drawPath();
+    }
+  });
+  ["btnSat","btnTopo","btnOSM"].forEach(id=>document.getElementById(id).classList.remove("on"));
+  document.getElementById({sat:"btnSat",topo:"btnTopo",osm:"btnOSM"}[k]).classList.add("on");
+}
+
+document.getElementById("btnDraw").onclick=(e)=>{ drawMode=!drawMode;
+  e.target.classList.toggle("on",drawMode); e.target.textContent=drawMode?"Drawing… (click map)":"Draw path";
+  document.getElementById("drawHint").textContent=drawMode
+    ? "Click points on the map to lay down the route. Tap Draw path again when done, then Play."
+    : "Draw path, then Play — or just drag the coral dot. Jitter adds realistic GPS noise."; };
+document.getElementById("btnClearPath").onclick=()=>{ PATH=[]; sDist=0; drawPath(); log("ev-sys","path cleared"); };
+document.getElementById("btnPlay").onclick=play;
+document.getElementById("btnStops").onclick=()=>{ if(playing) pause();
+  if(!buildStopsPath()){ log("ev-warn","no stops with a center to route through"); return; }
+  sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones();
+  fitToData(); play(); };
+document.getElementById("btnLoop").onclick=(e)=>{ e.target.classList.toggle("on");
+  e.target.textContent=e.target.classList.contains("on")?"Loop ▣":"Loop ▢"; };
+document.getElementById("btnMute").onclick=(e)=>{ Audio.on=!Audio.on;
+  e.target.classList.toggle("on",Audio.on); e.target.textContent=Audio.on?"Sound ◼":"Muted ◻"; };
+document.getElementById("btnReset").onclick=()=>{ Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+  document.getElementById("sFix").textContent="0"; refreshZones(); log("ev-sys","engine reset — state cleared"); };
+
+log("ev-sys","simulator ready — sample walk loaded. Drag the dot, or Draw path → Play.");
 </script>
 </body>
 </html>
