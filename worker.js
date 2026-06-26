@@ -39,7 +39,8 @@ export default {
     const FRIENDLY = {
       "/editor": "/fence-editor.html",
       "/sim": "/geofence-sim.html",
-      "/engine": "/geofence-engine.html"
+      "/engine": "/geofence-engine.html",
+      "/dashboard": "/dashboard.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     if (FRIENDLY[clean] && env.ASSETS) {
@@ -173,6 +174,42 @@ async function api(request, env, url) {
     const state = {};
     (results || []).forEach(r => { state[r.scope] = { granted: !!r.granted, version: r.version, at: r.grantedAt }; });
     return json({ deviceId: dev, consent: state });
+  }
+
+  // --- analytics ingest: idempotent batch, gated by recorded consent ---
+  if (path === "/api/events" && method === "POST") {
+    const b = await request.json();
+    if (!b.deviceId) return json({ error: "need deviceId" }, 400);
+    const evs = Array.isArray(b.events) ? b.events : [];
+    if (!evs.length) return json({ ok: true, accepted: 0 });
+    // defense in depth: only accept if this device has store-history consent on record
+    const c = await env.DB.prepare(
+      "SELECT granted FROM consent WHERE deviceId=? AND scope='store-history' ORDER BY grantedAt DESC LIMIT 1"
+    ).bind(b.deviceId).first();
+    if (!c || !c.granted) return json({ error: "no analytics consent on record" }, 403);
+    const stmts = [];
+    for (const e of evs.slice(0, 500)) {
+      const pid = e.projectId || b.projectId;
+      if (!e.id || !pid) continue;                       // event needs an id + project
+      stmts.push(env.DB.prepare(
+        "INSERT OR IGNORE INTO event (id,projectId,userId,deviceId,type,ts,data) VALUES (?,?,?,?,?,?,?)"
+      ).bind(e.id, pid, null, b.deviceId, e.type || "event", e.ts || Date.now(),
+             typeof e.data === "string" ? e.data : JSON.stringify(e.data || {})));
+    }
+    if (stmts.length) await env.DB.batch(stmts);
+    return json({ ok: true, accepted: stmts.length });
+  }
+
+  // --- analytics read (admin-gated): raw events for the dashboard to aggregate ---
+  if (path === "/api/analytics" && method === "GET") {
+    if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+    const pid = url.searchParams.get("project");
+    if (!pid) return json({ error: "need project param" }, 400);
+    const lim = Math.min(parseInt(url.searchParams.get("limit") || "5000", 10) || 5000, 20000);
+    const { results } = await env.DB.prepare(
+      "SELECT id,type,ts,deviceId,data FROM event WHERE projectId=? ORDER BY ts DESC LIMIT ?"
+    ).bind(pid, lim).all();
+    return json({ project: pid, count: (results || []).length, events: results || [] });
   }
 
   return json({ error: "not found: " + method + " " + path }, 404);
