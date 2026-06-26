@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v11 · consent</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v13 · analytics</span></h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill">OFF</span>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
@@ -601,18 +601,116 @@ const HUD = {
     l.setAttribute('x2',(Math.sin(rad)*r2).toFixed(1)); l.setAttribute('y2',(-Math.cos(rad)*r2).toFixed(1));
     g.appendChild(l);} })();
 
+/* ---- analytics: capture → IndexedDB buffer → idempotent sync ----
+   off unless hasConsent('store-history'); never blocks UI/audio; foreground-only (PWA honest) */
+const Analytics = {
+  DB:null, QCAP:500, opening:null, _syncing:false, enterT:{},
+  uuid(){ try{ if(crypto&&crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+    return 'e-'+Date.now().toString(16)+'-'+Math.random().toString(16).slice(2,10); },
+  device(){ try{ return localStorage.getItem('gp.device'); }catch(e){ return null; } },
+  enabled(){ return !!(window.hasConsent && window.hasConsent('store-history')); },
+  open(){ if(this.DB) return Promise.resolve(this.DB);
+    if(this.opening) return this.opening;
+    this.opening=new Promise((res,rej)=>{ try{
+      const r=indexedDB.open('gp-analytics',1);
+      r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('q')) r.result.createObjectStore('q',{keyPath:'id'}); };
+      r.onsuccess=()=>{ this.DB=r.result; res(this.DB); };
+      r.onerror=()=>rej(r.error);
+    }catch(e){ rej(e); } });
+    return this.opening; },
+  put(ev){ return new Promise((res,rej)=>{ const tx=this.DB.transaction('q','readwrite');
+    tx.objectStore('q').put(ev); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); }); },
+  all(){ return new Promise((res,rej)=>{ const tx=this.DB.transaction('q','readonly');
+    const rq=tx.objectStore('q').getAll(); rq.onsuccess=()=>res(rq.result||[]); rq.onerror=()=>rej(rq.error); }); },
+  del(ids){ return new Promise((res)=>{ const tx=this.DB.transaction('q','readwrite');
+    const s=tx.objectStore('q'); ids.forEach(id=>s.delete(id)); tx.oncomplete=()=>res(); tx.onerror=()=>res(); }); },
+  async trim(){ try{ const ev=await this.all();
+    if(ev.length>this.QCAP){ ev.sort((a,b)=>a.ts-b.ts); await this.del(ev.slice(0,ev.length-this.QCAP).map(e=>e.id)); } }catch(e){} },
+  async enqueue(type, data){
+    if(!this.enabled()) return;
+    const pid=(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null; if(!pid) return;
+    const ev={ id:this.uuid(), projectId:pid, type, ts:Date.now(), data };
+    try{ await this.open(); await this.put(ev); this.trim(); }catch(e){ return; }
+    this.sync();
+  },
+  spatial(state, zone){ this.enqueue('SPATIAL_TRANSITION',
+    { zone_id:zone.id, state, accuracy_m:(window.__lastAcc!=null?window.__lastAcc:null),
+      heading:(typeof Compass!=='undefined'&&Compass.heading!=null?Compass.heading:null) }); },
+  delivery(zone){ const lat=this.enterT[zone.id]?(Date.now()-this.enterT[zone.id]):null;
+    this.enqueue('AUDIO_ENGAGEMENT',
+    { zone_id:zone.id, trigger_latency_ms:lat, accuracy_m:(window.__lastAcc!=null?window.__lastAcc:null) }); },
+  async sync(){
+    if(this._syncing || !this.enabled()) return;
+    if(typeof navigator!=='undefined' && navigator.onLine===false) return;
+    const dev=this.device(); if(!dev) return;
+    this._syncing=true;
+    try{
+      await this.open();
+      const batch=(await this.all()).slice(0,200);
+      if(batch.length){
+        const r=await fetch('/api/events',{ method:'POST', headers:{'content-type':'application/json'},
+          body:JSON.stringify({ deviceId:dev, projectId:(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null,
+            events:batch.map(e=>({id:e.id,projectId:e.projectId,type:e.type,ts:e.ts,data:e.data})) }) });
+        if(r.ok){ await this.del(batch.map(e=>e.id)); HUD.log('ev-flick','analytics synced '+batch.length+' event(s)'); }
+      }
+    }catch(e){ /* keep queued, retry next tick */ }
+    this._syncing=false;
+  }
+};
+setInterval(()=>Analytics.sync(), 30000);
+try{ window.addEventListener('online', ()=>Analytics.sync());
+     document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) Analytics.sync(); }); }catch(e){}
+
+/* ---- action dispatcher: optional per-state actions (webhooks now; extensible) ----
+   lives outside the shared core (sim never fires real actions);
+   every action is consent-gated and failures never interrupt the walk */
+const Actions = {
+  ON: { enter:'enter', exit:'exit', say:'reveal', 'arm-needle':'approach' },
+  run(kind, zone){
+    const on = this.ON[kind];
+    if(!on || !zone || !Array.isArray(zone.actions)) return;
+    zone.actions.forEach(a => { if((a.on||'enter')===on) this.dispatch(a, on, zone); });
+  },
+  dispatch(a, on, zone){
+    if(!a || !a.type) return;
+    // consent enforcement: an action may declare a required scope; refuse if not granted
+    if(a.requires && !(window.hasConsent && window.hasConsent(a.requires))){
+      HUD.log('ev-flick','ACTION skipped ('+a.type+' on '+on+') — needs consent: '+a.requires); return; }
+    if(a.type==='webhook') return this.webhook(a, on, zone);
+    HUD.log('ev-flick','ACTION unknown type: '+a.type);
+  },
+  webhook(a, on, zone){
+    if(!a.url){ HUD.log('ev-warn','webhook action missing url'); return; }
+    const body = { event:on, zone:zone.id, name:zone.name,
+                   project:(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null, ts:Date.now() };
+    if(a.includeDevice){ try{ body.deviceId=localStorage.getItem('gp.device')||null; }catch(e){} }
+    let ctrl, to;
+    try{ ctrl=new AbortController(); to=setTimeout(()=>ctrl.abort(), a.timeoutMs||5000); }catch(e){}
+    fetch(a.url, { method:a.method||'POST', headers:{'content-type':'application/json'},
+        body:JSON.stringify(Object.assign(body, a.extra||{})),
+        mode:'cors', keepalive:true, signal:ctrl?ctrl.signal:undefined })
+      .then(r => HUD.log('ev-sys','ACTION webhook '+on+' → '+zone.name+' ('+r.status+')'))
+      .catch(err => HUD.log('ev-warn','ACTION webhook failed: '+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||err)))
+      .finally(()=>{ if(to) clearTimeout(to); });
+  }
+};
+
 /* Geofencer -> HUD log wiring */
 Geofencer.onEvent=(e)=>{
-  if(e.kind==='enter') HUD.log('ev-enter','ENTER  '+e.zone.name+(e.info.side?' ('+e.info.side+')':''));
+  if(e.kind==='enter'){ HUD.log('ev-enter','ENTER  '+e.zone.name+(e.info.side?' ('+e.info.side+')':''));
+       Analytics.enterT[e.zone.id]=Date.now(); Analytics.spatial('ENTER', e.zone); }
   else if(e.kind==='exit'){ HUD.log('ev-exit','EXIT   '+e.zone.name+'  '+e.info.dur.toFixed(0)+'s, moved '+e.info.move.toFixed(0)+'m');
-       if(e.info.flick) HUD.log('ev-flick','       ^ flicker (barely moved) — ignore'); }
+       if(e.info.flick) HUD.log('ev-flick','       ^ flicker (barely moved) — ignore');
+       Analytics.spatial('EXIT', e.zone); }
   else if(e.kind==='say'){ HUD.log(e.warn?'ev-warn':'ev-say','SAY    "'+e.text+'"'+(e.warn?' [approx]':''));
+       Analytics.delivery(e.zone);
        const wrap=document.querySelector('.wrap');
        if(wrap){ wrap.style.transition='none'; wrap.style.boxShadow='inset 0 0 0 5px #ff6a3d';
          setTimeout(()=>{ wrap.style.transition='box-shadow .6s ease-out';
            wrap.style.boxShadow='inset 0 0 0 0 rgba(255,106,61,0)'; },60); } }
   else if(e.kind==='suppressed') HUD.log('ev-flick','HOLD   reveal suppressed (fix too loose)');
   else if(e.kind==='arm-needle') HUD.log('ev-sys','NEEDLE armed → '+e.zone.name);
+  Actions.run(e.kind, e.zone);
 };
 
 /* ===================== INPUTS: GPS / SIM / UI ===================== */
