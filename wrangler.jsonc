@@ -1,7 +1,16 @@
 {
   "name": "geofence-platform",
   "compatibility_date": "2026-06-01",
+  "main": "worker.js",
   "assets": {
-    "directory": "./"
-  }
+    "directory": "./",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "geofence-db",
+      "database_id": "d1b9f6e3-d70b-4bf0-a91e-9385f886fa73"
+    }
+  ]
 }
