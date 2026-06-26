@@ -700,6 +700,11 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
 /* ---- consent + device identity (the privacy gate) ----
    off by default; pseudonymous device id; future analytics must pass hasConsent() */
 (function(){
+  // the gate every future analytics/track call must check — closed by default, set immediately
+  window.__consent={ "store-history":false, "live-tracking":false };
+  window.hasConsent=function(scope){ return !!window.__consent[scope]; };
+
+  function _consentSetup(){
   const CONSENT_VERSION="2026-06-26";
   function lsGet(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
   function lsSet(k,v){ try{localStorage.setItem(k,v);}catch(e){} }
@@ -710,9 +715,6 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
   function stored(){ try{ return JSON.parse(lsGet('gp.consent')||'null'); }catch(e){ return null; } }
   function current(){ const c=stored(); return c && c.version===CONSENT_VERSION; }
 
-  // the gate every future analytics/track call must check
-  window.__consent={ "store-history":false, "live-tracking":false };
-  window.hasConsent=function(scope){ return !!window.__consent[scope]; };
   function apply(scopes){ window.__consent={ "store-history":!!(scopes&&scopes["store-history"]),
                                              "live-tracking":!!(scopes&&scopes["live-tracking"]) }; }
 
@@ -751,6 +753,9 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
   // on load: apply any stored choice; show the gate first-run or when the text version changes
   if(current()){ apply((stored()||{}).scopes); HUD.log('ev-sys','privacy · analytics '+(window.hasConsent('store-history')?'on':'off')+' · route '+(window.hasConsent('live-tracking')?'on':'off')); }
   else { open(); }
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',_consentSetup);
+  else _consentSetup();
 })();
 </script>
 
