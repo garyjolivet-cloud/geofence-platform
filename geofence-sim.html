@@ -66,7 +66,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
 </head>
 <body>
 <header>
-  <h1>Geofence Simulator</h1><span class="v">v3</span>
+  <h1>Geofence Simulator</h1><span class="v">v4</span>
   <span class="sub">general-purpose test bench · runs the real engine core</span>
 </header>
 
@@ -81,6 +81,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
         <button class="sm" id="btnLoad">Load pasted</button>
         <button class="sm" id="btnSample">Load sample walk</button>
         <button class="sm" id="btnFile">Import file…</button>
+        <button class="sm" id="btnPlatform">From platform</button>
         <button class="sm" id="btnFit">Fit to data</button>
       </div>
       <input type="file" id="file" accept=".json,application/json" hidden>
@@ -423,7 +424,9 @@ map.on("load",()=>{
   map.addLayer({id:"ghost",type:"circle",source:"ghost",
     paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
 
-  loadBundle(SAMPLE,"sample walk");
+  const pid=new URLSearchParams(location.search).get("project");
+  if(pid){ loadBundle(SAMPLE,"sample walk"); loadProjectFromPlatform(pid); }
+  else loadBundle(SAMPLE,"sample walk");
 });
 
 map.on("click",(e)=>{
@@ -648,6 +651,16 @@ document.getElementById("btnLoad").onclick=()=>{ try{ loadBundle(JSON.parse(docu
   catch(e){ log("ev-warn","couldn't parse that JSON: "+e.message); } };
 document.getElementById("btnFit").onclick=fitToData;
 document.getElementById("btnFile").onclick=()=>document.getElementById("file").click();
+async function loadProjectFromPlatform(pid){
+  if(!pid) return;
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/bundle");
+    if(!r.ok){ const e=await r.json().catch(()=>({})); log("ev-warn","platform: "+(e.error||("HTTP "+r.status))); return; }
+    const b=await r.json(); loadBundle(b,"platform · "+pid);
+  }catch(e){ log("ev-warn","platform load failed: "+e.message); }
+}
+document.getElementById("btnPlatform").onclick=()=>{
+  const pid=prompt("Project id to load (e.g. kh-village-walk):"); if(pid) loadProjectFromPlatform(pid.trim()); };
 document.getElementById("file").onchange=(e)=>{ const f=e.target.files[0]; if(!f) return;
   const r=new FileReader(); r.onload=()=>{ try{ loadBundle(JSON.parse(r.result),f.name); }catch(err){ log("ev-warn","bad file: "+err.message); } }; r.readAsText(f); };
 
