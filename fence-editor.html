@@ -32,7 +32,7 @@
   input,textarea,select{width:100%;font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px}
   .half{display:flex;gap:6px} .half>div{flex:1}
-  textarea#out{height:96px;resize:vertical;font-family:ui-monospace,monospace;font-size:11px;line-height:1.4}
+  textarea#out{height:52px;resize:vertical;font-family:ui-monospace,monospace;font-size:11px;line-height:1.4}
   textarea.say{height:54px;resize:vertical;font-family:"Barlow Condensed";font-size:13px}
   .zone{background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:8px;margin-bottom:6px;cursor:pointer}
   .zone.sel{border-color:var(--coral);background:#23170f}
@@ -59,9 +59,22 @@
 <div class="status" id="status">click the map to read coordinates</div>
 
 <div class="panel">
-  <h1>Fence Editor <span class="v">v2 · triggers + audio</span></h1>
-  <div class="hint">Draw a stop, set what it says and how it fires, then export — it drops straight into the engine and the simulator.</div>
+  <h1>Fence Editor <span class="v">v3 · platform</span></h1>
+  <div class="hint">Draw stops, set what they say, then Publish — the engine &amp; sim load it by project.</div>
 
+  <label class="k">project</label>
+  <input id="projName" value="KH Village Walk">
+  <div class="row" style="margin-top:6px">
+    <select id="projSel" style="flex:1"><option value="">— load a project —</option></select>
+    <button id="projRefresh" class="ghost" title="refresh">↻</button>
+  </div>
+  <div class="row">
+    <button id="loadPlatform" class="ghost" style="flex:1">Load ▼</button>
+    <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
+  </div>
+  <div class="hint" id="platStatus">Publish saves to D1; open the engine with ?project=&lt;id&gt;</div>
+
+  <hr>
   <label class="k">add a stop — pick a shape</label>
   <div class="row">
     <button data-tool="circle">● Circle</button>
@@ -116,27 +129,13 @@
   <div id="zlist"></div>
 
   <hr>
-  <label class="k">project name</label>
-  <input id="projName" value="kh-village-walk">
-  <div class="row" style="margin-top:8px">
+  <div class="row">
     <button id="importBtn" class="ghost">Import ▲</button>
     <button id="exportBtn" class="on" style="flex:1">Export ▼</button>
     <button id="copyBtn" class="ghost">copy</button>
   </div>
-  <textarea id="out" placeholder="bundle JSON — paste here then Import to edit an existing walk, or Export to fill this from your stops"></textarea>
+  <textarea id="out" placeholder="bundle JSON — Export fills this; paste + Import to edit"></textarea>
   <div class="row"><button id="loadPois" class="ghost" style="flex:1">Show existing chutes</button></div>
-
-  <hr>
-  <label class="k">platform (D1) — tie it together</label>
-  <div class="row">
-    <select id="projSel" style="flex:1"><option value="">— projects —</option></select>
-    <button id="projRefresh" class="ghost" title="refresh list">↻</button>
-  </div>
-  <div class="row">
-    <button id="loadPlatform" class="ghost" style="flex:1">Load ▼</button>
-    <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
-  </div>
-  <div class="hint" id="platStatus">Publish saves this walk to the platform; the engine &amp; sim load it with <b>?project=&lt;id&gt;</b>.</div>
 </div>
 
 <script>
