@@ -135,7 +135,7 @@
     <button id="copyBtn" class="ghost">copy</button>
   </div>
   <textarea id="out" placeholder="bundle JSON — Export fills this; paste + Import to edit"></textarea>
-  <div class="row"><button id="loadPois" class="ghost" style="flex:1">Show existing chutes</button></div>
+  <div class="row"><button id="loadPois" class="ghost" style="flex:1">Reference points</button></div>
 </div>
 
 <script>
@@ -442,7 +442,7 @@ document.getElementById("loadPois").onclick=async()=>{
       properties:{name:p.name},geometry:{type:"Point",coordinates:[p.topLatLon[1],p.topLatLon[0]]}}));
     map.getSource("pois").setData(fc(feats));
     document.getElementById("status").textContent="loaded "+feats.length+" existing chutes for reference";
-  }catch(e){ document.getElementById("status").textContent="couldn't load /api/pois (same-origin only)"; }
+  }catch(e){ document.getElementById("status").textContent="no reference layer configured for this platform"; }
 };
 
 /* ---- platform (D1): publish + load, tie the tools together ---- */
@@ -458,8 +458,8 @@ async function fetchProjects(){
     ps().textContent="found "+((j.projects||[]).length)+" projects on the platform";
   }catch(e){ ps().textContent="couldn't reach the API — open this on the deployed site, not a local file"; }
 }
-async function loadFromPlatform(){
-  const id=document.getElementById("projSel").value;
+async function loadFromPlatform(idArg){
+  const id=(typeof idArg==="string" && idArg) || document.getElementById("projSel").value;
   if(!id){ ps().textContent="pick a project from the list first"; return; }
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle");
@@ -486,9 +486,11 @@ async function publishToPlatform(){
   }catch(e){ ps().textContent="publish failed: "+e.message; }
 }
 document.getElementById("projRefresh").onclick=fetchProjects;
-document.getElementById("loadPlatform").onclick=loadFromPlatform;
+document.getElementById("loadPlatform").onclick=()=>loadFromPlatform();
 document.getElementById("publishBtn").onclick=publishToPlatform;
 fetchProjects();
+const _pid=new URLSearchParams(location.search).get("project");
+if(_pid) loadFromPlatform(_pid);
 </script>
 </body>
 </html>
