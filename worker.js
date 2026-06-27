@@ -40,7 +40,8 @@ export default {
       "/editor": "/fence-editor.html",
       "/sim": "/geofence-sim.html",
       "/engine": "/geofence-engine.html",
-      "/dashboard": "/dashboard.html"
+      "/dashboard": "/dashboard.html",
+      "/share": "/share.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     if (FRIENDLY[clean] && env.ASSETS) {
