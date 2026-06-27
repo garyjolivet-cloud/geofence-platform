@@ -63,6 +63,13 @@
     <button class="ghost on" id="confBtn" title="toggle heading confidence">heading: good</button>
   </div>
 
+  <div class="row">
+    <span style="color:var(--fog);font-family:'Barlow Condensed';font-size:13px;text-transform:uppercase;letter-spacing:.5px">pan test:</span>
+    <button class="ghost" id="panL">◀ Left</button>
+    <button class="ghost" id="panC">● Center</button>
+    <button class="ghost" id="panR">Right ▶</button>
+    <span class="hint" style="margin:0">forces the panner directly — bypasses direction math</span>
+
   <div class="grid">
     <div class="panel">
       <canvas id="radar" width="320" height="320"></canvas>
@@ -86,7 +93,10 @@
       <div class="slider"><input type="range" id="loHz" min="250" max="3000" value="600" step="50"><span class="val" id="loHzv">600 Hz</span></div>
 
       <span class="k">volume falloff (far)</span>
-      <div class="slider"><input type="range" id="minGain" min="0" max="100" value="18"><span class="val" id="minGainv">0.18</span></div>
+      <div class="slider"><input type="range" id="minGain" min="0" max="100" value="12"><span class="val" id="minGainv">0.12</span></div>
+
+      <span class="k">falloff steepness (drop-off / bloom)</span>
+      <div class="slider"><input type="range" id="curve" min="100" max="400" value="220" step="10"><span class="val" id="curvev">2.2×</span></div>
 
       <span class="k">reverb at distance</span>
       <div class="slider"><input type="range" id="reverbMax" min="0" max="100" value="40"><span class="val" id="reverbMaxv">0.40</span></div>
@@ -110,7 +120,7 @@
    ============================================================ */
 const SpatialAudio = {
   ctx:null, buffer:null, src:null, nodes:null, playing:false,
-  tuning:{ clearM:10, farM:60, hiHz:7000, loHz:600, minGain:0.18, reverbMax:0.40, tau:0.09, mode:"stereo" },
+  tuning:{ clearM:8, farM:40, hiHz:7000, loHz:600, minGain:0.12, reverbMax:0.45, tau:0.09, curve:2.2, mode:"stereo" },
 
   ensureCtx(){
     if(this.ctx) return this.ctx;
@@ -169,7 +179,15 @@ const SpatialAudio = {
     else { lowpass.connect(stereo); stereo.connect(vol); }
   },
 
-  setBuffer(buffer){ this.buffer=buffer; },
+  setBuffer(buffer){ this.buffer=this._toMono(buffer); },
+  _toMono(buf){
+    if(!buf || buf.numberOfChannels<=1) return buf;
+    const c=this.ensureCtx(), len=buf.length, out=c.createBuffer(1,len,buf.sampleRate), o=out.getChannelData(0);
+    for(let ch=0; ch<buf.numberOfChannels; ch++){ const d=buf.getChannelData(ch); for(let i=0;i<len;i++) o[i]+=d[i]; }
+    let peak=0; for(let i=0;i<len;i++){ const a=Math.abs(o[i]); if(a>peak) peak=a; }
+    if(peak>1){ for(let i=0;i<len;i++) o[i]/=peak; }
+    return out;
+  },
 
   play(){
     if(!this.buffer){ return false; }
@@ -201,8 +219,8 @@ const SpatialAudio = {
     // distance factor 0 (near/clear) .. 1 (far)
     const f=Math.max(0, Math.min(1, (distM - t.clearM)/Math.max(1,(t.farM - t.clearM))));
     const cutoff = t.hiHz * Math.pow(t.loHz/t.hiHz, f);     // exponential sweep (perceptual)
-    const gain   = 1 + (t.minGain - 1)*f;                    // 1 → minGain
-    const wet    = t.reverbMax * f;                          // 0 → reverbMax
+    const gain   = t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2);   // steep falloff / bloom
+    const wet    = t.reverbMax * Math.pow(f, 0.6);
     const pan    = headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
 
     this.nodes.lowpass.frequency.setTargetAtTime(cutoff, ctx.currentTime, tau);
@@ -311,6 +329,19 @@ $("mode").querySelectorAll("button").forEach(b=>b.onclick=()=>{
 $("confBtn").onclick=()=>{ headingOk=!headingOk; $("confBtn").classList.toggle("on",headingOk);
   $("confBtn").textContent="heading: "+(headingOk?"good":"poor"); refresh(); };
 
+// manual pan test — forces the stereo panner directly, ignoring direction math
+function forcePan(p,label){
+  SpatialAudio.setMode("stereo");
+  $("mode").querySelectorAll("button").forEach(x=>x.classList.toggle("on",x.dataset.m==="stereo"));
+  if(SpatialAudio.nodes && SpatialAudio.nodes.stereo){
+    SpatialAudio.nodes.stereo.pan.setValueAtTime(p, SpatialAudio.ctx.currentTime);
+  }
+  $("rAz").textContent="forced "+label;
+}
+$("panL").onclick=()=>forcePan(-1,"LEFT");
+$("panC").onclick=()=>forcePan(0,"CENTER");
+$("panR").onclick=()=>forcePan(1,"RIGHT");
+
 // sliders -> tuning
 function slider(id, fmt, apply){ const el=$(id), v=$(id+"v");
   const upd=()=>{ const n=+el.value; v.textContent=fmt(n); apply(n); refresh(); }; el.oninput=upd; upd(); }
@@ -319,6 +350,7 @@ slider("farM", n=>n+" m", n=>SpatialAudio.tuning.farM=n);
 slider("hiHz", n=>n+" Hz", n=>SpatialAudio.tuning.hiHz=n);
 slider("loHz", n=>n+" Hz", n=>SpatialAudio.tuning.loHz=n);
 slider("minGain", n=>(n/100).toFixed(2), n=>SpatialAudio.tuning.minGain=n/100);
+slider("curve", n=>(n/100).toFixed(1)+"×", n=>SpatialAudio.tuning.curve=n/100);
 slider("reverbMax", n=>(n/100).toFixed(2), n=>SpatialAudio.tuning.reverbMax=n/100);
 slider("tau", n=>n+" ms", n=>SpatialAudio.tuning.tau=n/1000);
 
