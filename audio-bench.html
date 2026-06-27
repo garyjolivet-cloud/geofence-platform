@@ -122,7 +122,10 @@ const SpatialAudio = {
   // build the graph once
   build(){
     const ctx=this.ensureCtx();
+    const mono=ctx.createGain();
+    mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
     const lowpass=ctx.createBiquadFilter(); lowpass.type="lowpass"; lowpass.frequency.value=this.tuning.hiHz; lowpass.Q.value=0.7;
+    mono.connect(lowpass);
     const stereo=ctx.createStereoPanner();
     let panner=null;
     if(ctx.createPanner){ panner=ctx.createPanner(); panner.panningModel="HRTF"; panner.distanceModel="linear";
@@ -143,7 +146,7 @@ const SpatialAudio = {
     vol.connect(conv); conv.connect(wet); wet.connect(fade);
     fade.connect(ctx.destination);
 
-    this.nodes={ lowpass, stereo, panner, dry, conv, wet, fade, vol };
+    this.nodes={ mono, lowpass, stereo, panner, dry, conv, wet, fade, vol };
     this.setMode(this.tuning.mode);
   },
 
@@ -174,7 +177,7 @@ const SpatialAudio = {
     if(!this.nodes) this.build();
     if(this.src){ try{ this.src.stop(); }catch(e){} }
     const src=ctx.createBufferSource(); src.buffer=this.buffer; src.loop=true;
-    src.connect(this.nodes.lowpass); src.start();
+    src.connect(this.nodes.mono); src.start();
     this.src=src; this.playing=true;
     // fade in
     const g=this.nodes.fade.gain; g.cancelScheduledValues(ctx.currentTime);
