@@ -337,7 +337,7 @@ const Geofencer = {
       } else {
         const warn = lowAcc && mode==="warn";
         Audio.ding();
-        Audio.say(t.say, warn);
+        if(!zone.audioUrl) Audio.say(t.say, warn);   // recorded voice replaces TTS when present
         if(this.onEvent) this.onEvent({zone,kind:"say",text:t.say,warn});
       }
     }
