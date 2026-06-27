@@ -276,8 +276,10 @@ radar.addEventListener("touchstart",down,{passive:false}); radar.addEventListene
 
 // transport
 $("start").onclick=()=>{
-  if(!SpatialAudio.buffer){ ensureTestTone().then(()=>{ SpatialAudio.play(); refresh(); }); return; }
-  SpatialAudio.play(); refresh();
+  if(SpatialAudio.playing){ SpatialAudio.stop(); $("start").textContent="▶ Start audio"; $("start").classList.remove("ghost"); return; }
+  const go=()=>{ SpatialAudio.play(); refresh(); $("start").textContent="■ Stop"; };
+  if(!SpatialAudio.buffer){ ensureTestTone().then(go); return; }
+  go();
 };
 $("file").onchange=async(e)=>{
   const f=e.target.files[0]; if(!f) return;
