@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spatial Audio Bench</title>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;
+         --ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--amber:#ffc24d; }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--night);color:var(--snow);font-family:"Barlow",system-ui,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:22px 18px 60px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+         padding:6px 0 16px;border-bottom:1px solid var(--rim);margin-bottom:18px}
+  h1{font-family:"Black Han Sans";font-weight:400;font-size:20px;margin:0}
+  h1 span{font-size:12px;color:var(--coral);font-family:"Barlow Condensed"}
+  a{color:var(--ice);font-family:"Barlow Condensed";font-size:13px;text-transform:uppercase;letter-spacing:.4px;
+    border:1px solid var(--rim);border-radius:8px;padding:7px 11px;text-decoration:none}
+  a:hover{border-color:var(--coral);color:var(--snow)}
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:18px}
+  @media(max-width:760px){ .grid{grid-template-columns:1fr} }
+  .panel{background:linear-gradient(180deg,var(--slate),#10192640);border:1px solid var(--rim);border-radius:16px;padding:16px}
+  canvas{display:block;width:100%;height:auto;border-radius:12px;background:#0c1622;touch-action:none}
+  .read{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-family:"Barlow Condensed"}
+  .read div{font-size:13px;color:var(--fog)}
+  .read b{display:block;font-size:21px;color:var(--snow);font-weight:600}
+  .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  button{font-family:"Barlow Condensed";font-weight:700;font-size:14px;letter-spacing:.4px;text-transform:uppercase;
+         border:none;border-radius:10px;padding:11px 15px;cursor:pointer;background:var(--coral);color:#1a0d07}
+  button.ghost{background:transparent;border:1px solid var(--rim);color:var(--ice)}
+  button.ghost.on{border-color:var(--go);color:var(--go)}
+  button:disabled{opacity:.4;cursor:default}
+  label.file{display:inline-block;background:transparent;border:1px solid var(--rim);color:var(--ice);border-radius:10px;
+        padding:11px 15px;cursor:pointer;font-family:"Barlow Condensed";font-weight:600;font-size:14px;text-transform:uppercase;letter-spacing:.4px}
+  label.file:hover{border-color:var(--coral);color:var(--snow)}
+  input[type=file]{display:none}
+  .k{font-family:"Barlow Condensed";font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--fog);margin:14px 0 4px;display:block}
+  .slider{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .slider input[type=range]{flex:1;accent-color:var(--coral)}
+  .slider .val{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);width:74px;text-align:right}
+  .hint{color:var(--fog);font-size:12.5px;line-height:1.5;margin:6px 0 0}
+  .seg{display:flex;border:1px solid var(--rim);border-radius:9px;overflow:hidden}
+  .seg button{background:transparent;color:var(--ice);border:none;border-radius:0;padding:9px 13px;font-size:13px}
+  .seg button.on{background:var(--coral);color:#1a0d07}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Spatial Audio Bench <span>v1 · foundation</span></h1>
+    <a href="/">Home</a>
+  </header>
+
+  <div class="row">
+    <button id="start">▶ Start audio</button>
+    <label class="file">Load audio file<input type="file" id="file" accept="audio/*"></label>
+    <button class="ghost" id="testtone">Use test loop</button>
+    <div class="seg" id="mode">
+      <button data-m="stereo" class="on">Stereo</button>
+      <button data-m="hrtf">3-D (HRTF)</button>
+    </div>
+    <button class="ghost on" id="confBtn" title="toggle heading confidence">heading: good</button>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <canvas id="radar" width="320" height="320"></canvas>
+      <div class="read">
+        <div>direction<b id="rAz">—</b></div>
+        <div>distance<b id="rDist">—</b></div>
+        <div>cutoff<b id="rHz">—</b></div>
+        <div>volume<b id="rGain">—</b></div>
+      </div>
+      <p class="hint">You're the dot in the centre, facing up. Drag the <b style="color:var(--coral)">sound</b> around you (angle = direction) and toward/away (radius = distance). Headphones recommended — stereo and HRTF only work across two channels.</p>
+    </div>
+
+    <div class="panel">
+      <span class="k">distance → clarity</span>
+      <div class="slider"><input type="range" id="clearM" min="2" max="40" value="10"><span class="val" id="clearMv">10 m</span></div>
+      <div class="slider"><input type="range" id="farM" min="20" max="150" value="60"><span class="val" id="farMv">60 m</span></div>
+      <p class="hint">At/inside the clear distance the sound is full and bright. At/beyond the far distance it's muffled, quiet, and reverberant.</p>
+
+      <span class="k">low-pass cutoff (near → far)</span>
+      <div class="slider"><input type="range" id="hiHz" min="2000" max="16000" value="7000" step="100"><span class="val" id="hiHzv">7000 Hz</span></div>
+      <div class="slider"><input type="range" id="loHz" min="250" max="3000" value="600" step="50"><span class="val" id="loHzv">600 Hz</span></div>
+
+      <span class="k">volume falloff (far)</span>
+      <div class="slider"><input type="range" id="minGain" min="0" max="100" value="18"><span class="val" id="minGainv">0.18</span></div>
+
+      <span class="k">reverb at distance</span>
+      <div class="slider"><input type="range" id="reverbMax" min="0" max="100" value="40"><span class="val" id="reverbMaxv">0.40</span></div>
+
+      <span class="k">smoothing (param glide)</span>
+      <div class="slider"><input type="range" id="tau" min="20" max="400" value="90" step="10"><span class="val" id="tauv">90 ms</span></div>
+
+      <p class="hint">These are the constants that transplant into the field engine. Tune until a sound behind you, far off, feels behind you and far off.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   SpatialAudio — the reusable foundation (transplants to the engine)
+   Direction → pan (stereo: sin(az); or HRTF panner).
+   Distance  → low-pass cutoff + gain + reverb wet.
+   All params glide (setTargetAtTime) to avoid zipper noise.
+   ============================================================ */
+const SpatialAudio = {
+  ctx:null, buffer:null, src:null, nodes:null, playing:false,
+  tuning:{ clearM:10, farM:60, hiHz:7000, loHz:600, minGain:0.18, reverbMax:0.40, tau:0.09, mode:"stereo" },
+
+  ensureCtx(){
+    if(this.ctx) return this.ctx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    this.ctx = new AC();
+    return this.ctx;
+  },
+
+  // build the graph once
+  build(){
+    const ctx=this.ensureCtx();
+    const lowpass=ctx.createBiquadFilter(); lowpass.type="lowpass"; lowpass.frequency.value=this.tuning.hiHz; lowpass.Q.value=0.7;
+    const stereo=ctx.createStereoPanner();
+    let panner=null;
+    if(ctx.createPanner){ panner=ctx.createPanner(); panner.panningModel="HRTF"; panner.distanceModel="linear";
+      panner.refDistance=1; panner.maxDistance=10000; panner.rolloffFactor=0;   // we handle distance ourselves
+      if(ctx.listener.forwardX){ ctx.listener.forwardX.value=0; ctx.listener.forwardY.value=0; ctx.listener.forwardZ.value=-1;
+        ctx.listener.upX.value=0; ctx.listener.upY.value=1; ctx.listener.upZ.value=0; } }
+    const dry=ctx.createGain(); dry.gain.value=1;
+    const conv=ctx.createConvolver(); conv.buffer=this._impulse(ctx, 1.6, 2.6);
+    const wet=ctx.createGain(); wet.gain.value=0;
+    const fade=ctx.createGain(); fade.gain.value=0;        // master fade in/out
+    const vol=ctx.createGain(); vol.gain.value=1;          // distance volume
+
+    // routing: src -> lowpass -> [pan] -> vol -> (dry + conv->wet) -> fade -> dest
+    lowpass.connect(stereo);
+    const panOut=stereo;            // active pan node output (swapped by setMode)
+    panOut.connect(vol);
+    vol.connect(dry); dry.connect(fade);
+    vol.connect(conv); conv.connect(wet); wet.connect(fade);
+    fade.connect(ctx.destination);
+
+    this.nodes={ lowpass, stereo, panner, dry, conv, wet, fade, vol };
+    this.setMode(this.tuning.mode);
+  },
+
+  // generate a synthetic reverb impulse (no external file)
+  _impulse(ctx, seconds, decay){
+    const rate=ctx.sampleRate, len=Math.floor(rate*seconds), buf=ctx.createBuffer(2,len,rate);
+    for(let ch=0; ch<2; ch++){ const d=buf.getChannelData(ch);
+      for(let i=0;i<len;i++){ d[i]=(Math.random()*2-1)*Math.pow(1-i/len, decay); } }
+    return buf;
+  },
+
+  setMode(mode){
+    this.tuning.mode=mode;
+    if(!this.nodes) return;
+    const { lowpass, stereo, panner, vol } = this.nodes;
+    try{ lowpass.disconnect(); }catch(e){}
+    try{ stereo.disconnect(); }catch(e){}
+    if(panner){ try{ panner.disconnect(); }catch(e){} }
+    if(mode==="hrtf" && panner){ lowpass.connect(panner); panner.connect(vol); }
+    else { lowpass.connect(stereo); stereo.connect(vol); }
+  },
+
+  setBuffer(buffer){ this.buffer=buffer; },
+
+  play(){
+    if(!this.buffer){ return false; }
+    const ctx=this.ensureCtx(); if(ctx.state==="suspended") ctx.resume();
+    if(!this.nodes) this.build();
+    if(this.src){ try{ this.src.stop(); }catch(e){} }
+    const src=ctx.createBufferSource(); src.buffer=this.buffer; src.loop=true;
+    src.connect(this.nodes.lowpass); src.start();
+    this.src=src; this.playing=true;
+    // fade in
+    const g=this.nodes.fade.gain; g.cancelScheduledValues(ctx.currentTime);
+    g.setValueAtTime(g.value, ctx.currentTime); g.linearRampToValueAtTime(1, ctx.currentTime+0.8);
+    return true;
+  },
+
+  stop(){
+    if(!this.nodes||!this.src) return;
+    const ctx=this.ctx, g=this.nodes.fade.gain;
+    g.cancelScheduledValues(ctx.currentTime); g.setValueAtTime(g.value, ctx.currentTime);
+    g.linearRampToValueAtTime(0, ctx.currentTime+0.5);
+    const s=this.src; setTimeout(()=>{ try{ s.stop(); }catch(e){} }, 560);
+    this.playing=false;
+  },
+
+  // THE control mapping — az in radians (0 = ahead), distM in metres, headingOk gates direction
+  update(az, distM, headingOk){
+    if(!this.nodes) return null;
+    const ctx=this.ctx, t=this.tuning, tau=t.tau;
+    // distance factor 0 (near/clear) .. 1 (far)
+    const f=Math.max(0, Math.min(1, (distM - t.clearM)/Math.max(1,(t.farM - t.clearM))));
+    const cutoff = t.hiHz * Math.pow(t.loHz/t.hiHz, f);     // exponential sweep (perceptual)
+    const gain   = 1 + (t.minGain - 1)*f;                    // 1 → minGain
+    const wet    = t.reverbMax * f;                          // 0 → reverbMax
+    const pan    = headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
+
+    this.nodes.lowpass.frequency.setTargetAtTime(cutoff, ctx.currentTime, tau);
+    this.nodes.vol.gain.setTargetAtTime(gain, ctx.currentTime, tau);
+    this.nodes.wet.gain.setTargetAtTime(wet, ctx.currentTime, tau);
+    if(t.mode==="hrtf" && this.nodes.panner){
+      const r=2, x=Math.sin(az)*r, z=-Math.cos(az)*r, p=this.nodes.panner;
+      const a = headingOk ? az : 0, X=Math.sin(a)*r, Z=-Math.cos(a)*r;
+      if(p.positionX){ p.positionX.setTargetAtTime(X,ctx.currentTime,tau); p.positionY.setTargetAtTime(0,ctx.currentTime,tau); p.positionZ.setTargetAtTime(Z,ctx.currentTime,tau); }
+      else p.setPosition(X,0,Z);
+    } else {
+      this.nodes.stereo.pan.setTargetAtTime(pan, ctx.currentTime, tau);
+    }
+    return { cutoff, gain, wet, pan };
+  }
+};
+
+/* ============================================================
+   Bench UI — load/decode audio, radar, sliders (bench-only)
+   ============================================================ */
+const $=id=>document.getElementById(id);
+const radar=$("radar"), rx=radar.getContext("2d");
+const RAD=150, MAXM=80;                 // radar radius px = MAXM metres
+let src={x:0,y:-90};                     // source pos relative to centre (px), starts ahead 48m
+let headingOk=true;
+
+function metresPerPx(){ return MAXM/RAD; }
+function srcState(){
+  const dx=src.x, dy=src.y, r=Math.hypot(dx,dy);
+  const distM = Math.min(MAXM, r*metresPerPx());
+  const az = Math.atan2(dx, -dy);        // 0 = up/ahead, +clockwise
+  return { az, distM };
+}
+function draw(){
+  const W=radar.width, H=radar.height, cx=W/2, cy=H/2;
+  rx.clearRect(0,0,W,H);
+  // range rings
+  rx.strokeStyle="#1c2a3d"; rx.lineWidth=1;
+  [0.33,0.66,1].forEach(k=>{ rx.beginPath(); rx.arc(cx,cy,RAD*k,0,7); rx.stroke(); });
+  rx.fillStyle="#3a4a60"; rx.font="11px Barlow Condensed";
+  [0.33,0.66,1].forEach(k=>{ rx.fillText(Math.round(MAXM*k)+" m", cx+4, cy-RAD*k+12); });
+  // listener facing arrow (up)
+  rx.strokeStyle="#8fb6d4"; rx.lineWidth=2; rx.beginPath(); rx.moveTo(cx,cy); rx.lineTo(cx,cy-26); rx.stroke();
+  rx.beginPath(); rx.moveTo(cx-5,cy-20); rx.lineTo(cx,cy-28); rx.lineTo(cx+5,cy-20); rx.stroke();
+  rx.fillStyle="#5b7088"; rx.fillText("you ▲", cx-16, cy+16);
+  // source
+  const sx=cx+src.x, sy=cy+src.y;
+  rx.strokeStyle="#26344a"; rx.beginPath(); rx.moveTo(cx,cy); rx.lineTo(sx,sy); rx.stroke();
+  rx.fillStyle=headingOk?"#ff6a3d":"#5b7088"; rx.beginPath(); rx.arc(sx,sy,11,0,7); rx.fill();
+  rx.fillStyle="#1a0d07"; rx.font="bold 11px Barlow Condensed"; rx.fillText("♪", sx-4, sy+4);
+}
+function refresh(){
+  const { az, distM }=srcState();
+  const out=SpatialAudio.update(az, distM, headingOk);
+  const deg=Math.round(((az*180/Math.PI)+360)%360);
+  $("rAz").textContent = headingOk? (deg+"°") : "centred";
+  $("rDist").textContent = Math.round(distM)+" m";
+  if(out){ $("rHz").textContent=Math.round(out.cutoff)+" Hz"; $("rGain").textContent=out.gain.toFixed(2); }
+  draw();
+}
+
+// drag the source
+let dragging=false;
+function pos(e){ const r=radar.getBoundingClientRect(), t=e.touches?e.touches[0]:e;
+  const sx=radar.width/r.width, sy=radar.height/r.height;
+  return { x:(t.clientX-r.left)*sx - radar.width/2, y:(t.clientY-r.top)*sy - radar.height/2 }; }
+function down(e){ dragging=true; move(e); e.preventDefault(); }
+function move(e){ if(!dragging) return; const p=pos(e);
+  const r=Math.hypot(p.x,p.y); const cap=RAD; if(r>cap){ p.x*=cap/r; p.y*=cap/r; }
+  src=p; refresh(); e.preventDefault(); }
+function up(){ dragging=false; }
+radar.addEventListener("mousedown",down); window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+radar.addEventListener("touchstart",down,{passive:false}); radar.addEventListener("touchmove",move,{passive:false}); radar.addEventListener("touchend",up);
+
+// transport
+$("start").onclick=()=>{
+  if(!SpatialAudio.buffer){ ensureTestTone().then(()=>{ SpatialAudio.play(); refresh(); }); return; }
+  SpatialAudio.play(); refresh();
+};
+$("file").onchange=async(e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  const ctx=SpatialAudio.ensureCtx(); const buf=await f.arrayBuffer();
+  ctx.decodeAudioData(buf, b=>{ SpatialAudio.setBuffer(b); $("start").textContent="▶ Start audio";
+    if(SpatialAudio.playing) SpatialAudio.play(); }, ()=>alert("Couldn't decode that audio file."));
+};
+$("testtone").onclick=()=>ensureTestTone().then(()=>{ if(SpatialAudio.playing) SpatialAudio.play(); });
+
+// a built-in broadband loop so you can test without a file (filtered noise pulses + tone)
+async function ensureTestTone(){
+  const ctx=SpatialAudio.ensureCtx();
+  const dur=2.0, rate=ctx.sampleRate, len=Math.floor(rate*dur), buf=ctx.createBuffer(1,len,rate), d=buf.getChannelData(0);
+  for(let i=0;i<len;i++){ const t=i/rate;
+    const pulse=Math.exp(-((t%0.5))*7);                 // rhythmic pulses
+    const tone=Math.sin(2*Math.PI*440*t)*0.3 + Math.sin(2*Math.PI*660*t)*0.2;
+    const noise=(Math.random()*2-1)*0.5;
+    d[i]=(tone + noise*pulse)*0.4; }
+  SpatialAudio.setBuffer(buf);
+}
+
+// mode + confidence
+$("mode").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  $("mode").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+  SpatialAudio.setMode(b.dataset.m); refresh(); });
+$("confBtn").onclick=()=>{ headingOk=!headingOk; $("confBtn").classList.toggle("on",headingOk);
+  $("confBtn").textContent="heading: "+(headingOk?"good":"poor"); refresh(); };
+
+// sliders -> tuning
+function slider(id, fmt, apply){ const el=$(id), v=$(id+"v");
+  const upd=()=>{ const n=+el.value; v.textContent=fmt(n); apply(n); refresh(); }; el.oninput=upd; upd(); }
+slider("clearM", n=>n+" m", n=>SpatialAudio.tuning.clearM=n);
+slider("farM", n=>n+" m", n=>SpatialAudio.tuning.farM=n);
+slider("hiHz", n=>n+" Hz", n=>SpatialAudio.tuning.hiHz=n);
+slider("loHz", n=>n+" Hz", n=>SpatialAudio.tuning.loHz=n);
+slider("minGain", n=>(n/100).toFixed(2), n=>SpatialAudio.tuning.minGain=n/100);
+slider("reverbMax", n=>(n/100).toFixed(2), n=>SpatialAudio.tuning.reverbMax=n/100);
+slider("tau", n=>n+" ms", n=>SpatialAudio.tuning.tau=n/1000);
+
+draw();
+</script>
+</body>
+</html>
