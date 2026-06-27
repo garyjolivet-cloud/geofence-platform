@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geofence Platform — Share</title>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6; }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--night);color:var(--snow);font-family:"Barlow",system-ui,sans-serif}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:680px;margin:0 auto;padding:26px 20px 60px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:8px 0 18px;border-bottom:1px solid var(--rim);margin-bottom:24px}
+  .brand{display:flex;align-items:center;gap:11px}
+  .glyph{width:36px;height:36px;border-radius:10px;background:linear-gradient(150deg,var(--coral),#ff9166);position:relative}
+  .glyph::after{content:"";position:absolute;inset:10px;border-radius:50%;border:2px solid #1a0d07}
+  .brand h1{font-family:"Black Han Sans";font-weight:400;font-size:19px;margin:0}
+  .brand p{margin:0;font-family:"Barlow Condensed";font-size:11.5px;letter-spacing:1.1px;text-transform:uppercase;color:var(--fog)}
+  nav a{font-family:"Barlow Condensed";font-weight:600;font-size:13px;letter-spacing:.4px;text-transform:uppercase;padding:8px 12px;border:1px solid var(--rim);border-radius:9px;color:var(--ice)}
+  nav a:hover{border-color:var(--coral);color:var(--snow)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px}
+  select{flex:1;min-width:180px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;padding:11px 13px;font-family:"Barlow Condensed";font-size:15px}
+  .card{background:linear-gradient(180deg,var(--slate),#10192640);border:1px solid var(--rim);border-radius:18px;padding:26px;text-align:center}
+  .qrbox{background:#fff;display:inline-block;padding:16px;border-radius:14px;margin:6px 0 18px}
+  .qrbox img,.qrbox canvas{display:block}
+  h2{font-family:"Barlow Condensed";font-weight:600;font-size:23px;margin:0 0 4px}
+  .url{font-family:"Barlow Condensed";font-size:14px;color:var(--ice);word-break:break-all;background:var(--night);border:1px solid var(--rim);border-radius:9px;padding:10px 12px;margin:0 0 14px}
+  button{font-family:"Barlow Condensed";font-weight:700;font-size:14px;letter-spacing:.4px;text-transform:uppercase;border:none;border-radius:10px;padding:11px 18px;cursor:pointer}
+  .copy{background:var(--coral);color:#1a0d07} .copy:hover{filter:brightness(1.07)}
+  .hint{color:var(--fog);font-size:13.5px;line-height:1.5;margin:16px 2px 0}
+  .state{color:var(--fog);font-family:"Barlow Condensed";text-align:center;padding:30px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><div class="glyph"></div><div><h1>Share a tour</h1><p>Geofence Platform</p></div></div>
+    <nav><a href="/">Home</a></nav>
+  </header>
+
+  <div class="row">
+    <select id="projSel"><option value="">— pick a tour —</option></select>
+  </div>
+
+  <div id="out" class="state">Pick a tour to get its link and QR code.</div>
+
+  <p class="hint">Anyone who scans this QR (or opens the link) starts the tour in their phone browser — no install. Print it on a sign or card at the trailhead. The link always serves whatever you last published for that tour.</p>
+</div>
+
+<script>
+"use strict";
+const ORIGIN=location.origin;
+const sel=document.getElementById("projSel");
+const out=document.getElementById("out");
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+async function loadProjects(){
+  try{ const r=await fetch("/api/projects"); const j=await r.json();
+    (j.projects||[]).forEach(p=>{ const o=document.createElement("option"); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
+  }catch(e){ out.textContent="Couldn't reach the platform."; }
+}
+function show(id,name){
+  const url=ORIGIN+"/engine?project="+encodeURIComponent(id);
+  out.className="card";
+  out.innerHTML='<h2>'+esc(name)+'</h2><div class="qrbox" id="qr"></div>'
+    +'<div class="url" id="url">'+esc(url)+'</div>'
+    +'<button class="copy" id="copy">Copy link</button>';
+  const box=document.getElementById("qr"); box.innerHTML="";
+  try{ new QRCode(box,{text:url,width:220,height:220,colorDark:"#0a1018",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M}); }
+  catch(e){ box.innerHTML='<div style="color:#0a1018;font-family:sans-serif;font-size:13px;padding:20px">QR library didn\u2019t load — use the link below.</div>'; }
+  document.getElementById("copy").onclick=()=>{ navigator.clipboard.writeText(url).then(()=>{
+    const b=document.getElementById("copy"); b.textContent="Copied ✓"; setTimeout(()=>b.textContent="Copy link",1500); }); };
+}
+sel.onchange=()=>{ if(sel.value) show(sel.value, sel.options[sel.selectedIndex].textContent); else { out.className="state"; out.textContent="Pick a tour to get its link and QR code."; } };
+loadProjects();
+</script>
+</body>
+</html>
