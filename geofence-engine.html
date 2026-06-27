@@ -511,21 +511,25 @@ const Clarity = {
    AudioContext. Tuning matches the audio bench. */
 const SpatialVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
-  tuning:{ clearM:10, farM:60, hiHz:7000, loHz:600, minGain:0.18, reverbMax:0.40, tau:0.09 },
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
+  spatialRange(zone){ return Math.max(60, (zone.audibleFromM||40)*1.6); },   // voice carries well past the trigger ring
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
     const c=this.ctx=Clarity.ctx;
+    const mono=c.createGain();                 // force source to mono so it pans cleanly (fixes one-ear files)
+    mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
     const lowpass=c.createBiquadFilter(); lowpass.type='lowpass'; lowpass.frequency.value=this.tuning.hiHz; lowpass.Q.value=0.7;
     const stereo=c.createStereoPanner();
-    const vol=c.createGain(); vol.gain.value=0;
-    const dry=c.createGain(); dry.gain.value=1;
+    const fade=c.createGain(); fade.gain.value=0;    // enter/leave envelope
+    const vol=c.createGain();  vol.gain.value=0.05;  // start faint; distance update raises it (no bloom-to-full)
+    const dry=c.createGain();  dry.gain.value=1;
     const conv=c.createConvolver(); conv.buffer=this._ir(1.6,2.6);
-    const wet=c.createGain(); wet.gain.value=0;
-    lowpass.connect(stereo); stereo.connect(vol);
+    const wet=c.createGain();  wet.gain.value=0;
+    mono.connect(lowpass); lowpass.connect(stereo); stereo.connect(fade); fade.connect(vol);
     vol.connect(dry); dry.connect(c.destination);
     vol.connect(conv); conv.connect(wet); wet.connect(c.destination);
-    this.nodes={lowpass,stereo,vol,dry,conv,wet};
+    this.nodes={mono,lowpass,stereo,fade,vol,dry,conv,wet};
     return true;
   },
   _ir(sec,decay){ const r=this.ctx.sampleRate,n=Math.floor(r*sec),b=this.ctx.createBuffer(2,n,r);
@@ -533,8 +537,16 @@ const SpatialVoice = {
   async load(url){
     if(this.buffers[url]) return this.buffers[url];
     const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
-    const ab=await r.arrayBuffer(); const buf=await this.ctx.decodeAudioData(ab);
-    this.buffers[url]=buf; return buf;
+    const ab=await r.arrayBuffer(); const raw=await this.ctx.decodeAudioData(ab);
+    const buf=this._toMono(raw); this.buffers[url]=buf; return buf;
+  },
+  _toMono(buf){
+    if(buf.numberOfChannels<=1) return buf;
+    const len=buf.length, out=this.ctx.createBuffer(1,len,buf.sampleRate), o=out.getChannelData(0);
+    for(let ch=0; ch<buf.numberOfChannels; ch++){ const d=buf.getChannelData(ch); for(let i=0;i<len;i++) o[i]+=d[i]; }
+    let peak=0; for(let i=0;i<len;i++){ const a=Math.abs(o[i]); if(a>peak) peak=a; }
+    if(peak>1){ for(let i=0;i<len;i++) o[i]/=peak; }     // sum keeps a one-sided file loud; normalize avoids clipping
+    return out;
   },
   async playZone(zone){
     if(!zone || !zone.audioUrl) return;
@@ -542,14 +554,22 @@ const SpatialVoice = {
     if(this.currentUrl===url && this.playing) return;     // already on this stop
     if(this.loadingUrl===url) return;                     // load in flight
     this.ensure();
+    // map the falloff onto a wide approach so distance is felt over the whole walk-in
+    const range=this.spatialRange(zone);
+    this.tuning.farM=range;
+    this.tuning.clearM=Math.max(5, range*0.12);
     this.loadingUrl=url;
     let buf; try{ buf=await this.load(url); }
     catch(e){ this.loadingUrl=null; HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); return; }
     this.loadingUrl=null;
-    if(this.src){ try{ this.src.stop(); }catch(e){} }
-    const src=this.ctx.createBufferSource(); src.buffer=buf; src.loop=true;
-    src.connect(this.nodes.lowpass); src.start();
+    const c=this.ctx;
+    if(this.src){ try{ this.src.stop(); }catch(e){} }     // swap clip
+    const src=c.createBufferSource(); src.buffer=buf; src.loop=true;
+    src.connect(this.nodes.mono); src.start();
     this.src=src; this.currentUrl=url; this.playing=true;
+    // fade in
+    const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
+    g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);
     HUD.log('ev-sys','▶ spatial voice — '+zone.name);
   },
   update(az, distM, headingOk){
@@ -557,8 +577,8 @@ const SpatialVoice = {
     const c=this.ctx, t=this.tuning, tau=t.tau;
     const f=Math.max(0, Math.min(1, (distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
     const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz, f);
-    const gain=1+(t.minGain-1)*f;
-    const wet=t.reverbMax*f;
+    const gain=t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2);   // steep: loud near, drops fast
+    const wet=t.reverbMax*Math.pow(f, 0.6);                            // reverb blooms a touch sooner
     const pan=headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
     this.nodes.lowpass.frequency.setTargetAtTime(cutoff, c.currentTime, tau);
     this.nodes.vol.gain.setTargetAtTime(gain, c.currentTime, tau);
@@ -567,8 +587,10 @@ const SpatialVoice = {
   },
   fadeOut(){
     if(!this.playing) return;
-    const c=this.ctx; this.nodes.vol.gain.setTargetAtTime(0, c.currentTime, 0.25);
-    const s=this.src; setTimeout(()=>{ try{ s.stop(); }catch(e){} }, 500);
+    const c=this.ctx, g=this.nodes.fade.gain;
+    g.cancelScheduledValues(c.currentTime); g.setValueAtTime(g.value, c.currentTime);
+    g.linearRampToValueAtTime(0, c.currentTime+0.6);
+    const s=this.src; setTimeout(()=>{ try{ s.stop(); }catch(e){} }, 650);
     this.playing=false; this.currentUrl=null; this.src=null;
   }
 };
@@ -607,9 +629,9 @@ const HUD = {
       Clarity.update(aD, aIn);
     }
 
-    // spatial recorded voice: nearest stop with an audioUrl, while in audible range
+    // spatial recorded voice: nearest stop with an audioUrl, over its wide approach range
     if(Clarity.on && pick && pick.zone && pick.zone.audioUrl){
-      const dv=Geo.hav([p.lat,p.lon],pick.zone.center), range=pick.zone.audibleFromM||60;
+      const dv=Geo.hav([p.lat,p.lon],pick.zone.center), range=SpatialVoice.spatialRange(pick.zone);
       if(dv<range){
         SpatialVoice.playZone(pick.zone);
         const brg=Geo.bearing([p.lat,p.lon],pick.zone.center);
