@@ -84,8 +84,8 @@
 
     <div class="panel">
       <span class="k">distance → clarity</span>
-      <div class="slider"><input type="range" id="clearM" min="2" max="40" value="10"><span class="val" id="clearMv">10 m</span></div>
-      <div class="slider"><input type="range" id="farM" min="20" max="150" value="60"><span class="val" id="farMv">60 m</span></div>
+      <div class="slider"><input type="range" id="clearM" min="2" max="40" value="8"><span class="val" id="clearMv">8 m</span></div>
+      <div class="slider"><input type="range" id="farM" min="20" max="150" value="64"><span class="val" id="farMv">64 m</span></div>
       <p class="hint">At/inside the clear distance the sound is full and bright. At/beyond the far distance it's muffled, quiet, and reverberant.</p>
 
       <span class="k">low-pass cutoff (near → far)</span>
@@ -93,10 +93,10 @@
       <div class="slider"><input type="range" id="loHz" min="250" max="3000" value="600" step="50"><span class="val" id="loHzv">600 Hz</span></div>
 
       <span class="k">volume falloff (far)</span>
-      <div class="slider"><input type="range" id="minGain" min="0" max="100" value="12"><span class="val" id="minGainv">0.12</span></div>
+      <div class="slider"><input type="range" id="minGain" min="0" max="100" value="5"><span class="val" id="minGainv">0.05</span></div>
 
       <span class="k">falloff steepness (drop-off / bloom)</span>
-      <div class="slider"><input type="range" id="curve" min="100" max="400" value="220" step="10"><span class="val" id="curvev">2.2×</span></div>
+      <div class="slider"><input type="range" id="curve" min="100" max="400" value="110" step="10"><span class="val" id="curvev">1.1×</span></div>
 
       <span class="k">reverb at distance</span>
       <div class="slider"><input type="range" id="reverbMax" min="0" max="100" value="40"><span class="val" id="reverbMaxv">0.40</span></div>
@@ -120,7 +120,7 @@
    ============================================================ */
 const SpatialAudio = {
   ctx:null, buffer:null, src:null, nodes:null, playing:false,
-  tuning:{ clearM:8, farM:40, hiHz:7000, loHz:600, minGain:0.12, reverbMax:0.45, tau:0.09, curve:2.2, mode:"stereo" },
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1, mode:"stereo" },
 
   ensureCtx(){
     if(this.ctx) return this.ctx;
