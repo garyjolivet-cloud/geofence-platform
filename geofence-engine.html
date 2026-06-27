@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v14 · quick wins</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v15 · spatial voice</span></h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill">OFF</span>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
@@ -374,7 +374,7 @@ const Geofencer = {
       } else {
         const warn = lowAcc && mode==="warn";
         Audio.ding();
-        Audio.say(t.say, warn);
+        if(!zone.audioUrl) Audio.say(t.say, warn);   // recorded voice replaces TTS when present
         if(this.onEvent) this.onEvent({zone,kind:"say",text:t.say,warn});
       }
     }
@@ -505,6 +505,74 @@ const Clarity = {
     this.master.gain.setTargetAtTime(0.85*Math.pow(10,this.gainDbFor(d)/20),now,tc); }
 };
 
+/* ===================== SpatialVoice =====================
+   plays a stop's recorded audioUrl spatially — direction → pan,
+   distance → low-pass cutoff + volume + reverb. Shares Clarity's
+   AudioContext. Tuning matches the audio bench. */
+const SpatialVoice = {
+  ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
+  tuning:{ clearM:10, farM:60, hiHz:7000, loHz:600, minGain:0.18, reverbMax:0.40, tau:0.09 },
+  ensure(){
+    if(this.ctx) return true;
+    if(!Clarity.ready) Clarity.init();
+    const c=this.ctx=Clarity.ctx;
+    const lowpass=c.createBiquadFilter(); lowpass.type='lowpass'; lowpass.frequency.value=this.tuning.hiHz; lowpass.Q.value=0.7;
+    const stereo=c.createStereoPanner();
+    const vol=c.createGain(); vol.gain.value=0;
+    const dry=c.createGain(); dry.gain.value=1;
+    const conv=c.createConvolver(); conv.buffer=this._ir(1.6,2.6);
+    const wet=c.createGain(); wet.gain.value=0;
+    lowpass.connect(stereo); stereo.connect(vol);
+    vol.connect(dry); dry.connect(c.destination);
+    vol.connect(conv); conv.connect(wet); wet.connect(c.destination);
+    this.nodes={lowpass,stereo,vol,dry,conv,wet};
+    return true;
+  },
+  _ir(sec,decay){ const r=this.ctx.sampleRate,n=Math.floor(r*sec),b=this.ctx.createBuffer(2,n,r);
+    for(let ch=0;ch<2;ch++){const d=b.getChannelData(ch);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,decay);}return b; },
+  async load(url){
+    if(this.buffers[url]) return this.buffers[url];
+    const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+    const ab=await r.arrayBuffer(); const buf=await this.ctx.decodeAudioData(ab);
+    this.buffers[url]=buf; return buf;
+  },
+  async playZone(zone){
+    if(!zone || !zone.audioUrl) return;
+    const url=zone.audioUrl;
+    if(this.currentUrl===url && this.playing) return;     // already on this stop
+    if(this.loadingUrl===url) return;                     // load in flight
+    this.ensure();
+    this.loadingUrl=url;
+    let buf; try{ buf=await this.load(url); }
+    catch(e){ this.loadingUrl=null; HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); return; }
+    this.loadingUrl=null;
+    if(this.src){ try{ this.src.stop(); }catch(e){} }
+    const src=this.ctx.createBufferSource(); src.buffer=buf; src.loop=true;
+    src.connect(this.nodes.lowpass); src.start();
+    this.src=src; this.currentUrl=url; this.playing=true;
+    HUD.log('ev-sys','▶ spatial voice — '+zone.name);
+  },
+  update(az, distM, headingOk){
+    if(!this.nodes || !this.playing) return;
+    const c=this.ctx, t=this.tuning, tau=t.tau;
+    const f=Math.max(0, Math.min(1, (distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
+    const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz, f);
+    const gain=1+(t.minGain-1)*f;
+    const wet=t.reverbMax*f;
+    const pan=headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
+    this.nodes.lowpass.frequency.setTargetAtTime(cutoff, c.currentTime, tau);
+    this.nodes.vol.gain.setTargetAtTime(gain, c.currentTime, tau);
+    this.nodes.wet.gain.setTargetAtTime(wet, c.currentTime, tau);
+    this.nodes.stereo.pan.setTargetAtTime(pan, c.currentTime, tau);
+  },
+  fadeOut(){
+    if(!this.playing) return;
+    const c=this.ctx; this.nodes.vol.gain.setTargetAtTime(0, c.currentTime, 0.25);
+    const s=this.src; setTimeout(()=>{ try{ s.stop(); }catch(e){} }, 500);
+    this.playing=false; this.currentUrl=null; this.src=null;
+  }
+};
+
 /* ============================== HUD ============================== */
 const HUD = {
   pos:null, prev:null, fixes:0, needleZone:null, needleTarget:null,
@@ -538,6 +606,18 @@ const HUD = {
         if(d<range && d<aD){ aD=d; aIn=true; } });
       Clarity.update(aD, aIn);
     }
+
+    // spatial recorded voice: nearest stop with an audioUrl, while in audible range
+    if(Clarity.on && pick && pick.zone && pick.zone.audioUrl){
+      const dv=Geo.hav([p.lat,p.lon],pick.zone.center), range=pick.zone.audibleFromM||60;
+      if(dv<range){
+        SpatialVoice.playZone(pick.zone);
+        const brg=Geo.bearing([p.lat,p.lon],pick.zone.center);
+        const headingOk=(Compass.heading!=null);
+        const az=((brg-(Compass.heading||0))*Math.PI/180);
+        SpatialVoice.update(az, dv, headingOk);
+      } else SpatialVoice.fadeOut();
+    } else if(SpatialVoice.playing){ SpatialVoice.fadeOut(); }
 
     // ---- render ----
     this.el('vAcc').innerHTML = fix.acc.toFixed(0)+' <small>m</small>';
