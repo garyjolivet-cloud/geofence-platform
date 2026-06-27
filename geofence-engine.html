@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v13 · analytics</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v14 · quick wins</span></h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill">OFF</span>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
@@ -639,6 +639,13 @@ const Analytics = {
   delivery(zone){ const lat=this.enterT[zone.id]?(Date.now()-this.enterT[zone.id]):null;
     this.enqueue('AUDIO_ENGAGEMENT',
     { zone_id:zone.id, trigger_latency_ms:lat, accuracy_m:(window.__lastAcc!=null?window.__lastAcc:null) }); },
+  bearing(zone){
+    if(!HUD.pos || !zone.center || typeof Compass==='undefined' || Compass.heading==null) return;
+    const brg=Geo.bearing([HUD.pos.lat,HUD.pos.lon], zone.center);
+    const delta=Math.abs(((brg-Compass.heading+540)%360)-180);   // 0 = facing it, 180 = away
+    this.enqueue('BEARING_MATCH', { zone_id:zone.id, target_bearing:Math.round(brg),
+      user_heading:Math.round(Compass.heading), angle_delta:Math.round(delta),
+      heading_conf:(Compass.confidence!=null?Compass.confidence:null) }); },
   async sync(){
     if(this._syncing || !this.enabled()) return;
     if(typeof navigator!=='undefined' && navigator.onLine===false) return;
@@ -703,7 +710,7 @@ Geofencer.onEvent=(e)=>{
        if(e.info.flick) HUD.log('ev-flick','       ^ flicker (barely moved) — ignore');
        Analytics.spatial('EXIT', e.zone); }
   else if(e.kind==='say'){ HUD.log(e.warn?'ev-warn':'ev-say','SAY    "'+e.text+'"'+(e.warn?' [approx]':''));
-       Analytics.delivery(e.zone);
+       Analytics.delivery(e.zone); Analytics.bearing(e.zone);
        const wrap=document.querySelector('.wrap');
        if(wrap){ wrap.style.transition='none'; wrap.style.boxShadow='inset 0 0 0 5px #ff6a3d';
          setTimeout(()=>{ wrap.style.transition='box-shadow .6s ease-out';
@@ -792,7 +799,11 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
     if(document.getElementById('simZones')) buildSimZones();
     HUD.log('ev-sys','loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' · '+b.zones.length+' stops (from platform)');
-  }catch(e){ HUD.log('ev-warn','platform load failed: '+e.message+' — using built-in bundle'); }
+    // staleness: remember the version we've seen; flag if this load is older than last seen
+    try{ const key='gp.ver.'+pid, seen=+(localStorage.getItem(key)||0), now=+(b.bundleVersion||0);
+      if(now>seen){ localStorage.setItem(key,String(now)); if(seen) HUD.log('ev-sys','updated to v'+now+' (was v'+seen+')'); }
+      else if(now<seen) HUD.log('ev-warn','this bundle (v'+now+') is older than one you loaded before (v'+seen+')'); }catch(e){}
+  }catch(e){ HUD.log('ev-warn','platform load failed: '+e.message+' — using built-in bundle (may be outdated offline)'); }
 })();
 
 /* ---- consent + device identity (the privacy gate) ----
