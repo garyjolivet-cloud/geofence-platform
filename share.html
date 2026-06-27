@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Geofence Platform — Share</title>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6; }
   *{box-sizing:border-box}
@@ -63,13 +62,15 @@ async function loadProjects(){
 }
 function show(id,name){
   const url=ORIGIN+"/engine?project="+encodeURIComponent(id);
+  const qr="https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=16&ecc=L&data="+encodeURIComponent(url);
   out.className="card";
-  out.innerHTML='<h2>'+esc(name)+'</h2><div class="qrbox" id="qr"></div>'
-    +'<div class="url" id="url">'+esc(url)+'</div>'
+  out.innerHTML='<h2>'+esc(name)+'</h2>'
+    +'<div class="qrbox"><img id="qrimg" width="300" height="300" alt="QR code for '+esc(name)+'"></div>'
+    +'<div class="url">'+esc(url)+'</div>'
     +'<button class="copy" id="copy">Copy link</button>';
-  const box=document.getElementById("qr"); box.innerHTML="";
-  try{ new QRCode(box,{text:url,width:220,height:220,colorDark:"#0a1018",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M}); }
-  catch(e){ box.innerHTML='<div style="color:#0a1018;font-family:sans-serif;font-size:13px;padding:20px">QR library didn\u2019t load — use the link below.</div>'; }
+  const img=document.getElementById("qrimg");
+  img.onerror=()=>{ img.parentElement.innerHTML='<div style="color:#0a1018;font-family:sans-serif;font-size:13px;padding:24px;max-width:260px">QR didn\u2019t load — use the link below, or try again.</div>'; };
+  img.src=qr;
   document.getElementById("copy").onclick=()=>{ navigator.clipboard.writeText(url).then(()=>{
     const b=document.getElementById("copy"); b.textContent="Copied ✓"; setTimeout(()=>b.textContent="Copy link",1500); }); };
 }
