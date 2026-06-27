@@ -41,7 +41,8 @@ export default {
       "/sim": "/geofence-sim.html",
       "/engine": "/geofence-engine.html",
       "/dashboard": "/dashboard.html",
-      "/share": "/share.html"
+      "/share": "/share.html",
+      "/audio": "/tour-audio-sandbox.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     if (FRIENDLY[clean] && env.ASSETS) {
@@ -211,6 +212,33 @@ async function api(request, env, url) {
       "SELECT id,type,ts,deviceId,data FROM event WHERE projectId=? ORDER BY ts DESC LIMIT ?"
     ).bind(pid, lim).all();
     return json({ project: pid, count: (results || []).length, events: results || [] });
+  }
+
+  // --- audio assets in R2: upload (admin) + serve (public) ---
+  if (path.startsWith("/api/audio/")) {
+    const key = decodeURIComponent(path.slice("/api/audio/".length));
+    if (!key) return json({ error: "need an audio key" }, 400);
+    if (!env.AUDIO) return json({ error: "no audio bucket bound (create R2 'geofence-audio' + binding)" }, 500);
+    if (method === "PUT") {
+      if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+      const ct = request.headers.get("content-type") || "application/octet-stream";
+      await env.AUDIO.put(key, request.body, { httpMetadata: { contentType: ct } });
+      return json({ ok: true, key, url: "/api/audio/" + key });
+    }
+    if (method === "GET") {
+      const obj = await env.AUDIO.get(key);
+      if (!obj) return new Response("not found", { status: 404, headers: CORS });
+      const h = new Headers(CORS);
+      h.set("content-type", (obj.httpMetadata && obj.httpMetadata.contentType) || "audio/mpeg");
+      h.set("cache-control", "public, max-age=31536000");
+      if (obj.httpEtag) h.set("etag", obj.httpEtag);
+      return new Response(obj.body, { headers: h });
+    }
+    if (method === "DELETE") {
+      if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+      await env.AUDIO.delete(key);
+      return json({ ok: true, deleted: key });
+    }
   }
 
   return json({ error: "not found: " + method + " " + path }, 404);

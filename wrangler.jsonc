@@ -12,5 +12,11 @@
       "database_name": "geofence-db",
       "database_id": "d1b9f6e3-d70b-4bf0-a91e-9385f886fa73"
     }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "AUDIO",
+      "bucket_name": "geofence-audio"
+    }
   ]
 }
