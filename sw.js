@@ -1,9 +1,8 @@
-/* Geofence Platform — offline service worker
-   - app shell (engine HTML) + fonts: cache-first so it loads with no signal
-   - audio clips: cache-first (big, rarely change)
-   - project bundle: network-first, fall back to cache
-   Bump CACHE to invalidate everything after a deploy. */
-const CACHE = 'gp-offline-v1';
+/* Geofence Platform — offline service worker (network-first)
+   Online: always fetch fresh (so deploys show immediately).
+   Offline: fall back to the cached copy.
+   Audio is cache-first (large, stable). Bump CACHE to wipe old caches. */
+const CACHE = 'gp-offline-v2';
 
 self.addEventListener('install', e => { self.skipWaiting(); });
 
@@ -20,7 +19,7 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // audio assets — cache-first (large, stable)
+  // audio clips — cache-first (large, rarely change)
   if (url.pathname.startsWith('/api/audio/')) {
     e.respondWith(caches.open(CACHE).then(async c => {
       const hit = await c.match(req);
@@ -31,29 +30,16 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // project bundle — network-first so it's fresh online, cached for offline
-  if (url.pathname.includes('/bundle')) {
-    e.respondWith((async () => {
-      const c = await caches.open(CACHE);
-      try { const res = await fetch(req); if (res.ok) c.put(req, res.clone()); return res; }
-      catch (err) {
-        const hit = await c.match(req);
-        return hit || new Response(JSON.stringify({ error: 'offline, not cached' }),
-          { status: 504, headers: { 'content-type': 'application/json' } });
-      }
-    })());
-    return;
-  }
-
-  // app shell (engine page) + fonts — cache-first, refresh in background
-  const sameOrigin = url.origin === location.origin;
-  const isFont = /fonts\.(googleapis|gstatic)\.com/.test(url.host);
-  if (req.mode === 'navigate' || sameOrigin || isFont) {
-    e.respondWith(caches.open(CACHE).then(async c => {
+  // everything else (pages, JS, bundle, fonts) — network-first, cache as offline fallback
+  e.respondWith((async () => {
+    const c = await caches.open(CACHE);
+    try {
+      const res = await fetch(req);
+      if (res.ok) c.put(req, res.clone());
+      return res;
+    } catch (err) {
       const hit = await c.match(req);
-      const net = fetch(req).then(res => { if (res.ok) c.put(req, res.clone()); return res; }).catch(() => hit);
-      return hit || net;
-    }));
-    return;
-  }
+      return hit || new Response('offline and not cached', { status: 504 });
+    }
+  })());
 });

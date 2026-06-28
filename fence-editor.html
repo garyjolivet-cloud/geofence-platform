@@ -411,9 +411,9 @@ function getToken(){
 }
 function clearToken(){ verifiedToken=""; try{ localStorage.removeItem("gp.admin"); }catch(e){}
   const el=document.getElementById("adminTok"); if(el) el.value=""; }
-// the field is the only place the token is entered; capture every keystroke so autofill can't substitute it later
+// capture the token only from REAL keyboard typing (keydown), never from autofill's silent input events
 (function(){ const el=document.getElementById("adminTok"); if(!el) return;
-  el.addEventListener("input", ()=>{ verifiedToken=el.value.trim();
+  el.addEventListener("keyup", ()=>{ verifiedToken=el.value.trim();
     try{ if(verifiedToken) localStorage.setItem("gp.admin",verifiedToken); }catch(e){} }); })();
 // restore a saved token into the visible field on load
 (function(){ try{ const t=localStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
@@ -442,10 +442,13 @@ document.getElementById("appNew").onclick=async()=>{
       headers:{ "content-type":"application/json","authorization":"Bearer "+token }, body:JSON.stringify({name}) });
     const j=await r.json().catch(()=>({}));
     if(r.ok){ await loadApps(j.id);
-      ps().textContent = j.existed
-        ? ("app \u201c"+(j.name||name)+"\u201d already exists \u2014 selected it")
-        : ("app \u201c"+name+"\u201d created \u2713 \u2014 this project will publish into it"); }
-    else { ps().textContent="couldn\u2019t create app \u2014 HTTP "+r.status+": "+(j.error||"unknown"); if(r.status===401) clearToken(); }
+      const msg = j.existed
+        ? ("App \u201c"+(j.name||name)+"\u201d already exists \u2014 selected it.")
+        : ("App \u201c"+name+"\u201d created \u2713  It\u2019s now in the app list.");
+      ps().textContent=msg; alert(msg); }
+    else { const msg="Couldn\u2019t create app \u2014 HTTP "+r.status+": "+(j.error||"unknown")
+        +"\n(sent: \u201c"+token.slice(0,2)+"\u2026\u201d, "+token.length+" chars)";
+      ps().textContent=msg; alert(msg); if(r.status===401) clearToken(); }
   }catch(e){ ps().textContent="create failed: "+e.message; }
 };
 loadApps();
