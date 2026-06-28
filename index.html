@@ -88,15 +88,18 @@
       <a href="/sim">Simulator</a>
       <a href="/engine">Field engine</a>
       <a href="/dashboard">Analytics</a>
+      <a href="/share">Share</a>
+      <a href="/audio">Audio lab</a>
     </nav>
   </header>
 
   <div class="sect">
-    <h2>Projects</h2>
+    <h2>Apps</h2>
     <span class="count" id="count"></span>
+    <button id="newApp" style="margin-left:auto;background:transparent;border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer">+ New app</button>
   </div>
-  <div class="grid" id="grid"></div>
-  <div class="state" id="state">Loading projects…</div>
+  <div id="apps"></div>
+  <div class="state" id="state">Loading…</div>
 
   <footer>
     <span><span class="dot" id="apidot"></span><span id="apitext">checking platform…</span></span>
@@ -106,7 +109,7 @@
 
 <script>
 "use strict";
-const grid=document.getElementById("grid");
+const appsEl=document.getElementById("apps");
 const stateEl=document.getElementById("state");
 const countEl=document.getElementById("count");
 
@@ -128,27 +131,53 @@ function card(p){
     +   '<a href="/editor?project='+id+'">Edit</a>'
     + '</div></div>';
 }
+function appSection(title, desc, projects){
+  const head='<div class="sect" style="margin-top:22px"><h2 style="font-size:16px">'+esc(title)+'</h2>'
+    + (desc?'<span class="count">'+esc(desc)+'</span>':'')
+    + '<span class="count" style="margin-left:auto">'+projects.length+(projects.length===1?' project':' projects')+'</span></div>';
+  const body = projects.length
+    ? '<div class="grid">'+projects.map(card).join("")+'</div>'
+    : '<div class="state" style="display:block">No projects in this app yet. <a href="/editor">Open the editor</a> and publish one here.</div>';
+  return head+body;
+}
 
 async function load(){
   try{
-    const r=await fetch("/api/projects");
-    const j=await r.json();
-    const list=j.projects||[];
-    setApi(true, list.length+" projects · platform online");
-    if(!list.length){
-      stateEl.innerHTML='No projects yet. <a href="/editor">Open the editor</a> to author your first tour, then Publish it.';
-      stateEl.style.display="block"; grid.style.display="none"; countEl.textContent=""; return;
+    const [ra, rp] = await Promise.all([ fetch("/api/apps"), fetch("/api/projects") ]);
+    const apps=(await ra.json()).apps||[];
+    const projects=(await rp.json()).projects||[];
+    setApi(true, apps.length+" apps · "+projects.length+" projects · online");
+    countEl.textContent=apps.length+(apps.length===1?" app":" apps");
+
+    let html="";
+    apps.forEach(a=>{ const mine=projects.filter(p=>p.appId===a.id);
+      html+=appSection(a.name, a.description, mine); });
+    const unsorted=projects.filter(p=>!p.appId || !apps.some(a=>a.id===p.appId));
+    if(unsorted.length) html+=appSection("Unsorted", "not filed under an app yet", unsorted);
+    if(!apps.length && !projects.length){
+      stateEl.innerHTML='No apps yet. Tap <b>+ New app</b> to create one (e.g. \u201cVillage Walks\u201d), then author a tour in the editor and publish it here.';
+      stateEl.style.display="block"; appsEl.innerHTML=""; return;
     }
-    grid.innerHTML=list.map(card).join("");
-    grid.style.display="grid"; stateEl.style.display="none";
-    countEl.textContent=list.length+(list.length===1?" project":" projects");
+    appsEl.innerHTML=html; stateEl.style.display="none";
   }catch(e){
     setApi(false,"platform unreachable");
     stateEl.innerHTML='Couldn\u2019t reach the platform API. The tools still work directly: '
       +'<a href="/editor">Editor</a>, <a href="/sim">Simulator</a>, <a href="/engine">Engine</a>.';
-    stateEl.style.display="block"; grid.style.display="none";
+    stateEl.style.display="block"; appsEl.innerHTML="";
   }
 }
+document.getElementById("newApp").onclick=async()=>{
+  const name=prompt("Name this app (e.g. \u201cVillage Walks\u201d, \u201cSki Guides\u201d):"); if(!name) return;
+  let token=""; try{ token=localStorage.getItem("gp.admin")||""; }catch(e){}
+  if(!token){ token=(prompt("Admin token:")||"").trim(); if(token){ try{ localStorage.setItem("gp.admin",token); }catch(e){} } }
+  if(!token) return;
+  try{ const r=await fetch("/api/apps",{ method:"POST",
+      headers:{ "content-type":"application/json","authorization":"Bearer "+token }, body:JSON.stringify({name}) });
+    if(r.ok){ load(); }
+    else { const j=await r.json().catch(()=>({})); alert("Couldn\u2019t create app: "+(j.error||r.status));
+      if(r.status===401){ try{ localStorage.removeItem("gp.admin"); }catch(e){} } }
+  }catch(e){ alert("Create failed: "+e.message); }
+};
 function setApi(ok,text){
   document.getElementById("apidot").className="dot "+(ok?"ok":"bad");
   document.getElementById("apitext").textContent=text;
