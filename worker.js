@@ -214,9 +214,18 @@ async function api(request, env, url) {
     return json({ project: pid, count: (results || []).length, events: results || [] });
   }
 
+  // --- list what audio is stored (admin) ---
+  if (path === "/api/audio-list" && method === "GET") {
+    if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    const pfx = url.searchParams.get("project");
+    const listed = await env.AUDIO.list(pfx ? { prefix: pfx + "/" } : {});
+    return json({ objects: (listed.objects || []).map(o => ({ key: o.key, size: o.size, url: "/api/audio/" + o.key })) });
+  }
+
   // --- audio assets in R2: upload (admin) + serve (public) ---
   if (path.startsWith("/api/audio/")) {
-    const key = decodeURIComponent(path.slice("/api/audio/".length));
+    const key = decodeURIComponent(path.slice("/api/audio/".length)).trim();
     if (!key) return json({ error: "need an audio key" }, 400);
     if (!env.AUDIO) return json({ error: "no audio bucket bound (create R2 'geofence-audio' + binding)" }, 500);
     if (method === "PUT") {
@@ -226,7 +235,9 @@ async function api(request, env, url) {
       return json({ ok: true, key, url: "/api/audio/" + key });
     }
     if (method === "GET") {
-      const obj = await env.AUDIO.get(key);
+      let obj = null;
+      try { obj = await env.AUDIO.get(key); }
+      catch (e) { return new Response("invalid key", { status: 404, headers: CORS }); }
       if (!obj) return new Response("not found", { status: 404, headers: CORS });
       const h = new Headers(CORS);
       h.set("content-type", (obj.httpMetadata && obj.httpMetadata.contentType) || "audio/mpeg");
@@ -239,6 +250,13 @@ async function api(request, env, url) {
       await env.AUDIO.delete(key);
       return json({ ok: true, deleted: key });
     }
+  }
+
+  // --- token check: lets tools verify the admin token before using it ---
+  if (path === "/api/auth-check") {
+    return authed(request, env)
+      ? json({ ok: true })
+      : json({ ok: false, error: "unauthorized" }, 401);
   }
 
   return json({ error: "not found: " + method + " " + path }, 404);
