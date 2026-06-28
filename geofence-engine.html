@@ -564,10 +564,10 @@ const SpatialVoice = {
     if(this.currentUrl===url && this.playing) return;     // already on this stop
     if(this.loadingUrl===url) return;                     // load in flight
     this.ensure();
-    // map the falloff onto a wide approach so distance is felt over the whole walk-in
+    // map the falloff onto the project's carry + full-volume distances
     const range=this.spatialRange(zone);
     this.tuning.farM=range;
-    this.tuning.clearM=Math.max(5, range*0.12);
+    this.tuning.clearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
     this.loadingUrl=url;
     let buf; try{ buf=await this.load(url); }
     catch(e){ this.loadingUrl=null; HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); return; }
