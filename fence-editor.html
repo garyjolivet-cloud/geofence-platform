@@ -65,6 +65,10 @@
   <label class="k">project</label>
   <input id="projName" value="KH Village Walk">
   <div class="row" style="margin-top:6px">
+    <select id="appSel" style="flex:1"><option value="">— unsorted —</option></select>
+    <button id="appNew" class="ghost" title="new app">+ app</button>
+  </div>
+  <div class="row" style="margin-top:6px">
     <select id="projSel" style="flex:1"><option value="">— load a project —</option></select>
     <button id="projRefresh" class="ghost" title="refresh">↻</button>
   </div>
@@ -398,28 +402,49 @@ document.getElementById("pActOn").addEventListener("change",()=>{ if(sel<0)retur
 function getToken(){
   const el=document.getElementById("adminTok");
   let t=(el && el.value.trim()) || "";
-  if(!t){ try{ t=sessionStorage.getItem("gp.admin")||""; }catch(e){} }
+  if(!t){ try{ t=localStorage.getItem("gp.admin")||""; }catch(e){} }
   if(!t){ t=(prompt("Admin token:")||"").trim(); }
-  if(t){ if(el) el.value=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} }
+  if(t){ if(el) el.value=t; try{ localStorage.setItem("gp.admin",t); }catch(e){} }
   return t;
 }
-function clearToken(){ try{ sessionStorage.removeItem("gp.admin"); }catch(e){}
+function clearToken(){ try{ localStorage.removeItem("gp.admin"); }catch(e){}
   const el=document.getElementById("adminTok"); if(el) el.value=""; }
 // restore a saved token into the visible field on load
-(function(){ try{ const t=sessionStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
+(function(){ try{ const t=localStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
   if(t && el) el.value=t; }catch(e){} })();
 // spatial audio range sliders — live labels
 (function(){ const s=document.getElementById("audioRange"), v=document.getElementById("audioRangeV");
   if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
 (function(){ const s=document.getElementById("audioClear"), v=document.getElementById("audioClearV");
   if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
+
+// app picker — organize projects into apps so they don't blend
+async function loadApps(sel){
+  try{ const r=await fetch("/api/apps"); const apps=(await r.json()).apps||[];
+    const as=document.getElementById("appSel"); const keep=sel||as.value;
+    as.innerHTML='<option value="">— unsorted —</option>'+
+      apps.map(a=>'<option value="'+a.id+'">'+(a.name||a.id)+'</option>').join("");
+    if(keep) as.value=keep;
+  }catch(e){}
+}
+document.getElementById("appNew").onclick=async()=>{
+  const name=prompt("New app name (e.g. \u201cVillage Walks\u201d, \u201cSki Guides\u201d):"); if(!name) return;
+  const token=getToken(); if(!token) return;
+  try{ const r=await fetch("/api/apps",{ method:"POST",
+      headers:{ "content-type":"application/json","authorization":"Bearer "+token }, body:JSON.stringify({name}) });
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ await loadApps(j.id); ps().textContent="app \u201c"+name+"\u201d created — this project will publish into it"; }
+    else { ps().textContent="couldn\u2019t create app: "+(j.error||r.status); if(r.status===401) clearToken(); }
+  }catch(e){ ps().textContent="create failed: "+e.message; }
+};
+loadApps();
 // Test button: verify the token against the server, plainly
 document.getElementById("tokTest").onclick=async()=>{
   const t=(document.getElementById("adminTok").value||"").trim();
   if(!t){ ps().textContent="type a token first, then Test"; return; }
   ps().textContent="checking token…";
   try{ const r=await fetch("/api/auth-check",{ headers:{ authorization:"Bearer "+t } });
-    if(r.ok){ try{ sessionStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads and publish will work"; }
+    if(r.ok){ try{ localStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads and publish will work"; }
     else ps().innerHTML="token <b style='color:var(--hazard)'>rejected ✕</b> — doesn't match the server's ADMIN_TOKEN secret";
   }catch(e){ ps().textContent="couldn't reach the server to check"; }
 };
@@ -533,6 +558,7 @@ function exportBundle(){
               ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)],
               spatialRangeM:+document.getElementById("audioRange").value,
               spatialClearM:+document.getElementById("audioClear").value,
+              appId:document.getElementById("appSel").value||null,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -573,6 +599,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(b.name) document.getElementById("projName").value=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
+    if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
