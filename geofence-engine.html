@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v17 · clean audio</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v18 · heading reliability</span></h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill">OFF</span>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
@@ -121,6 +121,10 @@
     <button id="btnSim">Sim</button>
     <button id="btnAudio">Audio</button>
     <button id="btnOffline" title="download tour for use with no signal">⬇ Offline</button>
+  </div>
+
+  <div id="calBanner" style="display:none;background:rgba(255,194,77,.12);border:1px solid var(--amber);color:var(--amber);border-radius:9px;padding:9px 12px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:13.5px;text-align:center;line-height:1.4">
+    🧭 Compass needs calibrating — wave the phone in a slow figure-8 a few times. Until it's steady, the voice plays centred (no direction).
   </div>
 
   <div id="simPanel" class="sim">
@@ -451,7 +455,12 @@ const Compass = {
     // iOS reports webkitCompassAccuracy; negative or large = needs calibration.
     if(accDeg!=null) this.confidence = (accDeg<0)?1 : (accDeg<=15?3 : accDeg<=30?2 : 1);
     else this.confidence = 2;                          // Android: no accuracy reported, assume usable
+    this._updateCal();
     if(typeof HUD!=='undefined' && HUD.paintCompass) HUD.paintCompass();  // live repaint as you turn
+  },
+  _updateCal(){
+    const b=document.getElementById('calBanner'); if(!b) return;
+    b.style.display = (this.on && this.heading!=null && this.confidence<2) ? 'block' : 'none';
   }
 };
 
@@ -636,7 +645,7 @@ const HUD = {
       if(dv<range){
         SpatialVoice.playZone(pick.zone);
         const brg=Geo.bearing([p.lat,p.lon],pick.zone.center);
-        const headingOk=(Compass.heading!=null);
+        const headingOk=(Compass.heading!=null && Compass.confidence>=2);   // poor/uncalibrated → centred, not wrong-way
         const az=((brg-(Compass.heading||0))*Math.PI/180);
         SpatialVoice.update(az, dv, headingOk);
       } else SpatialVoice.fadeOut();
@@ -865,7 +874,8 @@ document.getElementById('btnSim').onclick=toggleSim;
 document.getElementById('btnAudio').onclick=function(){
   if(Clarity.on){ Clarity.disable(); this.classList.remove('on'); HUD.log('ev-sys','clarity audio OFF'); }
   else { Clarity.enable(); this.classList.add('on');
-    HUD.log('ev-sys','clarity audio ON — move toward a stop to hear it bloom'); }
+    HUD.log('ev-sys','audio ON — move toward a stop to hear the voice');
+    if(!Compass.on) HUD.log('ev-warn','tip: turn Compass on for directional audio — without it the voice plays centred'); }
 };
 
 document.querySelectorAll('.sim .pad [data-dir]').forEach(b=>{
