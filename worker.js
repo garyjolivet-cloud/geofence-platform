@@ -63,10 +63,48 @@ async function api(request, env, url) {
   if (!env.DB) return json({ error: "D1 not bound — add the DB binding in wrangler.jsonc" }, 500);
 
   // --- list projects (public; used by the tool pickers) ---
+  // --- apps (workspaces): list with project counts ---
+  if (path === "/api/apps" && method === "GET") {
+    const { results } = await env.DB.prepare(
+      "SELECT a.id,a.name,a.slug,a.description,a.updatedAt, " +
+      "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
+      "FROM app a ORDER BY a.updatedAt DESC"
+    ).all();
+    return json({ apps: results || [] });
+  }
+
+  // --- create an app (admin) ---
+  if (path === "/api/apps" && method === "POST") {
+    if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+    const b = await request.json();
+    const name = (b.name || "").trim();
+    if (!name) return json({ error: "need a name" }, 400);
+    const slug = (b.slug || name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "app";
+    const id = b.id || slug;
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO app (id,orgId,name,slug,description,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)"
+    ).bind(id, b.orgId || "chase-life", name, slug, b.description || "", now, now).run();
+    return json({ ok: true, id, slug, name });
+  }
+
+  // --- move a project into an app (admin) ---
+  const mvm = path.match(/^\/api\/projects\/([^/]+)\/app$/);
+  if (mvm && method === "PUT") {
+    if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+    const pid = decodeURIComponent(mvm[1]);
+    const b = await request.json();
+    await env.DB.prepare("UPDATE project SET appId=?, updatedAt=? WHERE id=?")
+      .bind(b.appId || null, new Date().toISOString(), pid).run();
+    return json({ ok: true, project: pid, appId: b.appId || null });
+  }
+
   if (path === "/api/projects" && method === "GET") {
-    const { results } = await env.DB
-      .prepare("SELECT id,name,slug,mode,status,bundleVersion,updatedAt FROM project ORDER BY updatedAt DESC")
-      .all();
+    const appFilter = url.searchParams.get("app");
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId FROM project" +
+                (appFilter ? " WHERE appId=?" : "") + " ORDER BY updatedAt DESC";
+    const stmt = appFilter ? env.DB.prepare(sql).bind(appFilter) : env.DB.prepare(sql);
+    const { results } = await stmt.all();
     return json({ projects: results || [] });
   }
 
@@ -78,8 +116,8 @@ async function api(request, env, url) {
     if (!id || !b.name) return json({ error: "need id and name" }, 400);
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO project (id,orgId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?)"
-    ).bind(id, b.orgId || "chase-life", b.name, b.slug || id, b.mode || "walking-tour", "draft", 1, now, now).run();
+      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).bind(id, b.orgId || "chase-life", b.appId || null, b.name, b.slug || id, b.mode || "walking-tour", "draft", 1, now, now).run();
     return json({ ok: true, id });
   }
 
@@ -112,13 +150,13 @@ async function api(request, env, url) {
         "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
       ).bind(pid, ver, JSON.stringify(bundle), now).run();
       if (proj) {
-        await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live' WHERE id=?")
-          .bind(ver, now, pid).run();
+        await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId) WHERE id=?")
+          .bind(ver, now, bundle.appId || null, pid).run();
       } else {
         // first publish for a brand-new project id — create the project row too
         await env.DB.prepare(
-          "INSERT INTO project (id,orgId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, "chase-life", bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
+          "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
+        ).bind(pid, "chase-life", bundle.appId || null, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
       }
       return json({ ok: true, version: ver });
     }
