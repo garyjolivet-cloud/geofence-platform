@@ -22,9 +22,45 @@ function json(obj, status = 200) {
     status, headers: { "content-type": "application/json", ...CORS }
   });
 }
-function authed(request, env) {
+function authed(request, env) {            // master-token check (sync; always works as fallback)
   const h = request.headers.get("authorization") || "";
   return !!env.ADMIN_TOKEN && h === "Bearer " + env.ADMIN_TOKEN;
+}
+function bearer(request){ const h = request.headers.get("authorization") || ""; return h.startsWith("Bearer ") ? h.slice(7) : ""; }
+async function sha256hex(s){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+// resolve the caller's auth context: master token (full) or a scoped, non-revoked key
+async function auth(request, env){
+  const tok = bearer(request);
+  if(!tok) return null;
+  if(env.ADMIN_TOKEN && tok === env.ADMIN_TOKEN) return { master:true, appId:null, scopes:"*", keyId:"master" };
+  try{
+    const hash = await sha256hex(tok);
+    const row = await env.DB.prepare("SELECT id,appId,scopes FROM api_key WHERE keyHash=? AND revokedAt IS NULL").bind(hash).first();
+    if(!row) return null;
+    env.DB.prepare("UPDATE api_key SET lastUsedAt=? WHERE id=?").bind(new Date().toISOString(), row.id).run().catch(()=>{});
+    return { master:false, appId:row.appId, scopes:row.scopes || "", keyId:row.id };
+  }catch(e){ return null; }              // api_key table absent / db error → only master works (safety)
+}
+function scopeOk(A, scope, targetAppId){
+  if(!A) return false;
+  if(A.master) return true;
+  const scopes = (A.scopes || "").split(",").map(s => s.trim());
+  const hasScope = scopes.includes("*") || scopes.includes(scope);
+  const appOk = (A.appId == null) || (targetAppId == null) || (A.appId === targetAppId);
+  return hasScope && appOk;
+}
+async function projectAppId(env, idOrSlug){
+  try{ const r = await env.DB.prepare("SELECT appId FROM project WHERE id=? OR slug=? LIMIT 1").bind(idOrSlug, idOrSlug).first();
+    return r ? r.appId : null; }catch(e){ return null; }
+}
+async function logAudit(env, request, A, action, target){
+  try{ await env.DB.prepare("INSERT INTO audit_log (id,ts,keyId,action,target,ip) VALUES (?,?,?,?,?,?)")
+    .bind(crypto.randomUUID(), new Date().toISOString(), (A && A.keyId) || "?", action, target || "",
+          request.headers.get("cf-connecting-ip") || "").run();
+  }catch(e){}
 }
 
 export default {
@@ -60,6 +96,42 @@ async function api(request, env, url) {
   const method = request.method;
 
   if (path === "/api/health") return json({ ok: true, db: !!env.DB, ts: Date.now() });
+
+  // --- API keys: create / list / revoke (master only) ---
+  if (path === "/api/keys" && method === "POST") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401);
+    const b = await request.json();
+    const scopes = Array.isArray(b.scopes) ? b.scopes.join(",") : (b.scopes || "*");
+    const secret = "gpk_" + crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO api_key (id,keyHash,appId,label,scopes,createdAt) VALUES (?,?,?,?,?,?)"
+    ).bind(id, await sha256hex(secret), b.appId || null, b.label || "", scopes, now).run();
+    await logAudit(env, request, { keyId: "master" }, "key.create", id);
+    return json({ ok: true, id, key: secret, appId: b.appId || null, scopes, note: "Copy this key now — it is not shown again." });
+  }
+  if (path === "/api/keys" && method === "GET") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401);
+    const { results } = await env.DB.prepare(
+      "SELECT id,appId,label,scopes,createdAt,lastUsedAt,revokedAt FROM api_key ORDER BY createdAt DESC"
+    ).all();
+    return json({ keys: results || [] });
+  }
+  const mk = path.match(/^\/api\/keys\/([^/]+)$/);
+  if (mk && method === "DELETE") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401);
+    await env.DB.prepare("UPDATE api_key SET revokedAt=? WHERE id=?").bind(new Date().toISOString(), mk[1]).run();
+    await logAudit(env, request, { keyId: "master" }, "key.revoke", mk[1]);
+    return json({ ok: true, revoked: mk[1] });
+  }
+  if (path === "/api/audit" && method === "GET") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401);
+    const { results } = await env.DB.prepare(
+      "SELECT ts,keyId,action,target,ip FROM audit_log ORDER BY ts DESC LIMIT 200"
+    ).all();
+    return json({ audit: results || [] });
+  }
   if (!env.DB) return json({ error: "D1 not bound — add the DB binding in wrangler.jsonc" }, 500);
 
   // --- list projects (public; used by the tool pickers) ---
@@ -82,10 +154,17 @@ async function api(request, env, url) {
     const slug = (b.slug || name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "app";
     const id = b.id || slug;
     const now = new Date().toISOString();
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO app (id,orgId,name,slug,description,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)"
-    ).bind(id, b.orgId || "chase-life", name, slug, b.description || "", now, now).run();
-    return json({ ok: true, id, slug, name });
+    const existing = await env.DB.prepare("SELECT id,name FROM app WHERE id=? OR slug=?").bind(id, slug).first();
+    if (existing) return json({ ok: true, id: existing.id, slug, name: existing.name, existed: true });
+    try {
+      await env.DB.prepare(
+        "INSERT INTO app (id,orgId,name,slug,description,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)"
+      ).bind(id, b.orgId || "chase-life", name, slug, b.description || "", now, now).run();
+    } catch (e) {
+      return json({ error: "create failed: " + ((e && e.message) || e) }, 500);
+    }
+    await logAudit(env, request, { keyId: "master" }, "app.create", id);
+    return json({ ok: true, id, slug, name, created: true });
   }
 
   // --- move a project into an app (admin) ---
@@ -139,10 +218,12 @@ async function api(request, env, url) {
     }
 
     if (method === "PUT") {
-      if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
       const bundle = await request.json();
       if (!bundle || !Array.isArray(bundle.zones))
         return json({ error: "body must be a bundle with a zones array" }, 400);
+      const targetApp = (await projectAppId(env, pid)) || bundle.appId || null;
+      const A = await auth(request, env);
+      if (!scopeOk(A, "publish", targetApp)) return json({ error: "not authorized to publish to this app" }, 401);
       const now = new Date().toISOString();
       const proj = await env.DB.prepare("SELECT bundleVersion FROM project WHERE id=?").bind(pid).first();
       const ver = ((proj && proj.bundleVersion) || 0) + 1;
@@ -153,11 +234,11 @@ async function api(request, env, url) {
         await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId) WHERE id=?")
           .bind(ver, now, bundle.appId || null, pid).run();
       } else {
-        // first publish for a brand-new project id — create the project row too
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
         ).bind(pid, "chase-life", bundle.appId || null, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
       }
+      await logAudit(env, request, A, "publish", pid + " v" + ver);
       return json({ ok: true, version: ver });
     }
   }
@@ -240,11 +321,11 @@ async function api(request, env, url) {
     return json({ ok: true, accepted: stmts.length });
   }
 
-  // --- analytics read (admin-gated): raw events for the dashboard to aggregate ---
   if (path === "/api/analytics" && method === "GET") {
-    if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
     const pid = url.searchParams.get("project");
     if (!pid) return json({ error: "need project param" }, 400);
+    const A = await auth(request, env);
+    if (!scopeOk(A, "analytics", await projectAppId(env, pid))) return json({ error: "not authorized for this app's analytics" }, 401);
     const lim = Math.min(parseInt(url.searchParams.get("limit") || "5000", 10) || 5000, 20000);
     const { results } = await env.DB.prepare(
       "SELECT id,type,ts,deviceId,data FROM event WHERE projectId=? ORDER BY ts DESC LIMIT ?"
@@ -252,24 +333,27 @@ async function api(request, env, url) {
     return json({ project: pid, count: (results || []).length, events: results || [] });
   }
 
-  // --- list what audio is stored (admin) ---
+  // --- list what audio is stored (scoped) ---
   if (path === "/api/audio-list" && method === "GET") {
-    if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
     if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
     const pfx = url.searchParams.get("project");
+    const A = await auth(request, env);
+    if (!scopeOk(A, "audio", pfx ? await projectAppId(env, pfx) : null)) return json({ error: "unauthorized" }, 401);
     const listed = await env.AUDIO.list(pfx ? { prefix: pfx + "/" } : {});
     return json({ objects: (listed.objects || []).map(o => ({ key: o.key, size: o.size, url: "/api/audio/" + o.key })) });
   }
 
-  // --- audio assets in R2: upload (admin) + serve (public) ---
+  // --- audio assets in R2: upload (scoped) + serve (public) ---
   if (path.startsWith("/api/audio/")) {
     const key = decodeURIComponent(path.slice("/api/audio/".length)).trim();
     if (!key) return json({ error: "need an audio key" }, 400);
     if (!env.AUDIO) return json({ error: "no audio bucket bound (create R2 'geofence-audio' + binding)" }, 500);
     if (method === "PUT") {
-      if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+      const A = await auth(request, env);
+      if (!scopeOk(A, "audio", await projectAppId(env, key.split("/")[0]))) return json({ error: "not authorized to upload to this app" }, 401);
       const ct = request.headers.get("content-type") || "application/octet-stream";
       await env.AUDIO.put(key, request.body, { httpMetadata: { contentType: ct } });
+      await logAudit(env, request, A, "audio.put", key);
       return json({ ok: true, key, url: "/api/audio/" + key });
     }
     if (method === "GET") {
@@ -284,16 +368,19 @@ async function api(request, env, url) {
       return new Response(obj.body, { headers: h });
     }
     if (method === "DELETE") {
-      if (!authed(request, env)) return json({ error: "unauthorized" }, 401);
+      const A = await auth(request, env);
+      if (!scopeOk(A, "audio", await projectAppId(env, key.split("/")[0]))) return json({ error: "unauthorized" }, 401);
       await env.AUDIO.delete(key);
+      await logAudit(env, request, A, "audio.delete", key);
       return json({ ok: true, deleted: key });
     }
   }
 
   // --- token check: lets tools verify the admin token before using it ---
   if (path === "/api/auth-check") {
-    return authed(request, env)
-      ? json({ ok: true })
+    const A = await auth(request, env);
+    return A
+      ? json({ ok: true, master: A.master, appId: A.appId, scopes: A.scopes })
       : json({ ok: false, error: "unauthorized" }, 401);
   }
 

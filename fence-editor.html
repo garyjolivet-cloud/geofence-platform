@@ -441,7 +441,10 @@ document.getElementById("appNew").onclick=async()=>{
   try{ const r=await fetch("/api/apps",{ method:"POST",
       headers:{ "content-type":"application/json","authorization":"Bearer "+token }, body:JSON.stringify({name}) });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ await loadApps(j.id); ps().textContent="app \u201c"+name+"\u201d created \u2713 — this project will publish into it"; }
+    if(r.ok){ await loadApps(j.id);
+      ps().textContent = j.existed
+        ? ("app \u201c"+(j.name||name)+"\u201d already exists \u2014 selected it")
+        : ("app \u201c"+name+"\u201d created \u2713 \u2014 this project will publish into it"); }
     else { ps().textContent="couldn\u2019t create app \u2014 HTTP "+r.status+": "+(j.error||"unknown"); if(r.status===401) clearToken(); }
   }catch(e){ ps().textContent="create failed: "+e.message; }
 };
