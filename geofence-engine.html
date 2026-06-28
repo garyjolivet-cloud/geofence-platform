@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v16 · offline</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v17 · clean audio</span></h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill">OFF</span>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
@@ -621,10 +621,10 @@ const HUD = {
         const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} });
     }
 
-    // proximity audio: nearest audio-enabled stop drives distance-clarity (§5a)
+    // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it)
     if(Clarity.on){
       let aD=Infinity, aIn=false;
-      BUNDLE.zones.forEach(z=>{ if(!z.center||z.audio===false) return;
+      BUNDLE.zones.forEach(z=>{ if(!z.center||z.audio===false||z.audioUrl) return;
         const d=Geo.hav([p.lat,p.lon],z.center), range=z.audibleFromM||60;
         if(d<range && d<aD){ aD=d; aIn=true; } });
       Clarity.update(aD, aIn);
