@@ -77,6 +77,10 @@
     <button id="tokTest" class="ghost" title="check token">Test</button>
   </div>
   <div class="hint" id="platStatus">Publish saves to D1; open the engine with ?project=&lt;id&gt;</div>
+  <hr>
+  <label class="k">spatial audio range — full at centre, silent at <span id="audioRangeV">64</span> m</label>
+  <div class="slider"><input type="range" id="audioRange" min="20" max="160" value="64" step="2" style="width:100%"></div>
+  <div class="hint">How far each stop's voice carries. Short for indoor/dense stops, long for open trails.</div>
 
   <hr>
   <label class="k">add a stop — pick a shape</label>
@@ -392,8 +396,9 @@ document.getElementById("pActOn").addEventListener("change",()=>{ if(sel<0)retur
 function getToken(){
   const el=document.getElementById("adminTok");
   let t=(el && el.value.trim()) || "";
-  if(!t){ try{ t=sessionStorage.getItem("gp.admin")||""; }catch(e){} if(t && el) el.value=t; }
-  if(t){ try{ sessionStorage.setItem("gp.admin",t); }catch(e){} }
+  if(!t){ try{ t=sessionStorage.getItem("gp.admin")||""; }catch(e){} }
+  if(!t){ t=(prompt("Admin token:")||"").trim(); }
+  if(t){ if(el) el.value=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} }
   return t;
 }
 function clearToken(){ try{ sessionStorage.removeItem("gp.admin"); }catch(e){}
@@ -401,6 +406,9 @@ function clearToken(){ try{ sessionStorage.removeItem("gp.admin"); }catch(e){}
 // restore a saved token into the visible field on load
 (function(){ try{ const t=sessionStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
   if(t && el) el.value=t; }catch(e){} })();
+// spatial audio range slider — live label
+(function(){ const s=document.getElementById("audioRange"), v=document.getElementById("audioRangeV");
+  if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
 // Test button: verify the token against the server, plainly
 document.getElementById("tokTest").onclick=async()=>{
   const t=(document.getElementById("adminTok").value||"").trim();
@@ -518,7 +526,9 @@ function exportBundle(){
     ref=[cs.reduce((s,c)=>s+c[0],0)/cs.length, cs.reduce((s,c)=>s+c[1],0)/cs.length]; }
   const out={ project:slug(document.getElementById("projName").value)||"project",
               name:document.getElementById("projName").value||"Project",
-              ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)], zones:zones.map(zoneToEngine) };
+              ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)],
+              spatialRangeM:+document.getElementById("audioRange").value,
+              zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
 }
@@ -556,6 +566,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
     zones=b.zones.map(engineToZone); sel=-1;
     if(b.name) document.getElementById("projName").value=b.name;
+    if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";

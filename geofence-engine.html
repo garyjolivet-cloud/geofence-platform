@@ -512,7 +512,7 @@ const Clarity = {
 const SpatialVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
   tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
-  spatialRange(zone){ return Math.max(60, (zone.audibleFromM||40)*1.6); },   // voice carries well past the trigger ring
+  spatialRange(zone){ return (zone && zone.spatialRangeM) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },   // per-project; full at centre → silent here
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
