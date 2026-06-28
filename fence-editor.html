@@ -429,12 +429,14 @@ async function loadApps(sel){
 }
 document.getElementById("appNew").onclick=async()=>{
   const name=prompt("New app name (e.g. \u201cVillage Walks\u201d, \u201cSki Guides\u201d):"); if(!name) return;
-  const token=getToken(); if(!token) return;
+  const token=((document.getElementById("adminTok").value||"").trim()) || getToken();
+  if(!token){ ps().textContent="enter your admin token first, then + app"; return; }
+  ps().textContent="creating app…";
   try{ const r=await fetch("/api/apps",{ method:"POST",
       headers:{ "content-type":"application/json","authorization":"Bearer "+token }, body:JSON.stringify({name}) });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ await loadApps(j.id); ps().textContent="app \u201c"+name+"\u201d created — this project will publish into it"; }
-    else { ps().textContent="couldn\u2019t create app: "+(j.error||r.status); if(r.status===401) clearToken(); }
+    if(r.ok){ await loadApps(j.id); ps().textContent="app \u201c"+name+"\u201d created \u2713 — this project will publish into it"; }
+    else { ps().textContent="couldn\u2019t create app \u2014 HTTP "+r.status+": "+(j.error||"unknown"); if(r.status===401) clearToken(); }
   }catch(e){ ps().textContent="create failed: "+e.message; }
 };
 loadApps();
