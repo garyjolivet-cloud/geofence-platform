@@ -85,7 +85,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v15 · spatial voice</span></h1>
+    <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v16 · offline</span></h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill">OFF</span>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
@@ -120,6 +120,7 @@
     <button id="btnCompass">Compass</button>
     <button id="btnSim">Sim</button>
     <button id="btnAudio">Audio</button>
+    <button id="btnOffline" title="download tour for use with no signal">⬇ Offline</button>
   </div>
 
   <div id="simPanel" class="sim">
@@ -890,6 +891,7 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
 (async function loadProject(){
   const pid=new URLSearchParams(location.search).get('project');
   if(!pid) return;
+  const LKEY='gp.bundle.'+pid;
   HUD.log('ev-sys','loading project "'+pid+'" from platform…');
   try{
     const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle');
@@ -899,13 +901,50 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
     if(!b || !Array.isArray(b.zones) || !b.zones.length){
       HUD.log('ev-warn','platform bundle empty — using built-in bundle'); return; }
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+    try{ localStorage.setItem(LKEY, JSON.stringify(b)); }catch(e){}   // keep a copy for offline
     if(document.getElementById('simZones')) buildSimZones();
     HUD.log('ev-sys','loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' · '+b.zones.length+' stops (from platform)');
     // staleness: remember the version we've seen; flag if this load is older than last seen
     try{ const key='gp.ver.'+pid, seen=+(localStorage.getItem(key)||0), now=+(b.bundleVersion||0);
       if(now>seen){ localStorage.setItem(key,String(now)); if(seen) HUD.log('ev-sys','updated to v'+now+' (was v'+seen+')'); }
       else if(now<seen) HUD.log('ev-warn','this bundle (v'+now+') is older than one you loaded before (v'+seen+')'); }catch(e){}
-  }catch(e){ HUD.log('ev-warn','platform load failed: '+e.message+' — using built-in bundle (may be outdated offline)'); }
+  }catch(e){
+    // offline (or unreachable): fall back to the last saved copy
+    let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
+    if(cached){ try{ const b=JSON.parse(cached);
+      BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+      if(document.getElementById('simZones')) buildSimZones();
+      HUD.log('ev-sys','offline — loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' from saved copy');
+    }catch(_){ HUD.log('ev-warn','offline and saved copy unreadable — using built-in bundle'); } }
+    else HUD.log('ev-warn','platform load failed: '+e.message+' — using built-in bundle (Save offline next time you have signal)');
+  }
+})();
+
+/* ---- offline: register the service worker + Save-for-offline pre-download ---- */
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{ /* offline cache unavailable; app still runs online */ });
+}
+(function(){
+  const btn=document.getElementById('btnOffline'); if(!btn) return;
+  btn.onclick=async function(){
+    const pid=new URLSearchParams(location.search).get('project'); if(!pid){ HUD.log('ev-warn','no project to save'); return; }
+    btn.disabled=true; const label='⬇ Offline';
+    try{
+      btn.textContent='saving…';
+      const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle');
+      const b=await r.json();
+      try{ localStorage.setItem('gp.bundle.'+pid, JSON.stringify(b)); }catch(e){}
+      const urls=(b.zones||[]).map(z=>z.audioUrl).filter(Boolean);
+      let done=0;
+      for(const u of urls){ try{ await fetch(u); }catch(e){} done++; btn.textContent='saving '+done+'/'+urls.length; }
+      btn.textContent='✓ saved';
+      HUD.log('ev-sys','saved for offline — bundle + '+urls.length+' audio clip(s) cached; works with no signal now');
+      setTimeout(()=>{ btn.textContent='✓ offline'; btn.disabled=false; }, 1500);
+    }catch(e){
+      btn.textContent=label; btn.disabled=false;
+      HUD.log('ev-warn','offline save failed: '+e.message+' — need signal to download first');
+    }
+  };
 })();
 
 /* ---- consent + device identity (the privacy gate) ----
