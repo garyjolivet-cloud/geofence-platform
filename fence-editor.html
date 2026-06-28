@@ -59,7 +59,7 @@
 <div class="status" id="status">click the map to read coordinates</div>
 
 <div class="panel">
-  <h1>Fence Editor <span class="v">v5 · audio</span></h1>
+  <h1>Fence Editor <span class="v">v5 · audio</span> <a href="/" style="float:right;font-weight:400;font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:4px 10px">⌂ Home</a></h1>
   <div class="hint">Draw stops, set what they say, then Publish — the engine &amp; sim load it by project.</div>
 
   <label class="k">project</label>
@@ -77,7 +77,7 @@
     <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
   </div>
   <div class="row">
-    <input id="adminTok" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="admin token" style="flex:1">
+    <input id="adminTok" type="text" name="gp-tok-x9z" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
     <button id="tokTest" class="ghost" title="check token">Test</button>
   </div>
   <div class="hint" id="platStatus">Publish saves to D1; open the engine with ?project=&lt;id&gt;</div>
@@ -399,16 +399,22 @@ bindProp("pActUrl",syncAction);
 document.getElementById("pActOn").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
 
 /* ---- per-stop audio upload to R2 (spatial audio source) ---- */
+let verifiedToken="";
 function getToken(){
+  if(verifiedToken) return verifiedToken;                       // value the user actually typed/tested
   const el=document.getElementById("adminTok");
   let t=(el && el.value.trim()) || "";
   if(!t){ try{ t=localStorage.getItem("gp.admin")||""; }catch(e){} }
   if(!t){ t=(prompt("Admin token:")||"").trim(); }
-  if(t){ if(el) el.value=t; try{ localStorage.setItem("gp.admin",t); }catch(e){} }
+  if(t){ verifiedToken=t; if(el) el.value=t; try{ localStorage.setItem("gp.admin",t); }catch(e){} }
   return t;
 }
-function clearToken(){ try{ localStorage.removeItem("gp.admin"); }catch(e){}
+function clearToken(){ verifiedToken=""; try{ localStorage.removeItem("gp.admin"); }catch(e){}
   const el=document.getElementById("adminTok"); if(el) el.value=""; }
+// the field is the only place the token is entered; capture every keystroke so autofill can't substitute it later
+(function(){ const el=document.getElementById("adminTok"); if(!el) return;
+  el.addEventListener("input", ()=>{ verifiedToken=el.value.trim();
+    try{ if(verifiedToken) localStorage.setItem("gp.admin",verifiedToken); }catch(e){} }); })();
 // restore a saved token into the visible field on load
 (function(){ try{ const t=localStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
   if(t && el) el.value=t; }catch(e){} })();
@@ -429,7 +435,7 @@ async function loadApps(sel){
 }
 document.getElementById("appNew").onclick=async()=>{
   const name=prompt("New app name (e.g. \u201cVillage Walks\u201d, \u201cSki Guides\u201d):"); if(!name) return;
-  const token=((document.getElementById("adminTok").value||"").trim()) || getToken();
+  const token=getToken();
   if(!token){ ps().textContent="enter your admin token first, then + app"; return; }
   ps().textContent="creating app…";
   try{ const r=await fetch("/api/apps",{ method:"POST",
@@ -446,7 +452,7 @@ document.getElementById("tokTest").onclick=async()=>{
   if(!t){ ps().textContent="type a token first, then Test"; return; }
   ps().textContent="checking token…";
   try{ const r=await fetch("/api/auth-check",{ headers:{ authorization:"Bearer "+t } });
-    if(r.ok){ try{ localStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads and publish will work"; }
+    if(r.ok){ verifiedToken=t; try{ localStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads, publish, and new apps will work"; }
     else ps().innerHTML="token <b style='color:var(--hazard)'>rejected ✕</b> — doesn't match the server's ADMIN_TOKEN secret";
   }catch(e){ ps().textContent="couldn't reach the server to check"; }
 };
