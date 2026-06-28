@@ -78,9 +78,11 @@
   </div>
   <div class="hint" id="platStatus">Publish saves to D1; open the engine with ?project=&lt;id&gt;</div>
   <hr>
-  <label class="k">spatial audio range — full at centre, silent at <span id="audioRangeV">64</span> m</label>
-  <div class="slider"><input type="range" id="audioRange" min="20" max="160" value="64" step="2" style="width:100%"></div>
-  <div class="hint">How far each stop's voice carries. Short for indoor/dense stops, long for open trails.</div>
+  <label class="k">voice carries to <span id="audioRangeV">64</span> m — fades in from here</label>
+  <div class="slider"><input type="range" id="audioRange" min="6" max="160" value="64" step="2" style="width:100%"></div>
+  <label class="k" style="margin-top:8px">full volume within <span id="audioClearV">8</span> m of centre</label>
+  <div class="slider"><input type="range" id="audioClear" min="2" max="40" value="8" step="1" style="width:100%"></div>
+  <div class="hint"><b>Carry</b> = how far the voice reaches (small for dense/indoor stops, large for open trails). <b>Full-volume</b> = the loud core. The gap between them is where it blooms and fades.</div>
 
   <hr>
   <label class="k">add a stop — pick a shape</label>
@@ -406,8 +408,10 @@ function clearToken(){ try{ sessionStorage.removeItem("gp.admin"); }catch(e){}
 // restore a saved token into the visible field on load
 (function(){ try{ const t=sessionStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
   if(t && el) el.value=t; }catch(e){} })();
-// spatial audio range slider — live label
+// spatial audio range sliders — live labels
 (function(){ const s=document.getElementById("audioRange"), v=document.getElementById("audioRangeV");
+  if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
+(function(){ const s=document.getElementById("audioClear"), v=document.getElementById("audioClearV");
   if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
 // Test button: verify the token against the server, plainly
 document.getElementById("tokTest").onclick=async()=>{
@@ -528,6 +532,7 @@ function exportBundle(){
               name:document.getElementById("projName").value||"Project",
               ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)],
               spatialRangeM:+document.getElementById("audioRange").value,
+              spatialClearM:+document.getElementById("audioClear").value,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -567,6 +572,7 @@ document.getElementById("importBtn").onclick=()=>{
     zones=b.zones.map(engineToZone); sel=-1;
     if(b.name) document.getElementById("projName").value=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
+    if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
