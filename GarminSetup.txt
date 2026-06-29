@@ -1,0 +1,71 @@
+GPS Bridge — Garmin Connect IQ Setup
+=====================================
+
+The GPS Bridge widget streams GPS + compass from your Garmin Instinct to the
+geofence engine running in Chrome on your phone via Bluetooth (NUS/UART).
+
+
+1. INSTALL THE TOOLS
+---------------------
+- Download the Connect IQ SDK Manager from:
+  https://developer.garmin.com/connect-iq/sdk/
+- Install the "Monkey C" extension in VS Code (publisher: Garmin)
+- In the SDK Manager, install the SDK and download the Instinct 2 device definition
+
+
+2. GET A DEVELOPER KEY
+-----------------------
+- Sign in at https://developer.garmin.com/connect-iq/connect-iq-basics/getting-started/
+- Generate a developer key and save the .der file somewhere permanent
+
+
+3. OPEN THE PROJECT IN VS CODE
+--------------------------------
+- Open the connect-iq/ folder (not the repo root)
+- VS Code will detect manifest.xml and activate the Monkey C extension
+
+
+4. CONFIGURE THE SDK IN VS CODE
+---------------------------------
+- Ctrl+Shift+P → Monkey C: Edit Settings
+- Set the SDK path and point to your developer key .der file
+
+
+5. SIDELOAD TO THE WATCH
+--------------------------
+- Connect the Instinct via USB
+- Ctrl+Shift+P → Monkey C: Build and Run → select your watch model
+  (instinct2 / instinct2s / instinct2x / instinctCrossover)
+- The .prg file is copied to the watch's GARMIN/Apps/ folder automatically
+
+
+6. RUN IT ON THE WATCH
+------------------------
+- On the watch: hold the action button → Widget Glances → scroll to GPS Bridge → press to open
+- The watch screen shows "Waiting for phone..." and begins acquiring GPS
+
+
+7. CONNECT FROM THE ENGINE
+---------------------------
+- Open the engine in Chrome (must be Chrome or Edge — Web Bluetooth is not supported in Safari/Firefox):
+  https://geofence-platform.gary-jolivet.workers.dev/engine?project=kh-village-walk
+- Tap the hamburger menu (☰, top right)
+- Under GPS Source, select Bluetooth GPS
+- Tap Connect Garmin / BLE GPS
+- Select the watch from the browser device picker
+- Status changes to "Phone connected" then "Streaming GPS"
+- Optionally tick "Use watch compass" to use the Instinct's ABC compass
+  for the direction needle instead of the phone's sensor
+
+
+NOTES
+------
+- The watch must be running GPS Bridge BEFORE you tap connect in Chrome.
+  Web Bluetooth requires the peripheral to be advertising, which starts
+  as soon as the widget is open.
+- The widget streams: lat, lon, accuracy (metres), compass heading (degrees)
+  at 1 Hz over Bluetooth LE.
+- If the compass reads "acquiring..." on the watch screen, walk outside and
+  calibrate by moving in a slow figure-8.
+- Supported models: Instinct 2, Instinct 2S, Instinct 2X Solar,
+  Instinct Crossover, Instinct Crossover Solar.
