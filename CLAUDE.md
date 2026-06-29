@@ -103,6 +103,53 @@ Copy the returned `key` value — it is shown once. Use it in the browser tool i
 - `ORG_ID` — organisation slug (default: `chase-life`)
 - `ALLOWED_ORIGIN` — browser origin allowed on write endpoints
 
+## Bluetooth GPS (Garmin Instinct)
+
+The geofence engine supports two BLE GPS protocols, auto-detected on connect:
+
+| Protocol | BLE Service | Who uses it |
+|----------|-------------|-------------|
+| LNS | GATT `0x1819` | Dedicated BLE GPS receivers, some Garmin Edge units |
+| NUS (UART) | `6e400001-...` | Garmin Instinct 2/Crossover/2X via Connect IQ app |
+
+**Garmin Instinct compatibility:**
+
+| Model | Connect IQ | BLE GPS |
+|-------|-----------|---------|
+| Instinct (1st gen) | Limited | Not recommended |
+| Instinct 2 / Solar | Full CIQ 3.x | ✓ via NUS app |
+| Instinct Crossover | Full CIQ 3.x | ✓ via NUS app |
+| Instinct 2X Solar | Full CIQ 3.x | ✓ via NUS app |
+
+**Connect IQ companion app spec** (`GPS Bridge`):
+
+The watch app must broadcast GPS over the Nordic UART Service (NUS). Send one line per second over the TX characteristic (`6e400003-b5a3-f393-e0a9-e50e24dcca9e`).
+
+Accepted formats (web app parses all of these):
+```
+lat,lon                     →  51.302757,-117.054644
+lat,lon,acc_m               →  51.302757,-117.054644,3.5
+$GPRMC sentence (NMEA)
+$GPGGA sentence (NMEA)
+```
+
+Minimal Monkey C outline:
+```monkeyc
+// Register NUS service + TX characteristic in app manifest
+// In onUpdate() or a background timer (1 Hz):
+var pos = Position.getInfo();
+if (pos.accuracy != Position.QUALITY_NOT_AVAILABLE) {
+    var lat = pos.position.toDegrees()[0];
+    var lon = pos.position.toDegrees()[1];
+    var acc = pos.accuracy;  // metres
+    var line = lat.format("%.6f") + "," + lon.format("%.6f") + "," + acc.format("%.1f") + "\n";
+    // write line to NUS TX characteristic
+}
+```
+
+Requires the `Ble` module and `communications` permission in the CIQ manifest.
+Only works in Chrome or Edge (Web Bluetooth API).
+
 ## Guardrails
 
 - **Never** hardcode or commit Cloudflare account IDs, API tokens, or `ADMIN_TOKEN` values.

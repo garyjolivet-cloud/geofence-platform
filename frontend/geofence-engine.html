@@ -223,9 +223,13 @@
       <button id="btnBleConnect" class="ble-btn">Connect Garmin / BLE GPS</button>
       <div id="bleStatus" class="ble-status off">Not connected</div>
       <div class="ble-note">
-        Requires a Garmin watch or BLE GPS device that broadcasts the <b>Location &amp; Navigation Service</b> (LNS profile).
-        On Garmin, install a Connect IQ companion app to enable BLE GPS broadcast if your model requires it.
-        Only works in Chrome or Edge.
+        <b>Garmin Instinct 2 / Crossover / 2X Solar</b> — install the
+        <b>GPS Bridge</b> Connect IQ app on the watch, start it before connecting here.
+        The app streams GPS over Bluetooth UART (NUS) — no cable needed.<br><br>
+        <b>Other BLE GPS receivers</b> — devices that broadcast the standard
+        Location &amp; Navigation Service (LNS / GATT 0x1819) connect automatically
+        with no extra app.<br><br>
+        Protocol is auto-detected on connect. Requires Chrome or Edge.
       </div>
     </div>
   </div>
@@ -918,13 +922,33 @@ Geofencer.onEvent=(e)=>{
 let watchId=null, simMode=false, simPos=BUNDLE.ref.slice();
 let gpsSource='device';   // 'device' | 'ble'
 
-/* ---- BLE GPS (Garmin / any LNS-profile device) ----
-   Spec: Bluetooth GATT Location and Navigation Service 0x1819
-   Location and Speed characteristic 0x2A67 */
+/* ---- BLE GPS — supports two protocols, auto-detected on connect ----
+
+   Protocol A · LNS (Location and Navigation Service, GATT 0x1819)
+     Works with: dedicated BLE GPS receivers, some Garmin Edge units.
+     Characteristic 0x2A67 (Location and Speed) carries packed binary lat/lon.
+
+   Protocol B · NUS (Nordic UART Service)
+     Works with: Garmin Instinct 2 / Instinct Crossover / Instinct 2X Solar
+     running a Connect IQ companion app that streams GPS over BLE UART.
+     The app sends one line per second in any of these formats:
+       "lat,lon"           e.g.  51.302757,-117.054644
+       "lat,lon,acc_m"     e.g.  51.302757,-117.054644,3.5
+       NMEA $GPRMC sentence
+       NMEA $GPGGA sentence
+
+   Connection flow: scan for both service UUIDs at once → try LNS → fall back to NUS.
+   ------------------------------------------------------------------ */
 const BleGPS = {
-  device:null, char:null, active:false,
+  device:null, char:null, active:false, protocol:null,
+
+  // LNS
   LNS_SERVICE: 0x1819,
   LOC_SPEED:   0x2A67,
+
+  // NUS (Nordic UART Service)
+  NUS_SERVICE: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  NUS_TX:      '6e400003-b5a3-f393-e0a9-e50e24dcca9e',  // watch → phone
 
   async connect(){
     if(!navigator.bluetooth){
@@ -934,21 +958,33 @@ const BleGPS = {
     try{
       Settings.bleStatus('scanning','Scanning for devices…');
       this.device = await navigator.bluetooth.requestDevice({
-        filters:[{services:[this.LNS_SERVICE]}]
+        filters:[
+          {services:[this.LNS_SERVICE]},
+          {services:[this.NUS_SERVICE]}
+        ],
+        optionalServices:[this.LNS_SERVICE, this.NUS_SERVICE]
       });
       this.device.addEventListener('gattserverdisconnected',()=>this._onDisconnect());
+      Settings.bleStatus('scanning','Connecting…');
       const server = await this.device.gatt.connect();
-      const svc    = await server.getPrimaryService(this.LNS_SERVICE);
-      this.char    = await svc.getCharacteristic(this.LOC_SPEED);
+
+      // Auto-detect protocol: try LNS first, fall back to NUS
+      const ok = await this._negotiate(server);
+      if(!ok){
+        Settings.bleStatus('error','Device found but no GPS service detected');
+        HUD.log('ev-warn','BLE GPS: device has neither LNS nor NUS service');
+        this.device.gatt.disconnect(); return;
+      }
+
       this.char.addEventListener('characteristicvaluechanged', e=>this._onData(e));
       await this.char.startNotifications();
       this.active = true;
       const name = this.device.name || 'BLE GPS';
-      Settings.bleStatus('connected','● '+name+' connected');
+      const proto = this.protocol === 'lns' ? 'LNS' : 'NUS/UART';
+      Settings.bleStatus('connected','● '+name+'  ·  '+proto);
       Settings.bleBtnOn(true);
       HUD.el('pill').textContent='BLE'; HUD.el('pill').className='pill live';
-      HUD.log('ev-sys','BLE GPS connected: '+name);
-      // BLE takes over — stop device watchPosition if running
+      HUD.log('ev-sys','BLE GPS connected: '+name+' ('+proto+')');
       if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
     }catch(e){
       if(e.name==='NotFoundError'){ Settings.bleStatus('off','No device selected'); }
@@ -957,13 +993,28 @@ const BleGPS = {
     }
   },
 
+  // Try LNS first, fall back to NUS; sets this.char + this.protocol
+  async _negotiate(server){
+    try{
+      const svc   = await server.getPrimaryService(this.LNS_SERVICE);
+      this.char   = await svc.getCharacteristic(this.LOC_SPEED);
+      this.protocol = 'lns'; return true;
+    }catch(_){}
+    try{
+      const svc   = await server.getPrimaryService(this.NUS_SERVICE);
+      this.char   = await svc.getCharacteristic(this.NUS_TX);
+      this.protocol = 'nus'; return true;
+    }catch(_){}
+    return false;
+  },
+
   disconnect(){
     if(this.device && this.device.gatt.connected) this.device.gatt.disconnect();
     else this._onDisconnect();
   },
 
   _onDisconnect(){
-    this.active=false; this.char=null; this.device=null;
+    this.active=false; this.char=null; this.device=null; this.protocol=null;
     Settings.bleStatus('off','Disconnected');
     Settings.bleBtnOn(false);
     HUD.el('pill').textContent='OFF'; HUD.el('pill').className='pill';
@@ -972,21 +1023,22 @@ const BleGPS = {
 
   _onData(e){
     if(!this.active) return;
-    const fix=this._parseLNS(e.target.value);
+    const fix = this.protocol==='lns' ? this._parseLNS(e.target.value)
+                                      : this._parseNUS(e.target.value);
     if(fix) HUD.onFix(fix);
   },
 
-  // Parse Location and Speed characteristic (0x2A67)
+  // ── Protocol A: LNS binary (GATT 0x2A67) ──────────────────────────
   _parseLNS(dv){
     try{
       if(dv.byteLength<2) return null;
-      const flags     = dv.getUint16(0,true);
-      const hasSpeed  = !!(flags&0x01);
-      const hasDist   = !!(flags&0x02);
-      const hasLoc    = !!(flags&0x04);
+      const flags    = dv.getUint16(0,true);
+      const hasSpeed = !!(flags&0x01);
+      const hasDist  = !!(flags&0x02);
+      const hasLoc   = !!(flags&0x04);
       if(!hasLoc) return null;
       let o=2;
-      if(hasSpeed) o+=2;   // uint16, 0.01 m/s units
+      if(hasSpeed) o+=2;   // uint16 × 0.01 m/s
       if(hasDist)  o+=3;   // uint24
       if(dv.byteLength<o+8) return null;
       const lat = dv.getInt32(o,true)*1e-7; o+=4;
@@ -994,6 +1046,55 @@ const BleGPS = {
       if(lat<-90||lat>90||lon<-180||lon>180) return null;
       return {lat,lon,acc:5,t:Date.now()};
     }catch(e){ return null; }
+  },
+
+  // ── Protocol B: NUS text (Connect IQ / UART) ──────────────────────
+  // Accepts: "lat,lon"  |  "lat,lon,acc"  |  $GPRMC  |  $GPGGA
+  _parseNUS(dv){
+    try{
+      const line = new TextDecoder().decode(dv).trim();
+      if(!line) return null;
+      if(line.startsWith('$GPRMC')) return this._rmc(line);
+      if(line.startsWith('$GPGGA')) return this._gga(line);
+      // simple CSV
+      const p = line.split(',');
+      if(p.length<2) return null;
+      const lat=parseFloat(p[0]), lon=parseFloat(p[1]);
+      const acc=p.length>=3 ? parseFloat(p[2]) : 5;
+      if(!isFinite(lat)||!isFinite(lon)||lat<-90||lat>90||lon<-180||lon>180) return null;
+      return {lat,lon,acc:isFinite(acc)?acc:5,t:Date.now()};
+    }catch(e){ return null; }
+  },
+
+  // $GPRMC,hhmmss,A,ddmm.mmm,N,dddmm.mmm,E,speed,course,date,...
+  _rmc(s){
+    const f=s.split(',');
+    if(f.length<7||f[2]!=='A') return null;   // void fix
+    const lat=this._nd(f[3],f[4]), lon=this._nd(f[5],f[6]);
+    if(lat===null||lon===null) return null;
+    return {lat,lon,acc:5,t:Date.now()};
+  },
+
+  // $GPGGA,hhmmss,ddmm.mmm,N,dddmm.mmm,E,quality,sats,hdop,...
+  _gga(s){
+    const f=s.split(',');
+    if(f.length<10||f[6]==='0') return null;   // no fix
+    const lat=this._nd(f[2],f[3]), lon=this._nd(f[4],f[5]);
+    if(lat===null||lon===null) return null;
+    const hdop=parseFloat(f[8]);
+    return {lat,lon,acc:isFinite(hdop)?Math.max(3,hdop*5):5,t:Date.now()};
+  },
+
+  // NMEA ddmm.mmmm → decimal degrees
+  _nd(raw,dir){
+    if(!raw||!dir) return null;
+    const dot=raw.indexOf('.');
+    if(dot<2) return null;
+    const deg=parseFloat(raw.slice(0,dot-2));
+    const min=parseFloat(raw.slice(dot-2));
+    if(!isFinite(deg)||!isFinite(min)) return null;
+    const dd=deg+min/60;
+    return (dir==='S'||dir==='W') ? -dd : dd;
   }
 };
 
