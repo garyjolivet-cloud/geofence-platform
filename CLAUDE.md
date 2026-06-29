@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Geofence Platform
 
 Cloudflare Workers app: static HTML tools + a D1-backed REST API + R2 audio storage.
@@ -17,6 +21,15 @@ geofence-platform/
 │   ├── audio-bench.html     ← Audio upload/playback sandbox
 │   ├── share.html           ← Shareable project link page
 │   └── sw.js                ← Service worker (network-first offline, cache-first for audio)
+├── connect-iq/
+│   ├── manifest.xml         ← CIQ app manifest (targets Instinct 2/2S/2X/Crossover)
+│   └── source/
+│       ├── GpsBridgeApp.mc
+│       ├── GpsBridgeView.mc
+│       ├── GpsBleDelegate.mc
+│       └── GpsBridgeInputDelegate.mc
+├── migrations/
+│   └── 0001_schema.sql      ← Full D1 schema (7 tables)
 └── wrangler.jsonc           ← Wrangler config (D1 + R2 bindings, assets: "./frontend")
 ```
 
@@ -56,10 +69,23 @@ This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrang
 ## Architecture
 
 - **Worker** (`worker.js`): handles `/api/*` routes, falls through to `env.ASSETS` for everything else.
-- **Friendly URLs**: the Worker maps `/editor` → `fence-editor.html`, `/sim` → `geofence-sim.html`, `/engine` → `geofence-engine.html`, `/dashboard` → `dashboard.html`, `/share` → `share.html`.
+- **Friendly URLs**: the Worker maps `/editor` → `fence-editor.html`, `/sim` → `geofence-sim.html`, `/engine` → `geofence-engine.html`, `/dashboard` → `dashboard.html`, `/share` → `share.html`, `/audio` → `audio-bench.html`.
 - **D1** (`geofence-db`, binding `DB`): stores projects, published bundles, API keys, devices, consent records, and events.
 - **R2** (`geofence-audio`, binding `AUDIO`): stores audio clips, served via `/api/audio/<key>`.
 - **Auth**: master token via `ADMIN_TOKEN` secret (env var). Scoped per-app API keys stored as SHA-256 hashes in D1.
+
+## D1 Schema (7 tables)
+
+| Table | Purpose |
+|-------|---------|
+| `app` | Workspace — groups projects under a tenant |
+| `project` | Named geofence tour/experience |
+| `published_bundle` | Versioned JSON snapshots published by the editor |
+| `api_key` | Scoped bearer tokens (stored as SHA-256 hashes) |
+| `audit_log` | Immutable append-only record of admin actions |
+| `device` | Anonymous visitor registration |
+| `consent` | Append-only record of user consent decisions per scope |
+| `event` | Analytics events, gated by `store-history` consent |
 
 ## Key API Endpoints
 
@@ -67,15 +93,21 @@ This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrang
 |--------|------|------|
 | GET | `/api/health` | public |
 | GET/POST | `/api/projects` | GET public, POST master |
-| GET/PUT | `/api/projects/:id/bundle` | GET public, PUT scoped |
+| GET/PUT | `/api/projects/:id/bundle` | GET public, PUT scoped (`publish`) |
+| PUT | `/api/projects/:id/app` | master |
 | GET/POST | `/api/apps` | GET public, POST master |
 | GET/POST/DELETE | `/api/keys` | master |
 | GET | `/api/audit` | master |
+| GET | `/api/auth-check` | any valid token |
 | POST | `/api/devices` | public |
-| POST | `/api/consent` | public |
-| POST | `/api/events` | public (requires stored consent) |
-| GET | `/api/analytics` | scoped |
-| GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped |
+| POST | `/api/devices/:id/forget` | public (right-to-delete) |
+| GET/POST | `/api/consent` | public |
+| POST | `/api/events` | public (requires stored `store-history` consent) |
+| GET | `/api/analytics` | scoped (`analytics`) |
+| GET | `/api/audio-list` | scoped (`audio`) |
+| GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped (`audio`) |
+
+**Size guards:** bundles are rejected over 1 MB; event payloads over 500 KB.
 
 ## Security Model
 
@@ -121,9 +153,7 @@ The geofence engine supports two BLE GPS protocols, auto-detected on connect:
 | Instinct Crossover | Full CIQ 3.x | ✓ via NUS app |
 | Instinct 2X Solar | Full CIQ 3.x | ✓ via NUS app |
 
-**Connect IQ companion app spec** (`GPS Bridge`):
-
-The watch app must broadcast GPS over the Nordic UART Service (NUS). Send one line per second over the TX characteristic (`6e400003-b5a3-f393-e0a9-e50e24dcca9e`).
+**Connect IQ companion app** (`connect-iq/`): a Widget that broadcasts GPS over the Nordic UART Service (NUS). Sends one line per second over the TX characteristic (`6e400003-b5a3-f393-e0a9-e50e24dcca9e`).
 
 Accepted formats (web app parses all of these):
 ```
@@ -131,20 +161,6 @@ lat,lon                     →  51.302757,-117.054644
 lat,lon,acc_m               →  51.302757,-117.054644,3.5
 $GPRMC sentence (NMEA)
 $GPGGA sentence (NMEA)
-```
-
-Minimal Monkey C outline:
-```monkeyc
-// Register NUS service + TX characteristic in app manifest
-// In onUpdate() or a background timer (1 Hz):
-var pos = Position.getInfo();
-if (pos.accuracy != Position.QUALITY_NOT_AVAILABLE) {
-    var lat = pos.position.toDegrees()[0];
-    var lon = pos.position.toDegrees()[1];
-    var acc = pos.accuracy;  // metres
-    var line = lat.format("%.6f") + "," + lon.format("%.6f") + "," + acc.format("%.1f") + "\n";
-    // write line to NUS TX characteristic
-}
 ```
 
 Requires the `Ble` module and `communications` permission in the CIQ manifest.
