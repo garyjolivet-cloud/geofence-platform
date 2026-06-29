@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<iq:manifest xmlns:iq="com.garmin.connect.iq" version="3">
+    <iq:application
+        entry="GpsBridgeApp"
+        id="a3872d8c-1a75-4b8b-8b8b-8b8b8b8b8b8b"
+        launchType="Widget"
+        minApiLevel="3.2.0"
+        type="widget"
+        version="1.0.0">
+
+        <iq:products>
+            <iq:product id="instinct2"/>
+            <iq:product id="instinct2s"/>
+            <iq:product id="instinct2x"/>
+            <iq:product id="instinctCrossover"/>
+            <iq:product id="instinctCrossoverSolar"/>
+        </iq:products>
+
+        <iq:permissions>
+            <iq:uses-permission id="Positioning"/>
+            <iq:uses-permission id="BluetoothLowEnergy"/>
+        </iq:permissions>
+
+        <iq:languages>
+            <iq:language id="eng"/>
+        </iq:languages>
+    </iq:application>
+</iq:manifest>
