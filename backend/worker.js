@@ -78,7 +78,7 @@ export default {
       "/engine": "/geofence-engine.html",
       "/dashboard": "/dashboard.html",
       "/share": "/share.html",
-      "/audio": "/tour-audio-sandbox.html"
+      "/audio": "/audio-bench.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     if (FRIENDLY[clean] && env.ASSETS) {
