@@ -726,7 +726,7 @@ const HUD = {
     }
 
     // spatial recorded voice: nearest stop with an audioUrl, over its wide approach range
-    if(Clarity.on && pick && pick.zone && pick.zone.audioUrl){
+    if(pick && pick.zone && pick.zone.audioUrl){
       const dv=Geo.hav([p.lat,p.lon],pick.zone.center), range=SpatialVoice.spatialRange(pick.zone);
       if(dv<range){
         SpatialVoice.playZone(pick.zone);
@@ -1140,6 +1140,8 @@ document.getElementById('btnBleConnect').onclick=()=>{
 
 function startGPS(){
   Audio.unlock(); Audio.unlocked=true;
+  Clarity.init(); if(Clarity.ctx && Clarity.ctx.state==='suspended') Clarity.ctx.resume();
+  SpatialVoice.ensure();
   if(gpsSource==='ble'){
     if(!BleGPS.active){
       HUD.log('ev-warn','Bluetooth GPS not connected — open Settings (☰) to connect');
@@ -1179,6 +1181,8 @@ function toggleSim(){
   if(simMode){ if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;}
     Smoother.reset(); Geofencer.reset(); HUD.prev=null;
     Audio.unlock(); Audio.unlocked=true;
+    Clarity.init(); if(Clarity.ctx && Clarity.ctx.state==='suspended') Clarity.ctx.resume();
+    SpatialVoice.ensure();
     buildSimZones(); tickSim(); HUD.log('ev-sys','sim mode — nudge the pad to walk a virtual position'); }
 }
 document.getElementById('btnSim').onclick=toggleSim;
