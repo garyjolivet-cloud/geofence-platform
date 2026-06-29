@@ -62,19 +62,23 @@
   <h1>Fence Editor <span class="v">v5 · audio</span> <a href="/" style="float:right;font-weight:400;font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:4px 10px">⌂ Home</a></h1>
   <div class="hint">Draw stops, set what they say, then Publish — the engine &amp; sim load it by project.</div>
 
-  <label class="k">project</label>
-  <input id="projName" value="KH Village Walk">
-  <div class="row" style="margin-top:6px">
-    <select id="appSel" style="flex:1"><option value="">— unsorted —</option></select>
-    <button id="appNew" class="ghost" title="new app">+ app</button>
-  </div>
-  <div class="row" style="margin-top:6px">
-    <select id="projSel" style="flex:1"><option value="">— load a project —</option></select>
-    <button id="projRefresh" class="ghost" title="refresh">↻</button>
-  </div>
+  <div style="border:1px solid var(--coral);border-radius:12px;padding:10px;margin:6px 0;background:rgba(255,106,61,.04)">
+  <label class="k" style="color:var(--coral);margin-top:0">platform project</label>
+  <select id="projSel" style="width:100%;margin-bottom:6px"><option value="">— pick a project to load —</option></select>
   <div class="row">
     <button id="loadPlatform" class="ghost" style="flex:1">Load ▼</button>
     <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
+    <button id="projRefresh" class="ghost" title="refresh list">↻</button>
+    <button id="projDel" class="ghost" title="delete selected project" style="color:var(--hazard);border-color:var(--hazard);flex:0 0 auto">✕ Del</button>
+  </div>
+  <label class="k" style="margin-top:8px">project name</label>
+  <input id="projName" value="KH Village Walk">
+  <label class="k" style="margin-top:6px">app (organizer)</label>
+  <div class="row" style="margin-top:4px">
+    <select id="appSel" style="flex:1"><option value="">— unsorted —</option></select>
+    <button id="appNew" class="ghost" title="new app">+ app</button>
+    <button id="appDel" class="ghost" title="delete selected app" style="color:var(--hazard);border-color:var(--hazard);flex:0 0 auto">✕ Del</button>
+  </div>
   </div>
   <div class="row">
     <input id="adminTok" type="text" name="gp-tok-x9z" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
@@ -89,7 +93,10 @@
   <div class="hint"><b>Carry</b> = how far the voice reaches (small for dense/indoor stops, large for open trails). <b>Full-volume</b> = the loud core. The gap between them is where it blooms and fades.</div>
 
   <hr>
-  <label class="k">add a stop — pick a shape</label>
+  <div class="row" style="margin-bottom:4px">
+    <label class="k" style="margin:0;align-self:center;flex:1">add a stop — pick a shape</label>
+    <button id="clearAllBtn" class="ghost" style="flex:0 0 auto;color:var(--fog);border-color:var(--rim)" title="Clear all stops and reset map state">✕ Clear all</button>
+  </div>
   <div class="row">
     <button data-tool="circle">● Circle</button>
     <button data-tool="polygon">⬡ Polygon</button>
@@ -609,7 +616,7 @@ document.getElementById("importBtn").onclick=()=>{
   if(!raw){ document.getElementById("status").textContent="paste a bundle into the box first, then Import"; return; }
   try{ const b=JSON.parse(raw);
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
-    zones=b.zones.map(engineToZone); sel=-1;
+    zones=b.zones.map(engineToZone); sel=-1; tool=null; draft=[];
     if(b.name) document.getElementById("projName").value=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
@@ -678,6 +685,52 @@ async function publishToPlatform(){
 document.getElementById("projRefresh").onclick=fetchProjects;
 document.getElementById("loadPlatform").onclick=()=>loadFromPlatform();
 document.getElementById("publishBtn").onclick=publishToPlatform;
+
+// auto-load when user picks from dropdown
+document.getElementById("projSel").onchange=()=>{ const id=document.getElementById("projSel").value; if(id) loadFromPlatform(id); };
+
+// delete project
+document.getElementById("projDel").onclick=async()=>{
+  const id=document.getElementById("projSel").value;
+  if(!id){ ps().textContent="pick a project to delete first"; return; }
+  if(!confirm("Delete project \""+id+"\" and all its bundles? This cannot be undone.")) return;
+  const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
+  ps().textContent="deleting "+id+"…";
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(id),{
+      method:"DELETE", headers:{authorization:"Bearer "+token} });
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ ps().textContent="deleted "+id+" ✓"; zones=[]; sel=-1; tool=null; draft=[]; render(); refreshProps(); fetchProjects(); }
+    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
+    else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
+  }catch(e){ ps().textContent="delete failed: "+e.message; }
+};
+
+// delete app
+document.getElementById("appDel").onclick=async()=>{
+  const id=document.getElementById("appSel").value;
+  if(!id){ ps().textContent="pick an app to delete first"; return; }
+  if(!confirm("Delete app \""+id+"\"? It must have no projects assigned.")) return;
+  const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
+  ps().textContent="deleting app "+id+"…";
+  try{
+    const r=await fetch("/api/apps/"+encodeURIComponent(id),{
+      method:"DELETE", headers:{authorization:"Bearer "+token} });
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ ps().textContent="deleted app "+id+" ✓"; loadApps(); }
+    else if(r.status===409){ ps().textContent="can't delete — reassign or delete the app's projects first"; }
+    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
+    else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
+  }catch(e){ ps().textContent="delete failed: "+e.message; }
+};
+
+// clear all stops + reset map state
+document.getElementById("clearAllBtn").onclick=()=>{
+  if(zones.length && !confirm("Clear all "+zones.length+" stops from the map?")) return;
+  zones=[]; sel=-1; tool=null; draft=[]; render(); refreshProps();
+  document.getElementById("status").textContent="map cleared";
+};
+
 fetchProjects();
 const _pid=new URLSearchParams(location.search).get("project");
 if(_pid) loadFromPlatform(_pid);

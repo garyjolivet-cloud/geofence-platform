@@ -185,6 +185,19 @@ async function api(request, env, url) {
     return json({ ok: true, id, slug, name, created: true }, 200, AC);
   }
 
+  // --- delete an app (master only; refuses if projects remain) ---
+  const mda = path.match(/^\/api\/apps\/([^/]+)$/);
+  if (mda && method === "DELETE") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    const aid = decodeURIComponent(mda[1]);
+    const chk = await env.DB.prepare("SELECT id FROM project WHERE appId=? LIMIT 1").bind(aid).first();
+    if (chk) return json({ error: "remove or reassign this app's projects first" }, 409, AC);
+    await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
+    await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
+    await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
+    return json({ ok: true, deleted: aid }, 200, AC);
+  }
+
   // --- move a project into an app (admin) ---
   const mvm = path.match(/^\/api\/projects\/([^/]+)\/app$/);
   if (mvm && method === "PUT") {
@@ -216,6 +229,18 @@ async function api(request, env, url) {
       "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
     ).bind(id, b.orgId || orgId, b.appId || null, b.name, b.slug || id, b.mode || "walking-tour", "draft", 1, now, now).run();
     return json({ ok: true, id }, 200, AC);
+  }
+
+  // --- delete a project (master only; cascades bundles + events) ---
+  const mdp = path.match(/^\/api\/projects\/([^/]+)$/);
+  if (mdp && method === "DELETE") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    const pid = decodeURIComponent(mdp[1]);
+    await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(pid).run();
+    await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(pid).run();
+    await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
+    await logAudit(env, request, { keyId: "master" }, "project.delete", pid);
+    return json({ ok: true, deleted: pid }, 200, AC);
   }
 
   // --- a project's bundle: GET latest (public) / PUT new version (scoped) ---
