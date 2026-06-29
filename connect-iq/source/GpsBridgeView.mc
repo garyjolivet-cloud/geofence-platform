@@ -1,7 +1,9 @@
 import Toybox.Ble;
 import Toybox.Graphics;
 import Toybox.Lang;
+import Toybox.Math;
 import Toybox.Position;
+import Toybox.Sensor;
 import Toybox.Timer;
 import Toybox.WatchUi;
 
@@ -23,6 +25,9 @@ class GpsBridgeView extends WatchUi.View {
     private var mLon        as Float?;
     private var mAccM       as Float = 99.0;
 
+    // Compass
+    private var mHeadingDeg as Float?;            // null until first valid compass reading
+
     // UI
     private var mStatus     as String = "Starting…";
     private var mConnected  as Boolean = false;
@@ -40,6 +45,7 @@ class GpsBridgeView extends WatchUi.View {
     function onShow() as Void {
         _setupBle();
         _setupGps();
+        _setupCompass();
         mTimer = new Timer.Timer();
         mTimer.start(method(:onTick), 1000, true);
     }
@@ -51,6 +57,7 @@ class GpsBridgeView extends WatchUi.View {
     function cleanup() as Void {
         if (mTimer != null) { (mTimer as Timer.Timer).stop(); mTimer = null; }
         Position.enableLocationEvents(Position.LOCATION_DISABLE, method(:onPosition));
+        try { Sensor.unregisterSensorDataListener(); } catch (e instanceof Exception) {}
     }
 
     // ── BLE peripheral setup ─────────────────────────────────────────
@@ -97,6 +104,19 @@ class GpsBridgeView extends WatchUi.View {
         );
     }
 
+    // ── Compass setup ────────────────────────────────────────────────
+    private function _setupCompass() as Void {
+        try {
+            var options = {
+                :period      => 1,
+                :sensorTypes => [Sensor.SENSOR_HEADING]
+            };
+            Sensor.registerSensorDataListener(method(:onSensorData), options);
+        } catch (e instanceof Exception) {
+            // Compass unavailable on this hardware; GPS-only mode continues normally.
+        }
+    }
+
     // GPS callback — fires on every new fix
     function onPosition(info as Position.Info) as Void {
         if (info.accuracy == Position.QUALITY_NOT_AVAILABLE ||
@@ -110,12 +130,29 @@ class GpsBridgeView extends WatchUi.View {
         mFixCount++;
     }
 
-    // 1 Hz timer — send GPS string to subscribed central
+    // Compass sensor callback
+    function onSensorData(sensorData as Sensor.SensorData) as Void {
+        if ((sensorData has :heading) && sensorData.heading != null) {
+            // CIQ returns heading in radians (0 = North, clockwise); convert to degrees
+            var rad = sensorData.heading as Float;
+            mHeadingDeg = ((rad * 180.0 / Math.PI) + 360.0) % 360.0;
+        }
+    }
+
+    // 1 Hz timer — send GPS + compass string to subscribed central
     function onTick() as Void {
         if (mNotifying && mTxChar != null && mLat != null) {
             var line = (mLat as Float).format("%.6f") + "," +
                        (mLon as Float).format("%.6f") + "," +
-                       mAccM.format("%.1f") + "\n";
+                       mAccM.format("%.1f");
+
+            // Append compass heading when available — engine parses as 4th field
+            if (mHeadingDeg != null) {
+                line = line + "," + (mHeadingDeg as Float).format("%.1f");
+            }
+
+            line = line + "\n";
+
             try {
                 (mTxChar as Ble.LocalCharacteristic).setValue(line.toUtf8Array() as ByteArray);
                 (mTxChar as Ble.LocalCharacteristic).notify();
@@ -136,13 +173,13 @@ class GpsBridgeView extends WatchUi.View {
 
         // Title
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, cy - 48, Graphics.FONT_SMALL,
+        dc.drawText(cx, cy - 56, Graphics.FONT_SMALL,
                     "GPS Bridge", Graphics.TEXT_JUSTIFY_CENTER);
 
         // Status dot + text
         var dotColor = mConnected ? Graphics.COLOR_GREEN : Graphics.COLOR_LT_GRAY;
         dc.setColor(dotColor, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, cy - 18, Graphics.FONT_XTINY,
+        dc.drawText(cx, cy - 28, Graphics.FONT_XTINY,
                     mStatus, Graphics.TEXT_JUSTIFY_CENTER);
 
         // GPS readout
@@ -150,21 +187,33 @@ class GpsBridgeView extends WatchUi.View {
         if (mLat != null) {
             var posStr = (mLat as Float).format("%.4f") + ", " +
                          (mLon as Float).format("%.4f");
-            dc.drawText(cx, cy + 8,  Graphics.FONT_XTINY, posStr,
+            dc.drawText(cx, cy - 4, Graphics.FONT_XTINY, posStr,
                         Graphics.TEXT_JUSTIFY_CENTER);
             dc.setColor(Graphics.COLOR_BLUE, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(cx, cy + 28, Graphics.FONT_XTINY,
+            dc.drawText(cx, cy + 16, Graphics.FONT_XTINY,
                         "±" + mAccM.format("%.0f") + " m  ·  " + mFixCount + " fixes",
                         Graphics.TEXT_JUSTIFY_CENTER);
         } else {
             dc.setColor(Graphics.COLOR_YELLOW, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(cx, cy + 8, Graphics.FONT_XTINY,
+            dc.drawText(cx, cy - 4, Graphics.FONT_XTINY,
                         "Acquiring GPS…", Graphics.TEXT_JUSTIFY_CENTER);
+        }
+
+        // Compass heading
+        if (mHeadingDeg != null) {
+            dc.setColor(Graphics.COLOR_GREEN, Graphics.COLOR_TRANSPARENT);
+            dc.drawText(cx, cy + 36, Graphics.FONT_XTINY,
+                        "🧭 " + (mHeadingDeg as Float).format("%.0f") + "°",
+                        Graphics.TEXT_JUSTIFY_CENTER);
+        } else {
+            dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
+            dc.drawText(cx, cy + 36, Graphics.FONT_XTINY,
+                        "compass: acquiring…", Graphics.TEXT_JUSTIFY_CENTER);
         }
 
         // Hint
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, cy + 52, Graphics.FONT_XTINY,
+        dc.drawText(cx, cy + 56, Graphics.FONT_XTINY,
                     "Back key to exit", Graphics.TEXT_JUSTIFY_CENTER);
     }
 

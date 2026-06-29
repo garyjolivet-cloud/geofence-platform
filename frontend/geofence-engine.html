@@ -222,6 +222,13 @@
     <div id="bleBox" class="ble-box" style="display:none">
       <button id="btnBleConnect" class="ble-btn">Connect Garmin / BLE GPS</button>
       <div id="bleStatus" class="ble-status off">Not connected</div>
+      <label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;cursor:pointer">
+        <input type="checkbox" id="bleCompass" style="width:17px;height:17px;accent-color:var(--coral);flex:0 0 auto;margin-top:2px">
+        <span>
+          <span style="font-family:'Barlow Condensed';font-weight:600;font-size:15px;display:block;color:var(--snow)">Use watch compass</span>
+          <span style="font-family:'Barlow Condensed';font-size:12px;color:var(--fog);line-height:1.4;display:block">Uses the Instinct's ABC compass for the direction needle instead of your phone's sensor. More accurate outdoors. Requires GPS Bridge v1.1+.</span>
+        </span>
+      </label>
       <div class="ble-note">
         <b>Garmin Instinct 2 / Crossover / 2X Solar</b> — install the
         <b>GPS Bridge</b> Connect IQ app on the watch, start it before connecting here.
@@ -532,6 +539,7 @@ const Compass = {
     } else start();
   },
   _read(e){
+    if(BleGPS.useWatchCompass) return;   // watch compass takes priority; ignore device sensor
     let h=null, accDeg=null;
     if(e.webkitCompassHeading!=null){ h=e.webkitCompassHeading; accDeg=e.webkitCompassAccuracy; }  // iOS
     else if(e.alpha!=null){ h=(360-e.alpha)%360; }                                                  // Android
@@ -700,8 +708,11 @@ const HUD = {
                 d.textContent=t+'  '+msg; l.prepend(d); },
   posConf(acc,R){ if(R==null) return 2; return acc*1.0<R?3 : acc<R+15?2 : 1; },
 
-  onFix(fix){               // fix = {lat,lon,acc,t}
+  onFix(fix){               // fix = {lat,lon,acc,t[,heading]}
     window.__lastAcc=fix.acc;
+    if(fix.heading!=null && BleGPS.useWatchCompass){
+      Compass.heading=fix.heading; Compass.confidence=2; Compass._updateCal();
+    }
     const sm=Smoother.push(fix);
     this.fixes++;
     const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
@@ -940,7 +951,7 @@ let gpsSource='device';   // 'device' | 'ble'
    Connection flow: scan for both service UUIDs at once → try LNS → fall back to NUS.
    ------------------------------------------------------------------ */
 const BleGPS = {
-  device:null, char:null, active:false, protocol:null,
+  device:null, char:null, active:false, protocol:null, useWatchCompass:false,
 
   // LNS
   LNS_SERVICE: 0x1819,
@@ -1049,7 +1060,7 @@ const BleGPS = {
   },
 
   // ── Protocol B: NUS text (Connect IQ / UART) ──────────────────────
-  // Accepts: "lat,lon"  |  "lat,lon,acc"  |  $GPRMC  |  $GPGGA
+  // Accepts: "lat,lon"  |  "lat,lon,acc"  |  "lat,lon,acc,hdg_deg"  |  $GPRMC  |  $GPGGA
   _parseNUS(dv){
     try{
       const line = new TextDecoder().decode(dv).trim();
@@ -1061,8 +1072,11 @@ const BleGPS = {
       if(p.length<2) return null;
       const lat=parseFloat(p[0]), lon=parseFloat(p[1]);
       const acc=p.length>=3 ? parseFloat(p[2]) : 5;
+      const hdg=p.length>=4 ? parseFloat(p[3]) : null;
       if(!isFinite(lat)||!isFinite(lon)||lat<-90||lat>90||lon<-180||lon>180) return null;
-      return {lat,lon,acc:isFinite(acc)?acc:5,t:Date.now()};
+      const fix={lat,lon,acc:isFinite(acc)?acc:5,t:Date.now()};
+      if(hdg!==null && isFinite(hdg) && hdg>=0 && hdg<360) fix.heading=hdg;
+      return fix;
     }catch(e){ return null; }
   },
 
@@ -1136,6 +1150,11 @@ document.querySelectorAll('input[name="gps-src"]').forEach(r=>{
 document.getElementById('btnBleConnect').onclick=()=>{
   if(BleGPS.active) BleGPS.disconnect();
   else BleGPS.connect();
+};
+document.getElementById('bleCompass').onchange=function(){
+  BleGPS.useWatchCompass=this.checked;
+  if(!this.checked){ Compass.heading=null; Compass.confidence=0; }
+  HUD.log('ev-sys','watch compass '+(this.checked?'ON — using Garmin bearing':'OFF — using device sensor'));
 };
 
 function startGPS(){
