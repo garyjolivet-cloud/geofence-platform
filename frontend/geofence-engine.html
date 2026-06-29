@@ -80,6 +80,47 @@
   .hint{color:var(--fog); font-family:"Barlow Condensed"; font-size:12px; margin-top:8px; text-align:center}
 
   @media (prefers-reduced-motion: reduce){ *{transition:none!important; animation:none!important} }
+
+  /* ---- Hamburger / settings ---- */
+  .hamburger{background:transparent;border:1px solid var(--rim);color:var(--fog);
+    border-radius:8px;padding:5px 10px;font-size:18px;line-height:1;cursor:pointer;flex:none}
+  .hamburger:hover{border-color:var(--ice);color:var(--snow)}
+
+  .settings-panel{position:fixed;inset:0;z-index:9998;background:rgba(6,10,16,.88);
+    backdrop-filter:blur(4px);align-items:flex-end;justify-content:center;padding:0}
+  .settings-inner{width:100%;max-width:430px;background:linear-gradient(180deg,var(--slate),#10192a);
+    border-top:1px solid var(--rim);border-radius:18px 18px 0 0;padding:20px 18px 36px;
+    max-height:82vh;overflow-y:auto}
+  .settings-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+  .settings-hd h3{font-family:"Barlow Condensed";font-weight:700;font-size:20px;
+    letter-spacing:.6px;text-transform:uppercase;color:var(--snow);margin:0}
+  .settings-close{background:transparent;border:1px solid var(--rim);color:var(--fog);
+    border-radius:8px;padding:4px 11px;font-size:16px;cursor:pointer}
+  .settings-sec{margin-bottom:20px}
+  .settings-sec-lbl{font-family:"Barlow Condensed";font-weight:600;font-size:11.5px;
+    letter-spacing:1.1px;text-transform:uppercase;color:var(--fog);margin-bottom:8px}
+  .src-row{display:flex;align-items:flex-start;gap:11px;padding:11px 12px;
+    border:1px solid var(--rim);border-radius:10px;cursor:pointer;margin-bottom:6px;
+    background:rgba(20,29,43,.4);transition:.14s}
+  .src-row:hover{border-color:#33455f}
+  .src-row input[type=radio]{accent-color:var(--coral);width:17px;height:17px;
+    margin-top:2px;flex:0 0 auto}
+  .src-row-lbl{font-family:"Barlow Condensed";font-size:16px;font-weight:600;
+    line-height:1.2;display:block}
+  .src-row-sub{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);
+    line-height:1.4;margin-top:2px}
+  .ble-box{background:rgba(14,21,33,.7);border:1px solid var(--rim);border-radius:12px;
+    padding:13px 14px;margin-top:2px}
+  .ble-btn{width:100%;background:var(--slate-2);border:1px solid var(--rim);color:var(--snow);
+    border-radius:9px;padding:10px;font-family:"Barlow Condensed";font-weight:600;
+    font-size:14px;letter-spacing:.4px;text-transform:uppercase;cursor:pointer;transition:.14s}
+  .ble-btn:hover{border-color:var(--ice)}
+  .ble-btn.on{border-color:var(--go);color:var(--go)}
+  .ble-status{font-family:"Barlow Condensed";font-size:13px;margin-top:9px;letter-spacing:.3px}
+  .ble-status.off{color:var(--fog)}  .ble-status.scanning{color:var(--amber)}
+  .ble-status.connected{color:var(--go)}  .ble-status.error{color:var(--hazard)}
+  .ble-note{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);
+    margin-top:10px;line-height:1.45}
 </style>
 </head>
 <body>
@@ -89,6 +130,7 @@
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill">OFF</span>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
+      <button id="btnSettings" class="hamburger" aria-label="Settings" title="Settings">☰</button>
     </div>
   </header>
 
@@ -147,6 +189,46 @@
     <div id="log" class="log"></div>
   </div>
   <div class="hint" id="srcHint">bundle: built-in sample · open over https on your phone for GPS + compass</div>
+</div>
+
+<!-- Settings panel (slide up from bottom) -->
+<div id="settingsPanel" class="settings-panel" style="display:none" role="dialog" aria-modal="true" aria-label="Settings">
+  <div class="settings-inner">
+    <div class="settings-hd">
+      <h3>Settings</h3>
+      <button class="settings-close" id="btnSettingsClose" aria-label="Close">✕</button>
+    </div>
+
+    <div class="settings-sec">
+      <div class="settings-sec-lbl">GPS Source</div>
+
+      <label class="src-row">
+        <input type="radio" name="gps-src" id="srcDevice" value="device" checked>
+        <span>
+          <span class="src-row-lbl">Device GPS</span>
+          <span class="src-row-sub">Uses your phone or tablet's built-in location</span>
+        </span>
+      </label>
+
+      <label class="src-row">
+        <input type="radio" name="gps-src" id="srcBle" value="ble">
+        <span>
+          <span class="src-row-lbl">Bluetooth GPS</span>
+          <span class="src-row-sub">Garmin watch or any BLE GPS receiver</span>
+        </span>
+      </label>
+    </div>
+
+    <div id="bleBox" class="ble-box" style="display:none">
+      <button id="btnBleConnect" class="ble-btn">Connect Garmin / BLE GPS</button>
+      <div id="bleStatus" class="ble-status off">Not connected</div>
+      <div class="ble-note">
+        Requires a Garmin watch or BLE GPS device that broadcasts the <b>Location &amp; Navigation Service</b> (LNS profile).
+        On Garmin, install a Connect IQ companion app to enable BLE GPS broadcast if your model requires it.
+        Only works in Chrome or Edge.
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -834,9 +916,137 @@ Geofencer.onEvent=(e)=>{
 
 /* ===================== INPUTS: GPS / SIM / UI ===================== */
 let watchId=null, simMode=false, simPos=BUNDLE.ref.slice();
+let gpsSource='device';   // 'device' | 'ble'
+
+/* ---- BLE GPS (Garmin / any LNS-profile device) ----
+   Spec: Bluetooth GATT Location and Navigation Service 0x1819
+   Location and Speed characteristic 0x2A67 */
+const BleGPS = {
+  device:null, char:null, active:false,
+  LNS_SERVICE: 0x1819,
+  LOC_SPEED:   0x2A67,
+
+  async connect(){
+    if(!navigator.bluetooth){
+      Settings.bleStatus('error','Web Bluetooth not supported — use Chrome or Edge');
+      HUD.log('ev-warn','Bluetooth: not supported in this browser'); return;
+    }
+    try{
+      Settings.bleStatus('scanning','Scanning for devices…');
+      this.device = await navigator.bluetooth.requestDevice({
+        filters:[{services:[this.LNS_SERVICE]}]
+      });
+      this.device.addEventListener('gattserverdisconnected',()=>this._onDisconnect());
+      const server = await this.device.gatt.connect();
+      const svc    = await server.getPrimaryService(this.LNS_SERVICE);
+      this.char    = await svc.getCharacteristic(this.LOC_SPEED);
+      this.char.addEventListener('characteristicvaluechanged', e=>this._onData(e));
+      await this.char.startNotifications();
+      this.active = true;
+      const name = this.device.name || 'BLE GPS';
+      Settings.bleStatus('connected','● '+name+' connected');
+      Settings.bleBtnOn(true);
+      HUD.el('pill').textContent='BLE'; HUD.el('pill').className='pill live';
+      HUD.log('ev-sys','BLE GPS connected: '+name);
+      // BLE takes over — stop device watchPosition if running
+      if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
+    }catch(e){
+      if(e.name==='NotFoundError'){ Settings.bleStatus('off','No device selected'); }
+      else{ Settings.bleStatus('error',e.message||'Connection failed');
+            HUD.log('ev-warn','BLE GPS: '+(e.message||'connection failed')); }
+    }
+  },
+
+  disconnect(){
+    if(this.device && this.device.gatt.connected) this.device.gatt.disconnect();
+    else this._onDisconnect();
+  },
+
+  _onDisconnect(){
+    this.active=false; this.char=null; this.device=null;
+    Settings.bleStatus('off','Disconnected');
+    Settings.bleBtnOn(false);
+    HUD.el('pill').textContent='OFF'; HUD.el('pill').className='pill';
+    HUD.log('ev-sys','BLE GPS disconnected');
+  },
+
+  _onData(e){
+    if(!this.active) return;
+    const fix=this._parseLNS(e.target.value);
+    if(fix) HUD.onFix(fix);
+  },
+
+  // Parse Location and Speed characteristic (0x2A67)
+  _parseLNS(dv){
+    try{
+      if(dv.byteLength<2) return null;
+      const flags     = dv.getUint16(0,true);
+      const hasSpeed  = !!(flags&0x01);
+      const hasDist   = !!(flags&0x02);
+      const hasLoc    = !!(flags&0x04);
+      if(!hasLoc) return null;
+      let o=2;
+      if(hasSpeed) o+=2;   // uint16, 0.01 m/s units
+      if(hasDist)  o+=3;   // uint24
+      if(dv.byteLength<o+8) return null;
+      const lat = dv.getInt32(o,true)*1e-7; o+=4;
+      const lon = dv.getInt32(o,true)*1e-7;
+      if(lat<-90||lat>90||lon<-180||lon>180) return null;
+      return {lat,lon,acc:5,t:Date.now()};
+    }catch(e){ return null; }
+  }
+};
+
+/* ---- Settings panel ---- */
+const Settings = {
+  open(){ document.getElementById('settingsPanel').style.display='flex'; },
+  close(){ document.getElementById('settingsPanel').style.display='none'; },
+  bleStatus(cls,msg){
+    const el=document.getElementById('bleStatus'); if(!el) return;
+    el.className='ble-status '+cls; el.textContent=msg;
+  },
+  bleBtnOn(on){
+    const b=document.getElementById('btnBleConnect'); if(!b) return;
+    b.textContent = on ? 'Disconnect' : 'Connect Garmin / BLE GPS';
+    b.classList.toggle('on',on);
+  }
+};
+
+document.getElementById('btnSettings').onclick    = ()=>Settings.open();
+document.getElementById('btnSettingsClose').onclick= ()=>Settings.close();
+// tap backdrop to close
+document.getElementById('settingsPanel').addEventListener('click',e=>{
+  if(e.target===document.getElementById('settingsPanel')) Settings.close(); });
+
+// GPS source radio toggle
+document.querySelectorAll('input[name="gps-src"]').forEach(r=>{
+  r.onchange=e=>{
+    gpsSource=e.target.value;
+    document.getElementById('bleBox').style.display = gpsSource==='ble'?'block':'none';
+    if(gpsSource==='ble'){
+      HUD.log('ev-sys','GPS source: Bluetooth — connect a device below');
+    } else {
+      if(BleGPS.active) BleGPS.disconnect();
+      HUD.log('ev-sys','GPS source: device GPS');
+    }
+  };
+});
+
+document.getElementById('btnBleConnect').onclick=()=>{
+  if(BleGPS.active) BleGPS.disconnect();
+  else BleGPS.connect();
+};
 
 function startGPS(){
   Audio.unlock(); Audio.unlocked=true;
+  if(gpsSource==='ble'){
+    if(!BleGPS.active){
+      HUD.log('ev-warn','Bluetooth GPS not connected — open Settings (☰) to connect');
+      Settings.open(); return;
+    }
+    HUD.log('ev-sys','BLE GPS active — walk the stops'); return;
+  }
+  // Device GPS
   if(!navigator.geolocation){ HUD.log('ev-warn','no geolocation on this device'); return; }
   HUD.el('pill').textContent='GPS'; HUD.el('pill').className='pill live';
   HUD.log('ev-sys','GPS started — walk the stops');

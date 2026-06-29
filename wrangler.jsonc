@@ -2,6 +2,10 @@
   "name": "geofence-platform",
   "compatibility_date": "2026-06-01",
   "main": "./backend/worker.js",
+  "vars": {
+    "ORG_ID": "chase-life",
+    "ALLOWED_ORIGIN": "https://geofence-platform.gary-jolivet.workers.dev"
+  },
   "assets": {
     "directory": "./frontend",
     "binding": "ASSETS"

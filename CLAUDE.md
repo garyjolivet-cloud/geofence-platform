@@ -47,9 +47,11 @@ Create a `.dev.vars` file at the project root (gitignored) to set secrets for `n
 
 ```ini
 ADMIN_TOKEN=your-secret-token-here
+# ALLOWED_ORIGIN not needed locally (defaults to *, all origins allowed)
+# ORG_ID=chase-life
 ```
 
-This file is never committed. In production, set `ADMIN_TOKEN` via `npx wrangler secret put ADMIN_TOKEN`.
+This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrangler secret put ADMIN_TOKEN` and `ORG_ID`/`ALLOWED_ORIGIN` are set in `wrangler.jsonc`.
 
 ## Architecture
 
@@ -74,6 +76,32 @@ This file is never committed. In production, set `ADMIN_TOKEN` via `npx wrangler
 | POST | `/api/events` | public (requires stored consent) |
 | GET | `/api/analytics` | scoped |
 | GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped |
+
+## Security Model
+
+**Two token types:**
+
+| Token | Where it lives | What it can do |
+|-------|---------------|----------------|
+| `ADMIN_TOKEN` | Wrangler secret (never in code) | Everything — master key |
+| Scoped API key | D1 `api_key` table (hashed) | Only the scopes you grant: `publish`, `analytics`, `audio` |
+
+**Rule: never use `ADMIN_TOKEN` in a browser.** The editor and dashboard ask for a token in the browser UI. Use a scoped API key there, not the master token.
+
+**Create a scoped key for browser use:**
+```bash
+curl -X POST https://geofence-platform.gary-jolivet.workers.dev/api/keys \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label":"editor-browser","appId":"your-app-id","scopes":["publish"]}'
+```
+Copy the returned `key` value — it is shown once. Use it in the browser tool instead of the master token.
+
+**CORS:** Write/admin endpoints are restricted to `ALLOWED_ORIGIN` (set in `wrangler.jsonc`). Public read endpoints allow `*`. For local dev, `ALLOWED_ORIGIN` is unset so all origins are allowed.
+
+**Environment variables** (non-secret, set in `wrangler.jsonc`):
+- `ORG_ID` — organisation slug (default: `chase-life`)
+- `ALLOWED_ORIGIN` — browser origin allowed on write endpoints
 
 ## Guardrails
 
