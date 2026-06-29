@@ -81,7 +81,7 @@
   </div>
   </div>
   <div class="row">
-    <input id="adminTok" type="text" name="gp-tok-x9z" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
+    <input id="adminTok" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
     <button id="tokTest" class="ghost" title="check token">Test</button>
   </div>
   <div class="hint" id="platStatus">Publish saves to D1; open the engine with ?project=&lt;id&gt;</div>
@@ -408,23 +408,21 @@ document.getElementById("pActOn").addEventListener("change",()=>{ if(sel<0)retur
 /* ---- per-stop audio upload to R2 (spatial audio source) ---- */
 let verifiedToken="";
 function getToken(){
-  if(verifiedToken) return verifiedToken;                       // value the user actually typed/tested
+  if(verifiedToken) return verifiedToken;
   const el=document.getElementById("adminTok");
   let t=(el && el.value.trim()) || "";
-  if(!t){ try{ t=localStorage.getItem("gp.admin")||""; }catch(e){} }
+  if(!t){ try{ t=sessionStorage.getItem("gp.admin")||""; }catch(e){} }
   if(!t){ t=(prompt("Admin token:")||"").trim(); }
-  if(t){ verifiedToken=t; if(el) el.value=t; try{ localStorage.setItem("gp.admin",t); }catch(e){} }
+  if(t){ verifiedToken=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} }
   return t;
 }
-function clearToken(){ verifiedToken=""; try{ localStorage.removeItem("gp.admin"); }catch(e){}
+function clearToken(){ verifiedToken=""; try{ sessionStorage.removeItem("gp.admin"); }catch(e){}
   const el=document.getElementById("adminTok"); if(el) el.value=""; }
-// capture the token only from REAL keyboard typing (keydown), never from autofill's silent input events
 (function(){ const el=document.getElementById("adminTok"); if(!el) return;
-  el.addEventListener("keyup", ()=>{ verifiedToken=el.value.trim();
-    try{ if(verifiedToken) localStorage.setItem("gp.admin",verifiedToken); }catch(e){} }); })();
-// restore a saved token into the visible field on load
-(function(){ try{ const t=localStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
-  if(t && el) el.value=t; }catch(e){} })();
+  el.addEventListener("input", ()=>{ verifiedToken=el.value.trim();
+    try{ if(verifiedToken) sessionStorage.setItem("gp.admin",verifiedToken); }catch(e){} }); })();
+(function(){ try{ const t=sessionStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
+  if(t && el){ el.value=t; verifiedToken=t; el.placeholder="admin token (session)"; } }catch(e){} })();
 // spatial audio range sliders — live labels
 (function(){ const s=document.getElementById("audioRange"), v=document.getElementById("audioRangeV");
   if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
@@ -465,7 +463,7 @@ document.getElementById("tokTest").onclick=async()=>{
   if(!t){ ps().textContent="type a token first, then Test"; return; }
   ps().textContent="checking token…";
   try{ const r=await fetch("/api/auth-check",{ headers:{ authorization:"Bearer "+t } });
-    if(r.ok){ verifiedToken=t; try{ localStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads, publish, and new apps will work"; }
+    if(r.ok){ verifiedToken=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads, publish, and new apps will work"; }
     else ps().innerHTML="token <b style='color:var(--hazard)'>rejected ✕</b> — doesn't match the server's ADMIN_TOKEN secret";
   }catch(e){ ps().textContent="couldn't reach the server to check"; }
 };
