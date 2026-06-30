@@ -525,36 +525,53 @@ document.getElementById("pAudioBrowse").onclick=async()=>{
   if(sel<0){ aStat().textContent="select a stop first, then Browse R2"; return; }
   const token=getToken(); if(!token){ aStat().textContent="enter your token first"; return; }
   const proj=slug(document.getElementById("projName").value)||"project";
-  aStat().textContent="listing R2 clips for "+proj+"…";
+  aStat().textContent="listing R2 clips…";
   try{
-    const r=await fetch("/api/audio-list?project="+encodeURIComponent(proj),
-      {headers:{authorization:"Bearer "+token}});
-    if(!r.ok){ aStat().textContent="couldn't list clips (HTTP "+r.status+")"; return; }
-    const {objects=[]}=await r.json();
-    if(!objects.length){ aStat().textContent="no clips in R2 for project "+proj+" yet"; return; }
-    // Build a small picker in a floating overlay
-    let overlay=document.getElementById("r2Picker");
-    if(!overlay){
-      overlay=document.createElement("div");
-      overlay.id="r2Picker";
-      overlay.style.cssText="position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center";
-      document.body.appendChild(overlay);
+    // Try project-scoped first, fall back to all files
+    let objects=[];
+    const r1=await fetch("/api/audio-list?project="+encodeURIComponent(proj),{headers:{authorization:"Bearer "+token}});
+    if(r1.ok) objects=(await r1.json()).objects||[];
+    let scope=proj;
+    if(!objects.length){
+      const r2=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
+      if(r2.ok) objects=(await r2.json()).objects||[];
+      scope="all projects";
     }
-    overlay.innerHTML='<div style="background:#141d2b;border:1px solid #26344a;border-radius:14px;padding:16px;width:320px;max-height:70vh;overflow-y:auto">'+
-      '<div style="font-family:\'Barlow Condensed\';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">Pick a clip from R2</div>'+
-      objects.map(o=>{
-        const name=o.key.split("/").pop();
-        const kb=(o.size/1024).toFixed(0);
-        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #26344a">'+
-          '<span style="font-family:\'Barlow Condensed\';font-size:13px;flex:1;word-break:break-all">'+name+' <span style="color:#5b7088">'+kb+' KB</span></span>'+
-          '<button onclick="window._pickClip(\''+o.url+'\',\''+name+'\')" style="flex:0 0 auto;background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;font-family:\'Barlow Condensed\';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer;margin-left:8px">Use</button>'+
+    if(!objects.length){ aStat().textContent="R2 is empty — no audio has been uploaded yet"; return; }
+
+    function buildPicker(objs,title){
+      return '<div style="background:#141d2b;border:1px solid #26344a;border-radius:14px;padding:16px;width:340px;max-height:75vh;overflow-y:auto">'+
+        '<div style="font-family:\'Barlow Condensed\';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">'+title+'</div>'+
+        '<div style="font-family:\'Barlow Condensed\';font-size:11px;color:#5b7088;margin-bottom:10px">'+objs.length+' file'+(objs.length===1?"":"s")+' — full path shown</div>'+
+        objs.map(o=>{
+          const kb=(o.size/1024).toFixed(0);
+          const safeUrl=o.url.replace(/'/g,"\\'"), safeKey=o.key.replace(/'/g,"\\'");
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #26344a;gap:8px">'+
+            '<div style="flex:1;min-width:0">'+
+              '<div style="font-family:\'Barlow Condensed\';font-size:12px;color:#eef4fb;word-break:break-all">'+o.key+'</div>'+
+              '<div style="font-family:\'Barlow Condensed\';font-size:11px;color:#5b7088">'+kb+' KB</div>'+
+            '</div>'+
+            '<button onclick="window._pickClip(\''+safeUrl+'\',\''+safeKey+'\')" '+
+              'style="flex:0 0 auto;background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;'+
+              'font-family:\'Barlow Condensed\';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer">Use</button>'+
           '</div>';
-      }).join("")+
-      '<button onclick="document.getElementById(\'r2Picker\').remove()" style="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;font-family:\'Barlow Condensed\';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>'+
+        }).join("")+
+        '<button onclick="document.getElementById(\'r2Picker\').remove()" '+
+          'style="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;'+
+          'font-family:\'Barlow Condensed\';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>'+
       '</div>';
-    overlay.style.display="flex";
-    window._pickClip=(url,name)=>{
-      if(sel>=0){ zones[sel].audioUrl=url; aStat().innerHTML="assigned <b>"+name+"</b> from R2 ✓"; }
+    }
+
+    let overlay=document.getElementById("r2Picker");
+    if(overlay) overlay.remove();
+    overlay=document.createElement("div"); overlay.id="r2Picker";
+    overlay.style.cssText="position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px";
+    overlay.innerHTML=buildPicker(objects,"R2 clips — "+scope);
+    document.body.appendChild(overlay);
+    overlay.onclick=ev=>{ if(ev.target===overlay) overlay.remove(); };
+
+    window._pickClip=(url,key)=>{
+      if(sel>=0){ zones[sel].audioUrl=url; aStat().innerHTML="assigned <b>"+key.split("/").pop()+"</b> ✓ — hit Publish to save"; }
       overlay.remove();
     };
   }catch(e){ aStat().textContent="browse failed: "+e.message; }
