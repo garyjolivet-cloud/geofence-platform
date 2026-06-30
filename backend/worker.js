@@ -391,7 +391,8 @@ async function api(request, env, url) {
     if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
     const pfx = url.searchParams.get("project");
     const A = await auth(request, env);
-    if (!scopeOk(A, "audio", pfx ? await projectAppId(env, pfx) : null)) return json({ error: "unauthorized" }, 401, AC);
+    const appId = pfx ? await projectAppId(env, pfx) : null;
+    if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
     const listed = await env.AUDIO.list(pfx ? { prefix: pfx + "/" } : {});
     return json({ objects: (listed.objects || []).map(o => ({ key: o.key, size: o.size, url: "/api/audio/" + o.key })) }, 200, AC);
   }
