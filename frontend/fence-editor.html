@@ -546,48 +546,74 @@ document.getElementById("pAudioBrowse").onclick=async()=>{
     }
     if(!objects.length){ aStat().textContent="R2 is empty — no audio has been uploaded yet"; return; }
 
-    function buildPicker(objs,title){
-      return '<div style="background:#141d2b;border:1px solid #26344a;border-radius:14px;padding:16px;width:340px;max-height:75vh;overflow-y:auto">'+
-        '<div style="font-family:\'Barlow Condensed\';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">'+title+'</div>'+
-        '<div style="font-family:\'Barlow Condensed\';font-size:11px;color:#5b7088;margin-bottom:10px">'+objs.length+' file'+(objs.length===1?"":"s")+' — full path shown</div>'+
-        objs.map(o=>{
-          const kb=(o.size/1024).toFixed(0);
-          const safeUrl=o.url.replace(/'/g,"\\'"), safeKey=o.key.replace(/'/g,"\\'");
-          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #26344a;gap:8px">'+
-            '<div style="flex:1;min-width:0">'+
-              '<div style="font-family:\'Barlow Condensed\';font-size:12px;color:#eef4fb;word-break:break-all">'+o.key+'</div>'+
-              '<div style="font-family:\'Barlow Condensed\';font-size:11px;color:#5b7088">'+kb+' KB</div>'+
-            '</div>'+
-            '<div style="display:flex;gap:6px;flex-shrink:0">'+
-            '<button onclick="window._trimR2Clip(\''+safeUrl+'\',\''+safeKey+'\')" '+
-              'style="background:none;border:1px solid #26344a;border-radius:7px;color:#8fb6d4;'+
-              'font-family:\'Barlow Condensed\';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer">✂ Trim</button>'+
-            '<button onclick="window._pickClip(\''+safeUrl+'\',\''+safeKey+'\')" '+
-              'style="background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;'+
-              'font-family:\'Barlow Condensed\';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer">Use</button>'+
-            '</div>'+
-          '</div>';
-        }).join("")+
-        '<button onclick="document.getElementById(\'r2Picker\').remove()" '+
-          'style="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;'+
-          'font-family:\'Barlow Condensed\';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>'+
-      '</div>';
-    }
-
     let overlay=document.getElementById("r2Picker");
     if(overlay) overlay.remove();
     overlay=document.createElement("div"); overlay.id="r2Picker";
     overlay.style.cssText="position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px";
-    overlay.innerHTML=buildPicker(objects,"R2 clips — "+scope);
-    document.body.appendChild(overlay);
-    overlay.onclick=ev=>{ if(ev.target===overlay) overlay.remove(); };
 
-    window._pickClip=(url,key)=>{
-      if(sel>=0){ zones[sel].audioUrl=url; aStat().innerHTML="assigned <b>"+key.split("/").pop()+"</b> ✓ — hit Publish to save"; }
-      overlay.remove();
-    };
-    window._trimR2Clip=async(url,key)=>{
-      overlay.remove();
+    // build picker via DOM — avoids any HTML-escaping issues with key names
+    const box=document.createElement("div");
+    Object.assign(box.style,{background:"#141d2b",border:"1px solid #26344a",borderRadius:"14px",
+      padding:"16px",width:"340px",maxHeight:"75vh",overflowY:"auto",display:"flex",
+      flexDirection:"column",gap:"0"});
+
+    const ttl=document.createElement("div");
+    ttl.style.cssText="font-family:'Barlow Condensed';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px";
+    ttl.textContent="R2 clips — "+scope;
+    box.appendChild(ttl);
+
+    const cnt=document.createElement("div");
+    cnt.style.cssText="font-family:'Barlow Condensed';font-size:11px;color:#5b7088;margin-bottom:10px";
+    cnt.textContent=objects.length+" file"+(objects.length===1?"":"s")+" — full path shown";
+    box.appendChild(cnt);
+
+    objects.forEach(o=>{
+      const kb=(o.size/1024).toFixed(0);
+      const row=document.createElement("div");
+      row.style.cssText="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #26344a;gap:8px";
+
+      const info=document.createElement("div");
+      info.style.cssText="flex:1;min-width:0";
+      const kd=document.createElement("div");
+      kd.style.cssText="font-family:'Barlow Condensed';font-size:12px;color:#eef4fb;word-break:break-all";
+      kd.textContent=o.key;
+      const sd=document.createElement("div");
+      sd.style.cssText="font-family:'Barlow Condensed';font-size:11px;color:#5b7088";
+      sd.textContent=kb+" KB";
+      info.appendChild(kd); info.appendChild(sd);
+
+      const btns=document.createElement("div");
+      btns.style.cssText="display:flex;gap:6px;flex-shrink:0";
+
+      const trimBtn=document.createElement("button");
+      trimBtn.style.cssText="background:none;border:1px solid #26344a;border-radius:7px;color:#8fb6d4;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
+      trimBtn.textContent="✂ Trim";
+      trimBtn.addEventListener("click",()=>{ overlay.remove(); _doTrimR2(o.url,o.key); });
+
+      const useBtn=document.createElement("button");
+      useBtn.style.cssText="background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
+      useBtn.textContent="Use";
+      useBtn.addEventListener("click",()=>{
+        if(sel>=0){ zones[sel].audioUrl=o.url; aStat().innerHTML="assigned <b>"+o.key.split("/").pop()+"</b> ✓ — hit Publish to save"; }
+        overlay.remove();
+      });
+
+      btns.appendChild(trimBtn); btns.appendChild(useBtn);
+      row.appendChild(info); row.appendChild(btns);
+      box.appendChild(row);
+    });
+
+    const cancelBtn=document.createElement("button");
+    cancelBtn.style.cssText="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;font-family:'Barlow Condensed';font-size:13px;border-radius:8px;padding:8px;cursor:pointer";
+    cancelBtn.textContent="Cancel";
+    cancelBtn.addEventListener("click",()=>overlay.remove());
+    box.appendChild(cancelBtn);
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click",ev=>{ if(ev.target===overlay) overlay.remove(); });
+
+    async function _doTrimR2(url,key){
       aStat().textContent="downloading for trim…";
       try{
         const buf=await _decodeUrl(url);
@@ -602,7 +628,7 @@ document.getElementById("pAudioBrowse").onclick=async()=>{
           }
         );
       }catch(e){ aStat().textContent="download failed: "+e.message; }
-    };
+    }
   }catch(e){ aStat().textContent="browse failed: "+e.message; }
 };
 document.getElementById("pActDev").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
