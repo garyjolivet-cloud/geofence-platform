@@ -96,7 +96,8 @@ export default {
       "/engine": "/geofence-engine.html",
       "/dashboard": "/dashboard.html",
       "/share": "/share.html",
-      "/audio": "/audio-bench.html"
+      "/audio": "/audio-bench.html",
+      "/field": "/field-recorder.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     if (FRIENDLY[clean] && env.ASSETS) {

@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Chase Life — Field Recorder</title>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
+      --snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--night);color:var(--snow);font-family:"Barlow",system-ui,sans-serif;overflow:hidden}
+
+/* ── sessions screen ── */
+#screenSessions{height:100%;overflow-y:auto;padding:20px 16px;max-width:500px;margin:0 auto}
+.s-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.s-hdr h1{font-family:"Black Han Sans";font-size:22px}
+.s-hdr a{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);text-decoration:none;
+          border:1px solid var(--rim);border-radius:7px;padding:4px 10px}
+.sess-card{background:var(--slate);border:1px solid var(--rim);border-radius:14px;padding:14px;margin-bottom:10px}
+.sess-card.pending{border-color:var(--amber)}
+.sess-card .ttl{font-family:"Barlow Condensed";font-weight:700;font-size:16px;margin-bottom:3px}
+.sess-card .meta{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin-bottom:10px}
+.sess-card .acts{display:flex;gap:8px}
+
+/* ── field screen ── */
+#screenField{display:none;flex-direction:column;height:100%}
+#fieldBar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--slate);
+           border-bottom:1px solid var(--rim);font-family:"Barlow Condensed";font-size:13px;flex-shrink:0}
+.rdot{width:10px;height:10px;border-radius:50%;background:var(--fog);flex-shrink:0}
+.rdot.on{background:var(--hazard);animation:blink 1s infinite}
+.rdot.pause{background:var(--amber)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+#tabContent{flex:1;overflow:hidden;position:relative}
+.tab-panel{position:absolute;inset:0;display:none;flex-direction:column;overflow-y:auto}
+.tab-panel.on{display:flex}
+#tabTrack{overflow:hidden}
+
+/* ── bottom nav ── */
+#nav{display:flex;background:var(--slate);border-top:1px solid var(--rim);flex-shrink:0}
+.nb{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;
+     padding:9px 4px 7px;background:none;border:none;color:var(--fog);
+     font-family:"Barlow Condensed";font-size:11px;letter-spacing:.3px;cursor:pointer}
+.nb .ic{font-size:19px;line-height:1}
+.nb.on{color:var(--coral)}
+
+/* ── track tab ── */
+#map{position:absolute;inset:0}
+#coordBadge{position:absolute;top:10px;right:10px;background:rgba(10,16,24,.85);
+             border:1px solid var(--rim);border-radius:8px;padding:6px 10px;
+             font-family:"Barlow Condensed";font-size:12px;z-index:5;color:var(--ice)}
+#trackBtns{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+            display:flex;gap:10px;z-index:5}
+#pauseToast{display:none;position:absolute;top:56px;left:50%;transform:translateX(-50%);
+             background:var(--slate);border:1px solid var(--amber);border-radius:12px;
+             padding:10px 14px;font-family:"Barlow Condensed";font-size:13px;
+             z-index:10;white-space:nowrap;align-items:center;gap:10px}
+
+/* ── record tab ── */
+.rec-wrap{padding:16px;display:flex;flex-direction:column;gap:12px}
+.gps-stamp{font-family:"Barlow Condensed";font-size:12px;color:var(--go)}
+#waveCanvas{width:100%;height:80px;background:var(--slate2);border:1px solid var(--rim);
+             border-radius:10px;cursor:ew-resize;touch-action:none;display:block}
+.trim-info{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);text-align:center}
+.big-rec{height:72px;border-radius:36px;font-family:"Barlow Condensed";font-weight:700;
+          font-size:16px;letter-spacing:1px;border:2px solid var(--hazard);
+          background:rgba(255,47,78,.12);color:var(--hazard);cursor:pointer;
+          display:flex;align-items:center;justify-content:center;gap:8px;width:100%}
+.big-rec.active{background:var(--hazard);color:#fff}
+
+/* ── clips tab ── */
+.clips-wrap{padding:12px;display:flex;flex-direction:column;gap:8px}
+.clip-card{background:var(--slate);border:1px solid var(--rim);border-radius:12px;padding:12px}
+.clip-card.warn{border-color:var(--amber)}
+.clip-card .ct{font-family:"Barlow Condensed";font-weight:700;font-size:14px;margin-bottom:2px}
+.clip-card .cm{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin-bottom:8px}
+.clip-card .ca{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ── sync tab ── */
+.sync-wrap{padding:16px;display:flex;flex-direction:column;gap:12px;max-width:500px;width:100%;margin:0 auto}
+.sync-box{background:var(--slate);border:1px solid var(--rim);border-radius:12px;padding:14px}
+.sync-box h3{font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.6px;
+              color:var(--ice);margin-bottom:10px}
+.prog-row{display:flex;align-items:center;gap:8px;font-family:"Barlow Condensed";font-size:13px;margin-bottom:4px}
+.prog-bar{flex:1;height:6px;background:var(--slate2);border-radius:3px;overflow:hidden}
+.prog-fill{height:100%;background:var(--coral);border-radius:3px;transition:width .1s}
+
+/* ── shared ── */
+button{font-family:"Barlow Condensed";font-weight:600;font-size:13px;letter-spacing:.4px;
+        color:var(--snow);background:var(--slate2);border:1px solid var(--rim);border-radius:9px;
+        padding:8px 12px;cursor:pointer}
+button.pri{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+button.haz{color:var(--hazard);border-color:var(--hazard);background:none}
+button.go{color:var(--go);border-color:var(--go);background:none}
+button.full{width:100%;padding:12px;font-size:15px;border-radius:12px}
+button:disabled{opacity:.4;cursor:default}
+label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:11px;
+          letter-spacing:.6px;color:var(--fog);display:block;margin-bottom:4px}
+input,select,textarea{width:100%;font-family:"Barlow Condensed";font-size:14px;
+                       background:var(--slate2);color:var(--snow);border:1px solid var(--rim);
+                       border-radius:8px;padding:9px 11px}
+.hint{font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
+hr{border:none;border-top:1px solid var(--rim);margin:4px 0}
+
+/* ── bottom sheet ── */
+#sheet{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);align-items:flex-end}
+#sheet.open{display:flex}
+#sheetBody{width:100%;max-width:500px;margin:0 auto;background:var(--slate);
+            border-radius:18px 18px 0 0;border:1px solid var(--rim);border-bottom:none;
+            padding:18px;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+#sheetBody h2{font-family:"Barlow Condensed";font-size:16px;font-weight:700;
+               text-transform:uppercase;letter-spacing:.5px}
+.sheet-btns{display:flex;gap:8px;margin-top:4px}
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════
+     SESSIONS SCREEN
+════════════════════════════════════════════════════ -->
+<div id="screenSessions">
+  <div class="s-hdr">
+    <h1>Field Recorder</h1>
+    <a href="/">⌂ Home</a>
+  </div>
+  <button class="pri full" id="btnNew" style="margin-bottom:16px">+ New Session</button>
+  <div id="sessList"><div class="hint">No sessions yet.</div></div>
+</div>
+
+<!-- ════════════════════════════════════════════════════
+     FIELD SCREEN
+════════════════════════════════════════════════════ -->
+<div id="screenField">
+
+  <!-- status bar -->
+  <div id="fieldBar">
+    <div class="rdot" id="rdot"></div>
+    <span id="elapsed">0:00:00</span>
+    <span id="gpsInfo" style="margin-left:auto;color:var(--ice)">GPS…</span>
+  </div>
+
+  <div id="tabContent">
+
+    <!-- ── TRACK TAB ── -->
+    <div class="tab-panel on" id="tabTrack">
+      <div id="map"></div>
+      <div id="coordBadge">acquiring GPS…</div>
+      <div id="trackBtns">
+        <button id="btnPause">⏸ Pause</button>
+        <button id="btnGoRec" class="pri">🎙 Clip</button>
+        <button id="btnAddStop">📍 Stop</button>
+      </div>
+      <div id="pauseToast">
+        Stopped moving —
+        <button id="btnToastYes" style="padding:4px 10px">📍 Create stop here</button>
+        <button id="btnToastNo"  style="padding:4px 10px">✕</button>
+      </div>
+    </div>
+
+    <!-- ── RECORD TAB ── -->
+    <div class="tab-panel" id="tabRecord">
+      <div class="rec-wrap">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="gps-stamp" id="recStamp">📍 —</span>
+          <span id="recTimer" style="font-family:'Barlow Condensed';font-size:13px;color:var(--fog)">0:00</span>
+        </div>
+
+        <canvas id="waveCanvas" height="80"></canvas>
+        <div class="trim-info" id="trimInfo">tap record — waveform appears after</div>
+
+        <button class="big-rec" id="btnRec">
+          <span id="recIcon">●</span><span id="recLbl"> TAP TO RECORD</span>
+        </button>
+
+        <button id="btnPrev" disabled>▶ Preview trimmed</button>
+
+        <label style="display:flex;gap:8px;align-items:center;font-family:'Barlow Condensed';font-size:13px;color:var(--snow)">
+          <input type="checkbox" id="chkNote" style="width:16px;height:16px">
+          Guide note only (won't publish)
+        </label>
+
+        <div>
+          <label class="k">assign to stop</label>
+          <select id="recZoneSel"><option value="">— assign later —</option></select>
+        </div>
+
+        <div style="display:flex;gap:8px">
+          <button id="btnDiscard" class="haz">✕ Discard</button>
+          <button id="btnSave" class="pri" disabled style="flex:1">✓ Save clip</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CLIPS TAB ── -->
+    <div class="tab-panel" id="tabClips">
+      <div class="clips-wrap" id="clipsList">
+        <div class="hint">No clips yet.</div>
+      </div>
+    </div>
+
+    <!-- ── SYNC TAB ── -->
+    <div class="tab-panel" id="tabSync">
+      <div class="sync-wrap">
+        <div class="sync-box">
+          <h3>Session</h3>
+          <div id="syncSessInfo" style="font-family:'Barlow Condensed';font-size:13px;line-height:1.6"></div>
+        </div>
+        <div class="sync-box">
+          <h3>Platform</h3>
+          <label class="k">project ID</label>
+          <input id="syncProj" placeholder="kh-village-walk">
+          <label class="k" style="margin-top:8px">app</label>
+          <select id="syncApp"><option value="">— unsorted —</option></select>
+          <label class="k" style="margin-top:8px">token</label>
+          <input id="syncTok" type="password" autocomplete="off" placeholder="admin or publish token">
+        </div>
+        <div class="sync-box" id="syncProgBox" style="display:none">
+          <h3>Progress</h3>
+          <div id="syncProgBody"></div>
+        </div>
+        <button class="pri full" id="btnSync">↑ Upload &amp; Publish</button>
+        <div class="hint" id="syncStatus">Upload when you're back on a network.</div>
+      </div>
+    </div>
+
+  </div><!-- /tabContent -->
+
+  <!-- bottom nav -->
+  <nav id="nav">
+    <button class="nb on" data-tab="tabTrack"><span class="ic">🗺</span>Track</button>
+    <button class="nb"    data-tab="tabRecord"><span class="ic">🎙</span>Record</button>
+    <button class="nb"    data-tab="tabClips"><span class="ic" id="clipsIc">🎵</span>Clips</button>
+    <button class="nb"    data-tab="tabSync"><span class="ic">☁</span>Sync</button>
+  </nav>
+
+</div><!-- /screenField -->
+
+<!-- ════════════════════════════════════════════════════
+     BOTTOM SHEET (modal)
+════════════════════════════════════════════════════ -->
+<div id="sheet">
+  <div id="sheetBody">
+    <h2 id="sheetTitle">—</h2>
+    <div id="sheetContent"></div>
+    <div class="sheet-btns">
+      <button id="sheetCancel">Cancel</button>
+      <button id="sheetOk" class="pri" style="flex:1">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ═══════════════════════════════════════════════════════════
+   DATABASE  (IndexedDB)
+═══════════════════════════════════════════════════════════ */
+let _db = null;
+function openDB(){
+  if(_db) return Promise.resolve(_db);
+  return new Promise((res,rej)=>{
+    const req = indexedDB.open("chase-field",1);
+    req.onupgradeneeded = ev=>{
+      const db = ev.target.result;
+      if(!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions",{keyPath:"id"});
+      if(!db.objectStoreNames.contains("zones")){
+        const s=db.createObjectStore("zones",{keyPath:"id"}); s.createIndex("sid","sessionId");
+      }
+      if(!db.objectStoreNames.contains("clips")){
+        const s=db.createObjectStore("clips",{keyPath:"id"}); s.createIndex("sid","sessionId");
+      }
+    };
+    req.onsuccess = ev=>{ _db=ev.target.result; res(_db); };
+    req.onerror = ev=>rej(ev.target.error);
+  });
+}
+function dbPut(store,obj){ return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(store,"readwrite");
+  tx.objectStore(store).put(obj).onsuccess=ev=>res(ev.target.result);
+  tx.onerror=()=>rej(tx.error);
+})); }
+function dbGet(store,key){ return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(store);
+  tx.objectStore(store).get(key).onsuccess=ev=>res(ev.target.result);
+  tx.onerror=()=>rej(tx.error);
+})); }
+function dbAll(store){ return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(store);
+  tx.objectStore(store).getAll().onsuccess=ev=>res(ev.target.result||[]);
+  tx.onerror=()=>rej(tx.error);
+})); }
+function dbByIdx(store,idx,key){ return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(store);
+  tx.objectStore(store).index(idx).getAll(key).onsuccess=ev=>res(ev.target.result||[]);
+  tx.onerror=()=>rej(tx.error);
+})); }
+function dbDel(store,key){ return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(store,"readwrite");
+  tx.objectStore(store).delete(key).onsuccess=()=>res();
+  tx.onerror=()=>rej(tx.error);
+})); }
+
+/* ═══════════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════════ */
+let session=null, zones=[], clips=[], trackPts=[];
+let lastPos=null, gpsWatch=null;
+let sessStartTs=0, pausedMs=0, pauseStartTs=0;
+let elTimer=null, lastMoveTs=Date.now(), toastShown=false;
+
+/* ═══════════════════════════════════════════════════════════
+   UTILITIES
+═══════════════════════════════════════════════════════════ */
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function fmtS(s){ return Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0"); }
+function fmtMs(ms){
+  const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+  return h+":"+String(m).padStart(2,"0")+":"+String(sec).padStart(2,"0");
+}
+function circleRing(lat,lon,rM,n=48){
+  const pts=[];
+  for(let i=0;i<=n;i++){
+    const a=(2*Math.PI*i)/n;
+    const dLat=(rM/111320)*Math.sin(a);
+    const dLon=(rM/(111320*Math.cos(lat*Math.PI/180)))*Math.cos(a);
+    pts.push([lon+dLon,lat+dLat]);
+  }
+  return pts;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MAP
+═══════════════════════════════════════════════════════════ */
+let map=null, mapReady=false;
+
+function initMap(){
+  if(mapReady) return;
+  mapReady=true;
+  map=new maplibregl.Map({
+    container:"map",
+    style:{version:8,
+      sources:{base:{type:"raster",
+        tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize:256,attribution:"Esri"}},
+      layers:[{id:"base",type:"raster",source:"base"}]},
+    center:[0,0],zoom:2
+  });
+  map.addControl(new maplibregl.NavigationControl({showCompass:false}),"top-left");
+  map.on("load",()=>{
+    map.addSource("track",{type:"geojson",data:{type:"Feature",geometry:{type:"LineString",coordinates:[]}}});
+    map.addSource("zones",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addSource("clips",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addSource("dot",{type:"geojson",data:{type:"Feature",geometry:{type:"Point",coordinates:[0,0]}}});
+
+    map.addLayer({id:"track-line",type:"line",source:"track",
+      paint:{"line-color":"#ff6a3d","line-width":3,"line-opacity":.85}});
+    map.addLayer({id:"zone-fill",type:"fill",source:"zones",
+      paint:{"fill-color":"#38e0a6","fill-opacity":.15}});
+    map.addLayer({id:"zone-line",type:"line",source:"zones",
+      paint:{"line-color":"#38e0a6","line-width":2}});
+    map.addLayer({id:"zone-lbl",type:"symbol",source:"zones",
+      layout:{"text-field":["get","name"],"text-size":12,"text-offset":[0,1.6]},
+      paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.5}});
+    map.addLayer({id:"clip-pt",type:"circle",source:"clips",
+      paint:{"circle-color":"#ffc24d","circle-radius":7,"circle-stroke-color":"#fff","circle-stroke-width":1.5}});
+    map.addLayer({id:"gps-dot",type:"circle",source:"dot",
+      paint:{"circle-color":"#ff6a3d","circle-radius":11,"circle-stroke-color":"#fff","circle-stroke-width":2.5}});
+
+    refreshMap();
+  });
+}
+
+function refreshMap(){
+  if(!map||!map.isStyleLoaded()) return;
+  map.getSource("track")?.setData({type:"Feature",geometry:{type:"LineString",coordinates:trackPts.map(p=>[p.lon,p.lat])}});
+  map.getSource("zones")?.setData({type:"FeatureCollection",features:zones.map(z=>({
+    type:"Feature",properties:{name:z.name},
+    geometry:{type:"Polygon",coordinates:[circleRing(z.lat,z.lon,z.radiusM)]}
+  }))});
+  map.getSource("clips")?.setData({type:"FeatureCollection",features:clips.filter(c=>!c.isNote&&c.lat!=null).map(c=>({
+    type:"Feature",properties:{name:c.name||"Clip"},
+    geometry:{type:"Point",coordinates:[c.lon,c.lat]}
+  }))});
+  if(lastPos) map.getSource("dot")?.setData({type:"Feature",geometry:{type:"Point",coordinates:[lastPos.lon,lastPos.lat]}});
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GPS
+═══════════════════════════════════════════════════════════ */
+function startGPS(){
+  if(!navigator.geolocation||gpsWatch!==null) return;
+  gpsWatch=navigator.geolocation.watchPosition(pos=>{
+    const {latitude:lat,longitude:lon,accuracy:acc,speed,heading}=pos.coords;
+    lastPos={lat,lon,acc,speed:speed||0,heading:heading||null};
+
+    if(session&&session.status==="active"){
+      trackPts.push({lat,lon,acc,ts:Date.now()});
+      if(lastPos.speed>0.8){
+        lastMoveTs=Date.now();
+        if(toastShown){ document.getElementById("pauseToast").style.display="none"; toastShown=false; }
+      } else if(!toastShown&&Date.now()-lastMoveTs>30000){
+        document.getElementById("pauseToast").style.display="flex"; toastShown=true;
+      }
+    }
+
+    const a=acc<5?"⊕ ":acc<15?"◉ ":"○ ";
+    const spd=lastPos.speed>0.4?" · "+(lastPos.speed*3.6).toFixed(1)+" km/h":"";
+    document.getElementById("gpsInfo").textContent=a+acc.toFixed(0)+"m"+spd;
+    document.getElementById("coordBadge").textContent=lat.toFixed(5)+"° "+lon.toFixed(5)+"°  "+a+acc.toFixed(0)+"m";
+    document.getElementById("recStamp").textContent="📍 "+lat.toFixed(5)+", "+lon.toFixed(5);
+
+    if(trackPts.length===1&&map) map.flyTo({center:[lon,lat],zoom:17});
+    refreshMap();
+  },
+  err=>{ document.getElementById("gpsInfo").textContent="GPS: "+err.message; },
+  {enableHighAccuracy:true,maximumAge:3000,timeout:15000});
+}
+
+function stopGPS(){
+  if(gpsWatch!==null){ navigator.geolocation.clearWatch(gpsWatch); gpsWatch=null; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ELAPSED TIMER
+═══════════════════════════════════════════════════════════ */
+function startElapsedTimer(){
+  if(elTimer) return;
+  elTimer=setInterval(()=>{
+    if(session&&session.status==="active"){
+      document.getElementById("elapsed").textContent=fmtMs(Date.now()-sessStartTs-pausedMs);
+    }
+  },1000);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   AUDIO — recording
+═══════════════════════════════════════════════════════════ */
+let mediaRec=null, recChunks=[], recStartTs=0, recInt=null;
+let audioCtx=null, curBuf=null, peaks=[], trimFrac={start:0,end:1};
+let dragHandle=null, prevSrc=null, pendingClip=null;
+
+function ensureCtx(){
+  if(!audioCtx||audioCtx.state==="closed") audioCtx=new AudioContext();
+  if(audioCtx.state==="suspended") audioCtx.resume();
+}
+
+async function startRec(){
+  ensureCtx();
+  pendingClip=null; curBuf=null; peaks=[]; trimFrac={start:0,end:1};
+  drawWave();
+  document.getElementById("btnSave").disabled=true;
+  document.getElementById("btnPrev").disabled=true;
+  document.getElementById("trimInfo").textContent="recording…";
+
+  let stream;
+  try{ stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
+  catch(e){ document.getElementById("trimInfo").textContent="mic denied: "+e.message; return; }
+
+  recChunks=[];
+  const mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":"";
+  mediaRec=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+  mediaRec.ondataavailable=ev=>{ if(ev.data.size>0) recChunks.push(ev.data); };
+  mediaRec.onstop=async()=>{
+    stream.getTracks().forEach(t=>t.stop());
+    const blob=new Blob(recChunks,{type:mediaRec.mimeType||"audio/webm"});
+    recChunks=[];
+    try{
+      ensureCtx();
+      const ab=await blob.arrayBuffer();
+      const buf=await audioCtx.decodeAudioData(ab);
+      curBuf=buf;
+      pendingClip={lat:lastPos?.lat??null,lon:lastPos?.lon??null,ts:recStartTs,blob,mimeType:blob.type,durationS:buf.duration};
+      buildPeaks(buf); trimFrac={start:0,end:1};
+      drawWave(); updateTrimInfo();
+      document.getElementById("btnSave").disabled=false;
+      document.getElementById("btnPrev").disabled=false;
+    }catch(e){ document.getElementById("trimInfo").textContent="decode error: "+e.message; }
+  };
+  mediaRec.start(250);
+  recStartTs=Date.now();
+
+  const btn=document.getElementById("btnRec");
+  btn.classList.add("active");
+  document.getElementById("recIcon").textContent="⏹";
+  document.getElementById("recLbl").textContent=" STOP";
+
+  recInt=setInterval(()=>{
+    document.getElementById("recTimer").textContent=fmtS((Date.now()-recStartTs)/1000);
+  },200);
+}
+
+function stopRec(){
+  if(mediaRec&&mediaRec.state!=="inactive") mediaRec.stop();
+  clearInterval(recInt);
+  const btn=document.getElementById("btnRec");
+  btn.classList.remove("active");
+  document.getElementById("recIcon").textContent="●";
+  document.getElementById("recLbl").textContent=" TAP TO RECORD";
+  document.getElementById("trimInfo").textContent="decoding…";
+}
+
+/* ── waveform ── */
+function buildPeaks(buf){
+  const data=buf.getChannelData(0), N=220, step=Math.floor(data.length/N);
+  peaks=[];
+  for(let i=0;i<N;i++){
+    let mx=0;
+    for(let j=0;j<step;j++) mx=Math.max(mx,Math.abs(data[i*step+j]||0));
+    peaks.push(mx);
+  }
+}
+
+function drawWave(){
+  const cv=document.getElementById("waveCanvas");
+  const ctx=cv.getContext("2d");
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth||300, H=80;
+  cv.width=W*dpr; cv.height=H*dpr;
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+
+  if(!peaks.length){
+    ctx.fillStyle="#1b2738"; ctx.fillRect(0,0,W,H); return;
+  }
+  const mid=H/2, bw=W/peaks.length;
+  const si=Math.floor(trimFrac.start*peaks.length);
+  const ei=Math.ceil(trimFrac.end*peaks.length);
+
+  peaks.forEach((p,i)=>{
+    const x=i*bw, bh=Math.max(2,p*(H-8)/2);
+    ctx.fillStyle=(i>=si&&i<ei)?"#ff6a3d":"#26344a";
+    ctx.fillRect(x+1,mid-bh,Math.max(1,bw-1),bh*2);
+  });
+
+  // trim handles
+  [trimFrac.start,trimFrac.end].forEach((f,idx)=>{
+    const x=f*W;
+    ctx.strokeStyle="#fff"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    ctx.fillStyle="#fff";
+    ctx.beginPath(); ctx.arc(x,mid,9,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=idx===0?"#ff6a3d":"#38e0a6";
+    ctx.beginPath(); ctx.arc(x,mid,6,0,Math.PI*2); ctx.fill();
+  });
+}
+
+function updateTrimInfo(){
+  if(!curBuf) return;
+  const dur=curBuf.duration;
+  const s=trimFrac.start*dur, e=trimFrac.end*dur;
+  document.getElementById("trimInfo").textContent=
+    "trim: "+fmtS(s)+" → "+fmtS(e)+"  ("+fmtS(e-s)+" kept)";
+}
+
+/* drag handles */
+(function(){
+  const cv=document.getElementById("waveCanvas");
+  cv.addEventListener("pointerdown",ev=>{
+    if(!peaks.length) return;
+    const r=cv.getBoundingClientRect(), x=(ev.clientX-r.left)/r.width;
+    dragHandle=Math.abs(x-trimFrac.start)<=Math.abs(x-trimFrac.end)?"start":"end";
+    cv.setPointerCapture(ev.pointerId);
+  });
+  cv.addEventListener("pointermove",ev=>{
+    if(!dragHandle) return;
+    const r=cv.getBoundingClientRect();
+    let x=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
+    if(dragHandle==="start") trimFrac.start=Math.min(x,trimFrac.end-0.04);
+    else trimFrac.end=Math.max(x,trimFrac.start+0.04);
+    drawWave(); updateTrimInfo();
+  });
+  cv.addEventListener("pointerup",()=>{ dragHandle=null; });
+  cv.addEventListener("pointercancel",()=>{ dragHandle=null; });
+})();
+
+function previewTrimmed(){
+  if(!curBuf) return;
+  if(prevSrc){ try{prevSrc.stop();}catch(e){} prevSrc=null; document.getElementById("btnPrev").textContent="▶ Preview trimmed"; return; }
+  ensureCtx();
+  const dur=curBuf.duration;
+  const start=trimFrac.start*dur, len=(trimFrac.end-trimFrac.start)*dur;
+  const src=audioCtx.createBufferSource();
+  src.buffer=curBuf; src.connect(audioCtx.destination); src.start(0,start,len);
+  prevSrc=src; document.getElementById("btnPrev").textContent="■ Stop";
+  src.onended=()=>{ prevSrc=null; document.getElementById("btnPrev").textContent="▶ Preview trimmed"; };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CLIPS — list + assign
+═══════════════════════════════════════════════════════════ */
+function renderClips(){
+  const list=document.getElementById("clipsList");
+  const unassigned=clips.filter(c=>!c.zoneId&&!c.isNote).length;
+  document.getElementById("clipsIc").textContent=unassigned?"🎵"+unassigned:"🎵";
+
+  if(!clips.length){ list.innerHTML='<div class="hint" style="padding:16px">No clips yet.</div>'; return; }
+  list.innerHTML="";
+  clips.slice().reverse().forEach(clip=>{
+    const zone=zones.find(z=>z.id===clip.zoneId);
+    const dur=clip.durationS?fmtS(clip.durationS):"?:??";
+    const trimmed=clip.trimFrac.start>0.02||clip.trimFrac.end<0.98;
+    const where=clip.isNote?"📝 guide note":zone?"→ "+zone.name:"⚠ unassigned";
+    const card=document.createElement("div");
+    card.className="clip-card"+((!clip.zoneId&&!clip.isNote)?" warn":"");
+    card.innerHTML=
+      '<div class="ct">🎵 '+(clip.name||"Clip")+'  <span style="color:var(--fog);font-weight:400">'+dur+(trimmed?" (trimmed)":"")+'</span></div>'+
+      '<div class="cm">'+new Date(clip.ts).toLocaleTimeString()+" · "+where+'</div>'+
+      '<div class="ca">'+
+        '<button data-id="'+clip.id+'" class="cp-play">▶ Play</button>'+
+        '<button data-id="'+clip.id+'" class="cp-asgn">📍 Assign</button>'+
+        '<button data-id="'+clip.id+'" class="cp-del haz">✕</button>'+
+      '</div>';
+    card.querySelector(".cp-play").onclick=()=>playClip(clip);
+    card.querySelector(".cp-asgn").onclick=()=>assignSheet(clip);
+    card.querySelector(".cp-del").onclick=async()=>{
+      if(!confirm("Delete this clip?")) return;
+      clips=clips.filter(c=>c.id!==clip.id);
+      await dbDel("clips",clip.id);
+      renderClips(); refreshMap();
+    };
+    list.appendChild(card);
+  });
+}
+
+let clipPrevSrc=null;
+function playClip(clip){
+  if(clipPrevSrc){ try{clipPrevSrc.stop();}catch(e){} clipPrevSrc=null; return; }
+  ensureCtx();
+  clip.blob.arrayBuffer()
+    .then(ab=>audioCtx.decodeAudioData(ab))
+    .then(buf=>{
+      const dur=buf.duration;
+      const s=(clip.trimFrac.start||0)*dur, len=((clip.trimFrac.end||1)-(clip.trimFrac.start||0))*dur;
+      const src=audioCtx.createBufferSource();
+      src.buffer=buf; src.connect(audioCtx.destination); src.start(0,s,len);
+      clipPrevSrc=src; src.onended=()=>{ clipPrevSrc=null; };
+    }).catch(()=>{});
+}
+
+function assignSheet(clip){
+  const opts=zones.map(z=>'<option value="'+z.id+'"'+(clip.zoneId===z.id?" selected":"")+'>'+z.name+'</option>').join("");
+  openSheet("Assign Clip",
+    ()=>'<label class="k">stop</label><select id="sZone"><option value="">— unassigned —</option>'+opts+'</select>',
+    async()=>{
+      const zid=document.getElementById("sZone").value||null;
+      clip.zoneId=zid;
+      if(zid){ const z=zones.find(z=>z.id===zid); if(z&&!z.clipId){ z.clipId=clip.id; await dbPut("zones",z); } }
+      await dbPut("clips",clip);
+      renderClips();
+    });
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ZONES
+═══════════════════════════════════════════════════════════ */
+function populateZoneSels(){
+  const opts='<option value="">— assign later —</option>'+
+    zones.map(z=>'<option value="'+z.id+'">'+z.name+'</option>').join("");
+  document.getElementById("recZoneSel").innerHTML=opts;
+}
+
+function createStopSheet(lat,lon){
+  openSheet("Create Stop",
+    ()=>'<label class="k">name</label><input id="sName" placeholder="Mountain Flower Garden">'+
+        '<label class="k" style="margin-top:8px">radius (metres)</label>'+
+        '<input id="sRadius" type="number" value="12" min="3" max="300">',
+    async()=>{
+      const name=(document.getElementById("sName").value||"Stop "+(zones.length+1)).trim();
+      const r=Math.max(3,+(document.getElementById("sRadius").value)||12);
+      const z={id:uid(),sessionId:session.id,name,lat,lon,radiusM:r,clipId:null};
+      zones.push(z);
+      await dbPut("zones",z);
+      populateZoneSels(); refreshMap();
+    });
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SAVE CLIP
+═══════════════════════════════════════════════════════════ */
+async function saveClip(){
+  if(!pendingClip) return;
+  const zoneId=document.getElementById("recZoneSel").value||null;
+  const isNote=document.getElementById("chkNote").checked;
+  const clip={
+    id:uid(), sessionId:session.id,
+    name:"Clip "+(clips.length+1),
+    lat:pendingClip.lat, lon:pendingClip.lon, ts:pendingClip.ts,
+    blob:pendingClip.blob, mimeType:pendingClip.mimeType,
+    durationS:pendingClip.durationS,
+    trimFrac:{...trimFrac},
+    zoneId, isNote, synced:false
+  };
+  if(zoneId){ const z=zones.find(z=>z.id===zoneId); if(z&&!z.clipId){ z.clipId=clip.id; await dbPut("zones",z); } }
+  clips.push(clip);
+  await dbPut("clips",clip);
+
+  pendingClip=null; curBuf=null; peaks=[]; trimFrac={start:0,end:1};
+  drawWave();
+  document.getElementById("trimInfo").textContent="saved ✓ — tap to record another";
+  document.getElementById("btnSave").disabled=true;
+  document.getElementById("btnPrev").disabled=true;
+  document.getElementById("recTimer").textContent="0:00";
+  document.getElementById("chkNote").checked=false;
+  renderClips(); refreshMap();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SYNC
+═══════════════════════════════════════════════════════════ */
+function wavEncode(buf){
+  const nCh=buf.numberOfChannels, sr=buf.sampleRate, n=buf.length;
+  const ab=new ArrayBuffer(44+n*nCh*2), v=new DataView(ab);
+  const ws=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  ws(0,"RIFF"); v.setUint32(4,ab.byteLength-8,true); ws(8,"WAVE");
+  ws(12,"fmt "); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,nCh,true); v.setUint32(24,sr,true);
+  v.setUint32(28,sr*nCh*2,true); v.setUint16(32,nCh*2,true); v.setUint16(34,16,true);
+  ws(36,"data"); v.setUint32(40,n*nCh*2,true);
+  let o=44;
+  for(let i=0;i<n;i++) for(let c=0;c<nCh;c++){
+    const s=Math.max(-1,Math.min(1,buf.getChannelData(c)[i]));
+    v.setInt16(o,s<0?s*0x8000:s*0x7FFF,true); o+=2;
+  }
+  return new Blob([ab],{type:"audio/wav"});
+}
+
+async function getUploadBlob(clip){
+  const needsTrim=clip.trimFrac.start>0.02||clip.trimFrac.end<0.98;
+  if(!needsTrim) return {blob:clip.blob,ext:clip.mimeType.includes("wav")?"wav":"webm",type:clip.mimeType};
+  const ab=await clip.blob.arrayBuffer();
+  const tmp=new AudioContext();
+  const buf=await tmp.decodeAudioData(ab); await tmp.close();
+  const sr=buf.sampleRate;
+  const s0=clip.trimFrac.start*buf.duration, s1=clip.trimFrac.end*buf.duration;
+  const len=Math.ceil((s1-s0)*sr);
+  const off=new OfflineAudioContext(buf.numberOfChannels,len,sr);
+  const src=off.createBufferSource(); src.buffer=buf;
+  src.connect(off.destination); src.start(0,s0,s1-s0);
+  const rendered=await off.startRendering();
+  return {blob:wavEncode(rendered),ext:"wav",type:"audio/wav"};
+}
+
+function logProg(msg,pct){
+  const b=document.getElementById("syncProgBody");
+  const d=document.createElement("div"); d.className="prog-row";
+  d.innerHTML='<span style="flex:1">'+msg+'</span>'+(pct!=null?
+    '<div class="prog-bar"><div class="prog-fill" style="width:'+pct+'%"></div></div>':'');
+  b.appendChild(d); b.scrollTop=b.scrollHeight;
+}
+
+async function doSync(){
+  const projId=document.getElementById("syncProj").value.trim();
+  const token=document.getElementById("syncTok").value.trim();
+  const appId=document.getElementById("syncApp").value;
+  if(!projId){ document.getElementById("syncStatus").textContent="Set a project ID first."; return; }
+  if(!token){ document.getElementById("syncStatus").textContent="Enter a token."; return; }
+  if(!navigator.onLine){ document.getElementById("syncStatus").textContent="No network — try again later."; return; }
+
+  const toUpload=clips.filter(c=>!c.isNote&&!c.synced);
+  document.getElementById("syncProgBox").style.display="block";
+  document.getElementById("syncProgBody").innerHTML="";
+  document.getElementById("btnSync").disabled=true;
+
+  for(let i=0;i<toUpload.length;i++){
+    const clip=toUpload[i];
+    logProg("encoding clip "+(i+1)+"/"+toUpload.length+"…");
+    try{
+      const {blob,ext,type}=await getUploadBlob(clip);
+      const key=projId+"/"+clip.id+"."+ext;
+      const r=await fetch("/api/audio/"+key,{
+        method:"PUT",headers:{authorization:"Bearer "+token,"content-type":type},body:blob});
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      clip.audioUrl="/api/audio/"+key; clip.synced=true;
+      await dbPut("clips",clip);
+      logProg("✓ "+(clip.name||clip.id),100);
+    }catch(e){ logProg("✕ clip failed: "+e.message); }
+  }
+
+  logProg("publishing bundle…");
+  try{
+    // Ensure project exists
+    await fetch("/api/projects",{method:"POST",
+      headers:{authorization:"Bearer "+token,"content-type":"application/json"},
+      body:JSON.stringify({id:projId,name:session.name,slug:projId,appId:appId||null})});
+
+    const lats=zones.map(z=>z.lat), lons=zones.map(z=>z.lon);
+    const ref=zones.length?[lats.reduce((a,b)=>a+b,0)/lats.length,lons.reduce((a,b)=>a+b,0)/lons.length]:[0,0];
+
+    const bundleZones=zones.map(z=>{
+      const clip=clips.find(c=>c.id===z.clipId&&c.audioUrl);
+      const genR=Math.max(30,z.radiusM*2.5);
+      return {
+        id:z.id, name:z.name, center:[z.lat,z.lon], audibleFromM:40,
+        layers:[{kind:"general",radiusM:genR},{kind:"target",radiusM:z.radiusM}],
+        triggers:[
+          {fires_on:"enter",layer:"general",needle:true,oncePerVisit:true},
+          {fires_on:"enter",layer:"target",oncePerVisit:true}
+        ],
+        ...(clip?{audioUrl:clip.audioUrl}:{})
+      };
+    });
+
+    const bundle={project:projId,name:session.name,ref,
+      spatialRangeM:64,spatialClearM:8,appId:appId||null,zones:bundleZones};
+
+    const r=await fetch("/api/projects/"+encodeURIComponent(projId)+"/bundle",{
+      method:"PUT",headers:{authorization:"Bearer "+token,"content-type":"application/json"},
+      body:JSON.stringify(bundle)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||"HTTP "+r.status);
+
+    session.synced=true; session.lastSyncAt=Date.now(); session.projectId=projId;
+    await dbPut("sessions",session);
+    logProg("✓ published v"+j.version,100);
+    document.getElementById("syncStatus").textContent="Published v"+j.version+" — "+new Date().toLocaleTimeString();
+  }catch(e){
+    logProg("✕ publish failed: "+e.message);
+    document.getElementById("syncStatus").textContent="Failed: "+e.message;
+  }
+  document.getElementById("btnSync").disabled=false;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   BOTTOM SHEET
+═══════════════════════════════════════════════════════════ */
+let sheetOkFn=null;
+function openSheet(title,contentFn,okFn){
+  document.getElementById("sheetTitle").textContent=title;
+  document.getElementById("sheetContent").innerHTML=contentFn();
+  sheetOkFn=okFn;
+  document.getElementById("sheet").classList.add("open");
+  setTimeout(()=>{ const el=document.getElementById("sheetContent").querySelector("input"); if(el) el.focus(); },80);
+}
+document.getElementById("sheetOk").onclick=async()=>{
+  if(sheetOkFn) await sheetOkFn();
+  document.getElementById("sheet").classList.remove("open"); sheetOkFn=null;
+};
+document.getElementById("sheetCancel").onclick=()=>{
+  document.getElementById("sheet").classList.remove("open"); sheetOkFn=null;
+};
+document.getElementById("sheet").onclick=ev=>{
+  if(ev.target===document.getElementById("sheet")){
+    document.getElementById("sheet").classList.remove("open"); sheetOkFn=null;
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════
+   UI ROUTING
+═══════════════════════════════════════════════════════════ */
+function switchTab(id){
+  document.querySelectorAll(".tab-panel").forEach(p=>p.classList.remove("on"));
+  document.querySelectorAll(".nb").forEach(b=>b.classList.remove("on"));
+  document.getElementById(id).classList.add("on");
+  document.querySelector('.nb[data-tab="'+id+'"]').classList.add("on");
+  if(id==="tabTrack"){ if(!mapReady) initMap(); else if(map) setTimeout(()=>map.resize(),50); }
+  if(id==="tabClips") renderClips();
+  if(id==="tabSync") refreshSyncTab();
+}
+
+function refreshSyncTab(){
+  if(!session) return;
+  const ms=session.status==="active"?Date.now()-sessStartTs-pausedMs:(session.durationMs||0);
+  document.getElementById("syncSessInfo").innerHTML=
+    "<b>"+session.name+"</b><br>"+
+    new Date(session.startedAt).toLocaleDateString()+" · "+fmtMs(ms)+"<br>"+
+    zones.length+" stops · "+clips.filter(c=>!c.isNote).length+" voice clips<br>"+
+    (navigator.onLine?"✓ online":"✕ offline");
+  if(session.projectId) document.getElementById("syncProj").value=session.projectId;
+  document.getElementById("syncStatus").textContent=session.lastSyncAt
+    ?"Last sync: "+new Date(session.lastSyncAt).toLocaleTimeString()
+    :"Not synced yet.";
+}
+
+/* ── sessions screen ── */
+async function renderSessions(){
+  const all=await dbAll("sessions");
+  all.sort((a,b)=>b.startedAt-a.startedAt);
+  const list=document.getElementById("sessList");
+  if(!all.length){ list.innerHTML='<div class="hint">No sessions yet — tap + New Session.</div>'; return; }
+  list.innerHTML="";
+  all.forEach(s=>{
+    const card=document.createElement("div");
+    card.className="sess-card"+(s.synced?"":" pending");
+    card.innerHTML=
+      '<div class="ttl">'+s.name+'</div>'+
+      '<div class="meta">'+new Date(s.startedAt).toLocaleDateString()+(s.synced?" · ✓ synced":" · pending sync")+'</div>'+
+      '<div class="acts">'+
+        '<button class="s-cont pri" data-id="'+s.id+'">Continue →</button>'+
+        '<button class="s-del haz"  data-id="'+s.id+'">✕</button>'+
+      '</div>';
+    card.querySelector(".s-cont").onclick=()=>loadSession(s.id);
+    card.querySelector(".s-del").onclick=async()=>{
+      if(!confirm("Delete session \""+s.name+"\"? This removes all local clips.")) return;
+      const sz=await dbByIdx("zones","sid",s.id);
+      const sc=await dbByIdx("clips","sid",s.id);
+      await Promise.all([dbDel("sessions",s.id),...sz.map(z=>dbDel("zones",z.id)),...sc.map(c=>dbDel("clips",c.id))]);
+      renderSessions();
+    };
+    list.appendChild(card);
+  });
+}
+
+async function loadSession(id){
+  const s=await dbGet("sessions",id);
+  if(!s) return;
+  session=s;
+  zones=await dbByIdx("zones","sid",id);
+  clips=await dbByIdx("clips","sid",id);
+  trackPts=[];
+  sessStartTs=s.startedAt; pausedMs=s.pausedMs||0;
+  enterField();
+}
+
+function enterField(){
+  document.getElementById("screenSessions").style.display="none";
+  document.getElementById("screenField").style.display="flex";
+
+  const dot=document.getElementById("rdot");
+  dot.className="rdot"+(session.status==="active"?" on":session.status==="paused"?" pause":"");
+  document.getElementById("btnPause").textContent=session.status==="active"?"⏸ Pause":"▶ Resume";
+
+  initMap(); startGPS(); startElapsedTimer(); populateZoneSels();
+
+  fetch("/api/apps").then(r=>r.json()).then(j=>{
+    const sel=document.getElementById("syncApp");
+    sel.innerHTML='<option value="">— unsorted —</option>'+
+      (j.apps||[]).map(a=>'<option value="'+a.id+'">'+a.name+'</option>').join("");
+    if(session.appId) sel.value=session.appId;
+  }).catch(()=>{});
+
+  switchTab("tabTrack");
+}
+
+/* ═══════════════════════════════════════════════════════════
+   EVENTS
+═══════════════════════════════════════════════════════════ */
+/* new session */
+document.getElementById("btnNew").onclick=()=>{
+  openSheet("New Session",
+    ()=>'<label class="k">name</label><input id="sName" placeholder="KH Village Walk — '+new Date().toLocaleDateString()+'">',
+    async()=>{
+      const name=(document.getElementById("sName").value||"Session "+new Date().toLocaleDateString()).trim();
+      const s={id:uid(),name,startedAt:Date.now(),status:"active",pausedMs:0,projectId:"",appId:"",synced:false};
+      await dbPut("sessions",s);
+      session=s; zones=[]; clips=[]; trackPts=[];
+      sessStartTs=s.startedAt; pausedMs=0;
+      enterField();
+    });
+};
+
+/* pause / resume */
+document.getElementById("btnPause").onclick=async()=>{
+  if(!session) return;
+  if(session.status==="active"){
+    session.status="paused"; pauseStartTs=Date.now();
+    document.getElementById("rdot").className="rdot pause";
+    document.getElementById("btnPause").textContent="▶ Resume";
+  } else {
+    session.status="active"; pausedMs+=Date.now()-pauseStartTs; session.pausedMs=pausedMs;
+    document.getElementById("rdot").className="rdot on";
+    document.getElementById("btnPause").textContent="⏸ Pause";
+  }
+  await dbPut("sessions",session);
+};
+
+/* create stop */
+document.getElementById("btnAddStop").onclick=()=>{
+  if(!lastPos){ alert("Waiting for GPS fix…"); return; }
+  createStopSheet(lastPos.lat,lastPos.lon);
+};
+
+/* go to record tab */
+document.getElementById("btnGoRec").onclick=()=>switchTab("tabRecord");
+
+/* pause toast */
+document.getElementById("btnToastYes").onclick=()=>{
+  document.getElementById("pauseToast").style.display="none"; toastShown=false;
+  if(lastPos) createStopSheet(lastPos.lat,lastPos.lon);
+};
+document.getElementById("btnToastNo").onclick=()=>{
+  document.getElementById("pauseToast").style.display="none"; toastShown=false;
+  lastMoveTs=Date.now();
+};
+
+/* record button */
+document.getElementById("btnRec").onclick=()=>{
+  if(mediaRec&&mediaRec.state==="recording") stopRec();
+  else startRec();
+};
+
+/* preview */
+document.getElementById("btnPrev").onclick=previewTrimmed;
+
+/* discard */
+document.getElementById("btnDiscard").onclick=()=>{
+  if(mediaRec&&mediaRec.state==="recording") stopRec();
+  pendingClip=null; curBuf=null; peaks=[]; trimFrac={start:0,end:1};
+  drawWave();
+  document.getElementById("trimInfo").textContent="tap to record — waveform appears after";
+  document.getElementById("btnSave").disabled=true;
+  document.getElementById("btnPrev").disabled=true;
+  document.getElementById("recTimer").textContent="0:00";
+};
+
+/* save */
+document.getElementById("btnSave").onclick=saveClip;
+
+/* sync */
+document.getElementById("btnSync").onclick=doSync;
+
+/* bottom nav */
+document.querySelectorAll(".nb").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+
+/* ═══════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════ */
+if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(()=>{});
+drawWave();
+renderSessions();
+</script>
+</body>
+</html>
