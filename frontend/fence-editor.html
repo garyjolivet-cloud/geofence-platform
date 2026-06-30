@@ -186,6 +186,10 @@
     </div>
   </div>
 
+  <div class="row" style="margin:4px 0 6px">
+    <button id="browseR2Btn" class="ghost" style="flex:1">Browse R2 clips</button>
+  </div>
+
   <label class="k">stops (<span id="zcount">0</span>) — click to edit</label>
   <div id="zlist"></div>
 
@@ -528,25 +532,25 @@ document.getElementById("pAudioClear").onclick=async()=>{
   if(token){ try{ await fetch("/api/audio/"+key,{method:"DELETE",headers:{authorization:"Bearer "+token}}); }catch(e){} }
   delete z.audioUrl; hideBar(); aStat().textContent="clip removed"; };
 
-document.getElementById("pAudioBrowse").onclick=async()=>{
-  if(sel<0){ aStat().textContent="select a stop first, then Browse R2"; return; }
-  const token=getToken(); if(!token){ aStat().textContent="enter your token first"; return; }
+function browseStatus(msg){ document.getElementById("status").textContent=msg; if(sel>=0) aStat().textContent=msg; }
+async function doBrowseR2(){
+  const token=getToken(); if(!token){ browseStatus("Browse R2: enter your token first"); return; }
   const proj=slug(document.getElementById("projName").value)||"project";
-  aStat().textContent="listing R2 clips…";
+  browseStatus("listing R2 clips…");
   try{
     // Try project-scoped first, fall back to all files
     let objects=[];
     const r1=await fetch("/api/audio-list?project="+encodeURIComponent(proj),{headers:{authorization:"Bearer "+token}});
-    if(r1.status===401){ aStat().textContent="token needs 'audio' or 'publish' scope to browse R2 — check your API key scopes"; return; }
+    if(r1.status===401){ browseStatus("Browse R2: token needs 'audio' or 'publish' scope — re-enter token or create a key with those scopes"); return; }
     if(r1.ok) objects=(await r1.json()).objects||[];
     let scope=proj;
     if(!objects.length){
       const r2=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
-      if(r2.status===401){ aStat().textContent="token needs 'audio' or 'publish' scope to browse R2 — check your API key scopes"; return; }
+      if(r2.status===401){ browseStatus("Browse R2: token needs 'audio' or 'publish' scope — re-enter token or create a key with those scopes"); return; }
       if(r2.ok) objects=(await r2.json()).objects||[];
       scope="all projects";
     }
-    if(!objects.length){ aStat().textContent="R2 is empty — no audio has been uploaded yet"; return; }
+    if(!objects.length){ browseStatus("Browse R2: R2 is empty — no audio uploaded yet"); return; }
 
     let overlay=document.getElementById("r2Picker");
     if(overlay) overlay.remove();
@@ -596,7 +600,10 @@ document.getElementById("pAudioBrowse").onclick=async()=>{
       useBtn.style.cssText="background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
       useBtn.textContent="Use";
       useBtn.addEventListener("click",()=>{
-        if(sel>=0){ zones[sel].audioUrl=o.url; aStat().innerHTML="assigned <b>"+o.key.split("/").pop()+"</b> ✓ — hit Publish to save"; }
+        if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
+        zones[sel].audioUrl=o.url;
+        aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
+        browseStatus("clip assigned: "+o.key.split("/").pop());
         overlay.remove();
       });
 
@@ -629,10 +636,12 @@ document.getElementById("pAudioBrowse").onclick=async()=>{
             doXhrUpload(blob, newKey, blob.type);
           }
         );
-      }catch(e){ aStat().textContent="download failed: "+e.message; }
+      }catch(e){ browseStatus("Browse R2: download failed — "+e.message); }
     }
-  }catch(e){ aStat().textContent="browse failed: "+e.message; }
-};
+  }catch(e){ browseStatus("Browse R2: "+e.message); }
+}
+document.getElementById("pAudioBrowse").onclick=doBrowseR2;
+document.getElementById("browseR2Btn").onclick=doBrowseR2;
 document.getElementById("pActDev").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
