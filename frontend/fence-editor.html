@@ -546,16 +546,21 @@ async function doBrowseR2(){
     // Try project-scoped first, fall back to all files
     let objects=[];
     const r1=await fetch("/api/audio-list?project="+encodeURIComponent(proj),{headers:{authorization:"Bearer "+token}});
-    if(r1.status===401){ alert("Browse R2: token was rejected (401).\n\nYour token needs 'publish' or 'audio' scope. Re-enter a valid token in the token field."); clearToken(); return; }
-    if(r1.ok) objects=(await r1.json()).objects||[];
+    const t1=await r1.text();
+    console.log("audio-list scoped",r1.status,t1);
+    if(r1.status===401){ alert("Browse R2: token rejected (401).\n\nYour token needs 'publish' or 'audio' scope.\nRe-enter a valid token in the token field."); clearToken(); return; }
+    if(r1.ok) objects=(JSON.parse(t1).objects)||[];
     let scope=proj;
     if(!objects.length){
       const r2=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
-      if(r2.status===401){ alert("Browse R2: token was rejected (401).\n\nYour token needs 'publish' or 'audio' scope."); clearToken(); return; }
-      if(r2.ok) objects=(await r2.json()).objects||[];
+      const t2=await r2.text();
+      console.log("audio-list all",r2.status,t2);
+      if(r2.status===401){ alert("Browse R2: token rejected (401).\n\nYour token needs 'publish' or 'audio' scope."); clearToken(); return; }
+      if(r2.ok) objects=(JSON.parse(t2).objects)||[];
       scope="all projects";
     }
-    if(!objects.length){ alert("Browse R2: the bucket is empty — no audio clips have been uploaded yet.\n\nUpload a clip using 'Upload clip' in a stop's audio section."); return; }
+    console.log("objects found:",objects.length, objects);
+    if(!objects.length){ alert("Browse R2: bucket is empty — no clips uploaded yet (scoped to '"+proj+"', then all projects).\n\nStatus: "+r1.status+" → "+t1.slice(0,120)); return; }
 
     let overlay=document.getElementById("r2Picker");
     if(overlay) overlay.remove();
@@ -564,12 +569,13 @@ async function doBrowseR2(){
 
     // build picker via DOM — avoids any HTML-escaping issues with key names
     const box=document.createElement("div");
-    Object.assign(box.style,{background:"#141d2b",border:"1px solid #26344a",borderRadius:"14px",
-      padding:"16px",width:"340px",maxHeight:"75vh",overflowY:"auto",display:"flex",
+    Object.assign(box.style,{background:"#1e2d42",border:"2px solid #8fb6d4",borderRadius:"14px",
+      boxShadow:"0 8px 40px rgba(0,0,0,.9),0 0 0 1px rgba(143,182,212,.3)",
+      padding:"16px",width:"360px",maxHeight:"80vh",overflowY:"auto",display:"flex",
       flexDirection:"column",gap:"0"});
 
     const ttl=document.createElement("div");
-    ttl.style.cssText="font-family:'Barlow Condensed';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px";
+    ttl.style.cssText="font-family:'Barlow Condensed';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;color:#eef4fb";
     ttl.textContent="R2 clips — "+scope;
     box.appendChild(ttl);
 
@@ -577,6 +583,24 @@ async function doBrowseR2(){
     cnt.style.cssText="font-family:'Barlow Condensed';font-size:11px;color:#5b7088;margin-bottom:10px";
     cnt.textContent=objects.length+" file"+(objects.length===1?"":"s")+" — full path shown";
     box.appendChild(cnt);
+
+    // define trim handler before forEach to avoid any hoisting edge cases
+    const doTrimR2=async(url,key)=>{
+      if(sel>=0) aStat().textContent="downloading for trim…";
+      try{
+        const buf=await _decodeUrl(url);
+        const pj=slug(document.getElementById("projName").value)||"project";
+        const z=sel>=0?zones[sel]:null;
+        openTrimmer(buf,
+          ()=>{ if(z) z.audioUrl=url; if(sel>=0) aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
+          async blob=>{
+            const ext=_mimeExt(blob.type);
+            const newKey=(z?pj+"/"+z.id+"."+ext:key.replace(/\.[^.]+$/,"."+ext));
+            doXhrUpload(blob, newKey, blob.type);
+          }
+        );
+      }catch(e){ alert("Browse R2: download failed — "+e.message); }
+    };
 
     objects.forEach(o=>{
       const kb=(o.size/1024).toFixed(0);
@@ -599,7 +623,7 @@ async function doBrowseR2(){
       const trimBtn=document.createElement("button");
       trimBtn.style.cssText="background:none;border:1px solid #26344a;border-radius:7px;color:#8fb6d4;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
       trimBtn.textContent="✂ Trim";
-      trimBtn.addEventListener("click",()=>{ overlay.remove(); _doTrimR2(o.url,o.key); });
+      trimBtn.addEventListener("click",()=>{ overlay.remove(); doTrimR2(o.url,o.key); });
 
       const useBtn=document.createElement("button");
       useBtn.style.cssText="background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
@@ -608,7 +632,6 @@ async function doBrowseR2(){
         if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
         zones[sel].audioUrl=o.url;
         aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
-        browseStatus("clip assigned: "+o.key.split("/").pop());
         overlay.remove();
       });
 
@@ -625,24 +648,9 @@ async function doBrowseR2(){
 
     overlay.appendChild(box);
     document.body.appendChild(overlay);
-    overlay.addEventListener("click",ev=>{ if(ev.target===overlay) overlay.remove(); });
-
-    async function _doTrimR2(url,key){
-      aStat().textContent="downloading for trim…";
-      try{
-        const buf=await _decodeUrl(url);
-        const proj=slug(document.getElementById("projName").value)||"project";
-        const z=sel>=0?zones[sel]:null;
-        openTrimmer(buf,
-          ()=>{ if(z) z.audioUrl=url; aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
-          async blob=>{
-            const ext=_mimeExt(blob.type);
-            const newKey=(z?proj+"/"+z.id+"."+ext:key.replace(/\.[^.]+$/,"."+ext));
-            doXhrUpload(blob, newKey, blob.type);
-          }
-        );
-      }catch(e){ alert("Browse R2: download failed — "+e.message); }
-    }
+    console.log("picker appended, in DOM:", !!document.getElementById("r2Picker"), "box children:", box.children.length);
+    // delay backdrop-click handler so the triggering click doesn't immediately dismiss it
+    setTimeout(()=>{ overlay.addEventListener("click",ev=>{ if(ev.target===overlay) overlay.remove(); }); }, 300);
   }catch(e){ alert("Browse R2 error: "+e.message); }
 }
 document.getElementById("pAudioBrowse").onclick=doBrowseR2;
