@@ -162,6 +162,7 @@
       <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:9px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';text-transform:uppercase;font-size:13px;letter-spacing:.4px">
         Upload clip<input type="file" id="pAudioFile" accept="audio/*" style="display:none">
       </label>
+      <button id="pAudioBrowse" class="ghost" title="Browse clips already in R2 for this project">Browse R2</button>
       <button id="pAudioPlay" class="ghost" title="preview">▶ Preview</button>
       <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)" title="Delete audio clip from storage and remove from this stop">✕ Delete clip</button>
     </div>
@@ -519,6 +520,45 @@ document.getElementById("pAudioClear").onclick=async()=>{
   const key=z.audioUrl.replace("/api/audio/",""); const token=getToken();
   if(token){ try{ await fetch("/api/audio/"+key,{method:"DELETE",headers:{authorization:"Bearer "+token}}); }catch(e){} }
   delete z.audioUrl; hideBar(); aStat().textContent="clip removed"; };
+
+document.getElementById("pAudioBrowse").onclick=async()=>{
+  if(sel<0){ aStat().textContent="select a stop first, then Browse R2"; return; }
+  const token=getToken(); if(!token){ aStat().textContent="enter your token first"; return; }
+  const proj=slug(document.getElementById("projName").value)||"project";
+  aStat().textContent="listing R2 clips for "+proj+"…";
+  try{
+    const r=await fetch("/api/audio-list?project="+encodeURIComponent(proj),
+      {headers:{authorization:"Bearer "+token}});
+    if(!r.ok){ aStat().textContent="couldn't list clips (HTTP "+r.status+")"; return; }
+    const {objects=[]}=await r.json();
+    if(!objects.length){ aStat().textContent="no clips in R2 for project "+proj+" yet"; return; }
+    // Build a small picker in a floating overlay
+    let overlay=document.getElementById("r2Picker");
+    if(!overlay){
+      overlay=document.createElement("div");
+      overlay.id="r2Picker";
+      overlay.style.cssText="position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center";
+      document.body.appendChild(overlay);
+    }
+    overlay.innerHTML='<div style="background:#141d2b;border:1px solid #26344a;border-radius:14px;padding:16px;width:320px;max-height:70vh;overflow-y:auto">'+
+      '<div style="font-family:\'Barlow Condensed\';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">Pick a clip from R2</div>'+
+      objects.map(o=>{
+        const name=o.key.split("/").pop();
+        const kb=(o.size/1024).toFixed(0);
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #26344a">'+
+          '<span style="font-family:\'Barlow Condensed\';font-size:13px;flex:1;word-break:break-all">'+name+' <span style="color:#5b7088">'+kb+' KB</span></span>'+
+          '<button onclick="window._pickClip(\''+o.url+'\',\''+name+'\')" style="flex:0 0 auto;background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;font-family:\'Barlow Condensed\';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer;margin-left:8px">Use</button>'+
+          '</div>';
+      }).join("")+
+      '<button onclick="document.getElementById(\'r2Picker\').remove()" style="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;font-family:\'Barlow Condensed\';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>'+
+      '</div>';
+    overlay.style.display="flex";
+    window._pickClip=(url,name)=>{
+      if(sel>=0){ zones[sel].audioUrl=url; aStat().innerHTML="assigned <b>"+name+"</b> from R2 ✓"; }
+      overlay.remove();
+    };
+  }catch(e){ aStat().textContent="browse failed: "+e.message; }
+};
 document.getElementById("pActDev").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
