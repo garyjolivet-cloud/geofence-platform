@@ -199,6 +199,19 @@
   <div class="row"><button id="loadPois" class="ghost" style="flex:1">Reference points</button></div>
 </div>
 
+<div id="trimOverlay">
+  <div id="trimBox">
+    <h2>Trim clip — drag the handles</h2>
+    <canvas id="trimCanvas" height="80"></canvas>
+    <div id="trimLabel"></div>
+    <div class="row" style="margin:0">
+      <button id="trimPrev" class="ghost" style="flex:0 0 auto">▶ Preview</button>
+      <button id="trimSkip" class="ghost" style="flex:1">Upload as-is</button>
+      <button id="trimOk"   class="on"    style="flex:1">✓ Trim &amp; Upload</button>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 /* =====================================================================
@@ -961,18 +974,5 @@ function doXhrUpload(blob, key, mimeType, label){
   xhr.send(blob);
 }
 </script>
-
-<div id="trimOverlay">
-  <div id="trimBox">
-    <h2>Trim clip — drag the handles</h2>
-    <canvas id="trimCanvas" height="80"></canvas>
-    <div id="trimLabel"></div>
-    <div class="row" style="margin:0">
-      <button id="trimPrev" class="ghost" style="flex:0 0 auto">▶ Preview</button>
-      <button id="trimSkip" class="ghost" style="flex:1">Upload as-is</button>
-      <button id="trimOk"   class="on"    style="flex:1">✓ Trim &amp; Upload</button>
-    </div>
-  </div>
-</div>
 </body>
 </html>
