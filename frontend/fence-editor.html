@@ -532,25 +532,30 @@ document.getElementById("pAudioClear").onclick=async()=>{
   if(token){ try{ await fetch("/api/audio/"+key,{method:"DELETE",headers:{authorization:"Bearer "+token}}); }catch(e){} }
   delete z.audioUrl; hideBar(); aStat().textContent="clip removed"; };
 
-function browseStatus(msg){ document.getElementById("status").textContent=msg; if(sel>=0) aStat().textContent=msg; }
 async function doBrowseR2(){
-  const token=getToken(); if(!token){ browseStatus("Browse R2: enter your token first"); return; }
+  const tokEl=document.getElementById("adminTok");
+  let token=(tokEl&&tokEl.value.trim())||verifiedToken||(()=>{try{return sessionStorage.getItem("gp.admin")||"";}catch(e){return "";}})();
+  if(!token){
+    alert("Paste your admin/API token into the token field at the top of the panel, then click Browse R2 again.");
+    tokEl&&tokEl.focus(); return;
+  }
+  if(!verifiedToken){ verifiedToken=token; try{sessionStorage.setItem("gp.admin",token);}catch(e){} }
   const proj=slug(document.getElementById("projName").value)||"project";
-  browseStatus("listing R2 clips…");
+  document.getElementById("status").textContent="listing R2 clips…";
   try{
     // Try project-scoped first, fall back to all files
     let objects=[];
     const r1=await fetch("/api/audio-list?project="+encodeURIComponent(proj),{headers:{authorization:"Bearer "+token}});
-    if(r1.status===401){ browseStatus("Browse R2: token needs 'audio' or 'publish' scope — re-enter token or create a key with those scopes"); return; }
+    if(r1.status===401){ alert("Browse R2: token was rejected (401).\n\nYour token needs 'publish' or 'audio' scope. Re-enter a valid token in the token field."); clearToken(); return; }
     if(r1.ok) objects=(await r1.json()).objects||[];
     let scope=proj;
     if(!objects.length){
       const r2=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
-      if(r2.status===401){ browseStatus("Browse R2: token needs 'audio' or 'publish' scope — re-enter token or create a key with those scopes"); return; }
+      if(r2.status===401){ alert("Browse R2: token was rejected (401).\n\nYour token needs 'publish' or 'audio' scope."); clearToken(); return; }
       if(r2.ok) objects=(await r2.json()).objects||[];
       scope="all projects";
     }
-    if(!objects.length){ browseStatus("Browse R2: R2 is empty — no audio uploaded yet"); return; }
+    if(!objects.length){ alert("Browse R2: the bucket is empty — no audio clips have been uploaded yet.\n\nUpload a clip using 'Upload clip' in a stop's audio section."); return; }
 
     let overlay=document.getElementById("r2Picker");
     if(overlay) overlay.remove();
@@ -636,9 +641,9 @@ async function doBrowseR2(){
             doXhrUpload(blob, newKey, blob.type);
           }
         );
-      }catch(e){ browseStatus("Browse R2: download failed — "+e.message); }
+      }catch(e){ alert("Browse R2: download failed — "+e.message); }
     }
-  }catch(e){ browseStatus("Browse R2: "+e.message); }
+  }catch(e){ alert("Browse R2 error: "+e.message); }
 }
 document.getElementById("pAudioBrowse").onclick=doBrowseR2;
 document.getElementById("browseR2Btn").onclick=doBrowseR2;
