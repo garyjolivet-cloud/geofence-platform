@@ -459,7 +459,8 @@ async function startRec(){
   catch(e){ document.getElementById("trimInfo").textContent="mic denied: "+e.message; return; }
 
   recChunks=[];
-  const mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":"";
+  const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
+    .find(t=>MediaRecorder.isTypeSupported(t))||"";
   mediaRec=new MediaRecorder(stream,mime?{mimeType:mime}:{});
   mediaRec.ondataavailable=ev=>{ if(ev.data.size>0) recChunks.push(ev.data); };
   mediaRec.onstop=async()=>{
@@ -709,37 +710,49 @@ async function saveClip(){
 /* ═══════════════════════════════════════════════════════════
    SYNC
 ═══════════════════════════════════════════════════════════ */
-function wavEncode(buf){
-  const nCh=buf.numberOfChannels, sr=buf.sampleRate, n=buf.length;
-  const ab=new ArrayBuffer(44+n*nCh*2), v=new DataView(ab);
-  const ws=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
-  ws(0,"RIFF"); v.setUint32(4,ab.byteLength-8,true); ws(8,"WAVE");
-  ws(12,"fmt "); v.setUint32(16,16,true); v.setUint16(20,1,true);
-  v.setUint16(22,nCh,true); v.setUint32(24,sr,true);
-  v.setUint32(28,sr*nCh*2,true); v.setUint16(32,nCh*2,true); v.setUint16(34,16,true);
-  ws(36,"data"); v.setUint32(40,n*nCh*2,true);
-  let o=44;
-  for(let i=0;i<n;i++) for(let c=0;c<nCh;c++){
-    const s=Math.max(-1,Math.min(1,buf.getChannelData(c)[i]));
-    v.setInt16(o,s<0?s*0x8000:s*0x7FFF,true); o+=2;
-  }
-  return new Blob([ab],{type:"audio/wav"});
+function mimeToExt(mime){
+  if(!mime) return "webm";
+  if(mime.includes("mp4")) return "m4a";
+  if(mime.includes("ogg")) return "ogg";
+  return "webm";
 }
 
 async function getUploadBlob(clip){
   const needsTrim=clip.trimFrac.start>0.02||clip.trimFrac.end<0.98;
-  if(!needsTrim) return {blob:clip.blob,ext:clip.mimeType.includes("wav")?"wav":"webm",type:clip.mimeType};
+  if(!needsTrim){
+    const ext=mimeToExt(clip.mimeType);
+    return {blob:clip.blob,ext,type:clip.mimeType};
+  }
+
+  // Re-encode trimmed section through MediaRecorder (browser's native compressed codec)
   const ab=await clip.blob.arrayBuffer();
   const tmp=new AudioContext();
   const buf=await tmp.decodeAudioData(ab); await tmp.close();
-  const sr=buf.sampleRate;
+
   const s0=clip.trimFrac.start*buf.duration, s1=clip.trimFrac.end*buf.duration;
-  const len=Math.ceil((s1-s0)*sr);
-  const off=new OfflineAudioContext(buf.numberOfChannels,len,sr);
-  const src=off.createBufferSource(); src.buffer=buf;
-  src.connect(off.destination); src.start(0,s0,s1-s0);
-  const rendered=await off.startRendering();
-  return {blob:wavEncode(rendered),ext:"wav",type:"audio/wav"};
+  const duration=s1-s0;
+
+  // Prefer mp4/aac, fall back to webm/opus
+  const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
+    .find(t=>MediaRecorder.isTypeSupported(t))||"";
+
+  const ctx=new AudioContext({sampleRate:buf.sampleRate});
+  const dest=ctx.createMediaStreamDestination();
+
+  const blob=await new Promise(resolve=>{
+    const chunks=[];
+    const rec=new MediaRecorder(dest.stream,mime?{mimeType:mime}:{});
+    rec.ondataavailable=e=>{ if(e.data.size>0) chunks.push(e.data); };
+    rec.onstop=()=>{ ctx.close(); resolve(new Blob(chunks,{type:rec.mimeType||mime||"audio/webm"})); };
+    rec.start(100);
+    const src=ctx.createBufferSource();
+    src.buffer=buf; src.connect(dest); src.start(0,s0,duration);
+    src.onended=()=>{ if(rec.state!=="inactive") rec.stop(); };
+    setTimeout(()=>{ if(rec.state!=="inactive") rec.stop(); },(duration+2)*1000);
+  });
+
+  const outMime=blob.type||mime||"audio/webm";
+  return {blob,ext:mimeToExt(outMime),type:outMime};
 }
 
 function logProg(msg,pct){
