@@ -49,6 +49,15 @@
   .base{position:absolute;top:10px;right:10px;z-index:5}
   .base select{width:auto}
   .maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim);font-family:"Barlow Condensed"}
+  #trimOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);
+               align-items:center;justify-content:center;padding:16px}
+  #trimBox{background:var(--slate);border:1px solid var(--rim);border-radius:16px;padding:18px;
+           width:100%;max-width:440px;display:flex;flex-direction:column;gap:12px}
+  #trimBox h2{font-family:"Barlow Condensed";font-size:15px;font-weight:700;text-transform:uppercase;
+              letter-spacing:.5px;margin:0}
+  #trimCanvas{width:100%;height:80px;background:var(--slate-2);border:1px solid var(--rim);
+              border-radius:10px;cursor:ew-resize;touch-action:none;display:block}
+  #trimLabel{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);text-align:center}
 </style>
 </head>
 <body>
@@ -477,34 +486,19 @@ function audioExt(name,type){ const m=(name||"").match(/\.(mp3|m4a|aac|wav|ogg|w
   if(m) return m[1].toLowerCase(); if(/mp3|mpeg/.test(type)) return "mp3"; if(/m4a|aac|mp4/.test(type)) return "m4a";
   if(/wav/.test(type)) return "wav"; if(/ogg/.test(type)) return "ogg"; return "mp3"; }
 
-document.getElementById("pAudioFile").onchange=(e)=>{
-  const f=e.target.files[0]; if(!f||sel<0){ return; }
-  const z=zones[sel]; const proj=slug(document.getElementById("projName").value)||"project";
-  const key=proj+"/"+z.id+"."+audioExt(f.name,f.type);
-  const token=getToken(); if(!token){ aStat().textContent="upload cancelled — no token"; e.target.value=""; return; }
-  const kb=(f.size/1024); const sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
-  const t0=Date.now();
-  showBar(0); aStat().textContent="uploading "+sizeStr+" …";
-
-  const xhr=new XMLHttpRequest();
-  xhr.open("PUT","/api/audio/"+key);
-  xhr.setRequestHeader("authorization","Bearer "+token);
-  xhr.setRequestHeader("content-type", f.type||"audio/mpeg");
-  xhr.upload.onprogress=(ev)=>{ if(ev.lengthComputable){ const p=ev.loaded/ev.total*100;
-    const secs=(Date.now()-t0)/1000; const rate=ev.loaded/1024/Math.max(0.1,secs);
-    showBar(p); aStat().textContent="uploading "+sizeStr+" — "+Math.round(p)+"% · "+rate.toFixed(0)+" KB/s"; } };
-  xhr.onload=()=>{
-    const secs=((Date.now()-t0)/1000).toFixed(1); let j={}; try{ j=JSON.parse(xhr.responseText); }catch(_){}
-    if(xhr.status>=200 && xhr.status<300){ z.audioUrl=j.url||("/api/audio/"+key); showBar(100);
-      aStat().innerHTML="uploaded ✓ "+sizeStr+" in "+secs+"s → <b>"+(z.audioUrl)+"</b>"; setTimeout(hideBar,1200); }
-    else if(xhr.status===401){ clearToken(); hideBar(); aStat().textContent="✕ unauthorized — token cleared, try again"; }
-    else { hideBar(); aStat().textContent="✕ upload failed ("+xhr.status+"): "+(j.error||xhr.statusText||"server error"); }
-  };
-  xhr.onerror=()=>{ hideBar(); aStat().textContent="✕ network error — couldn't reach the platform"; };
-  xhr.ontimeout=()=>{ hideBar(); aStat().textContent="✕ upload timed out"; };
-  xhr.timeout=120000;
-  xhr.send(f);
-  e.target.value="";
+document.getElementById("pAudioFile").onchange=async(e)=>{
+  const f=e.target.files[0]; e.target.value="";
+  if(!f||sel<0) return;
+  aStat().textContent="decoding audio…";
+  let buf;
+  try{ const ab=await f.arrayBuffer(); const tmp=new AudioContext();
+    buf=await tmp.decodeAudioData(ab); await tmp.close(); }
+  catch(err){ aStat().textContent="couldn't decode: "+err.message; return; }
+  const z=zones[sel], proj=slug(document.getElementById("projName").value)||"project";
+  openTrimmer(buf,
+    ()=>doXhrUpload(f, proj+"/"+z.id+"."+audioExt(f.name,f.type), f.type||"audio/mpeg"),
+    blob=>doXhrUpload(blob, proj+"/"+z.id+"."+_mimeExt(blob.type), blob.type)
+  );
 };
 let _preview=null;
 document.getElementById("pAudioPlay").onclick=()=>{
@@ -551,9 +545,14 @@ document.getElementById("pAudioBrowse").onclick=async()=>{
               '<div style="font-family:\'Barlow Condensed\';font-size:12px;color:#eef4fb;word-break:break-all">'+o.key+'</div>'+
               '<div style="font-family:\'Barlow Condensed\';font-size:11px;color:#5b7088">'+kb+' KB</div>'+
             '</div>'+
+            '<div style="display:flex;gap:6px;flex-shrink:0">'+
+            '<button onclick="window._trimR2Clip(\''+safeUrl+'\',\''+safeKey+'\')" '+
+              'style="background:none;border:1px solid #26344a;border-radius:7px;color:#8fb6d4;'+
+              'font-family:\'Barlow Condensed\';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer">✂ Trim</button>'+
             '<button onclick="window._pickClip(\''+safeUrl+'\',\''+safeKey+'\')" '+
-              'style="flex:0 0 auto;background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;'+
+              'style="background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;'+
               'font-family:\'Barlow Condensed\';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer">Use</button>'+
+            '</div>'+
           '</div>';
         }).join("")+
         '<button onclick="document.getElementById(\'r2Picker\').remove()" '+
@@ -573,6 +572,23 @@ document.getElementById("pAudioBrowse").onclick=async()=>{
     window._pickClip=(url,key)=>{
       if(sel>=0){ zones[sel].audioUrl=url; aStat().innerHTML="assigned <b>"+key.split("/").pop()+"</b> ✓ — hit Publish to save"; }
       overlay.remove();
+    };
+    window._trimR2Clip=async(url,key)=>{
+      overlay.remove();
+      aStat().textContent="downloading for trim…";
+      try{
+        const buf=await _decodeUrl(url);
+        const proj=slug(document.getElementById("projName").value)||"project";
+        const z=sel>=0?zones[sel]:null;
+        openTrimmer(buf,
+          ()=>{ if(z) z.audioUrl=url; aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
+          async blob=>{
+            const ext=_mimeExt(blob.type);
+            const newKey=(z?proj+"/"+z.id+"."+ext:key.replace(/\.[^.]+$/,"."+ext));
+            doXhrUpload(blob, newKey, blob.type);
+          }
+        );
+      }catch(e){ aStat().textContent="download failed: "+e.message; }
     };
   }catch(e){ aStat().textContent="browse failed: "+e.message; }
 };
@@ -789,6 +805,174 @@ document.getElementById("clearAllBtn").onclick=()=>{
 fetchProjects();
 const _pid=new URLSearchParams(location.search).get("project");
 if(_pid) loadFromPlatform(_pid);
+
+/* ════════════════════════════════════════════════════
+   AUDIO TRIMMER
+════════════════════════════════════════════════════ */
+let _tBuf=null, _tFrac={start:0,end:1}, _tDrag=null, _tPeaks=[], _tPrevSrc=null;
+let _tOnSkip=null, _tOnOk=null, _tACtx=null;
+
+function openTrimmer(buf, onSkip, onOk){
+  _tBuf=buf; _tFrac={start:0,end:1}; _tOnSkip=onSkip; _tOnOk=onOk;
+  _tPeaks=_buildPeaks(buf);
+  _drawTrim(); _trimLabel();
+  document.getElementById("trimOk").textContent="✓ Trim & Upload";
+  document.getElementById("trimOk").disabled=false;
+  document.getElementById("trimOverlay").style.display="flex";
+}
+function closeTrimmer(){
+  document.getElementById("trimOverlay").style.display="none";
+  if(_tPrevSrc){ try{_tPrevSrc.stop();}catch(e){} _tPrevSrc=null; }
+  document.getElementById("trimPrev").textContent="▶ Preview";
+  _tBuf=null;
+}
+function _buildPeaks(buf){
+  const data=buf.getChannelData(0), N=220, step=Math.floor(data.length/N), out=[];
+  for(let i=0;i<N;i++){
+    let mx=0; for(let j=0;j<step;j++) mx=Math.max(mx,Math.abs(data[i*step+j]||0));
+    out.push(mx);
+  }
+  return out;
+}
+function _drawTrim(){
+  const cv=document.getElementById("trimCanvas");
+  const ctx=cv.getContext("2d");
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth||380, H=80;
+  cv.width=W*dpr; cv.height=H*dpr; ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+  const mid=H/2, bw=W/_tPeaks.length;
+  const si=Math.floor(_tFrac.start*_tPeaks.length), ei=Math.ceil(_tFrac.end*_tPeaks.length);
+  _tPeaks.forEach((p,i)=>{
+    const x=i*bw, bh=Math.max(2,p*(H-8)/2);
+    ctx.fillStyle=(i>=si&&i<ei)?"#ff6a3d":"#26344a";
+    ctx.fillRect(x+1,mid-bh,Math.max(1,bw-1),bh*2);
+  });
+  [_tFrac.start,_tFrac.end].forEach((f,idx)=>{
+    const x=f*W;
+    ctx.strokeStyle="#fff"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(x,mid,9,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=idx===0?"#ff6a3d":"#38e0a6";
+    ctx.beginPath(); ctx.arc(x,mid,6,0,Math.PI*2); ctx.fill();
+  });
+}
+function _trimLabel(){
+  if(!_tBuf) return;
+  const dur=_tBuf.duration, s=_tFrac.start*dur, e=_tFrac.end*dur;
+  const f=v=>Math.floor(v/60)+":"+(Math.floor(v%60)+"").padStart(2,"0");
+  document.getElementById("trimLabel").textContent=
+    "trim: "+f(s)+" → "+f(e)+"  ("+f(e-s)+" kept of "+f(dur)+" total)";
+}
+(function(){
+  const cv=document.getElementById("trimCanvas");
+  cv.addEventListener("pointerdown",ev=>{
+    if(!_tPeaks.length) return;
+    const r=cv.getBoundingClientRect(), x=(ev.clientX-r.left)/r.width;
+    _tDrag=Math.abs(x-_tFrac.start)<=Math.abs(x-_tFrac.end)?"start":"end";
+    cv.setPointerCapture(ev.pointerId);
+  });
+  cv.addEventListener("pointermove",ev=>{
+    if(!_tDrag) return;
+    const r=cv.getBoundingClientRect();
+    let x=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
+    if(_tDrag==="start") _tFrac.start=Math.min(x,_tFrac.end-0.04);
+    else _tFrac.end=Math.max(x,_tFrac.start+0.04);
+    _drawTrim(); _trimLabel();
+  });
+  cv.addEventListener("pointerup",()=>{ _tDrag=null; });
+  cv.addEventListener("pointercancel",()=>{ _tDrag=null; });
+})();
+document.getElementById("trimPrev").onclick=()=>{
+  if(!_tBuf) return;
+  if(_tPrevSrc){ try{_tPrevSrc.stop();}catch(e){} _tPrevSrc=null;
+    document.getElementById("trimPrev").textContent="▶ Preview"; return; }
+  if(!_tACtx||_tACtx.state==="closed") _tACtx=new AudioContext();
+  if(_tACtx.state==="suspended") _tACtx.resume();
+  const dur=_tBuf.duration, s=_tFrac.start*dur, len=(_tFrac.end-_tFrac.start)*dur;
+  const src=_tACtx.createBufferSource();
+  src.buffer=_tBuf; src.connect(_tACtx.destination); src.start(0,s,len);
+  _tPrevSrc=src; document.getElementById("trimPrev").textContent="■ Stop";
+  src.onended=()=>{ _tPrevSrc=null; document.getElementById("trimPrev").textContent="▶ Preview"; };
+};
+document.getElementById("trimSkip").onclick=async()=>{
+  const fn=_tOnSkip; closeTrimmer(); if(fn) await fn();
+};
+document.getElementById("trimOk").onclick=async()=>{
+  if(!_tBuf) return;
+  const btn=document.getElementById("trimOk"); btn.textContent="encoding…"; btn.disabled=true;
+  try{ const blob=await _reenc(_tBuf,_tFrac.start,_tFrac.end);
+    const fn=_tOnOk; closeTrimmer(); if(fn) await fn(blob);
+  }catch(e){ btn.textContent="✓ Trim & Upload"; btn.disabled=false; alert("encode failed: "+e.message); }
+};
+document.getElementById("trimOverlay").onclick=ev=>{
+  if(ev.target===document.getElementById("trimOverlay")) closeTrimmer();
+};
+async function _reenc(buf,f0,f1){
+  const s=f0*buf.duration, e=f1*buf.duration, dur=e-s;
+  const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
+    .find(t=>MediaRecorder.isTypeSupported(t))||"";
+  const ctx=new AudioContext({sampleRate:buf.sampleRate});
+  const dest=ctx.createMediaStreamDestination();
+  return new Promise((res,rej)=>{
+    const chunks=[];
+    const rec=new MediaRecorder(dest.stream,mime?{mimeType:mime}:{});
+    rec.ondataavailable=ev=>{ if(ev.data.size>0) chunks.push(ev.data); };
+    rec.onstop=()=>{ ctx.close(); res(new Blob(chunks,{type:rec.mimeType||mime||"audio/webm"})); };
+    rec.start(100);
+    const src=ctx.createBufferSource();
+    src.buffer=buf; src.connect(dest); src.start(0,s,dur);
+    src.onended=()=>{ if(rec.state!=="inactive") rec.stop(); };
+    setTimeout(()=>{ if(rec.state!=="inactive") rec.stop(); },(dur+2)*1000);
+  });
+}
+async function _decodeUrl(url){
+  const r=await fetch(url); const ab=await r.arrayBuffer();
+  const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab);
+  await tmp.close(); return buf;
+}
+function _mimeExt(mime){ return mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
+
+/* ── shared XHR uploader ── */
+function doXhrUpload(blob, key, mimeType, label){
+  const token=getToken(); if(!token){ aStat().textContent="upload cancelled — no token"; return; }
+  const kb=blob.size/1024, sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
+  const t0=Date.now();
+  showBar(0); aStat().textContent="uploading "+sizeStr+"…";
+  const xhr=new XMLHttpRequest();
+  xhr.open("PUT","/api/audio/"+key);
+  xhr.setRequestHeader("authorization","Bearer "+token);
+  xhr.setRequestHeader("content-type",mimeType||"audio/mpeg");
+  xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){
+    const p=ev.loaded/ev.total*100, secs=(Date.now()-t0)/1000, rate=ev.loaded/1024/Math.max(.1,secs);
+    showBar(p); aStat().textContent="uploading "+sizeStr+" — "+Math.round(p)+"% · "+rate.toFixed(0)+" KB/s"; } };
+  xhr.onload=()=>{
+    const secs=((Date.now()-t0)/1000).toFixed(1); let j={}; try{j=JSON.parse(xhr.responseText);}catch(_){}
+    if(xhr.status>=200&&xhr.status<300){
+      if(sel>=0) zones[sel].audioUrl=j.url||("/api/audio/"+key);
+      showBar(100);
+      aStat().innerHTML="uploaded ✓ "+sizeStr+" in "+secs+"s → <b>/api/audio/"+key+"</b>";
+      setTimeout(hideBar,1500);
+    } else if(xhr.status===401){ clearToken(); hideBar(); aStat().textContent="✕ unauthorized — token cleared"; }
+    else { hideBar(); aStat().textContent="✕ upload failed ("+xhr.status+"): "+(j.error||xhr.statusText||"server error"); }
+  };
+  xhr.onerror=()=>{ hideBar(); aStat().textContent="✕ network error"; };
+  xhr.timeout=180000;
+  xhr.send(blob);
+}
 </script>
+
+<div id="trimOverlay">
+  <div id="trimBox">
+    <h2>Trim clip — drag the handles</h2>
+    <canvas id="trimCanvas" height="80"></canvas>
+    <div id="trimLabel"></div>
+    <div class="row" style="margin:0">
+      <button id="trimPrev" class="ghost" style="flex:0 0 auto">▶ Preview</button>
+      <button id="trimSkip" class="ghost" style="flex:1">Upload as-is</button>
+      <button id="trimOk"   class="on"    style="flex:1">✓ Trim &amp; Upload</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
