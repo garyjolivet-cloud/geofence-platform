@@ -195,8 +195,14 @@ hr{border:none;border-top:1px solid var(--rim);margin:4px 0}
 
     <!-- ── CLIPS TAB ── -->
     <div class="tab-panel" id="tabClips">
-      <div class="clips-wrap" id="clipsList">
-        <div class="hint">No clips yet.</div>
+      <div class="clips-wrap">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 2px">
+          <span style="font-family:'Barlow Condensed';font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--ice)">Stops (<span id="stopCount">0</span>)</span>
+        </div>
+        <div id="stopsList"></div>
+        <hr style="margin:10px 0">
+        <div style="font-family:'Barlow Condensed';font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--ice);padding:4px 0 2px">Clips (<span id="clipCount">0</span>)</div>
+        <div id="clipsList"><div class="hint">No clips yet.</div></div>
       </div>
     </div>
 
@@ -591,12 +597,46 @@ function previewTrimmed(){
 /* ═══════════════════════════════════════════════════════════
    CLIPS — list + assign
 ═══════════════════════════════════════════════════════════ */
+function renderStops(){
+  const list=document.getElementById("stopsList");
+  document.getElementById("stopCount").textContent=zones.length;
+  if(!zones.length){ list.innerHTML='<div class="hint" style="padding:4px 0 8px">No stops yet — tap 📍 Stop on the map.</div>'; return; }
+  list.innerHTML="";
+  zones.forEach(z=>{
+    const clip=clips.find(c=>c.id===z.clipId);
+    const card=document.createElement("div");
+    card.className="clip-card";
+    card.innerHTML=
+      '<div class="ct">📍 '+z.name+'  <span style="color:var(--fog);font-weight:400">'+z.radiusM+'m radius</span></div>'+
+      '<div class="cm">'+(clip?"🎵 "+clip.name:"no clip assigned")+'</div>'+
+      '<div class="ca">'+
+        '<button class="sz-rec">🎙 Record</button>'+
+        '<button class="sz-del haz">✕ Delete</button>'+
+      '</div>';
+    card.querySelector(".sz-rec").onclick=()=>{
+      document.getElementById("recZoneSel").value=z.id;
+      switchTab("tabRecord");
+    };
+    card.querySelector(".sz-del").onclick=async()=>{
+      if(!confirm('Delete stop "'+z.name+'"?')) return;
+      // unlink any clip that was assigned to this zone
+      clips.filter(c=>c.zoneId===z.id).forEach(c=>{ c.zoneId=null; dbPut("clips",c); });
+      zones=zones.filter(zn=>zn.id!==z.id);
+      await dbDel("zones",z.id);
+      populateZoneSels(); renderStops(); renderClips(); refreshMap();
+    };
+    list.appendChild(card);
+  });
+}
+
 function renderClips(){
   const list=document.getElementById("clipsList");
   const unassigned=clips.filter(c=>!c.zoneId&&!c.isNote).length;
   document.getElementById("clipsIc").textContent=unassigned?"🎵"+unassigned:"🎵";
+  document.getElementById("clipCount").textContent=clips.length;
+  renderStops();
 
-  if(!clips.length){ list.innerHTML='<div class="hint" style="padding:16px">No clips yet.</div>'; return; }
+  if(!clips.length){ list.innerHTML='<div class="hint" style="padding:4px 0 8px">No clips yet.</div>'; return; }
   list.innerHTML="";
   clips.slice().reverse().forEach(clip=>{
     const zone=zones.find(z=>z.id===clip.zoneId);
@@ -868,7 +908,7 @@ function switchTab(id){
   document.getElementById(id).classList.add("on");
   document.querySelector('.nb[data-tab="'+id+'"]').classList.add("on");
   if(id==="tabTrack"){ if(!mapReady) initMap(); else if(map) setTimeout(()=>map.resize(),50); }
-  if(id==="tabClips") renderClips();
+  if(id==="tabClips"){ renderStops(); renderClips(); }
   if(id==="tabSync") refreshSyncTab();
 }
 
