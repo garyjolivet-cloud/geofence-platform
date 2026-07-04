@@ -590,6 +590,37 @@ let editingBotId=null;      // which bot is open in the edit panel
 let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
 let sel=-1;                 // selected zone index (-1 = none)
 
+/* ---- localStorage auto-save / auto-restore ---- */
+const DRAFT_KEY="gp.editor.draft";
+let _autoSaveTimer=null;
+function autoSave(){
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer=setTimeout(()=>{
+    try{
+      const id=_currentProjectId||slug(projName())||null;
+      if(!id||!zones.length) return;
+      const snap={id,name:projName(),zones,savedAt:Date.now()};
+      localStorage.setItem(DRAFT_KEY,JSON.stringify(snap));
+    }catch(e){}
+  },800);
+}
+function autoRestore(){
+  try{
+    const raw=localStorage.getItem(DRAFT_KEY);
+    if(!raw) return false;
+    const snap=JSON.parse(raw);
+    if(!snap||!Array.isArray(snap.zones)||!snap.zones.length) return false;
+    // stale after 7 days
+    if(Date.now()-snap.savedAt>7*24*3600*1000){ localStorage.removeItem(DRAFT_KEY); return false; }
+    zones=snap.zones; sel=-1;
+    _currentProjectId=snap.id||null;
+    document.getElementById("projCrumb").textContent=snap.name||snap.id||"draft";
+    render(); refreshProps();
+    ps().innerHTML="draft restored (<b>"+snap.zones.length+" zone"+(snap.zones.length===1?"":"s")+"</b>) — Publish to save to D1 &nbsp;<button onclick=\"localStorage.removeItem('"+DRAFT_KEY+"');zones=[];sel=-1;render();refreshProps();ps().textContent='draft cleared';\" style=\"font-size:11px;padding:2px 7px;border-radius:5px;background:transparent;border:1px solid var(--rim);color:var(--fog);cursor:pointer;font-family:'Barlow Condensed'\">discard</button>";
+    return true;
+  }catch(e){ return false; }
+}
+
 /* ---- geometry helpers (all in [lon,lat]) ---- */
 function circleRing(center,radiusM,n){
   const [lon,lat]=center, out=[];
@@ -680,6 +711,7 @@ function render(){
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
   map.getSource("draft").setData(fc(d.concat(pts)));
   drawList();
+  autoSave();
 }
 
 map.on("load",()=>{
@@ -717,6 +749,7 @@ map.on("load",()=>{
   map.addLayer({id:"bearing-arrowhead",type:"circle",source:"bearing-arrows",filter:["==","$type","Point"],
      paint:{"circle-radius":5,"circle-color":"#ffc24d","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
   render();
+  autoRestore();
 });
 
 /* ---- map clicks ---- */
@@ -873,6 +906,7 @@ loadApps();
   el.addEventListener("blur",()=>{
     const v=(el.textContent||"").trim();
     el.textContent=v||"new tour";
+    autoSave();
   });
   el.addEventListener("focus",()=>{
     const range=document.createRange(); range.selectNodeContents(el);
@@ -1233,7 +1267,7 @@ document.getElementById("projDel").onclick=async()=>{
       method:"DELETE", headers:{authorization:"Bearer "+token} });
     const j=await r.json().catch(()=>({}));
     if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour";
-      zones=[]; sel=-1; tool=null; draft=[]; render(); refreshProps();
+      zones=[]; sel=-1; tool=null; draft=[]; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps();
       ps().textContent="deleted "+id+" ✓ — go back to home to open another project"; }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
     else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
@@ -1251,7 +1285,7 @@ document.getElementById("appDel").onclick=async()=>{
     const r=await fetch("/api/apps/"+encodeURIComponent(id)+"?cascade=true",{
       method:"DELETE", headers:{authorization:"Bearer "+token} });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; render(); refreshProps(); loadApps(); ps().textContent="deleted app "+id+" ✓ — go back to home to open another project"; }
+    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps(); loadApps(); ps().textContent="deleted app "+id+" ✓ — go back to home to open another project"; }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
     else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
   }catch(e){ ps().textContent="delete failed: "+e.message; }
@@ -1268,7 +1302,7 @@ document.getElementById("nukeAllBtn").onclick=async()=>{
   try{
     const r=await fetch("/api/nuke",{method:"DELETE",headers:{authorization:"Bearer "+token}});
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; render(); refreshProps(); loadApps();
+    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps(); loadApps();
       ps().textContent="☢ all data wiped — "+((j.wiped||[]).join(", ")); }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
     else ps().textContent="nuke failed: "+(j.error||("HTTP "+r.status));
@@ -1278,7 +1312,7 @@ document.getElementById("nukeAllBtn").onclick=async()=>{
 // clear all stops + reset map state
 document.getElementById("clearAllBtn").onclick=()=>{
   if(zones.length && !confirm("Clear all "+zones.length+" stops from the map?")) return;
-  zones=[]; sel=-1; tool=null; draft=[]; render(); refreshProps();
+  zones=[]; sel=-1; tool=null; draft=[]; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps();
   document.getElementById("status").textContent="map cleared";
 };
 
