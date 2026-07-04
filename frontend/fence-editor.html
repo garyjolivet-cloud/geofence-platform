@@ -747,7 +747,7 @@ map.on("load",()=>{
   map.addLayer({id:"guidance-arrow-line",type:"line",source:"guidance-arrow",
      paint:{"line-color":"#38e0a6","line-width":4,"line-opacity":0.9}});
   map.addLayer({id:"guidance-arrow-head",type:"circle",source:"guidance-arrow",
-     filter:["==","tip",true],
+     filter:["has","tip"],
      paint:{"circle-radius":7,"circle-color":"#38e0a6","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
   map.addSource("bearing-arrows",{type:"geojson",data:fc([])});
   map.addLayer({id:"bearing-arrow",type:"line",source:"bearing-arrows",
@@ -1767,6 +1767,7 @@ SimFencer.onEvent=e=>{
         });
         if(guidanceSlot&&typeof GuidanceBot!=='undefined'){
           const targetZone=(simBundle.zones||[]).find(z=>z.id===guidanceSlot.targetZoneId);
+          simLogEv("sev-sys","guidance trigger: slot="+(guidanceSlot?guidanceSlot.botId:"none")+" targetZoneId="+(guidanceSlot?guidanceSlot.targetZoneId:"—")+" targetZone="+(targetZone?targetZone.name:"NOT FOUND"));
           if(targetZone){
             GuidanceBot.start({
               targetZone,
@@ -2197,7 +2198,7 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
 /* ---- bot picker modal ---- */
 function openBotPicker(){
   const grid=document.getElementById("botPickerGrid"); grid.innerHTML="";
-  editorBots.filter(b=>b.type==="region").forEach(b=>{
+  editorBots.filter(b=>b.type==="region"||b.type==="guidance").forEach(b=>{
     const card=document.createElement("div"); card.className="bpick-card";
     card.innerHTML='<div class="bpick-av">'+(b.avatar||"🤖")+'</div><div class="bpick-nm">'+(b.name||"Bot")+'</div>';
     card.onclick=()=>{ if(sel>=0) addBotToZone(zones[sel],b.id);
