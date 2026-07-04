@@ -623,8 +623,11 @@ function render(){
         geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
     else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",sel:selected,name:z.name},
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
-    // label point
-    feats.push({type:"Feature",properties:{kind:"label",name:z.name},geometry:{type:"Point",coordinates:c}});
+    // label point — include bot avatar(s) for zones that have bots assigned
+    const _bslots=Array.isArray(z.bots)?z.bots:(z.botId?[{botId:z.botId}]:[]);
+    const _botAv=_bslots.slice(0,3).map(s=>{const b=editorBots.find(x=>x.id===s.botId);return b?(b.avatar||"🤖"):"";}).filter(Boolean).join("");
+    const _lp={kind:"label",name:z.name}; if(_botAv)_lp.botAv=_botAv;
+    feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
   });
   map.getSource("fences").setData(fc(feats));
 
@@ -651,6 +654,11 @@ map.on("load",()=>{
   map.addLayer({id:"fence-lbl",type:"symbol",source:"fences",filter:["==","kind","label"],
      layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.4}});
+  map.addLayer({id:"bot-lbl",type:"symbol",source:"fences",
+     filter:["all",["==","kind","label"],["has","botAv"]],
+     layout:{"text-field":["get","botAv"],"text-size":18,"text-offset":[0,-1.4],
+             "text-font":["Open Sans Regular"],"text-allow-overlap":true},
+     paint:{"text-color":"#ffffff","text-halo-color":"#0a1018","text-halo-width":1.5}});
   map.addLayer({id:"draft-line",type:"line",source:"draft",
      paint:{"line-color":"#ffc24d","line-width":2,"line-dasharray":[2,1]}});
   map.addLayer({id:"draft-pts",type:"circle",source:"draft",filter:["==","$type","Point"],
