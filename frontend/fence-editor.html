@@ -183,6 +183,7 @@
                    transition:background .1s;z-index:10}
   .map-drop-target.hover{background:rgba(255,106,61,.35)}
 </style>
+<script src="/guidance-bot.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -246,6 +247,24 @@
     <label class="k">zone states</label>
     <div id="simChips"></div>
     <div id="simLog"></div>
+
+    <!-- guidance HUD — shown when a guidance bot is active in the simulator -->
+    <div id="simGuidanceHud" style="display:none;background:var(--slate);border:2px solid var(--go);
+         border-radius:10px;padding:10px 12px;margin-top:4px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-family:'Barlow Condensed';font-size:11px;font-weight:600;text-transform:uppercase;
+                     letter-spacing:.8px;color:var(--go)">🧭 Guidance Active</span>
+        <button id="simGuidanceStopBtn" style="font-family:'Barlow Condensed';font-size:11px;font-weight:600;
+                letter-spacing:.4px;text-transform:uppercase;border-radius:6px;background:transparent;
+                border:1px solid var(--rim);color:var(--fog);padding:3px 8px;cursor:pointer">Stop</button>
+      </div>
+      <div id="simGuidanceInstr" style="font-family:'Barlow Condensed';font-size:18px;font-weight:700;
+           color:var(--snow);margin-bottom:4px">—</div>
+      <div style="display:flex;gap:12px">
+        <span id="simGuidanceDist" style="font-family:'Barlow Condensed';font-size:13px;font-weight:600;color:var(--ice)">— m</span>
+        <span id="simGuidancePhase" style="font-family:'Barlow Condensed';font-size:12px;color:var(--fog)">navigating</span>
+      </div>
+    </div>
 
     <!-- chat panel — shown when visitor enters a zone with a chatbot -->
     <div id="simChat" style="display:none;flex-direction:column;gap:6px;border-top:1px solid var(--rim);padding-top:8px;margin-top:2px">
@@ -1627,7 +1646,8 @@ function editorToSimBundle(){
       audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,
       spatialRangeM:farM,spatialClearM:clearM,layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       chatPersona:z.chatPersona||null,chatKnowledge:z.chatKnowledge||null,chatGreeting:z.chatGreeting||null,
-      botId:z.botId||null,bots:z.bots||[],clientBotId:z.clientBotId||null};
+      botId:z.botId||null,bots:z.bots||[],clientBotId:z.clientBotId||null,
+      bearingDeg:z.bearingDeg!=null?z.bearingDeg:null,isHazard:!!z.isHazard};
   });
   const cs=simZones.filter(z=>z.center);
   const ref=cs.length?[cs.reduce((s,z)=>s+z.center[0],0)/cs.length,cs.reduce((s,z)=>s+z.center[1],0)/cs.length]:[0,0];
@@ -1664,6 +1684,10 @@ function feedSim(lat,lon,acc,t){
     }
   }
   refreshSimChips();
+  // feed guidance module
+  if(typeof GuidanceBot!=='undefined'&&GuidanceBot.active){
+    GuidanceBot.update({lat:sm.lat,lon:sm.lon,speed:sm.spd||0,headingTravel:sm.lastHeading,acc:sm.acc,t});
+  }
 }
 
 function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)return;
@@ -1680,6 +1704,37 @@ SimFencer.onEvent=e=>{
       if(!simBotHistory[botId])simBotHistory[botId]=[];
       simBotHistory[botId].push({zoneId:e.zone.id,zoneName:e.zone.name,enteredAt:Date.now(),exitedAt:null,dwellSeconds:null});
       if(!who){
+        // check for guidance bot on this zone
+        const guidanceSlot=(e.zone.bots||[]).find(slot=>{
+          const bot=resolveBot(slot.botId);
+          return bot&&bot.type==='guidance';
+        });
+        if(guidanceSlot&&typeof GuidanceBot!=='undefined'){
+          const targetZone=(simBundle.zones||[]).find(z=>z.id===guidanceSlot.targetZoneId);
+          if(targetZone){
+            GuidanceBot.start({
+              targetZone,
+              allZones:simBundle.zones,
+              sayFn:(text)=>{
+                simLogEv("sev-say","GUIDE  \""+text+"\"");
+                if(simSoundOn&&window.speechSynthesis){try{speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text));}catch(err){}}
+              },
+              onInstruction:(text,distM,phase)=>{
+                const hud=document.getElementById('simGuidanceHud');
+                if(hud){hud.style.display='block';
+                  document.getElementById('simGuidanceInstr').textContent=text;
+                  document.getElementById('simGuidanceDist').textContent=distM!=null?Math.round(distM)+' m':'—';
+                  document.getElementById('simGuidancePhase').textContent=phase;}
+              },
+              onComplete:()=>{
+                const hud=document.getElementById('simGuidanceHud');
+                if(hud)hud.style.display='none';
+                simLogEv("sev-say","GUIDE  arrived — guidance complete");
+              }
+            });
+            simLogEv("sev-sys","guidance started → "+targetZone.name);
+          }
+        }
         // visitor entered a zone — open chat (region bot or inline persona; fallback to zone name)
         openSimChat(e.zone);
       } else {
@@ -2460,7 +2515,14 @@ document.getElementById("simPlay").onclick=simPlay;
 document.getElementById("simMute").onclick=(e)=>{simSoundOn=!simSoundOn;
   e.target.textContent=simSoundOn?"Sound ◼":"Muted ◻";e.target.classList.toggle("on",simSoundOn);
   if(!simSoundOn){SimVoice.fadeOut();try{speechSynthesis.cancel();}catch(err){}}};
+document.getElementById("simGuidanceStopBtn").onclick=()=>{
+  if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
+  document.getElementById('simGuidanceHud').style.display='none';
+  simLogEv("sev-sys","guidance stopped");
+};
 document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
+  if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
+  document.getElementById('simGuidanceHud').style.display='none';
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
   simBundle=editorToSimBundle();refreshSimChips();simLogEv("sev-sys","reset");};
 // speed presets
