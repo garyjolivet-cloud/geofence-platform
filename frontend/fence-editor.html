@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8,8 +8,8 @@
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
-         --snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
+         --snow:#ffffff;--ice:#c8dff2;--fog:#8aa5bf;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow)}
   #map{position:absolute;inset:0}
@@ -49,6 +49,19 @@
   .base{position:absolute;top:10px;right:10px;z-index:5}
   .base select{width:auto}
   .maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim);font-family:"Barlow Condensed"}
+  #r2Picker{display:none;position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.6);
+            align-items:center;justify-content:center;padding:16px}
+  #r2PickerBox{background:#1e2d42;border:2px solid #8fb6d4;border-radius:14px;
+               box-shadow:0 8px 40px rgba(0,0,0,.9),0 0 0 1px rgba(143,182,212,.3);
+               padding:16px;width:360px;max-height:80vh;overflow-y:auto;display:flex;
+               flex-direction:column}
+  #r2PickerTitle{font-family:'Barlow Condensed';font-size:14px;font-weight:700;text-transform:uppercase;
+                 letter-spacing:.4px;margin-bottom:4px;color:#eef4fb}
+  #r2PickerCount{font-family:'Barlow Condensed';font-size:11px;color:#5b7088;margin-bottom:10px}
+  .r2row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #26344a;gap:8px}
+  .r2key{font-family:'Barlow Condensed';font-size:12px;color:#eef4fb;word-break:break-all}
+  .r2sz{font-family:'Barlow Condensed';font-size:11px;color:#5b7088}
+  .r2btns{display:flex;gap:6px;flex-shrink:0}
   #trimOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);
                align-items:center;justify-content:center;padding:16px}
   #trimBox{background:var(--slate);border:1px solid var(--rim);border-radius:16px;padding:18px;
@@ -58,6 +71,117 @@
   #trimCanvas{width:100%;height:80px;background:var(--slate-2);border:1px solid var(--rim);
               border-radius:10px;cursor:ew-resize;touch-action:none;display:block}
   #trimLabel{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);text-align:center}
+  /* ---- test / sim mode ---- */
+  #simPanel{flex-direction:column;gap:6px}
+  #simLog{background:#0c1421;border:1px solid var(--rim);border-radius:8px;padding:6px 8px;
+          font-family:"Barlow Condensed";font-size:12px;line-height:1.6;height:112px;overflow-y:auto;margin-top:2px}
+  .sim-chip{display:flex;justify-content:space-between;align-items:center;font-family:"Barlow Condensed";
+            font-size:13px;padding:5px 9px;border:1px solid var(--rim);border-radius:8px;background:#0c1421;margin:2px 0}
+  .stag{font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:2px 7px;border-radius:20px;border:1px solid}
+  .stag.out{color:var(--fog);border-color:var(--fog)}.stag.pending{color:var(--amber);border-color:var(--amber)}
+  .stag.in{color:var(--go);border-color:var(--go);background:rgba(56,224,166,.12)}.stag.cooldown{color:var(--ice);border-color:var(--ice)}
+  .sev-enter{color:var(--go)}.sev-exit{color:var(--ice)}.sev-say{color:var(--coral)}.sev-warn{color:var(--amber)}.sev-sys{color:var(--fog)}
+  .mic-btn{width:100%;padding:14px;font-size:18px;border-radius:12px;border:2px solid var(--rim);
+           background:#0c1421;color:var(--fog);cursor:pointer;font-family:"Barlow Condensed";
+           letter-spacing:.6px;text-transform:uppercase;transition:.15s}
+  .mic-btn.listening{border-color:var(--coral);color:var(--coral);background:rgba(255,106,61,.08);
+                     animation:micpulse 1s ease-in-out infinite}
+  .mic-btn.speaking{border-color:var(--go);color:var(--go);background:rgba(56,224,166,.08)}
+  @keyframes micpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,106,61,.4)}50%{box-shadow:0 0 0 8px rgba(255,106,61,0)}}
+  .av-dot{width:16px;height:16px;border-radius:50%;background:var(--coral);border:2px solid #fff;
+          box-shadow:0 0 0 5px rgba(255,106,61,.25);cursor:grab}
+  .tracker-dot{width:16px;height:16px;border-radius:50%;background:var(--ice);border:2px solid #fff;
+               box-shadow:0 0 0 5px rgba(143,182,212,.3);cursor:grab;position:relative}
+  .tracker-label{position:absolute;top:20px;left:50%;transform:translateX(-50%);
+                 font-family:"Barlow Condensed";font-size:11px;color:var(--ice);
+                 white-space:nowrap;text-shadow:0 1px 3px #0a1018;pointer-events:none}
+  /* bot slot in zone props */
+  .bot-slot{display:flex;align-items:center;gap:8px;background:var(--slate-2);border:1px solid var(--rim);
+            border-radius:8px;padding:8px 10px;cursor:pointer;transition:.12s}
+  .bot-slot:hover{border-color:var(--ice)}
+  .bot-slot.empty{border-style:dashed;color:var(--fog);justify-content:center}
+  .bot-slot .av{width:28px;height:28px;border-radius:50%;background:var(--slate);
+                font-size:16px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .bot-slot .bn{font-family:"Barlow Condensed";font-size:13px;flex:1}
+  .bot-slot .rm{background:none;border:none;color:var(--fog);font-size:14px;padding:0 2px;cursor:pointer;flex:0 0 auto;line-height:1}
+  .bot-slot .rm:hover{color:var(--hazard)}
+  /* advanced section */
+  .adv-toggle{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.8px;
+              color:var(--fog);cursor:pointer;display:flex;align-items:center;gap:5px;margin:8px 0 4px;user-select:none}
+  .adv-toggle .arr{transition:transform .15s}
+  .adv-toggle.open .arr{transform:rotate(90deg)}
+  .adv-body{display:none;flex-direction:column;gap:4px}
+  .adv-body.open{display:flex}
+  /* speed presets */
+  .spd-presets{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px}
+  .spd-btn{font-size:14px;padding:6px 8px;flex:1 1 auto;min-width:40px;text-align:center;
+           font-family:"Barlow Condensed";font-size:12px;letter-spacing:.3px}
+  .spd-btn.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  /* bot tray */
+  .bot-tray{border-top:1px solid var(--rim);padding-top:8px;margin-top:6px}
+  .bot-tray-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .bot-tray-head .k{margin:0}
+  .bot-tray-scroll{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+  .bot-tray-scroll::-webkit-scrollbar{height:4px}
+  .bot-tray-scroll::-webkit-scrollbar-thumb{background:var(--rim);border-radius:2px}
+  .bot-card{flex:0 0 60px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:grab;
+            padding:6px 4px;border:1px solid var(--rim);border-radius:10px;background:var(--slate);
+            transition:.12s;user-select:none}
+  .bot-card:hover{border-color:var(--ice);background:var(--slate-2)}
+  .bot-card.dragging{opacity:.4}
+  .bot-card .bc-av{width:34px;height:34px;border-radius:50%;background:var(--slate-2);
+                   font-size:20px;display:flex;align-items:center;justify-content:center}
+  .bot-card .bc-nm{font-family:"Barlow Condensed";font-size:10px;color:var(--ice);
+                   text-align:center;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* bot picker modal */
+  #botPicker{display:none;position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.7);
+             align-items:center;justify-content:center;padding:16px}
+  #botPickerBox{background:#1e2d42;border:2px solid var(--ice);border-radius:14px;padding:16px;
+                width:320px;max-height:75vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+  #botPickerBox h3{font-family:"Barlow Condensed";font-size:14px;text-transform:uppercase;letter-spacing:.6px;margin:0;color:var(--snow)}
+  .bpick-grid{display:flex;flex-wrap:wrap;gap:8px}
+  .bpick-card{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px;
+              border:1px solid var(--rim);border-radius:10px;background:var(--slate);
+              cursor:pointer;width:72px;transition:.12s}
+  .bpick-card:hover{border-color:var(--coral);background:rgba(255,106,61,.08)}
+  .bpick-av{width:38px;height:38px;border-radius:50%;background:var(--slate-2);
+            font-size:22px;display:flex;align-items:center;justify-content:center}
+  .bpick-nm{font-family:"Barlow Condensed";font-size:10px;color:var(--ice);text-align:center;
+            max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* multi-bot zone rows */
+  .bz-list{display:flex;flex-direction:column;gap:3px;margin:4px 0}
+  .bz-row{display:flex;align-items:center;gap:6px;background:var(--slate-2);border:1px solid var(--rim);
+          border-radius:8px;padding:6px 8px;cursor:grab;user-select:none;transition:.12s}
+  .bz-row:hover{border-color:var(--ice)}
+  .bz-row.bz-active{border-color:var(--go);background:rgba(56,224,166,.07)}
+  .bz-row.drag-over{border-color:var(--coral);background:rgba(255,106,61,.08)}
+  .bz-row.dragging{opacity:.35}
+  .bz-handle{color:var(--fog);font-size:14px;flex:0 0 auto;cursor:grab;line-height:1}
+  .bz-av{width:24px;height:24px;border-radius:50%;background:var(--slate);font-size:14px;
+         display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .bz-nm{font-family:"Barlow Condensed";font-size:13px;color:var(--snow);flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .bz-pri{font-family:"Barlow Condensed";font-size:10px;color:var(--fog);flex:0 0 auto;width:14px;text-align:center}
+  .bz-cond-btn{background:none;border:1px solid var(--rim);border-radius:5px;color:var(--fog);
+               font-size:11px;padding:2px 5px;cursor:pointer;flex:0 0 auto;line-height:1}
+  .bz-cond-btn.active{border-color:var(--amber);color:var(--amber)}
+  .bz-rm{background:none;border:none;color:var(--fog);font-size:13px;padding:0 2px;cursor:pointer;flex:0 0 auto}
+  .bz-rm:hover{color:var(--hazard)}
+  .bz-cond-panel{background:#0c1421;border:1px solid var(--rim);border-radius:8px;padding:8px;
+                 display:none;flex-direction:column;gap:6px;margin:-2px 0 3px}
+  .bz-cond-panel.open{display:flex}
+  .bz-cond-row{display:flex;align-items:center;gap:6px}
+  .bz-cond-row .k{margin:0;flex:0 0 60px}
+  .bz-cond-row select{flex:1;font-size:12px;padding:4px 6px}
+  .bz-cond-row input{flex:0 0 54px;font-size:12px;padding:4px 6px}
+  .bz-add{border:1px dashed var(--rim);border-radius:8px;padding:8px;text-align:center;
+          font-family:"Barlow Condensed";font-size:12px;color:var(--fog);cursor:pointer;margin-top:3px;transition:.12s}
+  .bz-add:hover,.bz-add.drag-over{border-color:var(--coral);color:var(--coral)}
+  /* map drag overlay targets */
+  .map-drop-target{position:absolute;border-radius:50%;border:3px dashed var(--coral);
+                   background:rgba(255,106,61,.15);pointer-events:all;display:flex;
+                   align-items:center;justify-content:center;font-size:20px;
+                   transition:background .1s;z-index:10}
+  .map-drop-target.hover{background:rgba(255,106,61,.35)}
 </style>
 </head>
 <body>
@@ -68,39 +192,99 @@
 <div class="status" id="status">click the map to read coordinates</div>
 
 <div class="panel">
-  <h1>Fence Editor <span class="v">v5 · audio</span> <a href="/" style="float:right;font-weight:400;font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:4px 10px">⌂ Home</a></h1>
-  <div class="hint">Draw stops, set what they say, then Publish — the engine &amp; sim load it by project.</div>
+  <!-- breadcrumb: Home › Client › Tour -->
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:12px">
+    <a href="/" style="color:var(--fog);text-decoration:none;transition:.12s" onmouseover="this.style.color='var(--ice)'" onmouseout="this.style.color='var(--fog)'">← Home</a>
+    <span style="color:var(--rim)">›</span>
+    <span id="clientCrumb" style="color:var(--fog)">—</span>
+    <span style="color:var(--rim)">›</span>
+    <span id="projCrumb" contenteditable="true" spellcheck="false" style="color:var(--ice);white-space:nowrap;overflow:hidden;outline:none;cursor:text;border-bottom:1px dashed var(--rim);min-width:40px" title="click to rename">new tour</span>
+  </div>
+  <!-- hidden: appSel kept for data binding only -->
+  <select id="appSel" style="display:none"><option value="">— app —</option></select>
 
-  <div style="border:1px solid var(--coral);border-radius:12px;padding:10px;margin:6px 0;background:rgba(255,106,61,.04)">
-  <label class="k" style="color:var(--coral);margin-top:0">platform project</label>
-  <select id="projSel" style="width:100%;margin-bottom:6px"><option value="">— pick a project to load —</option></select>
-  <div class="row">
-    <button id="loadPlatform" class="ghost" style="flex:1">Load ▼</button>
-    <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
-    <button id="projRefresh" class="ghost" title="refresh list">↻</button>
-    <button id="projDel" class="ghost" title="delete selected project" style="color:var(--hazard);border-color:var(--hazard);flex:0 0 auto">✕ Del</button>
+  <!-- editor-only controls — hidden in test mode -->
+  <div id="editorControls">
+    <!-- token -->
+    <div class="row" style="margin:0 0 4px">
+      <input id="adminTok" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
+      <button id="tokTest" class="ghost" style="flex:0 0 auto">Test</button>
+    </div>
+    <div class="hint" id="platStatus" style="margin:0 0 4px">token required for Load, Publish</div>
+    <!-- publish -->
+    <div class="row" style="margin:0">
+      <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
+    </div>
+    <!-- delete -->
+    <div class="row" style="margin:4px 0 0">
+      <button id="projDel" class="ghost" style="flex:1;color:var(--hazard);border-color:var(--hazard);font-size:11px">✕ Del Project</button>
+      <button id="appDel" class="ghost" style="flex:1;color:var(--hazard);border-color:var(--hazard);font-size:11px">✕ Del App</button>
+      <button id="nukeAllBtn" class="ghost" style="flex:0 0 auto;color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:6px 8px" title="wipe all data">☢</button>
+    </div>
+    <!-- project settings -->
+    <div style="margin-top:6px">
+      <button id="projCfgToggle" class="ghost" style="width:100%;font-size:11px;text-align:left;padding:6px 10px">▸ Project Settings</button>
+      <div id="projCfgBody" style="display:none;padding-top:6px;flex-direction:column;gap:6px">
+        <label class="k">voice range — carries to <span id="audioRangeV">64</span> m</label>
+        <input type="range" id="audioRange" min="6" max="160" value="64" step="2" style="width:100%;accent-color:var(--coral)">
+        <label class="k" style="margin-top:2px">full volume within <span id="audioClearV">8</span> m of centre</label>
+        <input type="range" id="audioClear" min="2" max="40" value="8" step="1" style="width:100%;accent-color:var(--coral)">
+        <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
+        <select id="visitorBotSel"><option value="">— none —</option></select>
+        <label class="k" style="margin-top:2px">visitor zone radius <span id="visitorRadiusV">15</span> m</label>
+        <input type="range" id="visitorRadius" min="5" max="80" value="15" step="1" style="width:100%;accent-color:var(--coral)">
+      </div>
+    </div>
   </div>
-  <label class="k" style="margin-top:8px">project name</label>
-  <input id="projName" value="KH Village Walk">
-  <label class="k" style="margin-top:6px">app (organizer)</label>
-  <div class="row" style="margin-top:4px">
-    <select id="appSel" style="flex:1"><option value="">— unsorted —</option></select>
-    <button id="appNew" class="ghost" title="new app">+ app</button>
-    <button id="appDel" class="ghost" title="delete selected app" style="color:var(--hazard);border-color:var(--hazard);flex:0 0 auto">✕ Del</button>
-  </div>
-  </div>
-  <div class="row">
-    <input id="adminTok" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
-    <button id="tokTest" class="ghost" title="check token">Test</button>
-  </div>
-  <div class="hint" id="platStatus">Publish saves to D1; open the engine with ?project=&lt;id&gt;</div>
-  <hr>
-  <label class="k">voice carries to <span id="audioRangeV">64</span> m — fades in from here</label>
-  <div class="slider"><input type="range" id="audioRange" min="6" max="160" value="64" step="2" style="width:100%"></div>
-  <label class="k" style="margin-top:8px">full volume within <span id="audioClearV">8</span> m of centre</label>
-  <div class="slider"><input type="range" id="audioClear" min="2" max="40" value="8" step="1" style="width:100%"></div>
-  <div class="hint"><b>Carry</b> = how far the voice reaches (small for dense/indoor stops, large for open trails). <b>Full-volume</b> = the loud core. The gap between them is where it blooms and fades.</div>
 
+  <div class="row" style="margin:6px 0 2px">
+    <button id="testModeBtn" class="ghost" style="flex:1">▶ Test</button>
+  </div>
+
+  <!-- SIM PANEL — visible in test mode only -->
+  <div id="simPanel" style="display:none">
+    <label class="k">zone states</label>
+    <div id="simChips"></div>
+    <div id="simLog"></div>
+
+    <!-- chat panel — shown when visitor enters a zone with a chatbot -->
+    <div id="simChat" style="display:none;flex-direction:column;gap:6px;border-top:1px solid var(--rim);padding-top:8px;margin-top:2px">
+      <div id="simChatHeader" style="font-family:'Barlow Condensed';font-size:12px;color:var(--ice);letter-spacing:.4px"></div>
+      <div id="simChatLog" style="background:#0c1421;border:1px solid var(--rim);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:13px;line-height:1.5;height:120px;overflow-y:auto"></div>
+      <div id="simChatTranscript" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);text-align:center;min-height:15px;font-style:italic"></div>
+      <button id="simMicBtn" class="mic-btn">🎤 Tap to speak</button>
+      <div class="row" style="gap:4px;margin-top:2px">
+        <input id="simChatInput" placeholder="or type here…" style="flex:1;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--fog);font-family:'Barlow Condensed';font-size:12px;padding:5px 8px">
+        <button id="simChatSend" class="ghost" style="font-size:12px;padding:5px 10px">Send</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:2px">
+      <button id="simWalk" class="ghost" style="flex:1">▶ Walk stops</button>
+      <button id="simPlay" class="ghost" style="flex:0 0 auto;padding:8px 10px">▶</button>
+    </div>
+    <div style="margin:2px 0">
+      <div class="spd-presets">
+        <button class="spd-btn" data-spd="0.35" data-label="🚶 Walk">🚶</button>
+        <button class="spd-btn on" data-spd="1.4" data-label="🚴 Bike">🚴</button>
+        <button class="spd-btn" data-spd="2.8" data-label="⛷️ Ski">⛷️</button>
+        <button class="spd-btn" data-spd="5.6" data-label="🚗 Car">🚗</button>
+        <button class="spd-btn" data-spd="8.3" data-label="🚂 Train">🚂</button>
+        <button class="spd-btn" data-spd="34.7" data-label="✈️ Plane">✈️</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="range" id="simSpd" min="0.1" max="40" step="0.1" value="1.4" style="flex:1;accent-color:var(--coral)">
+        <span id="simSpdV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 56px;text-align:right">🚴 Bike</span>
+      </div>
+    </div>
+    <div class="row">
+      <button id="simMute" class="ghost" style="flex:1">Sound ◼</button>
+      <button id="simReset" class="ghost" style="flex:1">Reset</button>
+    </div>
+    <div class="hint">Click map or drag dot to move. Audio plays spatially as you approach stops.</div>
+  </div>
+
+  <div id="editSection">
   <hr>
   <div class="row" style="margin-bottom:4px">
     <label class="k" style="margin:0;align-self:center;flex:1">add a stop — pick a shape</label>
@@ -126,81 +310,209 @@
     <h2 id="pTitle">Stop</h2>
     <label class="k">name</label>
     <input id="pName" placeholder="Mountain Flower Garden">
-    <label class="k">spoken line</label>
-    <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
-    <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
 
-    <label class="k">speak when</label>
+    <!-- multi-bot priority list -->
+    <label class="k" style="margin-top:8px">region bots — drag to set priority</label>
+    <div class="bz-list" id="pBotList"></div>
+    <div class="bz-add" id="pBotDrop">+ Drop a bot here</div>
+    <!-- hidden inputs kept for compatibility -->
+    <select id="pBotId" style="display:none"><option value="">— none —</option></select>
+    <select id="pClientBotId" style="display:none"><option value="">— none —</option></select>
+
+    <label class="k" style="margin-top:8px">greeting prompt — what should the bot say on entry?</label>
+    <input id="pChatGreeting" placeholder="Greet the visitor and tell them the current temperature and wind">
+
+    <label class="k" style="margin-top:8px">speak when</label>
     <select id="pFires">
-      <option value="enter">I arrive</option>
-      <option value="dwell">I linger a while</option>
+      <option value="enter">Visitor arrives</option>
+      <option value="dwell">Visitor lingers</option>
     </select>
     <div class="row" id="dwellRow" style="display:none">
       <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
       <input id="pDwell" type="number" value="20" min="2" style="flex:1">
     </div>
 
-    <label class="chk"><input type="checkbox" id="pNeedle" checked> point the arrow here on approach</label>
+    <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
+    <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
+    <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
 
-    <div class="half">
-      <div><label class="k">approach ring m</label><input id="pApproach" type="number" value="30" min="8"></div>
-      <div id="revealWrap"><label class="k">reveal radius m</label><input id="pReveal" type="number" min="3"></div>
-    </div>
-    <label class="k">audio fades in from (m)</label>
-    <input id="pAudio" type="number" value="40" min="0">
-
-    <hr>
-    <label class="k">action webhook — optional (calls a URL when this stop fires)</label>
-    <div class="row">
-      <select id="pActOn" style="flex:0 0 110px">
-        <option value="enter">on enter</option>
-        <option value="reveal">on reveal</option>
-        <option value="exit">on exit</option>
-        <option value="approach">on approach</option>
-      </select>
-      <input id="pActUrl" placeholder="https://your-system/hook" style="flex:1">
-    </div>
-    <label style="display:flex;gap:7px;align-items:center;margin-top:6px;font-size:13px;color:var(--fog)">
-      <input type="checkbox" id="pActDev" style="width:16px;height:16px">
-      include device id (requires consent)
-    </label>
-
-    <hr>
-    <label class="k">voice / audio clip — spatial audio for this stop</label>
-    <div class="row">
-      <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:9px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';text-transform:uppercase;font-size:13px;letter-spacing:.4px">
-        Upload clip<input type="file" id="pAudioFile" accept="audio/*" style="display:none">
+    <!-- Advanced collapsible -->
+    <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
+    <div class="adv-body" id="advBody">
+      <label class="chk"><input type="checkbox" id="pNeedle" checked> point the arrow here on approach</label>
+      <div class="half">
+        <div><label class="k">approach ring m</label><input id="pApproach" type="number" value="30" min="8"></div>
+        <div id="revealWrap"><label class="k">reveal radius m</label><input id="pReveal" type="number" min="3"></div>
+      </div>
+      <div id="trackerRow">
+        <label class="k">tracker ID — zone follows this device's GPS</label>
+        <input id="pTrackerId" placeholder="guide-1  (leave blank for static zone)">
+      </div>
+      <div id="broadcastRow">
+        <label class="k">broadcast radius m</label>
+        <input id="pBroadcast" type="number" value="20" min="5">
+      </div>
+      <div id="clientBotRow">
+        <label class="k">client bot (tracker zones)</label>
+        <select id="pClientBotIdAdv" style="width:100%"><option value="">— none —</option></select>
+      </div>
+      <label class="k">audio fades in from (m)</label>
+      <input id="pAudio" type="number" value="40" min="0">
+      <hr>
+      <label class="k">voice / audio clip</label>
+      <div class="row">
+        <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:9px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';text-transform:uppercase;font-size:13px;letter-spacing:.4px">
+          Upload clip<input type="file" id="pAudioFile" accept="audio/*" style="display:none">
+        </label>
+        <button id="pAudioBrowse" class="ghost">Browse R2</button>
+        <button id="pAudioPlay" class="ghost">▶</button>
+        <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)">✕</button>
+      </div>
+      <div class="hint" id="pAudioStatus">no clip</div>
+      <div id="pAudioBar" style="display:none;height:9px;background:#1a2433;border-radius:5px;overflow:hidden;margin:4px 0">
+        <div id="pAudioFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
+      </div>
+      <hr>
+      <label class="k">webhook (fires on event)</label>
+      <div class="row">
+        <select id="pActOn" style="flex:0 0 100px">
+          <option value="enter">on enter</option>
+          <option value="reveal">on reveal</option>
+          <option value="exit">on exit</option>
+          <option value="approach">on approach</option>
+        </select>
+        <input id="pActUrl" placeholder="https://your-system/hook" style="flex:1">
+      </div>
+      <label style="display:flex;gap:7px;align-items:center;margin-top:4px;font-size:13px;color:var(--fog)">
+        <input type="checkbox" id="pActDev" style="width:16px;height:16px">
+        include device id (requires consent)
       </label>
-      <button id="pAudioBrowse" class="ghost" title="Browse clips already in R2 for this project">Browse R2</button>
-      <button id="pAudioPlay" class="ghost" title="preview">▶ Preview</button>
-      <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)" title="Delete audio clip from storage and remove from this stop">✕ Delete clip</button>
-    </div>
-    <div class="hint" id="pAudioStatus">no clip — uploads to the platform and plays spatially in the engine</div>
-    <div id="pAudioBar" style="display:none;height:9px;background:#1a2433;border-radius:5px;overflow:hidden;margin:7px 0 2px">
-      <div id="pAudioFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
+      <hr>
+      <div class="row" style="align-items:center;gap:6px;margin:0">
+        <label class="k" style="margin:0;flex:0 0 auto">triggers fire for</label>
+        <select id="pSubject" style="flex:1">
+          <option value="any">visitor or zone</option>
+          <option value="visitor">visitor only</option>
+          <option value="zone">zone only</option>
+        </select>
+      </div>
     </div>
 
-    <div class="row" style="margin-top:8px">
+    <div class="row" style="margin-top:10px">
       <button id="pDelete" class="ghost">Delete stop</button>
       <button id="pDone" class="on">Done</button>
     </div>
   </div>
 
-  <div class="row" style="margin:4px 0 6px">
-    <button id="browseR2Btn" class="ghost" style="flex:1">Browse R2 clips</button>
+  <!-- bot tray -->
+  <div class="bot-tray" id="botTray">
+    <div class="bot-tray-head">
+      <label class="k">🤖 Region Bots</label>
+      <a href="/bots" target="_blank" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
+    </div>
+    <div class="bot-tray-scroll" id="botTrayScroll"></div>
   </div>
 
+  <hr>
   <label class="k">stops (<span id="zcount">0</span>) — click to edit</label>
   <div id="zlist"></div>
 
-  <hr>
-  <div class="row">
-    <button id="importBtn" class="ghost">Import ▲</button>
-    <button id="exportBtn" class="on" style="flex:1">Export ▼</button>
-    <button id="copyBtn" class="ghost">copy</button>
+  <textarea id="out" style="display:none"></textarea>
+  <button id="importBtn" style="display:none">Import</button>
+  <button id="exportBtn" style="display:none">Export</button>
+  <button id="copyBtn" style="display:none">Copy</button>
+  <button id="loadPois" style="display:none">Ref</button>
+
+  <!-- Audio Lab -->
+  <hr style="margin:10px 0 6px">
+  <button id="audioLabToggle" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:6px 10px;letter-spacing:.5px">&#9658; &#128266; Audio Lab</button>
+  <div id="audioLabBody" style="display:none;flex-direction:column;gap:6px;padding-top:6px">
+    <div class="row" style="margin:0;gap:6px">
+      <label id="alFileLabel" style="flex:1;text-align:center;font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;border:1px solid var(--rim);border-radius:8px;padding:7px;cursor:pointer;color:var(--ice)">Load file<input type="file" id="alFile" accept="audio/*" style="display:none"></label>
+      <button id="alZoneClip" class="ghost" style="flex:1;font-size:12px;padding:7px">Zone clip</button>
+      <button id="alTone" class="ghost" style="flex:0 0 auto;font-size:12px;padding:7px">Tone</button>
+    </div>
+    <div class="row" style="margin:0;gap:6px">
+      <button id="alPlay" style="flex:1;font-size:13px;padding:9px">&#9654; Play</button>
+      <div style="display:flex;border:1px solid var(--rim);border-radius:8px;overflow:hidden;flex:0 0 auto">
+        <button data-m="stereo" class="alMode" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;background:var(--coral);color:#1a0d07;cursor:pointer;font-family:'Barlow Condensed';font-weight:700">Stereo</button>
+        <button data-m="hrtf" class="alMode ghost" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;cursor:pointer;font-family:'Barlow Condensed';font-weight:700;color:var(--ice)">3D</button>
+      </div>
+    </div>
+    <span class="k" style="margin:2px 0 0">pan test</span>
+    <div class="row" style="margin:0;gap:6px">
+      <button id="alPanL" class="ghost" style="flex:1;font-size:12px">&#9664; Left</button>
+      <button id="alPanC" class="ghost" style="flex:1;font-size:12px">&#9679; Center</button>
+      <button id="alPanR" class="ghost" style="flex:1;font-size:12px">Right &#9654;</button>
+    </div>
+    <span class="k" style="margin:2px 0 0">distance &mdash; <span id="alDistV">0</span> m</span>
+    <input type="range" id="alDist" min="0" max="80" value="0" step="1" style="width:100%;accent-color:var(--coral);margin-bottom:2px">
+
+    <span class="k" style="margin:6px 0 0">eq &amp; reverb</span>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+        <span style="width:72px">muffling</span>
+        <input type="range" id="alLoHz" min="100" max="3000" value="600" step="50" style="flex:1;accent-color:var(--coral)">
+        <span id="alLoHzV" style="width:52px;text-align:right;color:var(--ice)">600 Hz</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+        <span style="width:72px">reverb</span>
+        <input type="range" id="alRevMax" min="0" max="100" value="40" step="5" style="flex:1;accent-color:var(--coral)">
+        <span id="alRevMaxV" style="width:52px;text-align:right;color:var(--ice)">0.40</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+        <span style="width:72px">min vol</span>
+        <input type="range" id="alMinGain" min="0" max="50" value="5" step="1" style="flex:1;accent-color:var(--coral)">
+        <span id="alMinGainV" style="width:52px;text-align:right;color:var(--ice)">0.05</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+        <span style="width:72px">falloff</span>
+        <input type="range" id="alCurve" min="50" max="300" value="110" step="10" style="flex:1;accent-color:var(--coral)">
+        <span id="alCurveV" style="width:52px;text-align:right;color:var(--ice)">1.1&times;</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:'Barlow Condensed';font-size:12px;color:var(--ice);background:rgba(14,22,34,.6);border:1px solid var(--rim);border-radius:8px;padding:7px 10px">
+      <span>cut <b id="alHz" style="color:var(--snow)">&#8212;</b></span>
+      <span>gain <b id="alGain" style="color:var(--snow)">&#8212;</b></span>
+      <span>rev <b id="alRev" style="color:var(--snow)">&#8212;</b></span>
+      <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
+    </div>
+
+    <span class="k" style="margin:6px 0 0">voice (Kokoro TTS)</span>
+    <select id="alVoice" style="width:100%;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
+      <option value="af_bella">Bella &mdash; warm, female</option>
+      <option value="af_sarah">Sarah &mdash; clear, female</option>
+      <option value="af_sky">Sky &mdash; bright, female</option>
+      <option value="am_adam">Adam &mdash; male</option>
+      <option value="am_michael">Michael &mdash; male</option>
+      <option value="bf_emma">Emma &mdash; British female</option>
+      <option value="bm_george">George &mdash; British male</option>
+    </select>
+    <div style="display:flex;align-items:center;gap:6px;margin-top:2px">
+      <div id="alModelStatus" style="flex:1;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">not loaded &mdash; ~45 MB on first use, cached after</div>
+      <button id="alModelLoad" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 9px">Load</button>
+    </div>
+    <div id="alModelBar" style="display:none;height:4px;background:var(--rim);border-radius:2px;overflow:hidden;margin-top:3px">
+      <div id="alModelFill" style="height:100%;width:0%;background:var(--coral);transition:width .15s linear"></div>
+    </div>
+  </div>  </div><!-- /editSection -->
+</div>
+
+<div id="botPicker">
+  <div id="botPickerBox">
+    <h3>Pick a region bot</h3>
+    <div class="bpick-grid" id="botPickerGrid"></div>
+    <button id="botPickerCancel" style="margin-top:8px;width:100%;background:none;border:1px solid var(--rim);color:var(--ice);font-family:'Barlow Condensed';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>
   </div>
-  <textarea id="out" placeholder="bundle JSON — Export fills this; paste + Import to edit"></textarea>
-  <div class="row"><button id="loadPois" class="ghost" style="flex:1">Reference points</button></div>
+</div>
+
+<div id="r2Picker">
+  <div id="r2PickerBox">
+    <div id="r2PickerTitle"></div>
+    <div id="r2PickerCount"></div>
+    <div id="r2PickerList"></div>
+    <button id="r2PickerCancel" style="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;font-family:'Barlow Condensed';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>
+  </div>
 </div>
 
 <div id="trimOverlay">
@@ -208,6 +520,10 @@
     <h2>Trim clip — drag the handles</h2>
     <canvas id="trimCanvas" height="80"></canvas>
     <div id="trimLabel"></div>
+    <div style="margin:6px 0 2px">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save as (R2 key)</label>
+      <input id="trimKey" style="width:100%;margin-top:4px;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--snow);font-family:'Barlow Condensed';font-size:13px;padding:7px 10px" placeholder="project/stop-name.m4a">
+    </div>
     <div class="row" style="margin:0">
       <button id="trimPrev" class="ghost" style="flex:0 0 auto">▶ Preview</button>
       <button id="trimSkip" class="ghost" style="flex:1">Upload as-is</button>
@@ -241,6 +557,8 @@ const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,z
 map.addControl(new maplibregl.NavigationControl());
 
 let zones=[];               // rich stop objects (see makeZone)
+let editorBots=[];          // bot library for this project
+let editingBotId=null;      // which bot is open in the edit panel
 let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
 let sel=-1;                 // selected zone index (-1 = none)
 
@@ -406,11 +724,22 @@ function refreshProps(){
   document.getElementById("pApproach").value=z.approachM;
   document.getElementById("revealWrap").style.display=z.shape.type==="circle"?"block":"none";
   if(z.shape.type==="circle") document.getElementById("pReveal").value=z.shape.radiusM;
+  document.getElementById("trackerRow").style.display=z.shape.type==="circle"?"block":"none";
+  document.getElementById("pTrackerId").value=z.trackerId||"";
+  document.getElementById("broadcastRow").style.display=(z.shape.type==="circle"&&z.trackerId)?"block":"none";
+  document.getElementById("pBroadcast").value=z.broadcastRadiusM||20;
+  document.getElementById("pSubject").value=z.triggerSubject||"any";
   document.getElementById("pAudio").value=z.audioM;
   const act=(z.actions&&z.actions[0])||null;
   document.getElementById("pActOn").value=act?(act.on||"enter"):"enter";
   document.getElementById("pActUrl").value=act?(act.url||""):"";
   document.getElementById("pActDev").checked=!!(act&&act.includeDevice);
+  document.getElementById("pChatGreeting").value=z.chatGreeting||z.greeting||"";
+  refreshBotDropdowns();
+  renderZoneBots(z);
+  document.getElementById("clientBotRow").style.display=z.trackerId?"block":"none";
+  const advClientSel=document.getElementById("pClientBotIdAdv");
+  if(advClientSel) advClientSel.value=z.clientBotId||"";
   document.getElementById("pAudioStatus").innerHTML = z.audioUrl
     ? "clip attached ✓ → <b>"+z.audioUrl+"</b>"
     : "no clip — uploads to the platform and plays spatially in the engine";
@@ -422,6 +751,14 @@ bindProp("pDwell",z=>{ z.dwellS=+document.getElementById("pDwell").value||20; })
 bindProp("pApproach",z=>{ z.approachM=+document.getElementById("pApproach").value||30; });
 bindProp("pReveal",z=>{ if(z.shape.type==="circle") z.shape.radiusM=+document.getElementById("pReveal").value||12; });
 bindProp("pAudio",z=>{ z.audioM=+document.getElementById("pAudio").value||0; });
+bindProp("pTrackerId",z=>{ z.trackerId=document.getElementById("pTrackerId").value.trim()||null;
+  document.getElementById("broadcastRow").style.display=(z.shape.type==="circle"&&z.trackerId)?"block":"none"; });
+bindProp("pBroadcast",z=>{ z.broadcastRadiusM=+document.getElementById("pBroadcast").value||20; });
+bindProp("pSubject",z=>{ z.triggerSubject=document.getElementById("pSubject").value; });
+bindProp("pChatGreeting",z=>{ z.chatGreeting=document.getElementById("pChatGreeting").value; });
+bindProp("pBotId",z=>{ z.botId=document.getElementById("pBotId").value||null; });
+(function(){ const el=document.getElementById("pClientBotIdAdv");
+  if(el) el.addEventListener("input",()=>{ if(sel<0)return; zones[sel].clientBotId=el.value||null; render(); }); })();
 function syncAction(z){
   const url=document.getElementById("pActUrl").value.trim();
   if(!url){ delete z.actions; return; }
@@ -463,27 +800,27 @@ async function loadApps(sel){
     as.innerHTML='<option value="">— unsorted —</option>'+
       apps.map(a=>'<option value="'+a.id+'">'+(a.name||a.id)+'</option>').join("");
     if(keep) as.value=keep;
+    updateClientCrumb();
   }catch(e){}
 }
-document.getElementById("appNew").onclick=async()=>{
-  const name=prompt("New app name (e.g. \u201cVillage Walks\u201d, \u201cSki Guides\u201d):"); if(!name) return;
-  const token=getToken();
-  if(!token){ ps().textContent="enter your admin token first, then + app"; return; }
-  ps().textContent="creating app…";
-  try{ const r=await fetch("/api/apps",{ method:"POST",
-      headers:{ "content-type":"application/json","authorization":"Bearer "+token }, body:JSON.stringify({name}) });
-    const j=await r.json().catch(()=>({}));
-    if(r.ok){ await loadApps(j.id);
-      const msg = j.existed
-        ? ("App \u201c"+(j.name||name)+"\u201d already exists \u2014 selected it.")
-        : ("App \u201c"+name+"\u201d created \u2713  It\u2019s now in the app list.");
-      ps().textContent=msg; alert(msg); }
-    else { const msg="Couldn\u2019t create app \u2014 HTTP "+r.status+": "+(j.error||"unknown")
-        +"\n(sent: \u201c"+token.slice(0,2)+"\u2026\u201d, "+token.length+" chars)";
-      ps().textContent=msg; alert(msg); if(r.status===401) clearToken(); }
-  }catch(e){ ps().textContent="create failed: "+e.message; }
-};
+// clients are managed from the home page
 loadApps();
+// Editable tour name in breadcrumb
+(()=>{
+  const el=document.getElementById("projCrumb");
+  el.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){ e.preventDefault(); el.blur(); }
+  });
+  el.addEventListener("blur",()=>{
+    const v=(el.textContent||"").trim();
+    el.textContent=v||"new tour";
+  });
+  el.addEventListener("focus",()=>{
+    const range=document.createRange(); range.selectNodeContents(el);
+    const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  });
+})();
+
 // Test button: verify the token against the server, plainly
 document.getElementById("tokTest").onclick=async()=>{
   const t=(document.getElementById("adminTok").value||"").trim();
@@ -511,10 +848,11 @@ document.getElementById("pAudioFile").onchange=async(e)=>{
   try{ const ab=await f.arrayBuffer(); const tmp=new AudioContext();
     buf=await tmp.decodeAudioData(ab); await tmp.close(); }
   catch(err){ aStat().textContent="couldn't decode: "+err.message; return; }
-  const z=zones[sel], proj=slug(document.getElementById("projName").value)||"project";
-  openTrimmer(buf,
-    ()=>doXhrUpload(f, proj+"/"+z.id+"."+audioExt(f.name,f.type), f.type||"audio/mpeg"),
-    blob=>doXhrUpload(blob, proj+"/"+z.id+"."+_mimeExt(blob.type), blob.type)
+  const z=zones[sel], proj=slug(projName())||"project";
+  const defaultKey=proj+"/"+z.id+"."+audioExt(f.name,f.type);
+  openTrimmer(buf, defaultKey,
+    key=>doXhrUpload(f, key||defaultKey, f.type||"audio/mpeg"),
+    (blob,key)=>doXhrUpload(blob, key||defaultKey, blob.type)
   );
 };
 let _preview=null;
@@ -528,10 +866,20 @@ document.getElementById("pAudioPlay").onclick=()=>{
   catch(e){ aStat().textContent="preview failed"; _preview=null; btn.textContent="▶"; } };
 document.getElementById("pAudioClear").onclick=async()=>{
   if(sel<0) return; const z=zones[sel]; if(!z.audioUrl){ return; }
-  const key=z.audioUrl.replace("/api/audio/",""); const token=getToken();
-  if(token){ try{ await fetch("/api/audio/"+key,{method:"DELETE",headers:{authorization:"Bearer "+token}}); }catch(e){} }
+  const url=z.audioUrl; const key=url.replace("/api/audio/",""); const token=getToken();
+  if(token){
+    try{
+      const dr=await fetch("/api/audio/"+key,{method:"DELETE",headers:{authorization:"Bearer "+token}});
+      if(dr.ok && "caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(url)))); }catch(e){}
+    }catch(e){}
+  }
   delete z.audioUrl; hideBar(); aStat().textContent="clip removed"; };
 
+function closeR2Picker(){
+  const p=document.getElementById("r2Picker");
+  p.style.display="none";
+  document.getElementById("r2PickerList").innerHTML="";
+}
 async function doBrowseR2(){
   const tokEl=document.getElementById("adminTok");
   let token=(tokEl&&tokEl.value.trim())||verifiedToken||(()=>{try{return sessionStorage.getItem("gp.admin")||"";}catch(e){return "";}})();
@@ -540,63 +888,32 @@ async function doBrowseR2(){
     tokEl&&tokEl.focus(); return;
   }
   if(!verifiedToken){ verifiedToken=token; try{sessionStorage.setItem("gp.admin",token);}catch(e){} }
-  const proj=slug(document.getElementById("projName").value)||"project";
-  document.getElementById("status").textContent="listing R2 clips…";
   try{
-    // Try project-scoped first, fall back to all files
-    let objects=[];
-    const r1=await fetch("/api/audio-list?project="+encodeURIComponent(proj),{headers:{authorization:"Bearer "+token}});
-    const t1=await r1.text();
-    console.log("audio-list scoped",r1.status,t1);
-    if(r1.status===401){ alert("Browse R2: token rejected (401).\n\nYour token needs 'publish' or 'audio' scope.\nRe-enter a valid token in the token field."); clearToken(); return; }
-    if(r1.ok) objects=(JSON.parse(t1).objects)||[];
-    let scope=proj;
-    if(!objects.length){
-      const r2=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
-      const t2=await r2.text();
-      console.log("audio-list all",r2.status,t2);
-      if(r2.status===401){ alert("Browse R2: token rejected (401).\n\nYour token needs 'publish' or 'audio' scope."); clearToken(); return; }
-      if(r2.ok) objects=(JSON.parse(t2).objects)||[];
-      scope="all projects";
-    }
-    console.log("objects found:",objects.length, objects);
-    if(!objects.length){ alert("Browse R2: bucket is empty — no clips uploaded yet (scoped to '"+proj+"', then all projects).\n\nStatus: "+r1.status+" → "+t1.slice(0,120)); return; }
+    const r=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
+    if(r.status===401){ alert("Browse R2: token rejected (401).\n\nYour token needs 'publish' or 'audio' scope.\nRe-enter a valid token in the token field."); clearToken(); return; }
+    const objects=r.ok ? ((await r.json()).objects||[]) : [];
+    if(!objects.length){ alert("Browse R2: bucket is empty — no clips uploaded yet."); return; }
 
-    let overlay=document.getElementById("r2Picker");
-    if(overlay) overlay.remove();
-    overlay=document.createElement("div"); overlay.id="r2Picker";
-    overlay.style.cssText="position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px";
+    document.getElementById("r2PickerTitle").textContent="R2 clips — all projects";
+    document.getElementById("r2PickerCount").textContent=objects.length+" file"+(objects.length===1?"":"s")+" — full path shown";
 
-    // build picker via DOM — avoids any HTML-escaping issues with key names
-    const box=document.createElement("div");
-    Object.assign(box.style,{background:"#1e2d42",border:"2px solid #8fb6d4",borderRadius:"14px",
-      boxShadow:"0 8px 40px rgba(0,0,0,.9),0 0 0 1px rgba(143,182,212,.3)",
-      padding:"16px",width:"360px",maxHeight:"80vh",overflowY:"auto",display:"flex",
-      flexDirection:"column",gap:"0"});
+    const list=document.getElementById("r2PickerList");
+    list.innerHTML="";
 
-    const ttl=document.createElement("div");
-    ttl.style.cssText="font-family:'Barlow Condensed';font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;color:#eef4fb";
-    ttl.textContent="R2 clips — "+scope;
-    box.appendChild(ttl);
-
-    const cnt=document.createElement("div");
-    cnt.style.cssText="font-family:'Barlow Condensed';font-size:11px;color:#5b7088;margin-bottom:10px";
-    cnt.textContent=objects.length+" file"+(objects.length===1?"":"s")+" — full path shown";
-    box.appendChild(cnt);
-
-    // define trim handler before forEach to avoid any hoisting edge cases
     const doTrimR2=async(url,key)=>{
+      closeR2Picker();
       if(sel>=0) aStat().textContent="downloading for trim…";
       try{
         const buf=await _decodeUrl(url);
-        const pj=slug(document.getElementById("projName").value)||"project";
+        const pj=slug(projName())||"project";
         const z=sel>=0?zones[sel]:null;
-        openTrimmer(buf,
-          ()=>{ if(z) z.audioUrl=url; if(sel>=0) aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
-          async blob=>{
+        const trimDefaultKey=z?pj+"/"+z.id+".m4a":key;
+        openTrimmer(buf, trimDefaultKey,
+          _key=>{ if(z) z.audioUrl=url; if(sel>=0) aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
+          async(blob,userKey)=>{
             const ext=_mimeExt(blob.type);
-            const newKey=(z?pj+"/"+z.id+"."+ext:key.replace(/\.[^.]+$/,"."+ext));
-            doXhrUpload(blob, newKey, blob.type);
+            const fallback=z?pj+"/"+z.id+"."+ext:key.replace(/\.[^.]+$/,"."+ext);
+            doXhrUpload(blob, userKey||fallback, blob.type);
           }
         );
       }catch(e){ alert("Browse R2: download failed — "+e.message); }
@@ -605,26 +922,17 @@ async function doBrowseR2(){
     objects.forEach(o=>{
       const kb=(o.size/1024).toFixed(0);
       const row=document.createElement("div");
-      row.style.cssText="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #26344a;gap:8px";
-
+      row.className="r2row";
       const info=document.createElement("div");
       info.style.cssText="flex:1;min-width:0";
-      const kd=document.createElement("div");
-      kd.style.cssText="font-family:'Barlow Condensed';font-size:12px;color:#eef4fb;word-break:break-all";
-      kd.textContent=o.key;
-      const sd=document.createElement("div");
-      sd.style.cssText="font-family:'Barlow Condensed';font-size:11px;color:#5b7088";
-      sd.textContent=kb+" KB";
+      const kd=document.createElement("div"); kd.className="r2key"; kd.textContent=o.key;
+      const sd=document.createElement("div"); sd.className="r2sz"; sd.textContent=kb+" KB";
       info.appendChild(kd); info.appendChild(sd);
-
-      const btns=document.createElement("div");
-      btns.style.cssText="display:flex;gap:6px;flex-shrink:0";
-
+      const btns=document.createElement("div"); btns.className="r2btns";
       const trimBtn=document.createElement("button");
       trimBtn.style.cssText="background:none;border:1px solid #26344a;border-radius:7px;color:#8fb6d4;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
       trimBtn.textContent="✂ Trim";
-      trimBtn.addEventListener("click",()=>{ overlay.remove(); doTrimR2(o.url,o.key); });
-
+      trimBtn.addEventListener("click",()=>doTrimR2(o.url,o.key));
       const useBtn=document.createElement("button");
       useBtn.style.cssText="background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
       useBtn.textContent="Use";
@@ -632,29 +940,33 @@ async function doBrowseR2(){
         if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
         zones[sel].audioUrl=o.url;
         aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
-        overlay.remove();
+        closeR2Picker();
       });
-
-      btns.appendChild(trimBtn); btns.appendChild(useBtn);
+      const delBtn=document.createElement("button");
+      delBtn.style.cssText="background:none;border:1px solid var(--hazard);border-radius:7px;color:var(--hazard);font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
+      delBtn.textContent="✕";
+      delBtn.addEventListener("click",async()=>{
+        if(!confirm("Delete "+o.key+" from R2?\nThis cannot be undone.")) return;
+        delBtn.textContent="…"; delBtn.disabled=true;
+        try{
+          const dr=await fetch("/api/audio/"+o.key,{method:"DELETE",headers:{authorization:"Bearer "+token}});
+          if(dr.ok){
+            row.remove();
+            if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(o.url)))); }catch(e){}
+          } else{ alert("Delete failed: "+(await dr.text())); delBtn.textContent="✕"; delBtn.disabled=false; }
+        }catch(e){ alert("Delete failed: "+e.message); delBtn.textContent="✕"; delBtn.disabled=false; }
+      });
+      btns.appendChild(trimBtn); btns.appendChild(useBtn); btns.appendChild(delBtn);
       row.appendChild(info); row.appendChild(btns);
-      box.appendChild(row);
+      list.appendChild(row);
     });
 
-    const cancelBtn=document.createElement("button");
-    cancelBtn.style.cssText="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;font-family:'Barlow Condensed';font-size:13px;border-radius:8px;padding:8px;cursor:pointer";
-    cancelBtn.textContent="Cancel";
-    cancelBtn.addEventListener("click",()=>overlay.remove());
-    box.appendChild(cancelBtn);
-
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
-    console.log("picker appended, in DOM:", !!document.getElementById("r2Picker"), "box children:", box.children.length);
-    // delay backdrop-click handler so the triggering click doesn't immediately dismiss it
-    setTimeout(()=>{ overlay.addEventListener("click",ev=>{ if(ev.target===overlay) overlay.remove(); }); }, 300);
+    document.getElementById("r2Picker").style.display="flex";
   }catch(e){ alert("Browse R2 error: "+e.message); }
 }
+document.getElementById("r2Picker").addEventListener("click",ev=>{ if(ev.target===document.getElementById("r2Picker")) closeR2Picker(); });
+document.getElementById("r2PickerCancel").addEventListener("click",closeR2Picker);
 document.getElementById("pAudioBrowse").onclick=doBrowseR2;
-document.getElementById("browseR2Btn").onclick=doBrowseR2;
 document.getElementById("pActDev").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
@@ -679,6 +991,7 @@ function drawList(){
     d.querySelector(".del").onclick=(ev)=>{ ev.stopPropagation(); zones.splice(i,1); if(sel===i)sel=-1; else if(sel>i)sel--; render(); refreshProps(); };
     d.onclick=(ev)=>{ if(ev.target.classList.contains("del"))return;
        selectZone(i); map.flyTo({center:zoneCenterLonLat(z),zoom:17}); };
+    _makeZoneRowDroppable(d,i);
     wrap.appendChild(d);
   });
 }
@@ -699,21 +1012,35 @@ function zoneToEngine(z){
   else rev.fires_on="enter";
   if(z.say) rev.say=z.say;
   trig.push(rev);
+  const subj=z.triggerSubject||"any";
+  if(subj!=="any") trig.forEach(t=>{ t.subject=subj; });
   zo.triggers=trig;
+  if(z.trackerId) zo.trackerId=z.trackerId;
+  if(z.broadcastRadiusM) zo.broadcastRadiusM=z.broadcastRadiusM;
+  if(z.chatPersona) zo.chatPersona=z.chatPersona;
+  if(z.chatKnowledge) zo.chatKnowledge=z.chatKnowledge;
+  if(z.chatGreeting) zo.chatGreeting=z.chatGreeting;
+  if(z.botId) zo.botId=z.botId;
+  if(Array.isArray(z.bots)&&z.bots.length) zo.bots=z.bots;
+  if(z.clientBotId) zo.clientBotId=z.clientBotId;
   if(Array.isArray(z.actions) && z.actions.length) zo.actions=z.actions;
   if(z.audioUrl) zo.audioUrl=z.audioUrl;
   return zo;
 }
+function projName(){ return (document.getElementById("projCrumb").textContent||"").trim(); }
 function exportBundle(){
   let ref=REF.slice();
   if(zones.length){ const cs=zones.map(zoneCenterLonLat);
     ref=[cs.reduce((s,c)=>s+c[0],0)/cs.length, cs.reduce((s,c)=>s+c[1],0)/cs.length]; }
-  const out={ project:slug(document.getElementById("projName").value)||"project",
-              name:document.getElementById("projName").value||"Project",
+  const out={ project:_currentProjectId||slug(projName())||"project",
+              name:projName()||"New Tour",
               ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)],
               spatialRangeM:+document.getElementById("audioRange").value,
               spatialClearM:+document.getElementById("audioClear").value,
+              spatialTuning:AudioLab.getTuning(),
               appId:document.getElementById("appSel").value||null,
+              bots:editorBots,
+              visitorBotId:document.getElementById("visitorBotSel").value||null,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -743,6 +1070,16 @@ function engineToZone(zo){
   if(!(zo.triggers||[]).some(t=>t.needle)) z.needle=false;
   if(Array.isArray(zo.actions) && zo.actions.length) z.actions=zo.actions;
   if(zo.audioUrl) z.audioUrl=zo.audioUrl;
+  if(zo.trackerId) z.trackerId=zo.trackerId;
+  if(zo.broadcastRadiusM) z.broadcastRadiusM=zo.broadcastRadiusM;
+  if(zo.chatPersona) z.chatPersona=zo.chatPersona;
+  if(zo.chatKnowledge) z.chatKnowledge=zo.chatKnowledge;
+  if(zo.chatGreeting) z.chatGreeting=zo.chatGreeting;
+  if(zo.botId) z.botId=zo.botId;
+  if(Array.isArray(zo.bots)&&zo.bots.length) z.bots=zo.bots;
+  if(zo.clientBotId) z.clientBotId=zo.clientBotId;
+  const firstSubjTrig=(zo.triggers||[]).find(t=>t.subject&&t.subject!=="any");
+  if(firstSubjTrig) z.triggerSubject=firstSubjTrig.subject;
   return z;
 }
 document.getElementById("importBtn").onclick=()=>{
@@ -751,10 +1088,15 @@ document.getElementById("importBtn").onclick=()=>{
   try{ const b=JSON.parse(raw);
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
     zones=b.zones.map(engineToZone); sel=-1; tool=null; draft=[];
-    if(b.name) document.getElementById("projName").value=b.name;
+    editorBots=Array.isArray(b.bots)?b.bots:[];
+    renderBotList();
+    if(b.name) document.getElementById("projCrumb").textContent=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
+    if(b.spatialTuning) AudioLab.setTuning(b.spatialTuning);
     if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
+    refreshBotDropdowns();
+    if(b.visitorBotId) document.getElementById("visitorBotSel").value=b.visitorBotId;
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
@@ -777,27 +1119,25 @@ document.getElementById("loadPois").onclick=async()=>{
 
 /* ---- platform (D1): publish + load, tie the tools together ---- */
 const ps=()=>document.getElementById("platStatus");
-async function fetchProjects(){
-  try{
-    const r=await fetch("/api/projects"); const j=await r.json();
-    const sel=document.getElementById("projSel"); const keep=sel.value;
-    sel.innerHTML='<option value="">— projects —</option>';
-    (j.projects||[]).forEach(p=>{ const o=document.createElement("option");
-      o.value=p.id; o.textContent=p.name+"  (v"+p.bundleVersion+")"; sel.appendChild(o); });
-    sel.value=keep;
-    ps().textContent="found "+((j.projects||[]).length)+" projects on the platform";
-  }catch(e){ ps().textContent="couldn't reach the API — open this on the deployed site, not a local file"; }
+function updateClientCrumb(){
+  const as=document.getElementById("appSel");
+  const opt=as.options[as.selectedIndex];
+  document.getElementById("clientCrumb").textContent=(opt&&opt.value)?opt.text:"—";
 }
-async function loadFromPlatform(idArg){
-  const id=(typeof idArg==="string" && idArg) || document.getElementById("projSel").value;
-  if(!id){ ps().textContent="pick a project from the list first"; return; }
+let _currentProjectId=null;
+async function loadFromPlatform(id){
+  if(!id){ ps().textContent="no project specified"; return; }
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle");
     if(!r.ok){ const e=await r.json().catch(()=>({})); ps().textContent=e.error||("nothing published yet for "+id); return; }
     const b=await r.json();
+    _currentProjectId=id;
     document.getElementById("out").value=JSON.stringify(b,null,2);
-    document.getElementById("importBtn").click();           // reuse Import to load the zones
-    ps().textContent="loaded "+id+" v"+(b.bundleVersion||"?")+" — edit, then Publish to save a new version";
+    document.getElementById("importBtn").click();
+    document.getElementById("projCrumb").textContent=b.name||id;
+    if(b.appId){ document.getElementById("appSel").value=b.appId; updateClientCrumb(); }
+    ps().textContent="loaded v"+(b.bundleVersion||"?")+" — edit, then Publish to save";
+    fetchAndMergeBots();
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
 async function publishToPlatform(){
@@ -811,22 +1151,17 @@ async function publishToPlatform(){
       method:"PUT", headers:{"content-type":"application/json","authorization":"Bearer "+token},
       body:JSON.stringify(b) });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ ps().innerHTML="published <b>"+id+"</b> as v"+j.version+" ✓ — open the engine with <b>?project="+id+"</b>"; fetchProjects(); }
+    if(r.ok){ _currentProjectId=id; document.getElementById("projCrumb").textContent=b.name||id; ps().innerHTML="published v"+j.version+" ✓"; }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared, try again"; }
     else ps().textContent="publish failed: "+(j.error||("HTTP "+r.status));
   }catch(e){ ps().textContent="publish failed: "+e.message; }
 }
-document.getElementById("projRefresh").onclick=fetchProjects;
-document.getElementById("loadPlatform").onclick=()=>loadFromPlatform();
 document.getElementById("publishBtn").onclick=publishToPlatform;
-
-// auto-load when user picks from dropdown
-document.getElementById("projSel").onchange=()=>{ const id=document.getElementById("projSel").value; if(id) loadFromPlatform(id); };
 
 // delete project
 document.getElementById("projDel").onclick=async()=>{
-  const id=document.getElementById("projSel").value;
-  if(!id){ ps().textContent="pick a project to delete first"; return; }
+  const id=_currentProjectId;
+  if(!id){ ps().textContent="no project loaded — publish first to create one"; return; }
   if(!confirm("Delete project \""+id+"\" and all its bundles? This cannot be undone.")) return;
   const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
   ps().textContent="deleting "+id+"…";
@@ -834,28 +1169,47 @@ document.getElementById("projDel").onclick=async()=>{
     const r=await fetch("/api/projects/"+encodeURIComponent(id),{
       method:"DELETE", headers:{authorization:"Bearer "+token} });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ ps().textContent="deleted "+id+" ✓"; zones=[]; sel=-1; tool=null; draft=[]; render(); refreshProps(); fetchProjects(); }
+    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour";
+      zones=[]; sel=-1; tool=null; draft=[]; render(); refreshProps();
+      ps().textContent="deleted "+id+" ✓ — go back to home to open another project"; }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
     else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
   }catch(e){ ps().textContent="delete failed: "+e.message; }
 };
 
-// delete app
+// delete app (cascade — also deletes all projects inside it)
 document.getElementById("appDel").onclick=async()=>{
   const id=document.getElementById("appSel").value;
   if(!id){ ps().textContent="pick an app to delete first"; return; }
-  if(!confirm("Delete app \""+id+"\"? It must have no projects assigned.")) return;
+  if(!confirm("Delete app \""+id+"\" AND all its projects/bundles? Cannot be undone.")) return;
   const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
   ps().textContent="deleting app "+id+"…";
   try{
-    const r=await fetch("/api/apps/"+encodeURIComponent(id),{
+    const r=await fetch("/api/apps/"+encodeURIComponent(id)+"?cascade=true",{
       method:"DELETE", headers:{authorization:"Bearer "+token} });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ ps().textContent="deleted app "+id+" ✓"; loadApps(); }
-    else if(r.status===409){ ps().textContent="can't delete — reassign or delete the app's projects first"; }
+    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; render(); refreshProps(); loadApps(); ps().textContent="deleted app "+id+" ✓ — go back to home to open another project"; }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
     else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
   }catch(e){ ps().textContent="delete failed: "+e.message; }
+};
+
+// nuke all data
+document.getElementById("nukeAllBtn").onclick=async()=>{
+  if(!confirm("☢ NUKE ALL DATA?\n\nThis permanently deletes every app, project, bundle, bot, key, and event in the database. Cannot be undone.")) return;
+  if(!confirm("Are you absolutely sure? Type OK in the next prompt.")) return;
+  const answer=prompt("Type DELETE to confirm:");
+  if((answer||"").trim().toUpperCase()!=="DELETE"){ ps().textContent="nuke cancelled"; return; }
+  const token=getToken(); if(!token){ ps().textContent="need admin token to nuke"; return; }
+  ps().textContent="nuking all data…";
+  try{
+    const r=await fetch("/api/nuke",{method:"DELETE",headers:{authorization:"Bearer "+token}});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; render(); refreshProps(); loadApps();
+      ps().textContent="☢ all data wiped — "+((j.wiped||[]).join(", ")); }
+    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
+    else ps().textContent="nuke failed: "+(j.error||("HTTP "+r.status));
+  }catch(e){ ps().textContent="nuke failed: "+e.message; }
 };
 
 // clear all stops + reset map state
@@ -865,9 +1219,10 @@ document.getElementById("clearAllBtn").onclick=()=>{
   document.getElementById("status").textContent="map cleared";
 };
 
-fetchProjects();
-const _pid=new URLSearchParams(location.search).get("project");
-if(_pid) loadFromPlatform(_pid);
+const _qs=new URLSearchParams(location.search);
+const _pid=_qs.get("project"); if(_pid) loadFromPlatform(_pid);
+const _aid=_qs.get("app");
+if(_aid) loadApps(_aid); // pre-select app from home page "+" button
 
 /* ════════════════════════════════════════════════════
    AUDIO TRIMMER
@@ -875,10 +1230,11 @@ if(_pid) loadFromPlatform(_pid);
 let _tBuf=null, _tFrac={start:0,end:1}, _tDrag=null, _tPeaks=[], _tPrevSrc=null;
 let _tOnSkip=null, _tOnOk=null, _tACtx=null;
 
-function openTrimmer(buf, onSkip, onOk){
+function openTrimmer(buf, defaultKey, onSkip, onOk){
   _tBuf=buf; _tFrac={start:0,end:1}; _tOnSkip=onSkip; _tOnOk=onOk;
   _tPeaks=_buildPeaks(buf);
   _drawTrim(); _trimLabel();
+  document.getElementById("trimKey").value=defaultKey||"";
   document.getElementById("trimOk").textContent="✓ Trim & Upload";
   document.getElementById("trimOk").disabled=false;
   document.getElementById("trimOverlay").style.display="flex";
@@ -959,13 +1315,15 @@ document.getElementById("trimPrev").onclick=()=>{
   src.onended=()=>{ _tPrevSrc=null; document.getElementById("trimPrev").textContent="▶ Preview"; };
 };
 document.getElementById("trimSkip").onclick=async()=>{
-  const fn=_tOnSkip; closeTrimmer(); if(fn) await fn();
+  const key=document.getElementById("trimKey").value.trim();
+  const fn=_tOnSkip; closeTrimmer(); if(fn) await fn(key);
 };
 document.getElementById("trimOk").onclick=async()=>{
   if(!_tBuf) return;
+  const key=document.getElementById("trimKey").value.trim();
   const btn=document.getElementById("trimOk"); btn.textContent="encoding…"; btn.disabled=true;
   try{ const blob=await _reenc(_tBuf,_tFrac.start,_tFrac.end);
-    const fn=_tOnOk; closeTrimmer(); if(fn) await fn(blob);
+    const fn=_tOnOk; closeTrimmer(); if(fn) await fn(blob,key);
   }catch(e){ btn.textContent="✓ Trim & Upload"; btn.disabled=false; alert("encode failed: "+e.message); }
 };
 document.getElementById("trimOverlay").onclick=ev=>{
@@ -1023,6 +1381,1309 @@ function doXhrUpload(blob, key, mimeType, label){
   xhr.timeout=180000;
   xhr.send(blob);
 }
+
+/* =====================================================================
+   TEST MODE — engine core + spatial audio + sim controls
+   Engine core is a mirror of geofence-sim.html. Audio is a mirror of
+   geofence-engine.html (SpatialVoice + Clarity).
+   ===================================================================== */
+const SIM_TUNING={EXIT_BUFFER_M:20,ENTER_DWELL_S:3,ACCURACY_CAP_M:40,MOVE_MIN_M:8,SHORT_VISIT_S:12,LOWPASS:0.35};
+const SimGeo={
+  R:6371000,
+  hav(a,b){const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
+    const x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*this.R*Math.asin(Math.sqrt(x));},
+  bearing(a,b){const y=Math.sin((b[1]-a[1])*Math.PI/180)*Math.cos(b[0]*Math.PI/180);
+    const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
+    return(Math.atan2(y,x)*180/Math.PI+360)%360;},
+  toXY(p,ref){return{x:(p[1]-ref[1])*(111320*Math.cos(ref[0]*Math.PI/180)),y:(p[0]-ref[0])*111320};},
+  segDist(P,A,B){const vx=B.x-A.x,vy=B.y-A.y,wx=P.x-A.x,wy=P.y-A.y;const c1=vx*wx+vy*wy;if(c1<=0)return Math.hypot(wx,wy);
+    const c2=vx*vx+vy*vy;if(c2<=c1)return Math.hypot(P.x-B.x,P.y-B.y);const t=c1/c2;return Math.hypot(P.x-(A.x+t*vx),P.y-(A.y+t*vy));},
+  inPoly(P,pts){let inside=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){const xi=pts[i].x,yi=pts[i].y,xj=pts[j].x,yj=pts[j].y;
+    if(((yi>P.y)!==(yj>P.y))&&(P.x<(xj-xi)*(P.y-yi)/(yj-yi)+xi))inside=!inside;}return inside;},
+  sdCircle(p,center,R){return this.hav(p,center)-R;},
+  sdPolygon(p,coords,ref){const P=this.toXY(p,ref),pts=coords.map(c=>this.toXY(c,ref));let best=Infinity;
+    for(let i=0,j=pts.length-1;i<pts.length;j=i++)best=Math.min(best,this.segDist(P,pts[j],pts[i]));
+    return this.inPoly(P,pts)?-best:best;},
+  lineCross(prev,cur,from,to,ref){const A=this.toXY(prev,ref),B=this.toXY(cur,ref),C=this.toXY(from,ref),D=this.toXY(to,ref);
+    const ccw=(p,q,r)=>(r.y-p.y)*(q.x-p.x)-(q.y-p.y)*(r.x-p.x);
+    const d1=ccw(C,D,A),d2=ccw(C,D,B),d3=ccw(A,B,C),d4=ccw(A,B,D);
+    return{crossed:((d1>0)!==(d2>0))&&((d3>0)!==(d4>0)),side:d2<0?"L":"R"};}
+};
+function makeSimSmoother(){return{s:null,prev:null,spd:0,lastHeading:null,
+  push(fix){if(!this.s){this.s={lat:fix.lat,lon:fix.lon};this.prev=null;this.spd=0;}
+    const a=SIM_TUNING.LOWPASS;this.s={lat:this.s.lat+a*(fix.lat-this.s.lat),lon:this.s.lon+a*(fix.lon-this.s.lon)};
+    let headingTravel=null;
+    if(this.prev){const d=SimGeo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
+      const dt=(fix.t-this.prev.t)/1000;let inst=(dt<0.4)?this.spd:d/dt;if(inst>25)inst=this.spd;
+      this.spd=this.spd+0.35*(inst-this.spd);if(d>1){headingTravel=SimGeo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);this.lastHeading=headingTravel;}}
+    this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
+    return{lat:this.s.lat,lon:this.s.lon,acc:fix.acc,t:fix.t,speed:this.spd,headingTravel};},
+  reset(){this.s=null;this.prev=null;this.spd=0;this.lastHeading=null;}};}
+const SimSmoother=makeSimSmoother();
+const _trackerSmoothers={};
+function trackerSmoother(id){return _trackerSmoothers[id]||(_trackerSmoothers[id]=makeSimSmoother());}
+function resetTrackerSmoothers(){Object.keys(_trackerSmoothers).forEach(k=>_trackerSmoothers[k].reset());}
+const SimFencer={state:{},onEvent:null,
+  key(z,l,i){return z.id+":"+l.kind+":"+i;},
+  sd(PT,zone,layer){
+    if(layer.radiusM!=null)return SimGeo.sdCircle(PT,zone.center,layer.radiusM);
+    const g=layer.geometry;if(!g)return null;
+    if(g.type==="polygon")return SimGeo.sdPolygon(PT,g.coords,simBundle.ref);
+    return null;},
+  sdCircleVsLayer(srcCenter,srcR,zone,layer){
+    if(layer.radiusM!=null)return SimGeo.hav(srcCenter,zone.center)-(srcR+layer.radiusM);
+    const g=layer.geometry;if(!g)return null;
+    if(g.type==="polygon")return SimGeo.sdPolygon(srcCenter,g.coords,simBundle.ref)-srcR;
+    if(g.type==="tripline"){const P=SimGeo.toXY(srcCenter,simBundle.ref);
+      return SimGeo.segDist(P,SimGeo.toXY(g.from,simBundle.ref),SimGeo.toXY(g.to,simBundle.ref))-srcR;}
+    return null;},
+  _step(zone,layer,i,sd,now,kpfx,subj){
+    const k=kpfx+":"+this.key(zone,layer,i);
+    const st=this.state[k]||(this.state[k]={phase:"out",delivered:{},t0:0});
+    if(st.phase==="out"){if(sd<0)st.phase="pending";}
+    else if(st.phase==="pending"){if(sd>=0)st.phase="out";
+      else{st.phase="in";st.t0=now;st.delivered={};this._fire(zone,layer,"enter",{},subj);}}
+    else if(st.phase==="in"){
+      (zone.triggers||[]).forEach(t=>{
+        if(t.fires_on==="dwell"&&t.delayS&&(now-st.t0)/1000>=t.delayS&&!st.delivered["dwell"+t.delayS]){
+          st.delivered["dwell"+t.delayS]=1;this._deliver(zone,t,subj);}});
+      if(sd>SIM_TUNING.EXIT_BUFFER_M){this._fire(zone,layer,"exit",{dur:(now-st.t0)/1000},subj);st.phase="out";}}},
+  update(p,prev,now){const active=[];
+    /* visitor vs all zones */
+    simBundle.zones.forEach(zone=>{zone.layers.forEach((layer,i)=>{
+      const k="visitor:"+this.key(zone,layer,i);
+      const st=this.state[k]||(this.state[k]={phase:"out",delivered:{},t0:0});
+      if(layer.geometry&&layer.geometry.type==="tripline"){
+        if(prev){const c=SimGeo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],layer.geometry.from,layer.geometry.to,simBundle.ref);
+          if(c.crossed&&st.phase!=="cooldown"){st.phase="cooldown";setTimeout(()=>{st.phase="out";},4000);
+            this._fire(zone,layer,"enter",{side:c.side},"visitor");}} return;}
+      const sd=this.sd([p.lat,p.lon],zone,layer);if(sd==null)return;
+      if(sd<0&&st.phase==="in")active.push({zone,layer,sd});
+      this._step(zone,layer,i,sd,now,"visitor","visitor");
+    });});
+    /* dynamic zone vs all other zones */
+    simBundle.zones.forEach((srcZ,si)=>{
+      if(!srcZ.trackerId||!srcZ.center)return;
+      const srcR=srcZ.broadcastRadiusM||20;
+      simBundle.zones.forEach((tgtZ,ti)=>{
+        if(si===ti)return;
+        tgtZ.layers.forEach((layer,i)=>{
+          if(layer.geometry&&layer.geometry.type==="tripline")return;
+          const sd=this.sdCircleVsLayer(srcZ.center,srcR,tgtZ,layer);if(sd==null)return;
+          this._step(tgtZ,layer,i,sd,now,srcZ.trackerId,srcZ.trackerId);
+        });
+      });
+    });
+    return active;},
+  _fire(zone,layer,kind,info,subj="visitor"){
+    if(this.onEvent)this.onEvent({zone,layer,kind,info,subject:subj});
+    (zone.triggers||[]).forEach(t=>{
+      if(t.fires_on===kind&&(!t.layer||t.layer===layer.kind))this._deliver(zone,t,subj);});},
+  _deliver(zone,t,subj="visitor"){
+    const ts=t.subject||"any";
+    if(ts!=="any"&&ts!==subj)return;
+    if(t.needle&&simSoundOn)try{simDing();}catch(e){}
+    if(t.say){if(!zone.audioUrl&&simSoundOn)try{const u=new SpeechSynthesisUtterance(t.say);speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
+      if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
+  reset(){this.state={};}
+};
+
+/* ---- spatial audio (mirror of engine's SpatialVoice + minimal Clarity) ---- */
+let simSoundOn=true;
+function simDing(){try{const ac=SimVoice.ctx||new (window.AudioContext||window.webkitAudioContext)();if(!SimVoice.ctx)SimVoice.ctx=ac;
+  const t=ac.currentTime;[784,1175].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain(),s=t+i*0.09;
+    o.type="sine";o.frequency.value=f;g.gain.setValueAtTime(0.0001,s);g.gain.exponentialRampToValueAtTime(0.22,s+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001,s+0.25);o.connect(g);g.connect(ac.destination);o.start(s);o.stop(s+0.3);});}catch(e){}}
+
+const SimVoice={
+  ctx:null,nodes:null,src:null,buffers:{},currentUrl:null,playing:false,loadingUrl:null,
+  tuning:{clearM:8,farM:64,hiHz:7000,loHz:600,minGain:0.05,reverbMax:0.5,tau:0.12,curve:1.1},
+  _ir(sec,decay){const r=this.ctx.sampleRate,n=Math.floor(r*sec),b=this.ctx.createBuffer(2,n,r);
+    for(let ch=0;ch<2;ch++){const d=b.getChannelData(ch);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,decay);}return b;},
+  ensure(){if(this.ctx)return;const C=window.AudioContext||window.webkitAudioContext;this.ctx=new C();
+    const mono=this.ctx.createGain();mono.channelCount=1;mono.channelCountMode="explicit";
+    const lpf=this.ctx.createBiquadFilter();lpf.type="lowpass";lpf.frequency.value=this.tuning.hiHz;lpf.Q.value=0.7;
+    const stereo=this.ctx.createStereoPanner();
+    const fade=this.ctx.createGain();fade.gain.value=0;
+    const vol=this.ctx.createGain();vol.gain.value=0.05;
+    const dry=this.ctx.createGain();dry.gain.value=1;
+    const conv=this.ctx.createConvolver();conv.buffer=this._ir(1.6,2.6);
+    const wet=this.ctx.createGain();wet.gain.value=0;
+    mono.connect(lpf);lpf.connect(stereo);stereo.connect(fade);fade.connect(vol);
+    vol.connect(dry);dry.connect(this.ctx.destination);
+    vol.connect(conv);conv.connect(wet);wet.connect(this.ctx.destination);
+    this.nodes={mono,lpf,stereo,fade,vol,dry,conv,wet};},
+  async load(url){if(this.buffers[url])return this.buffers[url];
+    if(this._dead&&this._dead.has(url))throw new Error("skipped (previous 404)");
+    const r=await fetch(url,{cache:"no-cache"});
+    if(!r.ok){if(!this._dead)this._dead=new Set();this._dead.add(url);throw new Error(r.status+" — "+url);}
+    const ab=await r.arrayBuffer();this.ensure();const raw=await this.ctx.decodeAudioData(ab);
+    if(raw.numberOfChannels>1){const len=raw.length,out=this.ctx.createBuffer(1,len,raw.sampleRate),o=out.getChannelData(0);
+      for(let ch=0;ch<raw.numberOfChannels;ch++){const d=raw.getChannelData(ch);for(let i=0;i<len;i++)o[i]+=d[i];}
+      let pk=0;for(let i=0;i<len;i++)pk=Math.max(pk,Math.abs(o[i]));if(pk>1)for(let i=0;i<len;i++)o[i]/=pk;
+      this.buffers[url]=out;return out;}
+    this.buffers[url]=raw;return raw;},
+  async playZone(zone){if(!zone||!zone.audioUrl||!simSoundOn)return;
+    const url=zone.audioUrl;if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
+    this.ensure();this.loadingUrl=url;
+    let buf;try{buf=await this.load(url);}catch(e){this.loadingUrl=null;simLogEv("sev-warn","audio load failed: "+e.message);return;}
+    this.loadingUrl=null;if(this.ctx.state==="suspended")this.ctx.resume();
+    if(this.src){try{this.src.stop();}catch(e){}}
+    const src=this.ctx.createBufferSource();src.buffer=buf;src.loop=true;
+    src.connect(this.nodes.mono);src.start();this.src=src;this.currentUrl=url;this.playing=true;
+    const g=this.nodes.fade.gain;g.cancelScheduledValues(this.ctx.currentTime);
+    g.setValueAtTime(g.value,this.ctx.currentTime);g.linearRampToValueAtTime(1,this.ctx.currentTime+0.8);
+    simLogEv("sev-sys","▶ "+zone.name);},
+  update(distM,brg,headingTravel){if(!this.nodes||!this.playing)return;
+    const t=this.tuning,c=this.ctx,tau=t.tau;
+    const f=Math.max(0,Math.min(1,(distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
+    const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz,f);
+    const gain=t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve);
+    const wet=t.reverbMax*Math.pow(f,0.6);
+    // pan: use movement heading to get direction relative to zone
+    const az=headingTravel!=null?((brg-headingTravel)*Math.PI/180):0;
+    const pan=Math.max(-1,Math.min(1,Math.sin(az)));
+    this.nodes.lpf.frequency.setTargetAtTime(cutoff,c.currentTime,tau);
+    this.nodes.vol.gain.setTargetAtTime(gain,c.currentTime,tau);
+    this.nodes.wet.gain.setTargetAtTime(wet,c.currentTime,tau);
+    this.nodes.stereo.pan.setTargetAtTime(pan,c.currentTime,tau);},
+  fadeOut(){if(!this.playing)return;const c=this.ctx,g=this.nodes.fade.gain;
+    g.cancelScheduledValues(c.currentTime);g.setValueAtTime(g.value,c.currentTime);
+    g.linearRampToValueAtTime(0,c.currentTime+0.6);
+    const s=this.src;setTimeout(()=>{try{s.stop();}catch(e){}},650);
+    this.playing=false;this.currentUrl=null;this.src=null;},
+  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this.loadingUrl=null;}
+};
+
+/* ---- sim state ---- */
+let simMode=false, simAvatar=null, simBundle=null, simPrev=null, simPrevRaw=null;
+let simPath=[], simPlaying=false, simDist=0, simTimer=null;
+let simTrackers=[], simOrigCenters={};
+
+function editorToSimBundle(){
+  const farM=+(document.getElementById("audioRange").value)||64;
+  const clearM=+(document.getElementById("audioClear").value)||8;
+  const simZones=zones.map(z=>{
+    const s=z.shape;
+    let center;
+    if(s.type==="circle") center=[s.center[1],s.center[0]];
+    else if(s.type==="polygon"){const c=centroidLonLat(s.coords);center=[c[1],c[0]];}
+    else if(s.type==="tripline") center=[(s.from[1]+s.to[1])/2,(s.from[0]+s.to[0])/2];
+    const generalLayer={kind:"general",radiusM:z.approachM||30};
+    let targetLayer;
+    if(s.type==="circle") targetLayer={kind:"target",radiusM:s.radiusM||12};
+    else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
+    else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
+    const subj=z.triggerSubject||"any";
+    const triggers=[];
+    if(z.needle) triggers.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true,subject:subj});
+    if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
+      else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
+    return{id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
+      audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,
+      spatialRangeM:farM,spatialClearM:clearM,layers:[generalLayer,targetLayer].filter(Boolean),triggers,
+      chatPersona:z.chatPersona||null,chatKnowledge:z.chatKnowledge||null,chatGreeting:z.chatGreeting||null,
+      botId:z.botId||null,bots:z.bots||[],clientBotId:z.clientBotId||null};
+  });
+  const cs=simZones.filter(z=>z.center);
+  const ref=cs.length?[cs.reduce((s,z)=>s+z.center[0],0)/cs.length,cs.reduce((s,z)=>s+z.center[1],0)/cs.length]:[0,0];
+  return{name:slug(projName())||"project",ref,zones:simZones,
+    bots:editorBots,visitorBotId:document.getElementById("visitorBotSel").value||null,
+    spatialRangeM:farM,spatialClearM:clearM,spatialTuning:AudioLab.getTuning()};
+}
+
+function feedSim(lat,lon,acc,t){
+  acc=acc||5; t=t||Date.now();
+  const sm=SimSmoother.push({lat,lon,acc,t});
+  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+  // use raw (unsmoothed) position for zone detection so small zones aren't missed at speed
+  const raw={lat,lon,acc};
+  const active=SimFencer.update(raw,simPrevRaw,t);
+  simPrevRaw=raw;
+  simPrev=p;
+  // update per-tracker smoothers so speed/heading are available at chat trigger time
+  (simBundle.zones||[]).filter(z=>z.trackerId&&z.center).forEach(z=>{
+    trackerSmoother(z.trackerId).push({lat:z.center[0],lon:z.center[1],t});
+  });
+  // find nearest zone for spatial audio
+  let nearest=null,nearestD=Infinity;
+  simBundle.zones.forEach(z=>{if(!z.center)return;const d=SimGeo.hav([p.lat,p.lon],z.center);if(d<nearestD){nearestD=d;nearest=z;}});
+  if(nearest){
+    const range=nearest.spatialRangeM||64,clearM=nearest.spatialClearM||8;
+    SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
+    if(nearestD<range&&nearest.audioUrl&&simSoundOn&&!simChatZone){
+      SimVoice.playZone(nearest);
+      const brg=SimGeo.bearing([p.lat,p.lon],nearest.center);
+      SimVoice.update(nearestD,brg,sm.headingTravel);
+    } else if(!nearest.audioUrl||nearestD>=range||simChatZone){
+      SimVoice.fadeOut();
+    }
+  }
+  refreshSimChips();
+}
+
+function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)return;
+  const d=document.createElement("div");d.className=cls;
+  d.textContent=new Date().toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit",second:"2-digit"})+"  "+msg;
+  el.prepend(d);while(el.children.length>120)el.removeChild(el.lastChild);}
+
+SimFencer.onEvent=e=>{
+  const who=e.subject&&e.subject!=="visitor"?"["+e.subject+"] ":"";
+  const botId=e.subject||"visitor";
+  if(e.kind==="enter"){
+    simLogEv("sev-enter","ENTER  "+who+e.zone.name+"/"+(e.layer?e.layer.kind:"")+(e.info&&e.info.side?" ("+e.info.side+")":""));
+    if(e.layer&&e.layer.kind==="target"){
+      if(!simBotHistory[botId])simBotHistory[botId]=[];
+      simBotHistory[botId].push({zoneId:e.zone.id,zoneName:e.zone.name,enteredAt:Date.now(),exitedAt:null,dwellSeconds:null});
+      if(!who){
+        // visitor entered a zone — open chat (region bot or inline persona; fallback to zone name)
+        openSimChat(e.zone);
+      } else {
+        // tracker entered a region — open chat with region bot + tracker's client bot
+        const regionHasBot=(e.zone.bots&&e.zone.bots.length)||e.zone.botId||e.zone.chatPersona||e.zone.chatKnowledge;
+        if(regionHasBot){
+          const srcZ=(simBundle.zones||[]).find(z=>z.trackerId===e.subject);
+          const trackerClientBot=srcZ?resolveBot(srcZ.clientBotId)||resolveBot(srcZ.botId):null;
+          openSimChat(e.zone, trackerClientBot);
+        }
+      }
+    }
+  } else if(e.kind==="exit"){
+    simLogEv("sev-exit","EXIT   "+who+e.zone.name+"  "+e.info.dur.toFixed(0)+"s");
+    if(e.layer&&e.layer.kind==="target"){
+      const hist=simBotHistory[botId];
+      if(hist){const rec=[...hist].reverse().find(r=>r.zoneId===e.zone.id&&r.exitedAt===null);
+        if(rec){rec.exitedAt=Date.now();rec.dwellSeconds=Math.round(e.info.dur||0);}}
+    }
+    if(!who&&e.layer&&e.layer.kind==="target"&&simChatZone&&simChatZone.id===e.zone.id)closeSimChat();
+  } else if(e.kind==="say"){
+    simLogEv("sev-say","SAY    "+who+"\""+e.text+"\"");
+  }
+};
+
+function refreshSimChips(){
+  const el=document.getElementById("simChips");if(!el||!simBundle)return;
+  el.innerHTML="";
+  /* visitor-zone states */
+  simBundle.zones.forEach(z=>{
+    let ph="out";
+    z.layers.forEach((L,i)=>{const st=SimFencer.state["visitor:"+z.id+":"+L.kind+":"+i];if(!st)return;
+      if(st.phase==="in")ph="in";else if(st.phase==="pending"&&ph!=="in")ph="pending";else if(st.phase==="cooldown"&&ph==="out")ph="cooldown";});
+    const c=document.createElement("div");c.className="sim-chip";
+    const n=document.createElement("b");
+    n.textContent=(z.trackerId?"⟳ ":"")+z.name;
+    if(z.trackerId)n.title="dynamic — tracker: "+z.trackerId;
+    const tg=document.createElement("span");tg.className="stag "+ph;tg.textContent=ph;
+    c.appendChild(n);c.appendChild(tg);el.appendChild(c);
+  });
+  /* zone-zone intersection states */
+  const pairs=[];
+  simBundle.zones.forEach(srcZ=>{
+    if(!srcZ.trackerId)return;
+    simBundle.zones.forEach(tgtZ=>{
+      if(srcZ===tgtZ)return;
+      let best="out";
+      tgtZ.layers.forEach((L,i)=>{const st=SimFencer.state[srcZ.trackerId+":"+tgtZ.id+":"+L.kind+":"+i];if(!st)return;
+        if(st.phase==="in")best="in";else if(st.phase==="pending"&&best!=="in")best="pending";});
+      if(best!=="out")pairs.push({srcZ,tgtZ,phase:best});
+    });
+  });
+  if(pairs.length){
+    const sep=document.createElement("div");
+    sep.style.cssText="border-top:1px solid var(--rim);margin-top:4px;padding-top:4px";
+    const lbl=document.createElement("label");lbl.className="k";lbl.textContent="zone interactions";
+    sep.appendChild(lbl);
+    pairs.forEach(({srcZ,tgtZ,phase})=>{
+      const c=document.createElement("div");c.className="sim-chip";
+      const n=document.createElement("span");n.style.color="var(--ice)";
+      n.textContent="⟳ "+srcZ.trackerId+" → "+tgtZ.name;
+      const tg=document.createElement("span");tg.className="stag "+phase;tg.textContent=phase;
+      c.appendChild(n);c.appendChild(tg);sep.appendChild(c);
+    });
+    el.appendChild(sep);
+  }
+}
+
+/* ---- enter / exit test mode ---- */
+function enterTestMode(){
+  if(!zones.length){alert("Add at least one stop before testing.");return;}
+  simMode=true;
+  // cancel any edit in progress
+  if(tool){draft=[];tool=null;document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));render();}
+  selectZone(-1);
+  simBundle=editorToSimBundle();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simBotHistory={};resetTrackerSmoothers();
+  // unlock AudioContext now while we're inside the button click gesture
+  SimVoice.ensure();
+  if(SimVoice.ctx.state==="suspended") SimVoice.ctx.resume();
+  // build avatar — set lngLat before addTo or it lands at [0,0]
+  const c=map.getCenter();
+  if(!simAvatar){const el=document.createElement("div");el.className="av-dot";
+    simAvatar=new maplibregl.Marker({element:el,draggable:true}).setLngLat([c.lng,c.lat]).addTo(map);
+    let dragT=0;
+    simAvatar.on("drag",()=>{const now=performance.now();if(now-dragT<150)return;dragT=now;
+      const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());});
+  } else simAvatar.setLngLat([c.lng,c.lat]);
+  // create tracker markers for dynamic zones
+  simOrigCenters={};simTrackers=[];
+  zones.forEach((z,i)=>{
+    if(z.shape.type!=="circle"||!z.trackerId)return;
+    simOrigCenters[z.id]=[...z.shape.center]; // save [lon,lat]
+    const el=document.createElement("div");el.className="tracker-dot";
+    const lbl=document.createElement("div");lbl.className="tracker-label";lbl.textContent=z.trackerId;el.appendChild(lbl);
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(z.shape.center).addTo(map);
+    let dragT=0;
+    mk.on("drag",()=>{const now=performance.now();if(now-dragT<80)return;dragT=now;
+      const ll=mk.getLngLat();
+      z.shape.center=[ll.lng,ll.lat];           // editor format [lon,lat] — drives render()
+      simBundle.zones[i].center=[ll.lat,ll.lng]; // engine format [lat,lon] — drives geofencer
+      render();
+      if(simAvatar&&simPrev){const ap=simAvatar.getLngLat();feedSim(ap.lat,ap.lng,5,Date.now());}
+    });
+    simTrackers.push({marker:mk,zoneIdx:i});
+  });
+  document.getElementById("editSection").style.display="none";
+  document.getElementById("editorControls").style.display="none";
+  document.getElementById("simPanel").style.display="flex";
+  document.getElementById("testModeBtn").textContent="✕ Exit test";
+  document.getElementById("testModeBtn").classList.add("on");
+  refreshSimChips();
+  const dynCount=simTrackers.length;
+  simLogEv("sev-sys","test loaded — "+simBundle.zones.length+" stop"+(simBundle.zones.length===1?"":"s")
+    +(dynCount?" · "+dynCount+" dynamic (blue dot = tracker)":"")+" — click map or drag dot.");
+}
+
+function exitTestMode(){
+  simMode=false;
+  simPause();
+  SimVoice.stop();
+  closeSimChat();simVisited=[];
+  if(simAvatar){simAvatar.remove();simAvatar=null;}
+  // restore tracker markers and original zone centers
+  simTrackers.forEach(t=>{
+    const z=zones[t.zoneIdx];
+    if(simOrigCenters[z.id])z.shape.center=simOrigCenters[z.id];
+    t.marker.remove();
+  });
+  simTrackers=[];simOrigCenters={};
+  render();
+  document.getElementById("editSection").style.display="";
+  document.getElementById("editorControls").style.display="";
+  document.getElementById("simPanel").style.display="none";
+  document.getElementById("testModeBtn").textContent="▶ Test";
+  document.getElementById("testModeBtn").classList.remove("on");
+  Object.keys(activeBotPerZone).forEach(k=>delete activeBotPerZone[k]);
+}
+
+/* ---- path playback ---- */
+function simPathTotal(){let s=0;for(let i=1;i<simPath.length;i++)s+=SimGeo.hav(simPath[i-1],simPath[i]);return s;}
+function simPathPointAt(s){if(simPath.length<2)return simPath[0]||null;let acc=0;
+  for(let i=1;i<simPath.length;i++){const seg=SimGeo.hav(simPath[i-1],simPath[i]);
+    if(acc+seg>=s){const t=seg?(s-acc)/seg:0;
+      return[simPath[i-1][0]+t*(simPath[i][0]-simPath[i-1][0]),simPath[i-1][1]+t*(simPath[i][1]-simPath[i-1][1])];}
+    acc+=seg;}return simPath[simPath.length-1];}
+function buildSimStopsPath(){
+  const pts=simBundle.zones.filter(z=>z.center).map(z=>z.center);
+  if(pts.length<1)return false;
+  const lead=(p,q,m)=>{const len=SimGeo.hav(q,p)||1,k=m/len;return[p[0]+(p[0]-q[0])*k,p[1]+(p[1]-q[1])*k];};
+  const path=[];
+  if(pts.length>=2)path.push(lead(pts[0],pts[1],20));
+  pts.forEach(p=>path.push(p));
+  if(pts.length>=2)path.push(lead(pts[pts.length-1],pts[pts.length-2],20));
+  simPath=path;return simPath.length>=2;}
+function simPlay(){
+  if(!simPath.length&&!buildSimStopsPath()){simLogEv("sev-warn","no stops to walk");return;}
+  if(simPlaying){simPause();return;}
+  if(SimVoice.ctx&&SimVoice.ctx.state==="suspended")SimVoice.ctx.resume();
+  if(simDist>=simPathTotal()){simDist=0;SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;resetTrackerSmoothers();refreshSimChips();}
+  simPlaying=true;
+  document.getElementById("simPlay").textContent="⏸";
+  document.getElementById("simPlay").classList.add("on");
+  let vT=Date.now();
+  simTimer=setInterval(()=>{
+    const speed=+document.getElementById("simSpd").value,total=simPathTotal();
+    simDist+=speed;vT+=1000;
+    const ended=simDist>=total;
+    const pt=simPathPointAt(Math.min(simDist,total));
+    const jLat=pt[0]+(Math.random()-.5)*3/111320,jLon=pt[1]+(Math.random()-.5)*3/111320;
+    simAvatar.setLngLat([jLon,jLat]);
+    feedSim(jLat,jLon,4,vT);
+    if(ended){simPause();simLogEv("sev-sys","walk complete");}
+  },250);}
+function simPause(){simPlaying=false;if(simTimer){clearInterval(simTimer);simTimer=null;}
+  document.getElementById("simPlay").textContent="▶";
+  document.getElementById("simPlay").classList.remove("on");}
+
+/* ---- UI wiring ---- */
+/* ---- project settings toggle ---- */
+document.getElementById("projCfgToggle").onclick=()=>{
+  const b=document.getElementById("projCfgBody");
+  const open=b.style.display==="flex";
+  b.style.display=open?"none":"flex";
+  document.getElementById("projCfgToggle").textContent=(open?"▸":"▾")+" Project Settings";
+};
+document.getElementById("visitorRadius").oninput=e=>document.getElementById("visitorRadiusV").textContent=e.target.value;
+
+/* ---- advanced section toggle ---- */
+document.getElementById("advToggle").onclick=()=>{
+  document.getElementById("advToggle").classList.toggle("open");
+  document.getElementById("advBody").classList.toggle("open");
+};
+
+/* ---- bot system ---- */
+function _botUid(){ return "bot_"+Math.random().toString(36).slice(2,9); }
+
+// localStorage bridge for /bots page
+function _loadStoredBots(){ try{ return JSON.parse(localStorage.getItem("gp.bots")||"[]"); }catch(e){ return []; } }
+function _saveStoredBots(){ try{ localStorage.setItem("gp.bots",JSON.stringify(editorBots)); }catch(e){} }
+
+// Fetch bots from D1 and merge with localStorage
+async function fetchAndMergeBots(){
+  const appId=document.getElementById("appSel").value;
+  try{
+    const url="/api/bots"+(appId?"?appId="+encodeURIComponent(appId):"");
+    const r=await fetch(url);
+    if(r.ok){
+      const {bots}=await r.json();
+      (bots||[]).forEach(sb=>{ const idx=editorBots.findIndex(b=>b.id===sb.id);
+        if(idx>=0) editorBots[idx]={...editorBots[idx],...sb}; else editorBots.push(sb); });
+    }
+  }catch(e){}
+  // also merge localStorage
+  _loadStoredBots().forEach(sb=>{ if(!editorBots.find(b=>b.id===sb.id)) editorBots.push(sb); });
+  renderBotTray();
+}
+
+// Migrate legacy single-botId zone to bots[] array
+function migrateZoneBots(z){
+  if(Array.isArray(z.bots)) return;
+  z.bots=z.botId?[{botId:z.botId,priority:1,suppressIf:null,promoteIf:null}]:[];
+}
+
+function renderBotTray(){
+  const scroll=document.getElementById("botTrayScroll");
+  scroll.innerHTML="";
+  editorBots.filter(b=>b.type==="region").forEach(b=>{
+    const card=document.createElement("div");
+    card.className="bot-card"; card.draggable=true; card.dataset.botId=b.id;
+    card.innerHTML='<div class="bc-av">'+(b.avatar||"🤖")+'</div><div class="bc-nm">'+(b.name||"Bot")+'</div>';
+    card.ondragstart=e=>{ e.dataTransfer.setData("botId",b.id); card.classList.add("dragging"); };
+    card.ondragend=()=>card.classList.remove("dragging");
+    scroll.appendChild(card);
+  });
+  refreshBotDropdowns();
+  _saveStoredBots();
+}
+
+function refreshBotDropdowns(){
+  const regionOpts='<option value="">— none —</option>'+editorBots.filter(b=>b.type==="region").map(b=>`<option value="${b.id}">${b.name}</option>`).join("");
+  const visitorOpts='<option value="">— none —</option>'+editorBots.filter(b=>b.type==="visitor").map(b=>`<option value="${b.id}">${b.name}</option>`).join("");
+  document.getElementById("pBotId").innerHTML=regionOpts;
+  document.getElementById("pClientBotId").innerHTML=regionOpts;
+  const advSel=document.getElementById("pClientBotIdAdv"); if(advSel) advSel.innerHTML=regionOpts;
+  document.getElementById("visitorBotSel").innerHTML=visitorOpts;
+}
+
+// Init: merge localStorage bots, then fetch from D1
+(function(){ _loadStoredBots().forEach(sb=>{ if(!editorBots.find(b=>b.id===sb.id)) editorBots.push(sb); }); renderBotTray(); })();
+
+/* ---- multi-bot zone list ---- */
+const COND_OPTS=[
+  {v:"",l:"— none —"},
+  {v:"visited",l:"Visited this zone before"},
+  {v:"first_visit",l:"First-time visitor"},
+  {v:"speed_gt",l:"Speed faster than (km/h)",num:true},
+  {v:"snow_gt",l:"New snow more than (cm)",num:true},
+  {v:"temp_lt",l:"Temperature below (°C)",num:true},
+  {v:"wind_gt",l:"Wind faster than (km/h)",num:true},
+  {v:"time_before",l:"Before hour (0–23)",num:true},
+  {v:"time_after",l:"After hour (0–23)",num:true}
+];
+function _condOpts(sel){ return COND_OPTS.map(o=>`<option value="${o.v}"${o.v===sel?" selected":""}>${o.l}</option>`).join(""); }
+function _condNeedsNum(type){ return (COND_OPTS.find(o=>o.v===type)||{}).num; }
+
+function renderZoneBots(zone){
+  migrateZoneBots(zone);
+  const list=document.getElementById("pBotList");
+  list.innerHTML="";
+  let dragSrcIdx=null;
+  (zone.bots||[]).forEach((slot,i)=>{
+    const bot=editorBots.find(b=>b.id===slot.botId);
+    if(!bot) return;
+    const hasCond=slot.suppressIf||slot.promoteIf;
+    const isActive=zone.id&&activeBotPerZone[zone.id]===slot.botId;
+    // row
+    const row=document.createElement("div"); row.className="bz-row"+(isActive?" bz-active":""); row.draggable=true;
+    row.innerHTML=`<span class="bz-handle">⠿</span>`
+      +`<div class="bz-av">${bot.avatar||"🤖"}</div>`
+      +`<span class="bz-nm">${bot.name||"Bot"}</span>`
+      +`<span class="bz-pri" title="${isActive?"speaking — locked until chat closes":"priority "+(i+1)}">${isActive?"🔊":i+1}</span>`
+      +`<button class="bz-cond-btn${hasCond?" active":""}" title="conditions">⚙</button>`
+      +`<button class="bz-rm" title="remove from zone">✕</button>`;
+    // condition panel
+    const cp=document.createElement("div"); cp.className="bz-cond-panel";
+    const sType=slot.suppressIf?slot.suppressIf.type:"";
+    const sVal=slot.suppressIf&&slot.suppressIf.value!=null?slot.suppressIf.value:"";
+    const pType=slot.promoteIf?slot.promoteIf.type:"";
+    const pVal=slot.promoteIf&&slot.promoteIf.value!=null?slot.promoteIf.value:"";
+    cp.innerHTML=`<div class="bz-cond-row"><span class="k">Suppress if</span>`
+      +`<select class="bz-suppress-type">${_condOpts(sType)}</select>`
+      +`<input class="bz-suppress-val" type="number" value="${sVal}" style="display:${_condNeedsNum(sType)?"":"none"}">`
+      +`</div><div class="bz-cond-row"><span class="k">Promote if</span>`
+      +`<select class="bz-promote-type">${_condOpts(pType)}</select>`
+      +`<input class="bz-promote-val" type="number" value="${pVal}" style="display:${_condNeedsNum(pType)?"":"none"}">`
+      +`</div>`;
+    // events
+    row.querySelector(".bz-cond-btn").onclick=e=>{e.stopPropagation();cp.classList.toggle("open");};
+    row.querySelector(".bz-rm").onclick=e=>{ e.stopPropagation();
+      // if removing the active bot, release the lock so next entry can pick a new one
+      if(zone.id&&activeBotPerZone[zone.id]===slot.botId) delete activeBotPerZone[zone.id];
+      zone.bots.splice(i,1); renderZoneBots(zone); render(); };
+    function saveCond(){
+      const st=cp.querySelector(".bz-suppress-type").value;
+      const sv=cp.querySelector(".bz-suppress-val").value;
+      const pt=cp.querySelector(".bz-promote-type").value;
+      const pv=cp.querySelector(".bz-promote-val").value;
+      slot.suppressIf=st?{type:st,...(_condNeedsNum(st)?{value:+sv}:{})}:null;
+      slot.promoteIf=pt?{type:pt,...(_condNeedsNum(pt)?{value:+pv}:{})}:null;
+      row.querySelector(".bz-cond-btn").classList.toggle("active",!!(slot.suppressIf||slot.promoteIf));
+    }
+    cp.querySelector(".bz-suppress-type").onchange=e=>{
+      cp.querySelector(".bz-suppress-val").style.display=_condNeedsNum(e.target.value)?"":"none"; saveCond();};
+    cp.querySelector(".bz-promote-type").onchange=e=>{
+      cp.querySelector(".bz-promote-val").style.display=_condNeedsNum(e.target.value)?"":"none"; saveCond();};
+    cp.querySelector(".bz-suppress-val").oninput=saveCond;
+    cp.querySelector(".bz-promote-val").oninput=saveCond;
+    // drag-to-reorder within list
+    row.ondragstart=e=>{ if(e.target.classList.contains("bz-handle")||e.target.classList.contains("bz-row")){
+      dragSrcIdx=i; row.classList.add("dragging"); e.stopPropagation(); e.dataTransfer.setData("bzIdx",i); }};
+    row.ondragend=()=>row.classList.remove("dragging");
+    row.ondragover=e=>{ if(e.dataTransfer.types.includes("bzidx")){e.preventDefault();row.classList.add("drag-over");}};
+    row.ondragleave=()=>row.classList.remove("drag-over");
+    row.ondrop=e=>{ row.classList.remove("drag-over");
+      const from=parseInt(e.dataTransfer.getData("bzIdx"));
+      if(isNaN(from)||from===i)return; e.stopPropagation();
+      const [moved]=zone.bots.splice(from,1); zone.bots.splice(i,0,moved);
+      renderZoneBots(zone); render(); };
+    list.appendChild(row); list.appendChild(cp);
+  });
+  // sync legacy botId to first bot
+  document.getElementById("pBotId").value=(zone.bots&&zone.bots[0])?zone.bots[0].botId:"";
+}
+
+function addBotToZone(zone, botId){
+  migrateZoneBots(zone);
+  if(zone.bots.find(s=>s.botId===botId)) return; // already assigned
+  zone.bots.push({botId,priority:zone.bots.length+1,suppressIf:null,promoteIf:null});
+  renderZoneBots(zone); render(); drawList();
+}
+
+/* ---- zone props drop target (bz-add) ---- */
+(function(){
+  const drop=document.getElementById("pBotDrop");
+  drop.ondragover=e=>{if(e.dataTransfer.types.includes("botid")){e.preventDefault();drop.classList.add("drag-over");}};
+  drop.ondragleave=()=>drop.classList.remove("drag-over");
+  drop.ondrop=e=>{ drop.classList.remove("drag-over"); e.preventDefault();
+    const botId=e.dataTransfer.getData("botId"); if(!botId||sel<0)return;
+    addBotToZone(zones[sel],botId); };
+  drop.onclick=()=>openBotPicker();
+})();
+
+/* ---- map canvas drop — drag bot from tray directly onto map zone ---- */
+(function(){
+  function setupMapDrop(){
+    const canvas=map.getCanvas();
+    canvas.addEventListener("dragover",e=>{
+      if(e.dataTransfer.types.includes("botid")||e.dataTransfer.types.includes("botId".toLowerCase()))e.preventDefault();
+    });
+    canvas.addEventListener("drop",e=>{
+      e.preventDefault();
+      const botId=e.dataTransfer.getData("botId"); if(!botId)return;
+      const rect=canvas.getBoundingClientRect();
+      const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
+      // find closest zone centre within 200m
+      let best=null,bestD=200;
+      zones.forEach((z,i)=>{
+        const c=zoneCenterLonLat(z); if(!c)return;
+        const d=SimGeo.hav([pt.lat,pt.lng],LL(c));
+        if(d<bestD){bestD=d;best=i;}
+      });
+      if(best==null)return;
+      addBotToZone(zones[best],botId);
+      if(sel!==best){ selectZone(best); map.flyTo({center:zoneCenterLonLat(zones[best]),zoom:17}); }
+    });
+  }
+  if(map._loaded) setupMapDrop(); else map.on("load",setupMapDrop);
+})();
+
+/* ---- zone list rows drop target ---- */
+function _makeZoneRowDroppable(rowEl, zoneIdx){
+  rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("botid")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
+  rowEl.ondragleave=()=>rowEl.style.background="";
+  rowEl.ondrop=e=>{ e.preventDefault();rowEl.style.background="";
+    const botId=e.dataTransfer.getData("botId"); if(!botId)return;
+    addBotToZone(zones[zoneIdx],botId);
+    if(sel===zoneIdx) renderZoneBots(zones[zoneIdx]); };
+}
+
+/* ---- bot picker modal ---- */
+function openBotPicker(){
+  const grid=document.getElementById("botPickerGrid"); grid.innerHTML="";
+  editorBots.filter(b=>b.type==="region").forEach(b=>{
+    const card=document.createElement("div"); card.className="bpick-card";
+    card.innerHTML='<div class="bpick-av">'+(b.avatar||"🤖")+'</div><div class="bpick-nm">'+(b.name||"Bot")+'</div>';
+    card.onclick=()=>{ if(sel>=0) addBotToZone(zones[sel],b.id);
+      document.getElementById("botPicker").style.display="none"; };
+    grid.appendChild(card);
+  });
+  if(!grid.children.length) grid.innerHTML='<div style="font-family:\'Barlow Condensed\';font-size:12px;color:var(--fog);padding:8px">No region bots yet — <a href="/bots" target="_blank" style="color:var(--ice)">create some</a>.</div>';
+  document.getElementById("botPicker").style.display="flex";
+}
+document.getElementById("botPickerCancel").onclick=()=>{document.getElementById("botPicker").style.display="none";};
+
+/* ---- sim chat (voice-first) ---- */
+let simChatZone=null,simChatMessages=[],simChatEntryTime=0,simVisited=[];
+let simMediaRec=null,simRecording=false,simSpeaking=false;
+let simBotHistory={};       // { "visitor": [{...}], trackerId: [...] }
+let simChatClientBot=null;  // active client bot for current chat (visitor bot OR tracker bot)
+const activeBotPerZone={};  // zoneId → botId currently speaking; cleared on chat close
+
+// Kokoro TTS — neural in-browser TTS (cached after first ~45 MB download)
+const KokoroVoice = {
+  tts: null, _loading: false, _error: null, voice: 'af_bella',
+
+  async load(onProgress) {
+    if (this.tts) return true;
+    if (this._loading || this._error) return false;
+    this._loading = true;
+    try {
+      const { KokoroTTS } = await import('https://esm.sh/kokoro-js');
+      this.tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0', {
+        dtype: 'q4', progress_callback: onProgress || (()=>{})
+      });
+      this._loading = false;
+      return true;
+    } catch(e) {
+      this._error = e.message; this._loading = false;
+      console.warn('Kokoro load failed:', e);
+      return false;
+    }
+  },
+
+  async generate(text) {
+    if (!this.tts) return null;
+    return await this.tts.generate(text, { voice: this.voice });
+    // returns { audio: Float32Array, sampling_rate: number }
+  }
+};
+
+// TTSVoice — own node chain, independent of SimVoice ambient loop
+const TTSVoice = {
+  ctx: null, nodes: null, _src: null,
+  _ensure() {
+    SimVoice.ensure();
+    if (this.ctx) return;
+    this.ctx = SimVoice.ctx;
+    const c = this.ctx;
+    const mono = c.createGain(); mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
+    const lpf  = c.createBiquadFilter(); lpf.type='lowpass'; lpf.Q.value=0.7;
+    const pan  = c.createStereoPanner();
+    const vol  = c.createGain(); vol.gain.value=1;
+    const dry  = c.createGain(); dry.gain.value=1;
+    const conv = c.createConvolver();
+    const rlen = Math.floor(c.sampleRate*1.2), rb = c.createBuffer(2,rlen,c.sampleRate);
+    for(let ch=0;ch<2;ch++){const d=rb.getChannelData(ch);for(let i=0;i<rlen;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/rlen,2.6);}
+    conv.buffer = rb;
+    const wet = c.createGain(); wet.gain.value=0;
+    mono.connect(lpf); lpf.connect(pan); pan.connect(vol);
+    vol.connect(dry); dry.connect(c.destination);
+    vol.connect(conv); conv.connect(wet); wet.connect(c.destination);
+    this.nodes = {mono, lpf, pan, vol, dry, conv, wet};
+  },
+  play(buf, distM, onEnd) {
+    this._ensure();
+    const c = this.ctx;
+    if (c.state === 'suspended') c.resume();
+    if (this._src) { try { this._src.stop(); } catch(e) {} }
+    const s = c.createBufferSource(); s.buffer = buf;
+    s.connect(this.nodes.mono); s.start();
+    this._src = s;
+    const t = SimVoice.tuning;
+    const f = Math.max(0, Math.min(1, (distM - t.clearM) / Math.max(1, t.farM - t.clearM)));
+    this.nodes.lpf.frequency.setValueAtTime(t.hiHz * Math.pow(t.loHz/t.hiHz, f), c.currentTime);
+    this.nodes.vol.gain.setValueAtTime(t.minGain + (1-t.minGain) * Math.pow(1-f, t.curve), c.currentTime);
+    this.nodes.wet.gain.setValueAtTime(t.reverbMax * Math.pow(f, 0.6), c.currentTime);
+    this.nodes.pan.pan.setValueAtTime(0, c.currentTime);
+    s.onended = () => { if (onEnd) onEnd(); };
+  },
+  stop() { if (this._src) { try { this._src.stop(); } catch(e) {} this._src = null; } }
+};
+
+function _playKokoroResult(result, distM, text, onEnd) {
+  TTSVoice._ensure();
+  const c = TTSVoice.ctx;
+  const buf = c.createBuffer(1, result.audio.length, result.sampling_rate);
+  buf.getChannelData(0).set(result.audio);
+  TTSVoice.play(buf, distM, () => { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); });
+}
+
+async function simSpeak(text, onEnd) {
+  if (!text) return;
+  simSpeaking = true; _micBtnState();
+  const distM = (simChatZone && simPrev)
+    ? SimGeo.hav([simPrev.lat,simPrev.lon], simChatZone.center || [simPrev.lat,simPrev.lon])
+    : 0;
+
+  // Kokoro loaded — best quality
+  if (KokoroVoice.tts) {
+    try {
+      const result = await KokoroVoice.generate(text);
+      if (result) { _playKokoroResult(result, distM, text, onEnd); return; }
+    } catch(e) { console.warn('Kokoro generate error:', e); }
+  }
+
+  // Workers AI TTS — fallback (spatial filter still applies)
+  fetch('/api/tts', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({text})})
+    .then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status))
+    .then(ab => {
+      TTSVoice._ensure();
+      TTSVoice.ctx.decodeAudioData(ab, buf => {
+        TTSVoice.play(buf, distM, () => { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); });
+      }, () => _fallbackSpeak(text, onEnd));
+    })
+    .catch(() => _fallbackSpeak(text, onEnd));
+}
+
+function _fallbackSpeak(text, onEnd) {
+  if (!window.speechSynthesis) { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate=1.05; u.pitch=1.0;
+  u.onend = () => { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); };
+  speechSynthesis.speak(u);
+}
+function _micBtnState(){
+  const btn=document.getElementById("simMicBtn");if(!btn)return;
+  if(simRecording){btn.textContent="🔴 Recording — tap to send";btn.className="mic-btn listening";}
+  else if(simSpeaking){btn.textContent="🔊 Speaking…";btn.className="mic-btn speaking";}
+  else{btn.textContent="🎤 Tap to speak";btn.className="mic-btn";}
+}
+async function simStartListening(){
+  if(simRecording){
+    simMediaRec&&simMediaRec.state==="recording"&&simMediaRec.stop();return;
+  }
+  speechSynthesis.cancel();
+  const tr=document.getElementById("simChatTranscript");
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const chunks=[];
+    simMediaRec=new MediaRecorder(stream);
+    simMediaRec.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
+    simMediaRec.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      simRecording=false;_micBtnState();
+      tr.textContent="Transcribing…";
+      try{
+        const blob=new Blob(chunks,{type:simMediaRec.mimeType||"audio/webm"});
+        const ab=await blob.arrayBuffer();
+        const resp=await fetch("/api/transcribe",{method:"POST",headers:{"Content-Type":"audio/webm"},body:ab});
+        const{text,error}=await resp.json();
+        if(error)throw new Error(error);
+        if(text){tr.textContent='"'+text+'"';_doSendChat(text);}
+        else tr.textContent="Nothing heard — tap to try again";
+      }catch(e){tr.textContent="Transcription error: "+e.message;}
+    };
+    simMediaRec.start();simRecording=true;_micBtnState();
+    tr.textContent="Recording… tap to send";
+    // auto-stop after 8 s
+    setTimeout(()=>{if(simRecording&&simMediaRec&&simMediaRec.state==="recording")simMediaRec.stop();},8000);
+  }catch(e){tr.textContent="Mic error: "+e.message;}
+}
+function resolveBot(id){ return (simBundle.bots||[]).find(b=>b.id===id)||null; }
+
+// Evaluate a single condition against live state + cached weather
+let _simWeatherCache=null;
+async function _fetchSimWeather(){
+  if(_simWeatherCache)return _simWeatherCache;
+  try{ const r=await fetch("/api/weather"); if(r.ok){ _simWeatherCache=(await r.json()).latest||null; }}catch(e){}
+  return _simWeatherCache;
+}
+function _evalCond(cond, state, weather){
+  if(!cond||!cond.type)return false;
+  const visited=(state.visitorHistory||[]).some(h=>h.zoneName===state.zoneName);
+  switch(cond.type){
+    case "visited":      return visited;
+    case "first_visit":  return (state.visitorHistory||[]).length===0;
+    case "speed_gt":     return (state.speedKmh||0)>cond.value;
+    case "snow_gt":      return weather&&(weather.hn24_cm||0)>cond.value;
+    case "temp_lt":      return weather&&(weather.ww_temp_c||0)<cond.value;
+    case "wind_gt":      return weather&&(weather.ww_wind_spd_kph||0)>cond.value;
+    case "time_before":  return new Date().getHours()<cond.value;
+    case "time_after":   return new Date().getHours()>cond.value;
+    default:             return false;
+  }
+}
+// Select the winning bot from a zone's bots[] array using conditions
+async function selectZoneBot(zone){
+  migrateZoneBots(zone);
+  if(!zone.bots||!zone.bots.length) return resolveBot(zone.botId)||null;
+  const state=_buildGeoState();
+  const weather=await _fetchSimWeather();
+  // Sort: promoted bots float to top, then by priority
+  let slots=[...zone.bots].map((s,i)=>({...s,_origIdx:i}));
+  slots=slots.sort((a,b)=>{
+    const aP=a.promoteIf&&_evalCond(a.promoteIf,state,weather)?1:0;
+    const bP=b.promoteIf&&_evalCond(b.promoteIf,state,weather)?1:0;
+    return bP-aP || a.priority-b.priority;
+  });
+  // Return first non-suppressed, non-active bot
+  for(const s of slots){
+    if(activeBotPerZone[zone.id]===s.botId) continue; // already speaking
+    if(!_evalCond(s.suppressIf,state,weather)){
+      const bot=resolveBot(s.botId);
+      if(bot)return bot;
+    }
+  }
+  return null; // all suppressed or active
+}
+function _buildGeoState(){
+  const ap=simAvatar?simAvatar.getLngLat():null;
+  const _cmp=d=>['N','NE','E','SE','S','SW','W','NW'][Math.round(d/45)%8];
+  const nearbyZones=ap?simBundle.zones.filter(z=>z!==simChatZone&&z.center)
+    .map(z=>{const distanceM=SimGeo.hav([ap.lat,ap.lng],z.center);
+      return{name:z.name,distanceM,direction:_cmp(SimGeo.bearing([ap.lat,ap.lng],z.center))};})
+    .filter(z=>z.distanceM<150).sort((a,b)=>a.distanceM-b.distanceM).slice(0,3):[];
+  const distFromCenterM=ap&&simChatZone&&simChatZone.center?Math.round(SimGeo.hav([ap.lat,ap.lng],simChatZone.center)):null;
+  const speedKmh=Math.round(SimSmoother.spd*3.6*10)/10;
+  const now=Date.now();
+  const _d=new Date();const _hh=String(_d.getHours()).padStart(2,'0'),_mm=String(_d.getMinutes()).padStart(2,'0');
+  const timeOfDay=`${_hh}:${_mm} (${_d.getHours()<12?'morning':_d.getHours()<17?'afternoon':'evening'})`;
+  const headingDeg=SimSmoother.lastHeading!=null?Math.round(SimSmoother.lastHeading):null;
+  const trackers=[];
+  (simBundle.zones||[]).filter(srcZ=>srcZ.trackerId&&srcZ.center).forEach(srcZ=>{
+    const ts=trackerSmoother(srcZ.trackerId);
+    const tSpeedKmh=Math.round(ts.spd*3.6*10)/10;
+    const tHeadingDeg=ts.lastHeading!=null?Math.round(ts.lastHeading):null;
+    (simBundle.zones||[]).forEach(tgtZ=>{(tgtZ.layers||[]).forEach((layer,i)=>{
+      const k=srcZ.trackerId+":"+tgtZ.id+":"+layer.kind+":"+i;
+      const st=SimFencer.state[k];
+      if(st&&st.phase==="in") trackers.push({trackerId:srcZ.trackerId,zoneName:tgtZ.name,
+        dwellSeconds:Math.round((now-st.t0)/1000),speedKmh:tSpeedKmh,headingDeg:tHeadingDeg});
+    });});
+  });
+  const visitorHistory=(simBotHistory.visitor||[]).filter(r=>r.exitedAt!=null).slice(-10)
+    .map(r=>({zoneName:r.zoneName,dwellSeconds:r.dwellSeconds}));
+  const trackerHistories={};
+  trackers.forEach(t=>{const hist=(simBotHistory[t.trackerId]||[]).filter(r=>r.exitedAt!=null).slice(-10)
+    .map(r=>({zoneName:r.zoneName,dwellSeconds:r.dwellSeconds}));if(hist.length)trackerHistories[t.trackerId]=hist;});
+  const peerHistories={};
+  (simBundle.zones||[]).filter(srcZ=>srcZ.trackerId).forEach(srcZ=>{
+    const bot=resolveBot(srcZ.botId)||resolveBot(srcZ.clientBotId);
+    const hist=(simBotHistory[srcZ.trackerId]||[]).filter(r=>r.exitedAt!=null).slice(-10)
+      .map(r=>({zoneName:r.zoneName,dwellSeconds:r.dwellSeconds}));
+    if(hist.length) peerHistories[bot?(bot.name||srcZ.trackerId):srcZ.trackerId]=hist;
+  });
+  return{zoneName:simChatZone?simChatZone.name:"",dwellSeconds:(now-simChatEntryTime)/1000,
+    previousZones:simVisited.filter(n=>n!==simChatZone?.name),nearbyZones,distFromCenterM,speedKmh,
+    headingDeg,timeOfDay,trackers,visitorHistory,trackerHistories,peerHistories};
+}
+async function openSimChat(zone, clientBotOverride){
+  simChatZone=zone;simChatMessages=[];simChatEntryTime=Date.now();
+  simChatClientBot=clientBotOverride!==undefined ? clientBotOverride : resolveBot(simBundle.visitorBotId)||null;
+  // Select winning bot (skips any already active for this zone)
+  const rBot=await selectZoneBot(zone);
+  // No bot — SimVoice already plays the R2 clip spatially; just bail
+  if(!rBot&&!zone.chatGreeting&&!zone.chatPersona){
+    simChatZone=null; return;
+  }
+  // Bot about to speak — silence the ambient R2 loop so they don't overlap
+  SimVoice.fadeOut();
+  // Mark this bot active so re-entry picks the next one
+  if(rBot&&zone.id) activeBotPerZone[zone.id]=rBot.id;
+  const name=rBot?rBot.name:(zone.chatPersona||"").split(/[,.\n]/)[0].replace(/^you are\s*/i,"").trim()||"Guide";
+  document.getElementById("simChatHeader").textContent=(rBot?rBot.avatar||"💬":"💬")+" "+name+" — "+zone.name;
+  document.getElementById("simChatTranscript").textContent="";
+  const log=document.getElementById("simChatLog");log.innerHTML="";
+  document.getElementById("simChat").style.display="flex";
+  _micBtnState();
+  const greeting=rBot?rBot.greeting:(zone.chatGreeting||zone.greeting||"");
+  if(greeting) _autoGreet(greeting,log,rBot);
+}
+async function _autoGreet(hint,log,rBotOverride){
+  // greeting field is a Groq prompt — generate a live response using full context
+  const rBot=rBotOverride||resolveBot(simChatZone.botId)||{persona:simChatZone.chatPersona||"",knowledge:simChatZone.chatKnowledge||""};
+  const geoState=_buildGeoState();
+  const respEl=document.createElement("div");
+  respEl.style.cssText="margin:3px 0;padding:5px 8px;border-radius:7px;line-height:1.45;background:#0f1d2e;color:var(--ice)";
+  respEl.textContent="…";log.appendChild(respEl);log.scrollTop=log.scrollHeight;
+  try{
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({regionBot:rBot,clientBot:simChatClientBot,
+        messages:[{role:"user",content:hint}],geofenceState:geoState,isGreeting:true})});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const reader=r.body.getReader(),dec=new TextDecoder();
+    let buf="",full="";respEl.textContent="";
+    while(true){const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split("\n");buf=lines.pop();
+      for(const line of lines){if(!line.startsWith("data:"))continue;
+        const d=line.slice(5).trim();if(d==="[DONE]")break;
+        try{const t=JSON.parse(d).choices?.[0]?.delta?.content;if(t){full+=t;respEl.textContent=full;log.scrollTop=log.scrollHeight;}}catch(e){}}}
+    if(full){simChatMessages.push({role:"assistant",content:full});simSpeak(full);}
+    else{respEl.remove();}
+  }catch(e){respEl.textContent="(greeting failed: "+e.message+")";}
+}
+function closeSimChat(){
+  speechSynthesis.cancel();
+  if(simMediaRec&&simMediaRec.state==="recording"){try{simMediaRec.stop();}catch(e){}}
+  simRecording=false;simSpeaking=false;simChatClientBot=null;
+  if(simChatZone){
+    if(!simVisited.includes(simChatZone.name))simVisited.push(simChatZone.name);
+    if(simChatZone.id) delete activeBotPerZone[simChatZone.id]; // release bot for next trigger
+  }
+  simChatZone=null;simChatMessages=[];
+  document.getElementById("simChat").style.display="none";
+}
+function addChatMsg(role,text,log){
+  log=log||document.getElementById("simChatLog");
+  const d=document.createElement("div");
+  d.style.cssText="margin:3px 0;padding:5px 8px;border-radius:7px;line-height:1.45;"
+    +(role==="user"?"background:#1b2738;color:var(--snow);text-align:right":"background:#0f1d2e;color:var(--ice)");
+  d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;
+}
+async function _doSendChat(text){
+  if(!text.trim()||!simChatZone)return;
+  document.getElementById("simChatTranscript").textContent="";
+  const log=document.getElementById("simChatLog");
+  addChatMsg("user",text,log);
+  simChatMessages.push({role:"user",content:text});
+  const geofenceState=_buildGeoState();
+  const respEl=document.createElement("div");
+  respEl.style.cssText="margin:3px 0;padding:5px 8px;border-radius:7px;line-height:1.45;background:#0f1d2e;color:var(--ice)";
+  respEl.textContent="…";log.appendChild(respEl);log.scrollTop=log.scrollHeight;
+  try{
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        regionBot: resolveBot(simChatZone.botId) || {persona:simChatZone.chatPersona||"",knowledge:simChatZone.chatKnowledge||"",greeting:simChatZone.chatGreeting||""},
+        clientBot: simChatClientBot,
+        messages:simChatMessages.slice(-10),geofenceState})});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const reader=r.body.getReader(),dec=new TextDecoder();
+    let buf="",full="";respEl.textContent="";
+    while(true){
+      const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split("\n");buf=lines.pop();
+      for(const line of lines){
+        if(!line.startsWith("data: "))continue;
+        const d=line.slice(6).trim();if(d==="[DONE]")break;
+        try{const j=JSON.parse(d),tok=j.choices?.[0]?.delta?.content||"";
+          if(tok){full+=tok;respEl.textContent=full;log.scrollTop=log.scrollHeight;}}catch(e){}
+      }
+    }
+    if(full){simChatMessages.push({role:"assistant",content:full});simSpeak(full);}
+  }catch(e){respEl.style.color="var(--hazard)";respEl.textContent="Error: "+e.message;}
+}
+document.getElementById("simMicBtn").onclick=simStartListening;
+document.getElementById("simChatSend").onclick=()=>{
+  const v=document.getElementById("simChatInput").value.trim();
+  if(v){document.getElementById("simChatInput").value="";_doSendChat(v);}
+};
+document.getElementById("simChatInput").addEventListener("keydown",e=>{
+  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();
+    const v=e.target.value.trim();if(v){e.target.value="";_doSendChat(v);}}
+});
+
+document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
+document.getElementById("simWalk").onclick=()=>{
+  if(!simMode)return;simBundle=editorToSimBundle();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
+  if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
+  simPlay();};
+document.getElementById("simPlay").onclick=simPlay;
+document.getElementById("simMute").onclick=(e)=>{simSoundOn=!simSoundOn;
+  e.target.textContent=simSoundOn?"Sound ◼":"Muted ◻";e.target.classList.toggle("on",simSoundOn);
+  if(!simSoundOn){SimVoice.fadeOut();try{speechSynthesis.cancel();}catch(err){}}};
+document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
+  simBundle=editorToSimBundle();refreshSimChips();simLogEv("sev-sys","reset");};
+// speed presets
+(function(){
+  const slider=document.getElementById("simSpd");
+  const label=document.getElementById("simSpdV");
+  const SpdPresets={0.35:"🚶 Walk",1.4:"🚴 Bike",2.8:"⛷️ Ski",5.6:"🚗 Car",8.3:"🚂 Train",34.7:"✈️ Plane"};
+  function setSpeed(val,lbl){
+    slider.value=val;
+    label.textContent=lbl||(""+val+" m/t");
+    document.querySelectorAll(".spd-btn").forEach(b=>{
+      b.classList.toggle("on",parseFloat(b.dataset.spd)===parseFloat(val));
+    });
+  }
+  document.querySelectorAll(".spd-btn").forEach(btn=>{
+    btn.onclick=()=>setSpeed(parseFloat(btn.dataset.spd),btn.dataset.label);
+  });
+  slider.oninput=()=>{
+    const v=parseFloat(slider.value);
+    const preset=SpdPresets[v];
+    label.textContent=preset||Math.round(v*14.4)+" km/h";
+    document.querySelectorAll(".spd-btn").forEach(b=>b.classList.remove("on"));
+  };
+  setSpeed(1.4,"🚴 Bike");
+})();
+map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspended"&&SimVoice.ctx.resume();
+  const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());});
+
+/* ============================================================
+   Audio Lab — embedded spatial audio tester
+   ============================================================ */
+const AudioLab = {
+  _SA: {
+    ctx:null, buffer:null, src:null, nodes:null, playing:false,
+    tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.4, tau:0.09, curve:1.1, mode:"stereo" },
+    ensureCtx(){ if(this.ctx)return this.ctx; const AC=window.AudioContext||window.webkitAudioContext; this.ctx=new AC(); return this.ctx; },
+    build(){
+      const ctx=this.ensureCtx();
+      const mono=ctx.createGain(); mono.channelCount=1; mono.channelCountMode="explicit"; mono.channelInterpretation="speakers";
+      const lp=ctx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=this.tuning.hiHz; lp.Q.value=0.7;
+      mono.connect(lp);
+      const stereo=ctx.createStereoPanner();
+      let panner=null;
+      if(ctx.createPanner){ panner=ctx.createPanner(); panner.panningModel="HRTF"; panner.distanceModel="linear"; panner.refDistance=1; panner.maxDistance=10000; panner.rolloffFactor=0; }
+      const dry=ctx.createGain(); dry.gain.value=1;
+      const conv=ctx.createConvolver(); const rlen=Math.floor(ctx.sampleRate*1.6); const rbuf=ctx.createBuffer(2,rlen,ctx.sampleRate);
+      for(let ch=0;ch<2;ch++){ const d=rbuf.getChannelData(ch); for(let i=0;i<rlen;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/rlen,2.6); }
+      conv.buffer=rbuf;
+      const wet=ctx.createGain(); wet.gain.value=0;
+      const fade=ctx.createGain(); fade.gain.value=0;
+      const vol=ctx.createGain(); vol.gain.value=1;
+      lp.connect(stereo); stereo.connect(vol); vol.connect(dry); dry.connect(fade); vol.connect(conv); conv.connect(wet); wet.connect(fade); fade.connect(ctx.destination);
+      this.nodes={mono,lp,stereo,panner,dry,conv,wet,fade,vol};
+      this.setMode(this.tuning.mode);
+    },
+    setMode(mode){
+      this.tuning.mode=mode;
+      if(!this.nodes)return;
+      const{lp,stereo,panner,vol}=this.nodes;
+      try{lp.disconnect();}catch(e){} try{stereo.disconnect();}catch(e){} if(panner){try{panner.disconnect();}catch(e){}}
+      if(mode==="hrtf"&&panner){lp.connect(panner);panner.connect(vol);}else{lp.connect(stereo);stereo.connect(vol);}
+    },
+    setBuffer(buf){
+      if(!buf||buf.numberOfChannels<=1){this.buffer=buf;return;}
+      const c=this.ensureCtx(),len=buf.length,out=c.createBuffer(1,len,buf.sampleRate),o=out.getChannelData(0);
+      for(let ch=0;ch<buf.numberOfChannels;ch++){const d=buf.getChannelData(ch);for(let i=0;i<len;i++)o[i]+=d[i];}
+      let peak=0;for(let i=0;i<len;i++){const a=Math.abs(o[i]);if(a>peak)peak=a;}
+      if(peak>1)for(let i=0;i<len;i++)o[i]/=peak;
+      this.buffer=out;
+    },
+    play(){
+      if(!this.buffer)return false;
+      const ctx=this.ensureCtx(); if(ctx.state==="suspended")ctx.resume();
+      if(!this.nodes)this.build();
+      if(this.src){try{this.src.stop();}catch(e){}}
+      const s=ctx.createBufferSource(); s.buffer=this.buffer; s.loop=true;
+      s.connect(this.nodes.mono); s.start();
+      this.src=s; this.playing=true;
+      const g=this.nodes.fade.gain; g.cancelScheduledValues(ctx.currentTime); g.setValueAtTime(g.value,ctx.currentTime); g.linearRampToValueAtTime(1,ctx.currentTime+0.6);
+      return true;
+    },
+    stop(){
+      if(!this.nodes||!this.src)return;
+      const ctx=this.ctx,g=this.nodes.fade.gain;
+      g.cancelScheduledValues(ctx.currentTime); g.setValueAtTime(g.value,ctx.currentTime); g.linearRampToValueAtTime(0,ctx.currentTime+0.4);
+      const s=this.src; setTimeout(()=>{try{s.stop();}catch(e){}},450); this.playing=false;
+    },
+    update(az,distM){
+      if(!this.nodes)return null;
+      const ctx=this.ctx,t=this.tuning,tau=t.tau;
+      const f=Math.max(0,Math.min(1,(distM-t.clearM)/Math.max(1,t.farM-t.clearM)));
+      const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz,f);
+      const gain=t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve||2);
+      const wet=t.reverbMax*Math.pow(f,0.6);
+      const pan=Math.max(-1,Math.min(1,Math.sin(az)));
+      this.nodes.lp.frequency.setTargetAtTime(cutoff,ctx.currentTime,tau);
+      this.nodes.vol.gain.setTargetAtTime(gain,ctx.currentTime,tau);
+      this.nodes.wet.gain.setTargetAtTime(wet,ctx.currentTime,tau);
+      if(t.mode==="hrtf"&&this.nodes.panner){
+        const r=2,X=Math.sin(az)*r,Z=-Math.cos(az)*r,p=this.nodes.panner;
+        if(p.positionX){p.positionX.setTargetAtTime(X,ctx.currentTime,tau);p.positionY.setTargetAtTime(0,ctx.currentTime,tau);p.positionZ.setTargetAtTime(Z,ctx.currentTime,tau);}
+        else p.setPosition(X,0,Z);
+      }else{
+        this.nodes.stereo.pan.setTargetAtTime(pan,ctx.currentTime,tau);
+      }
+      return{cutoff,gain,wet,pan};
+    },
+    forcePan(p){
+      this.setMode("stereo");
+      if(this.nodes&&this.nodes.stereo)this.nodes.stereo.pan.setValueAtTime(p,this.ensureCtx().currentTime);
+    }
+  },
+
+  async ensureTone(){
+    const ctx=this._SA.ensureCtx();
+    const dur=2,rate=ctx.sampleRate,len=Math.floor(rate*dur),buf=ctx.createBuffer(1,len,rate),d=buf.getChannelData(0);
+    for(let i=0;i<len;i++){const t=i/rate;const pulse=Math.exp(-((t%0.5))*7);const tone=Math.sin(2*Math.PI*440*t)*0.3+Math.sin(2*Math.PI*660*t)*0.2;const noise=(Math.random()*2-1)*0.5;d[i]=(tone+noise*pulse)*0.4;}
+    this._SA.setBuffer(buf);
+  },
+
+  _az: 0,
+  _distM: 0,
+
+  // copy current tuning to SimVoice so sim test uses the same constants
+  syncToSimVoice(){
+    if(typeof SimVoice==="undefined") return;
+    const t=this._SA.tuning;
+    SimVoice.tuning.hiHz=t.hiHz; SimVoice.tuning.loHz=t.loHz;
+    SimVoice.tuning.minGain=t.minGain; SimVoice.tuning.reverbMax=t.reverbMax;
+    SimVoice.tuning.tau=t.tau; SimVoice.tuning.curve=t.curve;
+  },
+
+  // return plain object of EQ constants (persisted in bundle)
+  getTuning(){
+    const t=this._SA.tuning;
+    return{hiHz:t.hiHz,loHz:t.loHz,minGain:t.minGain,reverbMax:t.reverbMax,tau:t.tau,curve:t.curve};
+  },
+
+  // restore tuning from saved object, update sliders
+  setTuning(obj){
+    if(!obj) return;
+    const t=this._SA.tuning;
+    const $=id=>document.getElementById(id);
+    if(obj.loHz!=null){    t.loHz=obj.loHz;     $("alLoHz").value=obj.loHz;     $("alLoHzV").textContent=obj.loHz+" Hz"; }
+    if(obj.reverbMax!=null){t.reverbMax=obj.reverbMax; $("alRevMax").value=Math.round(obj.reverbMax*100); $("alRevMaxV").textContent=obj.reverbMax.toFixed(2); }
+    if(obj.minGain!=null){ t.minGain=obj.minGain; $("alMinGain").value=Math.round(obj.minGain*100); $("alMinGainV").textContent=obj.minGain.toFixed(2); }
+    if(obj.curve!=null){   t.curve=obj.curve;   $("alCurve").value=Math.round(obj.curve*100); $("alCurveV").textContent=obj.curve.toFixed(1)+"×"; }
+    if(obj.hiHz!=null)    t.hiHz=obj.hiHz;
+    if(obj.tau!=null)     t.tau=obj.tau;
+    this.syncToSimVoice();
+  },
+
+  refresh(){
+    const out=this._SA.update(this._az,this._distM);
+    const $=id=>document.getElementById(id);
+    $("alDistV").textContent=Math.round(this._distM);
+    if(out){
+      $("alHz").textContent=Math.round(out.cutoff)+" Hz";
+      $("alGain").textContent=out.gain.toFixed(2);
+      $("alRev").textContent=out.wet.toFixed(2);
+      $("alPan").textContent=out.pan.toFixed(2);
+    }
+  },
+
+  init(){
+    const $=id=>document.getElementById(id);
+    const tog=$("audioLabToggle"), body=$("audioLabBody");
+    tog.onclick=()=>{
+      const open=body.style.display==="flex";
+      body.style.display=open?"none":"flex";
+      tog.textContent=(open?"▸":"▾")+" 🔊 Audio Lab";
+    };
+
+    // file load
+    $("alFile").onchange=async e=>{
+      const f=e.target.files[0]; if(!f)return;
+      const ctx=this._SA.ensureCtx(); const ab=await f.arrayBuffer();
+      ctx.decodeAudioData(ab,b=>{this._SA.setBuffer(b); if(this._SA.playing)this._SA.play();},()=>alert("Couldn't decode audio."));
+    };
+
+    // zone clip
+    $("alZoneClip").onclick=async()=>{
+      const z=selectedZone; if(!z||!z.audioUrl){alert("Select a zone with an audio clip first.");return;}
+      try{
+        const r=await fetch(z.audioUrl); const ab=await r.arrayBuffer();
+        const ctx=this._SA.ensureCtx();
+        ctx.decodeAudioData(ab,b=>{this._SA.setBuffer(b); if(this._SA.playing)this._SA.play();},()=>alert("Couldn't decode zone clip."));
+      }catch(e){alert("Couldn't load zone clip: "+e.message);}
+    };
+
+    // tone
+    $("alTone").onclick=async()=>{ await this.ensureTone(); if(this._SA.playing)this._SA.play(); };
+
+    // play/stop
+    const playBtn=$("alPlay");
+    playBtn.onclick=()=>{
+      if(this._SA.playing){
+        this._SA.stop();
+        playBtn.textContent="▶ Play";
+        playBtn.className="ghost";
+        return;
+      }
+      const go=()=>{ const ok=this._SA.play(); if(ok){playBtn.textContent="■ Stop";playBtn.className="";this.refresh();} };
+      if(!this._SA.buffer){ this.ensureTone().then(go); return; }
+      go();
+    };
+
+    // mode
+    document.querySelectorAll(".alMode").forEach(b=>b.onclick=()=>{
+      document.querySelectorAll(".alMode").forEach(x=>{x.style.background="transparent";x.style.color="var(--ice)";});
+      b.style.background="var(--coral)"; b.style.color="#1a0d07";
+      this._SA.setMode(b.dataset.m); this.refresh();
+    });
+
+    // pan test
+    $("alPanL").onclick=()=>{this._SA.forcePan(-1); $("alPan").textContent="-1.00";};
+    $("alPanC").onclick=()=>{this._SA.forcePan(0);  $("alPan").textContent="0.00";};
+    $("alPanR").onclick=()=>{this._SA.forcePan(1);  $("alPan").textContent="1.00";};
+
+    // distance slider
+    $("alDist").oninput=()=>{ this._distM=+$("alDist").value; this.refresh(); };
+
+    // EQ sliders — update tuning + sync to SimVoice on every change
+    $("alLoHz").oninput=()=>{
+      this._SA.tuning.loHz=+$("alLoHz").value;
+      $("alLoHzV").textContent=$("alLoHz").value+" Hz";
+      this.syncToSimVoice(); this.refresh();
+    };
+    $("alRevMax").oninput=()=>{
+      this._SA.tuning.reverbMax=+$("alRevMax").value/100;
+      $("alRevMaxV").textContent=(+$("alRevMax").value/100).toFixed(2);
+      this.syncToSimVoice(); this.refresh();
+    };
+    $("alMinGain").oninput=()=>{
+      this._SA.tuning.minGain=+$("alMinGain").value/100;
+      $("alMinGainV").textContent=(+$("alMinGain").value/100).toFixed(2);
+      this.syncToSimVoice(); this.refresh();
+    };
+    $("alCurve").oninput=()=>{
+      this._SA.tuning.curve=+$("alCurve").value/100;
+      $("alCurveV").textContent=(+$("alCurve").value/100).toFixed(1)+"×";
+      this.syncToSimVoice(); this.refresh();
+    };
+
+    // voice selector
+    $("alVoice").onchange=()=>{
+      KokoroVoice.voice=$("alVoice").value;
+      if(KokoroVoice.tts){
+        const s=$("alModelStatus"); if(s){s.textContent="ready "+KokoroVoice.voice; s.style.color="var(--go)";}
+      }
+    };
+
+    // load model button
+    $("alModelLoad").onclick=async()=>{
+      const btn=$("alModelLoad"), st=$("alModelStatus"), bar=$("alModelBar"), fill=$("alModelFill");
+      if(KokoroVoice.tts){ st.textContent="already loaded: "+KokoroVoice.voice; return; }
+      if(KokoroVoice._loading){ st.textContent="downloading..."; return; }
+      btn.disabled=true; btn.textContent="...";
+      bar.style.display="block"; fill.style.width="0%";
+      st.style.color="var(--ice)"; st.textContent="starting download...";
+      const ok=await KokoroVoice.load(evt=>{
+        if(evt.status==="downloading"||evt.status==="progress"){
+          const pct=(evt.progress||0).toFixed(0);
+          fill.style.width=pct+"%";
+          const mb=evt.loaded?(evt.loaded/1048576).toFixed(1):"";
+          st.textContent="downloading "+pct+"%"+(mb?" - "+mb+" MB":"");
+        } else if(evt.status==="done"){
+          st.textContent="processing...";
+        }
+      });
+      btn.disabled=false; btn.textContent="Load";
+      bar.style.display="none"; fill.style.width="0%";
+      if(ok){ st.style.color="var(--go)"; st.textContent="ready: "+KokoroVoice.voice; }
+      else  { st.style.color="var(--hazard)"; st.textContent="load failed - check console"; }
+    };
+  }
+};
+
+AudioLab.init();
 </script>
 </body>
 </html>

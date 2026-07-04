@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -472,7 +472,7 @@ const Geofencer = {
       } else {
         const warn = lowAcc && mode==="warn";
         Audio.ding();
-        if(!zone.audioUrl) Audio.say(t.say, warn);   // recorded voice replaces TTS when present
+        if(!zone.audioUrl) Audio.say(t.say, warn, zone);   // recorded voice replaces TTS when present
         if(this.onEvent) this.onEvent({zone,kind:"say",text:t.say,warn});
       }
     }
@@ -520,11 +520,91 @@ const Audio = {
       o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.55);
     }catch(e){}
   },
-  say(text, warn){
-    try{ const u=new SpeechSynthesisUtterance(
-            text.replace(/–/g,' to ').replace(/°/g,' degrees '));
-         u.rate=1; u.pitch=warn?1.1:1; speechSynthesis.cancel(); speechSynthesis.speak(u);
+  say(text, warn, zoneOrDist){
+    const clean=text.replace(/–/g,' to ').replace(/°/g,' degrees ');
+    let d=0;
+    if(typeof zoneOrDist==='number') d=zoneOrDist;
+    else if(zoneOrDist&&zoneOrDist.center&&HUD.pos) d=Geo.hav([HUD.pos.lat,HUD.pos.lon],zoneOrDist.center);
+    // Kokoro if loaded, else Workers AI, else browser speechSynthesis
+    if(EngineKokoro.tts){
+      EngineKokoro.tts.generate(clean,{voice:EngineKokoro.voice})
+        .then(r=>{ EngineTTSVoice.play(r.audio,r.sampling_rate,d); })
+        .catch(()=>this._apiTTS(clean,d,warn));
+    } else {
+      this._apiTTS(clean,d,warn);
+    }
+  },
+  _apiTTS(text,d,warn){
+    fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})})
+      .then(r=>r.ok?r.arrayBuffer():Promise.reject(r.status))
+      .then(ab=>{
+        EngineTTSVoice._ensure();
+        EngineTTSVoice.ctx.decodeAudioData(ab,buf=>{
+          EngineTTSVoice.play(buf.getChannelData(0),buf.sampleRate,d);
+        },()=>this._fallback(text,warn));
+      })
+      .catch(()=>this._fallback(text,warn));
+  },
+  _fallback(text,warn){
+    try{ const u=new SpeechSynthesisUtterance(text);
+      u.rate=1; u.pitch=warn?1.1:1; speechSynthesis.cancel(); speechSynthesis.speak(u);
     }catch(e){} }
+};
+
+// Kokoro TTS — shared with editor via browser cache (same origin)
+const EngineKokoro={
+  tts:null, voice:'af_bella',
+  async tryLoad(){
+    if(this.tts) return;
+    try{
+      const{KokoroTTS}=await import('https://esm.sh/kokoro-js');
+      this.tts=await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0',{dtype:'q4',progress_callback:()=>{}});
+      HUD.log('ev-sys','Kokoro TTS ready');
+    }catch(e){ /* cached miss or no model yet — Workers AI fallback used */ }
+  }
+};
+
+// TTSVoice for engine — own node chain independent of SpatialVoice ambient loop
+const EngineTTSVoice={
+  ctx:null, nodes:null, _src:null,
+  _ensure(){
+    if(this.ctx) return true;
+    if(!Clarity.ready) Clarity.init();
+    const c=Clarity.ctx; if(!c) return false;
+    this.ctx=c;
+    const mono=c.createGain(); mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
+    const lpf=c.createBiquadFilter(); lpf.type='lowpass'; lpf.Q.value=0.7;
+    const pan=c.createStereoPanner();
+    const vol=c.createGain(); vol.gain.value=1;
+    const dry=c.createGain(); dry.gain.value=1;
+    const conv=c.createConvolver();
+    const rlen=Math.floor(c.sampleRate*1.2),rb=c.createBuffer(2,rlen,c.sampleRate);
+    for(let ch=0;ch<2;ch++){const d=rb.getChannelData(ch);for(let i=0;i<rlen;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/rlen,2.6);}
+    conv.buffer=rb;
+    const wet=c.createGain(); wet.gain.value=0;
+    mono.connect(lpf); lpf.connect(pan); pan.connect(vol);
+    vol.connect(dry); dry.connect(c.destination);
+    vol.connect(conv); conv.connect(wet); wet.connect(c.destination);
+    this.nodes={mono,lpf,pan,vol,dry,conv,wet};
+    return true;
+  },
+  play(samples,sampleRate,distM){
+    if(!this._ensure()) return;
+    const c=this.ctx;
+    if(c.state==='suspended') c.resume();
+    if(this._src){try{this._src.stop();}catch(e){}}
+    const buf=c.createBuffer(1,samples.length,sampleRate);
+    buf.getChannelData(0).set(samples);
+    const s=c.createBufferSource(); s.buffer=buf;
+    s.connect(this.nodes.mono); s.start();
+    this._src=s;
+    const t=SpatialVoice.tuning;
+    const f=Math.max(0,Math.min(1,(distM-t.clearM)/Math.max(1,t.farM-t.clearM)));
+    this.nodes.lpf.frequency.setValueAtTime(t.hiHz*Math.pow(t.loHz/t.hiHz,f),c.currentTime);
+    this.nodes.vol.gain.setValueAtTime(t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve),c.currentTime);
+    this.nodes.wet.gain.setValueAtTime(t.reverbMax*Math.pow(f,0.6),c.currentTime);
+    this.nodes.pan.pan.setValueAtTime(0,c.currentTime);
+  }
 };
 
 /* ============================ COMPASS ============================ */
@@ -1230,6 +1310,9 @@ document.getElementById('simHere').onclick=()=>{ simPos=BUNDLE.ref.slice(); tick
 HUD.log('ev-sys','engine loaded · '+BUNDLE.name+' · '+BUNDLE.zones.length+' stops');
 HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
 
+// try Kokoro from cache silently -- instant if editor already downloaded it
+EngineKokoro.tryLoad();
+
 /* if opened as ?project=<id>, load that published bundle from the platform;
    keep the built-in bundle if offline or the fetch fails */
 (async function loadProject(){
@@ -1245,6 +1328,8 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
     if(!b || !Array.isArray(b.zones) || !b.zones.length){
       HUD.log('ev-warn','platform bundle empty — using built-in bundle'); return; }
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+    if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
+      ['hiHz','loHz','minGain','reverbMax','tau','curve'].forEach(k=>{ if(st[k]!=null) t[k]=st[k]; }); }
     try{ localStorage.setItem(LKEY, JSON.stringify(b)); }catch(e){}   // keep a copy for offline
     if(document.getElementById('simZones')) buildSimZones();
     HUD.log('ev-sys','loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' · '+b.zones.length+' stops (from platform)');

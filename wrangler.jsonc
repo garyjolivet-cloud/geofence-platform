@@ -23,5 +23,11 @@
       "binding": "AUDIO",
       "bucket_name": "geofence-audio"
     }
-  ]
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "triggers": {
+    "crons": ["0 * * * *", "0 15 * * *"]
+  }
 }

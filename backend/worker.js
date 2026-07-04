@@ -39,6 +39,159 @@ function json(obj, status = 200, cors = CORS_PUBLIC) {
   });
 }
 
+function degToCompass(deg) {
+  const d = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return d[Math.round(deg / 22.5) % 16];
+}
+
+async function scrapeWeather(env) {
+  const resp = await fetch('https://kickinghorseresort.com/conditions/advanced-weather-data/', {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GeofencePlatform/1.0)' },
+    cf: { cacheEverything: false }
+  });
+  if (!resp.ok) throw new Error('KH fetch failed: ' + resp.status);
+  const html = await resp.text();
+
+  // Strip tags to plain text
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+
+  // Dogtooth section has both Dogtooth + WhiteWall columns merged per row
+  const sec = text.match(/DOGTOOTH SNOW STUDY PLOT([\s\S]+?)(?:Descriptions|PARTNERS|WHITE WALL REMOTE)/i)?.[1] || '';
+  // Data rows: start with month (1-2 digits) space day then 4-digit time
+  const rows = sec.split('\n').filter(l => /^\s{0,10}\d{1,2}\s+\d{1,2}\s+\d{3,4}\s/.test(l));
+  if (!rows.length) throw new Error('No Dogtooth data rows found');
+
+  const latest = rows[rows.length - 1].trim().split(/\s+/);
+  // cols: month day time dg_temp rh hn24 hst hs hour_precip precip_24hr gauge ww_time ww_temp ww_ws ww_wd ww_gust wind_run [month day]
+  if (latest.length < 16) throw new Error('Row too short: ' + latest.join(','));
+
+  // cols: month day time dg_temp rh hn24 hst hs hour_precip precip_24hr gauge ww_time ww_temp ww_ws ww_wd ww_gust wind_run [month day]
+  const [month, day, time, , , hn24, hst, hs, hourPrecip, precip24hr, , , wwTemp, wwWs, wwWd, wwGust] = latest;
+  const year = new Date().getUTCFullYear();
+  const readingDate = `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`;
+
+  await env.DB.prepare(`
+    INSERT INTO weather_cache (fetched_at, reading_date, reading_time, ww_temp_c, ww_wind_spd_kph, ww_wind_dir_deg, ww_wind_gust_kph, hour_precip_mm, precip_24hr_mm)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    new Date().toISOString(), readingDate, parseInt(time),
+    parseFloat(wwTemp), parseFloat(wwWs), parseInt(wwWd), parseFloat(wwGust),
+    parseFloat(hourPrecip), parseFloat(precip24hr)
+  ).run();
+
+  await env.DB.prepare(
+    `DELETE FROM weather_cache WHERE id NOT IN (SELECT id FROM weather_cache ORDER BY id DESC LIMIT 48)`
+  ).run();
+
+  return {
+    readingDate, readingTime: parseInt(time),
+    wwTemp: parseFloat(wwTemp), wwWs: parseFloat(wwWs), wwWd: parseInt(wwWd), wwGust: parseFloat(wwGust),
+    hourPrecip: parseFloat(hourPrecip), precip24hr: parseFloat(precip24hr),
+    hn24: parseFloat(hn24), hst: parseFloat(hst), hs: parseFloat(hs)
+  };
+}
+
+async function saveSnowSnapshot(env) {
+  const data = await scrapeWeather(env);
+  // snapshot_date is the local Mountain date (UTC-7 winter)
+  const localDate = new Date(Date.now() - 7 * 3600 * 1000).toISOString().slice(0, 10);
+  await env.DB.prepare(`
+    INSERT OR REPLACE INTO snow_history
+      (snapshot_date, taken_at, ww_temp_c, ww_wind_spd_kph, ww_wind_dir_deg, ww_wind_gust_kph, hour_precip_mm, precip_24hr_mm, hn24_cm, hst_cm, hs_cm)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    localDate, new Date().toISOString(),
+    data.wwTemp, data.wwWs, data.wwWd, data.wwGust,
+    data.hourPrecip, data.precip24hr,
+    data.hn24, data.hst, data.hs
+  ).run();
+
+  // Keep only last 14 days
+  await env.DB.prepare(
+    `DELETE FROM snow_history WHERE snapshot_date < date('now', '-14 days')`
+  ).run();
+
+  return { snapshotDate: localDate, ...data };
+}
+
+function buildChatPrompt(regionBot, clientBot, state, weather, snowHistory) {
+  const persona = (regionBot && regionBot.persona) || "You are a knowledgeable and friendly guide at this location.";
+  const knowledge = (regionBot && regionBot.knowledge) || "";
+  let p = persona.trim();
+  if (knowledge) p += "\n\nKNOWLEDGE ABOUT THIS LOCATION:\n" + knowledge.trim();
+  if (clientBot && clientBot.knowledge) p += "\n\nCLIENT PROFILE (you know this person):\n" + clientBot.knowledge.trim();
+
+  if (weather) {
+    p += "\n\nCURRENT MOUNTAIN CONDITIONS (White Wall station, 2325m):";
+    p += `\n  Temperature: ${weather.ww_temp_c}°C`;
+    p += `\n  Wind: ${weather.ww_wind_spd_kph} km/h from the ${degToCompass(weather.ww_wind_dir_deg)}, gusting to ${weather.ww_wind_gust_kph} km/h`;
+    p += weather.hour_precip_mm > 0
+      ? `\n  Precipitation last hour: ${weather.hour_precip_mm} mm`
+      : `\n  No precipitation in the last hour`;
+    if (weather.precip_24hr_mm > 0) p += `\n  24-hour precipitation: ${weather.precip_24hr_mm} mm`;
+    const t = String(weather.reading_time).padStart(4,'0');
+    p += `\n  (Reading time: ${weather.reading_date} ${t.slice(0,2)}:${t.slice(2)})`;
+  }
+
+  if (snowHistory && snowHistory.length) {
+    p += "\n\nSNOW HISTORY — last 14 days (8am daily snapshot):";
+    for (const r of snowHistory) {
+      const snow = r.hn24_cm > 0 ? ` | new snow: ${r.hn24_cm}cm` : '';
+      const precip = r.precip_24hr_mm > 0 ? ` | precip: ${r.precip_24hr_mm}mm` : '';
+      p += `\n  ${r.snapshot_date}: ${r.ww_temp_c}°C${snow}${precip}`;
+    }
+  }
+
+  p += "\n\nCURRENT VISITOR SITUATION:\n";
+  if (state) {
+    if (state.zoneName)         p += `At: ${state.zoneName}.\n`;
+    if (state.dwellSeconds > 5) p += `Time here: ${Math.round(state.dwellSeconds)}s.\n`;
+    if (state.previousZones && state.previousZones.length)
+      p += `Previously visited: ${state.previousZones.join(", ")}.\n`;
+    if (state.distFromCenterM != null)
+      p += `Distance from zone centre: ${state.distFromCenterM}m.\n`;
+    if (state.speedKmh != null) {
+      if (state.speedKmh > 15)     p += `Moving fast: ${state.speedKmh} km/h (skiing).\n`;
+      else if (state.speedKmh > 2) p += `Moving slowly: ${state.speedKmh} km/h.\n`;
+      else                          p += `Stationary.\n`;
+    }
+    if (state.headingDeg != null) {
+      const _16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+      const card = _16[Math.round(state.headingDeg / 22.5) % 16];
+      p += `Heading: ${card} (${state.headingDeg}°).\n`;
+    }
+    if (state.timeOfDay) p += `Local time: ${state.timeOfDay}.\n`;
+    if (state.nearbyZones && state.nearbyZones.length)
+      p += `Nearby: ${state.nearbyZones.map(z => `${z.name} (${Math.round(z.distanceM)}m ${z.direction})`).join(", ")}.\n`;
+    if (state.visitorHistory && state.visitorHistory.length)
+      p += `Visitor's zone history: ${state.visitorHistory.map(r => `${r.zoneName} (${r.dwellSeconds}s)`).join(" → ")}.\n`;
+    if (state.trackers && state.trackers.length) {
+      const _16c = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+      p += `Trackers currently in zones: ${state.trackers.map(t => {
+        let s = `${t.trackerId} in "${t.zoneName}" for ${t.dwellSeconds}s`;
+        if (t.speedKmh > 2) s += `, moving at ${t.speedKmh} km/h`;
+        else if (t.speedKmh != null) s += `, stationary`;
+        if (t.headingDeg != null) s += ` heading ${_16c[Math.round(t.headingDeg/22.5)%16]}`;
+        return s;
+      }).join("; ")}.\n`;
+    }
+    if (state.trackerHistories && Object.keys(state.trackerHistories).length) {
+      for (const [tid, hist] of Object.entries(state.trackerHistories))
+        p += `${tid} zone history: ${hist.map(r => `${r.zoneName} (${r.dwellSeconds}s)`).join(" → ")}.\n`;
+    }
+    if (state.peerHistories && Object.keys(state.peerHistories).length) {
+      p += "\nPEER BOT HISTORIES (shared by other moving bots):\n";
+      for (const [name, hist] of Object.entries(state.peerHistories))
+        p += `${name}: ${hist.map(r => `${r.zoneName} (${r.dwellSeconds}s)`).join(" → ")}.\n`;
+    }
+  }
+  // MARKET DATA: (coming soon — Yahoo Finance cron scrape cached in D1)
+  // NEWS: (coming soon — Al Jazeera RSS scrape cached in D1)
+  p += "\nKeep responses under 3 sentences unless asked for more. Stay in character.";
+  if (state && state.speedKmh > 15) p += " Visitor is skiing — 1 short sentence only.";
+  return p;
+}
+
 function authed(request, env) {
   const h = request.headers.get("authorization") || "";
   return !!env.ADMIN_TOKEN && h === "Bearer " + env.ADMIN_TOKEN;
@@ -97,7 +250,8 @@ export default {
       "/dashboard": "/dashboard.html",
       "/share": "/share.html",
       "/audio": "/audio-bench.html",
-      "/field": "/field-recorder.html"
+      "/field": "/field-recorder.html",
+      "/bots": "/bot-library.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     if (FRIENDLY[clean] && env.ASSETS) {
@@ -106,6 +260,15 @@ export default {
       return env.ASSETS.fetch(new Request(u.toString(), request));
     }
     return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
+  },
+
+  async scheduled(event, env) {
+    // Every hour: update real-time cache for Groq context
+    await scrapeWeather(env);
+    // At 15:00 UTC (8am MST): also save daily snow snapshot
+    if (event.cron === "0 15 * * *") {
+      await saveSnowSnapshot(env);
+    }
   }
 };
 
@@ -116,6 +279,18 @@ async function api(request, env, url) {
   const AC = adminCors(env);
 
   if (path === "/api/health") return json({ ok: true, db: !!env.DB, ts: Date.now() });
+
+  // --- nuke all data (master only) — wipes every row, keeps schema ---
+  if (path === "/api/nuke" && method === "DELETE") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    const tables = ["event","consent","device","audit_log","published_bundle","api_key","project","app","bot"];
+    const wiped = [], skipped = [];
+    for (const t of tables) {
+      try { await env.DB.prepare(`DELETE FROM ${t}`).run(); wiped.push(t); }
+      catch(e) { skipped.push(t); }
+    }
+    return json({ ok: true, wiped, skipped }, 200, AC);
+  }
 
   // --- API keys: create / list / revoke (master only) ---
   if (path === "/api/keys" && method === "POST") {
@@ -186,17 +361,73 @@ async function api(request, env, url) {
     return json({ ok: true, id, slug, name, created: true }, 200, AC);
   }
 
-  // --- delete an app (master only; refuses if projects remain) ---
+  // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
   const mda = path.match(/^\/api\/apps\/([^/]+)$/);
   if (mda && method === "DELETE") {
     if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
     const aid = decodeURIComponent(mda[1]);
-    const chk = await env.DB.prepare("SELECT id FROM project WHERE appId=? LIMIT 1").bind(aid).first();
-    if (chk) return json({ error: "remove or reassign this app's projects first" }, 409, AC);
+    const cascade = url.searchParams.get("cascade") === "true";
+    if (cascade) {
+      const { results: projs } = await env.DB.prepare("SELECT id FROM project WHERE appId=?").bind(aid).all();
+      for (const p of (projs || [])) {
+        await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(p.id).run();
+        await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(p.id).run();
+        await env.DB.prepare("DELETE FROM project WHERE id=?").bind(p.id).run();
+      }
+    } else {
+      const chk = await env.DB.prepare("SELECT id FROM project WHERE appId=? LIMIT 1").bind(aid).first();
+      if (chk) return json({ error: "remove or reassign this app's projects first, or use cascade=true" }, 409, AC);
+    }
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
     return json({ ok: true, deleted: aid }, 200, AC);
+  }
+
+  // --- bots: org-scoped reusable bot library ---
+  if (path === "/api/bots" && method === "GET") {
+    const appId = url.searchParams.get("appId");
+    const sql = appId
+      ? "SELECT * FROM bot WHERE app_id=? ORDER BY name"
+      : "SELECT * FROM bot ORDER BY name";
+    const { results } = await env.DB.prepare(sql).bind(...(appId ? [appId] : [])).all();
+    return json({ bots: results || [] });
+  }
+
+  if (path === "/api/bots" && method === "POST") {
+    const A = await auth(request, env);
+    if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    if (!b.name) return json({ error: "name required" }, 400, AC);
+    const id = b.id || "bot_" + crypto.randomUUID().slice(0, 8);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO bot (id,app_id,name,type,avatar,persona,knowledge,greeting,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).bind(id, b.appId || null, b.name, b.type || "region", b.avatar || "🤖",
+           b.persona || null, b.knowledge || null, b.greeting || null, now, now).run();
+    return json({ ok: true, id }, 201, AC);
+  }
+
+  const mbot = path.match(/^\/api\/bots\/([^/]+)$/);
+  if (mbot && method === "PUT") {
+    const A = await auth(request, env);
+    if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
+    const bid = decodeURIComponent(mbot[1]);
+    const b = await request.json().catch(() => ({}));
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "UPDATE bot SET name=COALESCE(?,name), type=COALESCE(?,type), avatar=COALESCE(?,avatar), persona=?, knowledge=?, greeting=?, app_id=COALESCE(?,app_id), updated_at=? WHERE id=?"
+    ).bind(b.name || null, b.type || null, b.avatar || null,
+           b.persona ?? null, b.knowledge ?? null, b.greeting ?? null,
+           b.appId || null, now, bid).run();
+    return json({ ok: true }, 200, AC);
+  }
+
+  if (mbot && method === "DELETE") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    const bid = decodeURIComponent(mbot[1]);
+    await env.DB.prepare("DELETE FROM bot WHERE id=?").bind(bid).run();
+    return json({ ok: true, deleted: bid }, 200, AC);
   }
 
   // --- move a project into an app (admin) ---
@@ -279,6 +510,17 @@ async function api(request, env, url) {
       await env.DB.prepare(
         "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
       ).bind(pid, ver, JSON.stringify(bundle), now).run();
+      // upsert bots from bundle into D1 bot table for cross-project reuse
+      if (Array.isArray(bundle.bots) && bundle.bots.length) {
+        const appId = bundle.appId || null;
+        for (const b of bundle.bots) {
+          if (!b.id || !b.name) continue;
+          await env.DB.prepare(
+            "INSERT INTO bot (id,app_id,name,type,avatar,persona,knowledge,greeting,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, type=excluded.type, avatar=excluded.avatar, persona=excluded.persona, knowledge=excluded.knowledge, greeting=excluded.greeting, app_id=COALESCE(excluded.app_id,bot.app_id), updated_at=excluded.updated_at"
+          ).bind(b.id, appId, b.name, b.type || "region", b.avatar || "🤖",
+                 b.persona || null, b.knowledge || null, b.greeting || null, now, now).run().catch(() => {});
+        }
+      }
       if (proj) {
         await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId) WHERE id=?")
           .bind(ver, now, bundle.appId || null, pid).run();
@@ -394,7 +636,9 @@ async function api(request, env, url) {
     const appId = pfx ? await projectAppId(env, pfx) : null;
     if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
     const listed = await env.AUDIO.list(pfx ? { prefix: pfx + "/" } : {});
-    return json({ objects: (listed.objects || []).map(o => ({ key: o.key, size: o.size, url: "/api/audio/" + o.key })) }, 200, AC);
+    return new Response(JSON.stringify({ objects: (listed.objects || []).map(o => ({ key: o.key, size: o.size, url: "/api/audio/" + o.key })) }), {
+      status: 200, headers: { "content-type": "application/json", "cache-control": "no-store", ...AC }
+    });
   }
 
   // --- audio assets in R2: upload (scoped) + serve (public) ---
@@ -404,7 +648,8 @@ async function api(request, env, url) {
     if (!env.AUDIO) return json({ error: "no audio bucket bound (create R2 'geofence-audio' + binding)" }, 500);
     if (method === "PUT") {
       const A = await auth(request, env);
-      if (!scopeOk(A, "audio", await projectAppId(env, key.split("/")[0]))) return json({ error: "not authorized to upload to this app" }, 401, AC);
+      const appId = await projectAppId(env, key.split("/")[0]);
+      if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "not authorized to upload to this app" }, 401, AC);
       const ct = request.headers.get("content-type") || "application/octet-stream";
       await env.AUDIO.put(key, request.body, { httpMetadata: { contentType: ct } });
       await logAudit(env, request, A, "audio.put", key);
@@ -423,11 +668,126 @@ async function api(request, env, url) {
     }
     if (method === "DELETE") {
       const A = await auth(request, env);
-      if (!scopeOk(A, "audio", await projectAppId(env, key.split("/")[0]))) return json({ error: "unauthorized" }, 401, AC);
+      const appId = await projectAppId(env, key.split("/")[0]);
+      if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
       await env.AUDIO.delete(key);
       await logAudit(env, request, A, "audio.delete", key);
       return json({ ok: true, deleted: key }, 200, AC);
     }
+  }
+
+  // --- whisper STT transcription ---
+  if (path === "/api/transcribe" && method === "POST") {
+    if (!env.AI) return json({ error: "AI binding not configured" }, 503, CORS_PUBLIC);
+    try {
+      const buf = await request.arrayBuffer();
+      if (!buf.byteLength) return json({ error: "empty audio" }, 400, CORS_PUBLIC);
+      const result = await env.AI.run("@cf/openai/whisper", {
+        audio: [...new Uint8Array(buf)]
+      });
+      return json({ text: (result.text || "").trim() }, 200, CORS_PUBLIC);
+    } catch(e) {
+      return json({ error: e.message }, 502, CORS_PUBLIC);
+    }
+  }
+
+  // --- TTS (Workers AI speecht5_tts → WAV) ---
+  if (path === "/api/tts" && method === "POST") {
+    if (!env.AI) return json({ error: "AI binding not configured" }, 503, CORS_PUBLIC);
+    try {
+      const { text } = await request.json();
+      if (!text || typeof text !== "string") return json({ error: "text required" }, 400, CORS_PUBLIC);
+      const result = await env.AI.run("@cf/microsoft/speecht5_tts", {
+        prompt: text.slice(0, 600)
+      });
+      // result.audio is Float32Array of 16 kHz PCM samples
+      const samples = result.audio;
+      if (!samples || !samples.length) return json({ error: "no audio returned" }, 502, CORS_PUBLIC);
+      // encode PCM → WAV
+      const pcmBuf = new ArrayBuffer(samples.length * 2);
+      const pcm = new DataView(pcmBuf);
+      for (let i = 0; i < samples.length; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        pcm.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+      const wav = new ArrayBuffer(44 + pcmBuf.byteLength);
+      const v = new DataView(wav);
+      const w = (s, o) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      w('RIFF', 0); v.setUint32(4, 36 + pcmBuf.byteLength, true); w('WAVE', 8);
+      w('fmt ', 12); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, 16000, true); v.setUint32(28, 32000, true);
+      v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+      w('data', 36); v.setUint32(40, pcmBuf.byteLength, true);
+      new Uint8Array(wav).set(new Uint8Array(pcmBuf), 44);
+      return new Response(new Uint8Array(wav), {
+        status: 200,
+        headers: { "content-type": "audio/wav", ...CORS_PUBLIC }
+      });
+    } catch(e) {
+      return json({ error: e.message }, 502, CORS_PUBLIC);
+    }
+  }
+
+  // --- weather cache (read + manual trigger) ---
+  if (path === "/api/weather") {
+    if (method === "GET") {
+      const row = await env.DB.prepare('SELECT * FROM weather_cache ORDER BY id DESC LIMIT 1').first();
+      return json(row || { error: "no data yet" }, row ? 200 : 404, CORS_PUBLIC);
+    }
+    if (method === "POST" && authed(request, env)) {
+      try {
+        const result = await scrapeWeather(env);
+        return json({ ok: true, ...result }, 200, CORS_PUBLIC);
+      } catch(e) {
+        return json({ error: e.message }, 502, CORS_PUBLIC);
+      }
+    }
+  }
+
+  // --- 14-day snow history ---
+  if (path === "/api/snow-history") {
+    if (method === "GET") {
+      const rows = await env.DB.prepare(
+        `SELECT snapshot_date, ww_temp_c, ww_wind_spd_kph, ww_wind_dir_deg, ww_wind_gust_kph, hour_precip_mm, precip_24hr_mm, hn24_cm, hst_cm, hs_cm
+         FROM snow_history ORDER BY snapshot_date DESC LIMIT 14`
+      ).all();
+      return json(rows.results || [], 200, CORS_PUBLIC);
+    }
+    if (method === "POST" && authed(request, env)) {
+      try {
+        const result = await saveSnowSnapshot(env);
+        return json({ ok: true, ...result }, 200, CORS_PUBLIC);
+      } catch(e) {
+        return json({ error: e.message }, 502, CORS_PUBLIC);
+      }
+    }
+  }
+
+  // --- chatbot (proxies Groq, streams SSE) ---
+  if (path === "/api/chat" && method === "POST") {
+    if (!env.GROQ_API_KEY) return json({ error: "GROQ_API_KEY not configured" }, 503, CORS_PUBLIC);
+    let body;
+    try { body = await request.json(); } catch(e) { return json({ error: "invalid JSON" }, 400, CORS_PUBLIC); }
+    const { regionBot, clientBot, messages, geofenceState,
+            persona, knowledge } = body; // persona/knowledge kept for backward compat
+    if (!Array.isArray(messages) || !messages.length) return json({ error: "messages required" }, 400, CORS_PUBLIC);
+    const rBot = regionBot || { persona, knowledge };
+    const weather = env.DB ? await env.DB.prepare('SELECT * FROM weather_cache ORDER BY id DESC LIMIT 1').first().catch(()=>null) : null;
+    const snowRows = env.DB ? await env.DB.prepare('SELECT snapshot_date, precip_24hr_mm, hn24_cm, ww_temp_c FROM snow_history ORDER BY snapshot_date DESC LIMIT 14').all().catch(()=>({results:[]})) : {results:[]};
+    const sys = buildChatPrompt(rBot, clientBot, geofenceState, weather, snowRows.results || []);
+    const gr = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + env.GROQ_API_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "system", content: sys }, ...messages.slice(-10)],
+        stream: true,
+        max_tokens: 300,
+        temperature: 0.75
+      })
+    });
+    if (!gr.ok) { const t = await gr.text(); return json({ error: "Groq " + gr.status, detail: t }, 502, CORS_PUBLIC); }
+    return new Response(gr.body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", "access-control-allow-origin": "*" } });
   }
 
   // --- token check ---
