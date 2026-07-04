@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Geofence Platform
 
-Cloudflare Workers app: static HTML tools + a D1-backed REST API + R2 audio storage.
+Cloudflare Workers app: static HTML tools + a D1-backed REST API + R2 audio storage + AI chat via Groq.
 
 ## File Layout
 
 ```
 geofence-platform/
 ├── backend/
-│   └── worker.js            ← Cloudflare Worker: all /api/* routes + asset fallthrough
+│   └── worker.js            ← Cloudflare Worker: all /api/* routes + asset fallthrough + cron
 ├── frontend/
 │   ├── index.html           ← Homepage — lists projects, links to tools
 │   ├── dashboard.html       ← Admin dashboard (API key management, audit log)
@@ -19,6 +19,7 @@ geofence-platform/
 │   ├── geofence-engine.html ← Tour player / engine (loads published bundles)
 │   ├── geofence-sim.html    ← Geofence simulator (tests zones without live GPS)
 │   ├── audio-bench.html     ← Audio upload/playback sandbox
+│   ├── bot-library.html     ← Bot library manager (/bots route)
 │   ├── share.html           ← Shareable project link page
 │   └── sw.js                ← Service worker (network-first offline, cache-first for audio)
 ├── connect-iq/
@@ -29,8 +30,10 @@ geofence-platform/
 │       ├── GpsBleDelegate.mc
 │       └── GpsBridgeInputDelegate.mc
 ├── migrations/
-│   └── 0001_schema.sql      ← Full D1 schema (7 tables)
-└── wrangler.jsonc           ← Wrangler config (D1 + R2 bindings, assets: "./frontend")
+│   ├── 0001_schema.sql      ← Core schema (7 tables: app, project, published_bundle, api_key, audit_log, device, consent, event)
+│   ├── 0002_weather.sql     ← Weather tables (weather_cache, snow_history)
+│   └── 0003_bots.sql        ← Bot table
+└── wrangler.jsonc           ← Wrangler config (D1 + R2 + AI bindings, assets: "./frontend", cron triggers)
 ```
 
 ## Development Commands
@@ -41,18 +44,21 @@ Run from the **project root** (not from backend/ or frontend/).
 # Start the local Worker dev server (serves HTML + /api/* together)
 npx wrangler dev
 
-# Apply schema to local D1 (first-time setup)
-npx wrangler d1 execute geofence-db --file=migrations/0001_schema.sql
+# Apply all migrations to local D1 (first-time setup)
+npx wrangler d1 execute geofence-db --local --file=migrations/0001_schema.sql
+npx wrangler d1 execute geofence-db --local --file=migrations/0002_weather.sql
+npx wrangler d1 execute geofence-db --local --file=migrations/0003_bots.sql
 
-# Apply schema to remote D1
+# Apply migrations to remote D1
 npx wrangler d1 execute geofence-db --remote --file=migrations/0001_schema.sql
-
-# Check migration status
-npx wrangler d1 migrations list geofence-db
+npx wrangler d1 execute geofence-db --remote --file=migrations/0002_weather.sql
+npx wrangler d1 execute geofence-db --remote --file=migrations/0003_bots.sql
 
 # Deploy to Cloudflare
 npx wrangler deploy
 ```
+
+After starting `npx wrangler dev`, open http://127.0.0.1:8787 in a browser. Keep the wrangler terminal running — it must stay alive to serve the site. Use a second terminal for all other commands.
 
 ## Local Development Setup
 
@@ -60,21 +66,25 @@ Create a `.dev.vars` file at the project root (gitignored) to set secrets for `n
 
 ```ini
 ADMIN_TOKEN=your-secret-token-here
+GROQ_API_KEY=your-groq-key-here
 # ALLOWED_ORIGIN not needed locally (defaults to *, all origins allowed)
 # ORG_ID=chase-life
 ```
 
-This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrangler secret put ADMIN_TOKEN` and `ORG_ID`/`ALLOWED_ORIGIN` are set in `wrangler.jsonc`.
+This file is never committed. In production, secrets are set via `npx wrangler secret put <NAME>`.
 
 ## Architecture
 
-- **Worker** (`worker.js`): handles `/api/*` routes, falls through to `env.ASSETS` for everything else.
-- **Friendly URLs**: the Worker maps `/editor` → `fence-editor.html`, `/sim` → `geofence-sim.html`, `/engine` → `geofence-engine.html`, `/dashboard` → `dashboard.html`, `/share` → `share.html`, `/audio` → `audio-bench.html`.
-- **D1** (`geofence-db`, binding `DB`): stores projects, published bundles, API keys, devices, consent records, and events.
+- **Worker** (`worker.js`): handles `/api/*` routes, falls through to `env.ASSETS` for everything else. Also has a `scheduled()` handler for cron jobs.
+- **Friendly URLs**: the Worker maps `/editor` → `fence-editor.html`, `/sim` → `geofence-sim.html`, `/engine` → `geofence-engine.html`, `/dashboard` → `dashboard.html`, `/share` → `share.html`, `/audio` → `audio-bench.html`, `/bots` → `bot-library.html`.
+- **D1** (`geofence-db`, binding `DB`): stores projects, published bundles, API keys, devices, consent records, events, bots, weather cache, snow history.
 - **R2** (`geofence-audio`, binding `AUDIO`): stores audio clips, served via `/api/audio/<key>`.
-- **Auth**: master token via `ADMIN_TOKEN` secret (env var). Scoped per-app API keys stored as SHA-256 hashes in D1.
+- **AI** (binding `AI`): Cloudflare Workers AI — used for Whisper STT (`/api/transcribe`) and TTS (`/api/tts`).
+- **Groq**: LLaMA 3.3 70B via `GROQ_API_KEY` secret — used for chat (`/api/chat`), streaming SSE.
+- **Auth**: master token via `ADMIN_TOKEN` secret. Scoped per-app API keys stored as SHA-256 hashes in D1.
+- **Cron**: `"0 * * * *"` (hourly) scrapes Kicking Horse weather into `weather_cache`; `"0 15 * * *"` (8am MST) saves daily snow snapshot to `snow_history`.
 
-## D1 Schema (7 tables)
+## D1 Schema
 
 | Table | Purpose |
 |-------|---------|
@@ -86,6 +96,36 @@ This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrang
 | `device` | Anonymous visitor registration |
 | `consent` | Append-only record of user consent decisions per scope |
 | `event` | Analytics events, gated by `store-history` consent |
+| `bot` | Reusable AI personas (region bots + visitor/client bots) |
+| `weather_cache` | Rolling hourly weather readings from Kicking Horse Resort (last 48) |
+| `snow_history` | Daily 8am MST snow snapshots (last 14 days) |
+
+## Bot System
+
+Bots are reusable AI personas stored in D1 (`bot` table) and managed at `/bots`.
+
+**Two bot types:**
+
+| Type | Where used | Purpose |
+|------|-----------|---------|
+| `region` | Assigned to a zone in the fence editor | Greets and chats with visitors who enter that zone |
+| `visitor` | Assigned to the whole project as a "client bot" | Travels with the visitor, accumulates zone history context |
+
+**Bot fields:** `id`, `app_id`, `name`, `type`, `avatar` (emoji), `persona`, `knowledge`, `greeting`, `created_at`, `updated_at`
+
+**In the fence editor:**
+- Bot tray at the bottom of the sidebar shows all region bots as draggable cards
+- Drag a bot card → map zone polygon to assign it (point-in-polygon drop target)
+- Drag a bot card → zone list row to assign it
+- Zones with bots show the avatar emoji floating above the zone on the map
+- Up to 3 bot avatars shown per zone
+- Zones can have multiple region bots with priority ordering (drag to reorder)
+
+**Chat API** (`/api/chat`): proxies to Groq streaming, builds a system prompt from:
+- Bot persona + knowledge base
+- Current weather (from `weather_cache`)
+- 14-day snow history (from `snow_history`)
+- Visitor's geofence state (zone, dwell, speed, heading, zone history, tracker states)
 
 ## Key API Endpoints
 
@@ -96,6 +136,7 @@ This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrang
 | GET/PUT | `/api/projects/:id/bundle` | GET public, PUT scoped (`publish`) |
 | PUT | `/api/projects/:id/app` | master |
 | GET/POST | `/api/apps` | GET public, POST master |
+| DELETE | `/api/apps/:id` | master (`?cascade=true` deletes all projects too) |
 | GET/POST/DELETE | `/api/keys` | master |
 | GET | `/api/audit` | master |
 | GET | `/api/auth-check` | any valid token |
@@ -104,10 +145,20 @@ This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrang
 | GET/POST | `/api/consent` | public |
 | POST | `/api/events` | public (requires stored `store-history` consent) |
 | GET | `/api/analytics` | scoped (`analytics`) |
-| GET | `/api/audio-list` | scoped (`audio`) |
-| GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped (`audio`) |
+| GET | `/api/audio-list` | scoped (`audio` or `publish`) |
+| GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped (`audio` or `publish`) |
+| POST | `/api/transcribe` | public (Workers AI Whisper STT) |
+| POST | `/api/tts` | public (Workers AI speecht5_tts → WAV) |
+| GET | `/api/weather` | public (latest cached reading) |
+| POST | `/api/weather` | master (manual scrape trigger) |
+| GET | `/api/snow-history` | public (14-day daily snapshots) |
+| POST | `/api/snow-history` | master (manual snapshot trigger) |
+| GET/POST | `/api/bots` | GET public, POST scoped (`publish`) |
+| PUT/DELETE | `/api/bots/:id` | PUT scoped (`publish`), DELETE master |
+| POST | `/api/chat` | public (Groq SSE stream) |
+| DELETE | `/api/nuke` | master (wipes all rows, keeps schema) |
 
-**Size guards:** bundles are rejected over 1 MB; event payloads over 500 KB.
+**Size guards:** bundles rejected over 1 MB; event payloads over 500 KB.
 
 ## Security Model
 
@@ -118,7 +169,7 @@ This file is never committed. In production, `ADMIN_TOKEN` is set via `npx wrang
 | `ADMIN_TOKEN` | Wrangler secret (never in code) | Everything — master key |
 | Scoped API key | D1 `api_key` table (hashed) | Only the scopes you grant: `publish`, `analytics`, `audio` |
 
-**Rule: never use `ADMIN_TOKEN` in a browser.** The editor and dashboard ask for a token in the browser UI. Use a scoped API key there, not the master token.
+**Rule: never use `ADMIN_TOKEN` in a browser.** Use a scoped API key there instead.
 
 **Create a scoped key for browser use:**
 ```bash
@@ -127,9 +178,8 @@ curl -X POST https://geofence-platform.gary-jolivet.workers.dev/api/keys \
   -H "Content-Type: application/json" \
   -d '{"label":"editor-browser","appId":"your-app-id","scopes":["publish"]}'
 ```
-Copy the returned `key` value — it is shown once. Use it in the browser tool instead of the master token.
 
-**CORS:** Write/admin endpoints are restricted to `ALLOWED_ORIGIN` (set in `wrangler.jsonc`). Public read endpoints allow `*`. For local dev, `ALLOWED_ORIGIN` is unset so all origins are allowed.
+**CORS:** Write/admin endpoints are restricted to `ALLOWED_ORIGIN`. Public read endpoints allow `*`.
 
 **Environment variables** (non-secret, set in `wrangler.jsonc`):
 - `ORG_ID` — organisation slug (default: `chase-life`)
@@ -144,30 +194,12 @@ The geofence engine supports two BLE GPS protocols, auto-detected on connect:
 | LNS | GATT `0x1819` | Dedicated BLE GPS receivers, some Garmin Edge units |
 | NUS (UART) | `6e400001-...` | Garmin Instinct 2/Crossover/2X via Connect IQ app |
 
-**Garmin Instinct compatibility:**
+**Connect IQ companion app** (`connect-iq/`): a Widget that broadcasts GPS over NUS. Sends one line per second over TX characteristic (`6e400003-b5a3-f393-e0a9-e50e24dcca9e`).
 
-| Model | Connect IQ | BLE GPS |
-|-------|-----------|---------|
-| Instinct (1st gen) | Limited | Not recommended |
-| Instinct 2 / Solar | Full CIQ 3.x | ✓ via NUS app |
-| Instinct Crossover | Full CIQ 3.x | ✓ via NUS app |
-| Instinct 2X Solar | Full CIQ 3.x | ✓ via NUS app |
-
-**Connect IQ companion app** (`connect-iq/`): a Widget that broadcasts GPS over the Nordic UART Service (NUS). Sends one line per second over the TX characteristic (`6e400003-b5a3-f393-e0a9-e50e24dcca9e`).
-
-Accepted formats (web app parses all of these):
-```
-lat,lon                     →  51.302757,-117.054644
-lat,lon,acc_m               →  51.302757,-117.054644,3.5
-$GPRMC sentence (NMEA)
-$GPGGA sentence (NMEA)
-```
-
-Requires the `Ble` module and `communications` permission in the CIQ manifest.
 Only works in Chrome or Edge (Web Bluetooth API).
 
 ## Guardrails
 
-- **Never** hardcode or commit Cloudflare account IDs, API tokens, or `ADMIN_TOKEN` values.
+- **Never** hardcode or commit Cloudflare account IDs, API tokens, `ADMIN_TOKEN`, or `GROQ_API_KEY`.
 - Secrets go in `wrangler.jsonc` secret bindings or `.dev.vars` (gitignored) for local dev.
 - The `database_id` in `wrangler.jsonc` is not a secret — committing it is fine.
