@@ -120,6 +120,7 @@
       <select id="beType">
         <option value="region">region — attached to a place, greets visitors</option>
         <option value="visitor">visitor — travels with a person, accumulates context</option>
+        <option value="guidance">guidance — navigates visitor to a GPS position</option>
       </select>
 
       <label class="k">persona — who is speaking</label>
@@ -131,6 +132,13 @@
       <div id="beGreetingWrap">
         <label class="k">greeting prompt — what to say on visitor arrival</label>
         <input id="beGreeting" placeholder="Greet the visitor and tell them the current temperature and wind">
+      </div>
+      <div id="guidanceNote" style="display:none;font-family:'Barlow Condensed';font-size:12px;
+           color:var(--fog);line-height:1.6;padding:10px;background:rgba(56,224,166,.08);
+           border:1px solid rgba(56,224,166,.25);border-radius:8px">
+        Guidance bots give real-time walking directions (turn left, bear right, slow down) via TTS.<br>
+        Assign this bot to a trigger zone in the Editor, then pick the target zone from the zone's bot slot.<br>
+        No persona or greeting needed.
       </div>
 
       <div class="row" style="margin-top:4px">
@@ -190,7 +198,9 @@ function openEdit(id){
   document.getElementById("bePersona").value=b?b.persona||"":"";
   document.getElementById("beKnowledge").value=b?b.knowledge||"":"";
   document.getElementById("beGreeting").value=b?b.greeting||"":"";
-  document.getElementById("beGreetingWrap").style.display=(b&&b.type==="visitor")?"none":"block";
+  const t=b?b.type||"region":"region";
+  document.getElementById("beGreetingWrap").style.display=(t==="visitor"||t==="guidance")?"none":"block";
+  document.getElementById("guidanceNote").style.display=t==="guidance"?"block":"none";
   document.getElementById("beDeleteBtn").style.display=b?"block":"none";
   document.getElementById("saveMsg").textContent="";
   renderGrid();
@@ -226,8 +236,9 @@ document.getElementById("beAvatar").oninput=e=>{
   document.getElementById("avPreview").textContent=e.target.value.trim()||"🤖";
 };
 document.getElementById("beType").onchange=()=>{
-  document.getElementById("beGreetingWrap").style.display=
-    document.getElementById("beType").value==="visitor"?"none":"block";
+  const v=document.getElementById("beType").value;
+  document.getElementById("beGreetingWrap").style.display=(v==="visitor"||v==="guidance")?"none":"block";
+  document.getElementById("guidanceNote").style.display=v==="guidance"?"block":"none";
 };
 document.getElementById("newBotBtn").onclick=()=>openEdit(null);
 document.getElementById("beSaveBtn").onclick=saveBot;

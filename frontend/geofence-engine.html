@@ -122,6 +122,7 @@
   .ble-note{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);
     margin-top:10px;line-height:1.45}
 </style>
+<script src="/guidance-bot.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -146,6 +147,26 @@
     <div id="targetName" class="target-name">—</div>
     <div id="targetSub" class="target-sub">no fix yet</div>
     <div id="stateLine" class="state-line state-out">standby</div>
+  </div>
+
+  <!-- guidance bot HUD — shown when guidance is active -->
+  <div id="guidanceHud" style="display:none;background:var(--slate);border:2px solid var(--go);
+       border-radius:14px;padding:14px 16px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <span style="font-family:'Barlow Condensed';font-size:11px;font-weight:600;
+                   text-transform:uppercase;letter-spacing:.8px;color:var(--go)">🧭 Guidance Active</span>
+      <button id="guidanceStopBtn" style="font-family:'Barlow Condensed';font-size:12px;font-weight:600;
+              letter-spacing:.4px;text-transform:uppercase;border-radius:7px;background:transparent;
+              border:1px solid var(--rim);color:var(--fog);padding:4px 10px;cursor:pointer">Stop</button>
+    </div>
+    <div id="guidanceInstr" style="font-family:'Black Han Sans';font-size:22px;color:var(--snow);
+         margin-bottom:6px">—</div>
+    <div style="display:flex;gap:16px">
+      <span id="guidanceDist" style="font-family:'Barlow Condensed';font-size:14px;font-weight:600;
+            color:var(--ice)">— m</span>
+      <span id="guidancePhase" style="font-family:'Barlow Condensed';font-size:13px;
+            color:var(--fog)">navigating</span>
+    </div>
   </div>
 
   <div class="grid">
@@ -858,6 +879,12 @@ const HUD = {
       this.needleTarget = tgt;       // the arrow aims here; paintCompass draws it live
     }
     this.paintCompass();             // draw red arrow + true-north marker now
+
+    // feed guidance module (phone in pocket — uses GPS travel heading only)
+    if(typeof GuidanceBot!=='undefined'&&GuidanceBot.active){
+      GuidanceBot.update({lat:sm.lat,lon:sm.lon,speed:sm.speed,
+                          headingTravel:sm.headingTravel,acc:sm.acc,t:fix.t});
+    }
   },
 
   paintCompass(){
@@ -1007,6 +1034,43 @@ Geofencer.onEvent=(e)=>{
   else if(e.kind==='suppressed') HUD.log('ev-flick','HOLD   reveal suppressed (fix too loose)');
   else if(e.kind==='arm-needle') HUD.log('ev-sys','NEEDLE armed → '+e.zone.name);
   Actions.run(e.kind, e.zone);
+
+  // Guidance bot trigger: fire when visitor enters the target layer of a zone with a guidance bot
+  if(e.kind==='enter' && e.layer && e.layer.kind==='target'){
+    const slots=(e.zone.bots||[]);
+    const guidanceSlot=slots.map(s=>({slot:s,bot:(BUNDLE.bots||[]).find(b=>b.id===s.botId)}))
+      .find(x=>x.bot&&x.bot.type==='guidance');
+    if(guidanceSlot&&typeof GuidanceBot!=='undefined'){
+      const targetZone=(BUNDLE.zones||[]).find(z=>z.id===guidanceSlot.slot.targetZoneId);
+      if(targetZone){
+        GuidanceBot.start({
+          targetZone,
+          allZones:BUNDLE.zones||[],
+          sayFn:(text)=>Audio.say(text,false,0),
+          onComplete:()=>{
+            const hud=document.getElementById('guidanceHud');
+            if(hud) hud.style.display='none';
+            HUD.log('ev-sys','Guidance complete — arrived at '+targetZone.name);
+          },
+          onInstruction:(text,distM,phase)=>{
+            const hud=document.getElementById('guidanceHud');
+            if(hud){
+              hud.style.display='block';
+              const instr=document.getElementById('guidanceInstr');
+              const dist=document.getElementById('guidanceDist');
+              const ph=document.getElementById('guidancePhase');
+              if(instr) instr.textContent=text;
+              if(dist)  dist.textContent=distM!=null?Math.round(distM)+' m':'—';
+              if(ph)    ph.textContent=phase;
+            }
+          }
+        });
+        const hud=document.getElementById('guidanceHud');
+        if(hud) hud.style.display='block';
+        HUD.log('ev-sys','Guidance started → '+targetZone.name);
+      }
+    }
+  }
 };
 
 /* ===================== INPUTS: GPS / SIM / UI ===================== */
@@ -1262,6 +1326,12 @@ function startGPS(){
 function tickSim(){ HUD.onFix({lat:simPos[0],lon:simPos[1],acc:5,t:Date.now()}); }
 
 document.getElementById('btnStart').onclick=()=>{ if(simMode) toggleSim(); startGPS(); };
+document.getElementById('guidanceStopBtn').onclick=()=>{
+  if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
+  const hud=document.getElementById('guidanceHud');
+  if(hud) hud.style.display='none';
+  HUD.log('ev-sys','Guidance stopped by user');
+};
 document.getElementById('btnCompass').onclick=(e)=>{ Compass.enable(); Audio.unlock();
   e.target.classList.add('on'); e.target.textContent='Compass on';
   HUD.log('ev-sys','compass enabled (tilt-calibrate by moving in a figure-8)'); };

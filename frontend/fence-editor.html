@@ -396,6 +396,15 @@
           <option value="zone">zone only</option>
         </select>
       </div>
+      <hr>
+      <label class="k">bearing of interest — visitor faces this direction on arrival</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="pBearing" type="number" min="0" max="359" placeholder="none" style="flex:1">
+        <span style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 auto">° (0–359)</span>
+      </div>
+      <label class="chk" style="margin-top:6px">
+        <input type="checkbox" id="pIsHazard"> mark as hazard — guidance routes visitors around this zone
+      </label>
     </div>
 
     <div class="row" style="margin-top:10px">
@@ -603,7 +612,8 @@ function zoneGenR(z){ const s=z.shape;
 function makeZone(name,shape){
   return { id:slug(name), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS, needle:DEFAULTS.needle,
-           approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM };
+           approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM,
+           bearingDeg:null, isHazard:false };
 }
 
 /* ---- render committed fences (target + approach ring) + draft ---- */
@@ -617,9 +627,10 @@ function render(){
     feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
       geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
     // target shape
-    if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name},
+    const hz=!!z.isHazard;
+    if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name,isHazard:hz},
         geometry:{type:"Polygon",coordinates:[circleRing(s.center,s.radiusM,64)]}});
-    else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name},
+    else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name,isHazard:hz},
         geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
     else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",sel:selected,name:z.name},
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
@@ -630,6 +641,18 @@ function render(){
     feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
   });
   map.getSource("fences").setData(fc(feats));
+
+  // bearing arrows — amber line 20m in bearingDeg direction from zone center
+  if(map.getSource("bearing-arrows")){
+    const arrowFeats=zones.filter(z=>z.bearingDeg!=null).map(z=>{
+      const ctr=zoneCenterLonLat(z); // [lon,lat]
+      const latRad=ctr[1]*Math.PI/180;
+      const brRad=z.bearingDeg*Math.PI/180;
+      const tip=[ctr[0]+(20/(111320*Math.cos(latRad)))*Math.sin(brRad), ctr[1]+(20/111320)*Math.cos(brRad)];
+      return {type:"Feature",properties:{},geometry:{type:"LineString",coordinates:[ctr,tip]}};
+    });
+    map.getSource("bearing-arrows").setData(fc(arrowFeats));
+  }
 
   const d=[];
   if((tool==="polygon"||tool==="tripline")&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
@@ -646,9 +669,9 @@ map.on("load",()=>{
   map.addLayer({id:"approach",type:"line",source:"fences",filter:["==","kind","approach"],
      paint:{"line-color":["case",["get","sel"],"#38e0a6","#8fb6d4"],"line-width":1.2,"line-dasharray":[2,2],"line-opacity":0.7}});
   map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==","kind","fill"],
-     paint:{"fill-color":["case",["get","sel"],"#38e0a6","#ff6a3d"],"fill-opacity":0.22}});
+     paint:{"fill-color":["case",["get","sel"],"#38e0a6",["get","isHazard"],"rgba(255,47,78,0.5)","#ff6a3d"],"fill-opacity":0.22}});
   map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==","kind","fill"],
-     paint:{"line-color":["case",["get","sel"],"#38e0a6","#ff6a3d"],"line-width":2}});
+     paint:{"line-color":["case",["get","sel"],"#38e0a6",["get","isHazard"],"#ff2f4e","#ff6a3d"],"line-width":2}});
   map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==","kind","line"],
      paint:{"line-color":["case",["get","sel"],"#38e0a6","#ff6a3d"],"line-width":3.2,"line-dasharray":[2,1.2]}});
   map.addLayer({id:"fence-lbl",type:"symbol",source:"fences",filter:["==","kind","label"],
@@ -669,6 +692,11 @@ map.on("load",()=>{
   map.addLayer({id:"poi-lbl",type:"symbol",source:"pois",
      layout:{"text-field":["get","name"],"text-size":10,"text-offset":[0,1],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#8fb6d4","text-halo-color":"#0a1018","text-halo-width":1}});
+  map.addSource("bearing-arrows",{type:"geojson",data:fc([])});
+  map.addLayer({id:"bearing-arrow",type:"line",source:"bearing-arrows",
+     paint:{"line-color":"#ffc24d","line-width":3,"line-dasharray":[1,0]}});
+  map.addLayer({id:"bearing-arrowhead",type:"circle",source:"bearing-arrows",filter:["==","$type","Point"],
+     paint:{"circle-radius":5,"circle-color":"#ffc24d","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
   render();
 });
 
@@ -751,6 +779,8 @@ function refreshProps(){
   document.getElementById("pAudioStatus").innerHTML = z.audioUrl
     ? "clip attached ✓ → <b>"+z.audioUrl+"</b>"
     : "no clip — uploads to the platform and plays spatially in the engine";
+  document.getElementById("pBearing").value = z.bearingDeg!=null ? z.bearingDeg : "";
+  document.getElementById("pIsHazard").checked = !!z.isHazard;
 }
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
 bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
@@ -764,6 +794,8 @@ bindProp("pTrackerId",z=>{ z.trackerId=document.getElementById("pTrackerId").val
 bindProp("pBroadcast",z=>{ z.broadcastRadiusM=+document.getElementById("pBroadcast").value||20; });
 bindProp("pSubject",z=>{ z.triggerSubject=document.getElementById("pSubject").value; });
 bindProp("pChatGreeting",z=>{ z.chatGreeting=document.getElementById("pChatGreeting").value; });
+bindProp("pBearing",z=>{ const v=document.getElementById("pBearing").value; z.bearingDeg=(v!==""&&v!==null)?(+v+360)%360:null; });
+document.getElementById("pIsHazard").addEventListener("change",()=>{ if(sel<0)return; zones[sel].isHazard=document.getElementById("pIsHazard").checked; render(); });
 bindProp("pBotId",z=>{ z.botId=document.getElementById("pBotId").value||null; });
 (function(){ const el=document.getElementById("pClientBotIdAdv");
   if(el) el.addEventListener("input",()=>{ if(sel<0)return; zones[sel].clientBotId=el.value||null; render(); }); })();
@@ -1033,6 +1065,8 @@ function zoneToEngine(z){
   if(z.clientBotId) zo.clientBotId=z.clientBotId;
   if(Array.isArray(z.actions) && z.actions.length) zo.actions=z.actions;
   if(z.audioUrl) zo.audioUrl=z.audioUrl;
+  if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
+  if(z.isHazard) zo.isHazard=true;
   return zo;
 }
 function projName(){ return (document.getElementById("projCrumb").textContent||"").trim(); }
@@ -1078,6 +1112,8 @@ function engineToZone(zo){
   if(!(zo.triggers||[]).some(t=>t.needle)) z.needle=false;
   if(Array.isArray(zo.actions) && zo.actions.length) z.actions=zo.actions;
   if(zo.audioUrl) z.audioUrl=zo.audioUrl;
+  if(zo.bearingDeg!=null) z.bearingDeg=zo.bearingDeg;
+  if(zo.isHazard) z.isHazard=true;
   if(zo.trackerId) z.trackerId=zo.trackerId;
   if(zo.broadcastRadiusM) z.broadcastRadiusM=zo.broadcastRadiusM;
   if(zo.chatPersona) z.chatPersona=zo.chatPersona;
@@ -1973,7 +2009,19 @@ function renderZoneBots(zone){
       if(isNaN(from)||from===i)return; e.stopPropagation();
       const [moved]=zone.bots.splice(from,1); zone.bots.splice(i,0,moved);
       renderZoneBots(zone); render(); };
-    list.appendChild(row); list.appendChild(cp);
+    // guidance bot: add a zone-picker below the slot row
+    if(bot.type==="guidance"){
+      const gp=document.createElement("div");
+      gp.style.cssText="margin:2px 8px 6px 34px";
+      const zoneOpts=zones.map(z=>`<option value="${z.id}"${slot.targetZoneId===z.id?" selected":""}>${z.name}</option>`).join("");
+      gp.innerHTML=`<label style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:2px">Guide to zone</label>`
+        +`<select style="width:100%;font-family:'Barlow Condensed';font-size:12px;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--snow);padding:5px 8px">`
+        +`<option value="">— pick a target zone —</option>${zoneOpts}</select>`;
+      gp.querySelector("select").onchange=e=>{ slot.targetZoneId=e.target.value||null; };
+      list.appendChild(row); list.appendChild(cp); list.appendChild(gp);
+    } else {
+      list.appendChild(row); list.appendChild(cp);
+    }
   });
   // sync legacy botId to first bot
   document.getElementById("pBotId").value=(zone.bots&&zone.bots[0])?zone.bots[0].botId:"";
