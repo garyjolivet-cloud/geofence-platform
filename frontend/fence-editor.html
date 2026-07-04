@@ -743,6 +743,12 @@ map.on("load",()=>{
   map.addLayer({id:"poi-lbl",type:"symbol",source:"pois",
      layout:{"text-field":["get","name"],"text-size":10,"text-offset":[0,1],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#8fb6d4","text-halo-color":"#0a1018","text-halo-width":1}});
+  map.addSource("guidance-arrow",{type:"geojson",data:fc([])});
+  map.addLayer({id:"guidance-arrow-line",type:"line",source:"guidance-arrow",
+     paint:{"line-color":"#38e0a6","line-width":4,"line-opacity":0.9}});
+  map.addLayer({id:"guidance-arrow-head",type:"circle",source:"guidance-arrow",
+     filter:["==","tip",true],
+     paint:{"circle-radius":7,"circle-color":"#38e0a6","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
   map.addSource("bearing-arrows",{type:"geojson",data:fc([])});
   map.addLayer({id:"bearing-arrow",type:"line",source:"bearing-arrows",
      paint:{"line-color":"#ffc24d","line-width":3,"line-dasharray":[1,0]}});
@@ -1720,8 +1726,24 @@ function feedSim(lat,lon,acc,t){
   refreshSimChips();
   // feed guidance module
   if(typeof GuidanceBot!=='undefined'&&GuidanceBot.active){
-    GuidanceBot.update({lat:sm.lat,lon:sm.lon,speed:sm.spd||0,headingTravel:sm.lastHeading,acc:sm.acc,t});
+    GuidanceBot.update({lat:sm.lat,lon:sm.lon,speed:sm.speed||0,headingTravel:sm.headingTravel,acc:sm.acc,t});
+    updateGuidanceArrow(sm.lat,sm.lon);
   }
+}
+
+function updateGuidanceArrow(lat,lon){
+  const src=map.getSource("guidance-arrow"); if(!src) return;
+  if(!GuidanceBot.active){ src.setData(fc([])); return; }
+  const brg=GuidanceBot.targetBearing;
+  if(brg==null){ src.setData(fc([])); return; }
+  // project 40m in target bearing direction
+  const R=6371000, dLat=40*Math.cos(brg*Math.PI/180)/R*180/Math.PI;
+  const dLon=40*Math.sin(brg*Math.PI/180)/(R*Math.cos(lat*Math.PI/180))*180/Math.PI;
+  const tip=[lon+dLon, lat+dLat];
+  src.setData(fc([
+    {type:"Feature",properties:{},geometry:{type:"LineString",coordinates:[[lon,lat],tip]}},
+    {type:"Feature",properties:{tip:true},geometry:{type:"Point",coordinates:tip}}
+  ]));
 }
 
 function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)return;
@@ -2553,11 +2575,13 @@ document.getElementById("simMute").onclick=(e)=>{simSoundOn=!simSoundOn;
 document.getElementById("simGuidanceStopBtn").onclick=()=>{
   if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
   document.getElementById('simGuidanceHud').style.display='none';
+  const s=map.getSource("guidance-arrow"); if(s) s.setData(fc([]));
   simLogEv("sev-sys","guidance stopped");
 };
 document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
   document.getElementById('simGuidanceHud').style.display='none';
+  const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
   simBundle=editorToSimBundle();refreshSimChips();simLogEv("sev-sys","reset");};
 // speed presets

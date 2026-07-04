@@ -171,6 +171,7 @@ let _waypointQueue=[];
 // --- update — called every GPS fix ---
 async function update(fix){
   if(!_active||!_targetZone) return;
+  _lastUserPos=[fix.lat,fix.lon];
   const now=fix.t||Date.now();
 
   // Smooth heading from GPS travel (phone in pocket → never use device compass)
@@ -216,6 +217,7 @@ async function update(fix){
       if(_onInstruction) _onInstruction(text,distToTarget,'navigate');
     }else if(now-_lastSpeakT>20000){
       const text=`Walk ${Math.round(distToTarget)} metres to the target`;
+      _lastSpeakT=now;
       _say(text);
       if(_onInstruction) _onInstruction(text,distToTarget,'navigate');
     }
@@ -260,6 +262,8 @@ function _finish(){
 }
 
 // --- public API ---
+let _lastUserPos=null; // [lat,lon] updated each tick
+
 window.GuidanceBot={
   start({targetZone, allZones, sayFn, onComplete, onInstruction}){
     _active=true; _phase='navigate';
@@ -273,9 +277,19 @@ window.GuidanceBot={
     _say("Guidance started — walk toward the target.");
   },
   update,
-  stop(){ _active=false; _phase=null; _sayFn=null; _onComplete=null; _onInstruction=null; },
+  stop(){ _active=false; _phase=null; _sayFn=null; _onComplete=null; _onInstruction=null; _lastUserPos=null; },
   get active(){ return _active; },
-  get phase(){ return _phase; }
+  get phase(){ return _phase; },
+  // returns bearing (0-360) from current pos to active waypoint/target, or null
+  get targetBearing(){
+    if(!_active||!_targetZone) return null;
+    const from=_lastUserPos;
+    if(!from) return null;
+    const to=_waypointQueue.length>0?[_waypointQueue[0].lat,_waypointQueue[0].lon]:_targetZone.center;
+    return bearing(from,to);
+  },
+  get targetZone(){ return _targetZone; },
+  get waypointQueue(){ return _waypointQueue; }
 };
 
 })();
