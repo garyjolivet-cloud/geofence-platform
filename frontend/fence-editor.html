@@ -1996,10 +1996,11 @@ function migrateZoneBots(z){
 function renderBotTray(){
   const scroll=document.getElementById("botTrayScroll");
   scroll.innerHTML="";
-  editorBots.filter(b=>b.type==="region").forEach(b=>{
+  editorBots.filter(b=>b.type==="region"||b.type==="guidance").forEach(b=>{
     const card=document.createElement("div");
     card.className="bot-card"; card.draggable=true; card.dataset.botId=b.id;
-    card.innerHTML='<div class="bc-av">'+(b.avatar||"🤖")+'</div><div class="bc-nm">'+(b.name||"Bot")+'</div>';
+    const typeTag=b.type==="guidance"?'<div style="font-family:\'Barlow Condensed\';font-size:9px;text-transform:uppercase;letter-spacing:.6px;color:var(--go);text-align:center">guidance</div>':'';
+    card.innerHTML='<div class="bc-av">'+(b.avatar||"🧭")+'</div><div class="bc-nm">'+(b.name||"Bot")+'</div>'+typeTag;
     card.ondragstart=e=>{ e.dataTransfer.setData("botId",b.id); card.classList.add("dragging"); };
     card.ondragend=()=>card.classList.remove("dragging");
     scroll.appendChild(card);
