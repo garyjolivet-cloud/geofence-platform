@@ -507,6 +507,15 @@ async function api(request, env, url) {
       const now = new Date().toISOString();
       const proj = await env.DB.prepare("SELECT bundleVersion FROM project WHERE id=?").bind(pid).first();
       const ver = ((proj && proj.bundleVersion) || 0) + 1;
+      // upsert project row BEFORE inserting bundle (foreign key requires project to exist first)
+      if (proj) {
+        await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId) WHERE id=?")
+          .bind(ver, now, bundle.appId || null, pid).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
+        ).bind(pid, orgId, bundle.appId || null, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
+      }
       await env.DB.prepare(
         "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
       ).bind(pid, ver, JSON.stringify(bundle), now).run();
@@ -520,14 +529,6 @@ async function api(request, env, url) {
           ).bind(b.id, appId, b.name, b.type || "region", b.avatar || "🤖",
                  b.persona || null, b.knowledge || null, b.greeting || null, now, now).run().catch(() => {});
         }
-      }
-      if (proj) {
-        await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId) WHERE id=?")
-          .bind(ver, now, bundle.appId || null, pid).run();
-      } else {
-        await env.DB.prepare(
-          "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, orgId, bundle.appId || null, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
       }
       await logAudit(env, request, A, "publish", pid + " v" + ver);
       return json({ ok: true, version: ver }, 200, AC);
