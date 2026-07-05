@@ -1731,6 +1731,25 @@ function feedSim(lat,lon,acc,t){
   }
 }
 
+let _ttsCtx=null;
+function simTTS(text){
+  fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})})
+    .then(r=>r.ok?r.arrayBuffer():Promise.reject())
+    .then(ab=>{
+      if(!_ttsCtx) _ttsCtx=new (window.AudioContext||window.webkitAudioContext)();
+      _ttsCtx.decodeAudioData(ab,buf=>{
+        const src=_ttsCtx.createBufferSource();
+        src.buffer=buf;
+        src.connect(_ttsCtx.destination);
+        src.start();
+      },()=>_ttsFallback(text));
+    })
+    .catch(()=>_ttsFallback(text));
+}
+function _ttsFallback(text){
+  try{speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text));}catch(e){}
+}
+
 function updateGuidanceArrow(lat,lon){
   const src=map.getSource("guidance-arrow"); if(!src) return;
   if(!GuidanceBot.active){ src.setData(fc([])); return; }
@@ -1774,7 +1793,8 @@ SimFencer.onEvent=e=>{
               allZones:simBundle.zones,
               sayFn:(text)=>{
                 simLogEv("sev-say","GUIDE  \""+text+"\"");
-                if(simSoundOn&&window.speechSynthesis){try{speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text));}catch(err){}}
+                if(!simSoundOn) return;
+                simTTS(text);
               },
               onInstruction:(text,distM,phase)=>{
                 const hud=document.getElementById('simGuidanceHud');
@@ -2566,6 +2586,8 @@ document.getElementById("simChatInput").addEventListener("keydown",e=>{
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
+  if(!_ttsCtx){_ttsCtx=new (window.AudioContext||window.webkitAudioContext)();}
+  else if(_ttsCtx.state==='suspended')_ttsCtx.resume();
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simPlay();};
