@@ -15,8 +15,9 @@ geofence-platform/
 ├── frontend/
 │   ├── index.html           ← Homepage — lists projects, links to tools
 │   ├── dashboard.html       ← Admin dashboard (API key management, audit log)
-│   ├── fence-editor.html    ← Geofence zone editor (publishes bundles to D1)
-│   ├── geofence-engine.html ← Tour player / engine (loads published bundles)
+│   ├── fence-editor.html    ← Geofence zone editor (publishes bundles to D1; auto-saves draft to localStorage)
+│   ├── geofence-engine.html ← Tour player / engine (loads published bundles; Kokoro TTS)
+│   ├── guidance-bot.js      ← Guidance bot module (window.GuidanceBot)
 │   ├── geofence-sim.html    ← Geofence simulator (tests zones without live GPS)
 │   ├── audio-bench.html     ← Audio upload/playback sandbox
 │   ├── bot-library.html     ← Bot library manager (/bots route)
@@ -104,22 +105,60 @@ This file is never committed. In production, secrets are set via `npx wrangler s
 
 Bots are reusable AI personas stored in D1 (`bot` table) and managed at `/bots`.
 
-**Two bot types:**
+**Three bot types:**
 
 | Type | Where used | Purpose |
 |------|-----------|---------|
 | `region` | Assigned to a zone in the fence editor | Greets and chats with visitors who enter that zone |
 | `visitor` | Assigned to the whole project as a "client bot" | Travels with the visitor, accumulates zone history context |
+| `guidance` | Assigned to a trigger zone; targets another zone | Guides visitor to a GPS spot and bearing using relative directions only |
 
 **Bot fields:** `id`, `app_id`, `name`, `type`, `avatar` (emoji), `persona`, `knowledge`, `greeting`, `created_at`, `updated_at`
 
 **In the fence editor:**
-- Bot tray at the bottom of the sidebar shows all region bots as draggable cards
+- Bot tray shows all region and guidance bots as draggable cards
 - Drag a bot card → map zone polygon to assign it (point-in-polygon drop target)
 - Drag a bot card → zone list row to assign it
 - Zones with bots show the avatar emoji floating above the zone on the map
 - Up to 3 bot avatars shown per zone
 - Zones can have multiple region bots with priority ordering (drag to reorder)
+- **Guidance bot slot**: when a guidance bot is assigned, a "Guide to zone" dropdown appears — select the destination zone
+
+## Guidance Bot (`frontend/guidance-bot.js`)
+
+Standalone IIFE module exposing `window.GuidanceBot`. Phone-in-pocket precision positioning — all instructions relative (turn left/right, bear, slow down), no compass directions.
+
+**Zone fields added for guidance:**
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `bearingDeg` | `number\|null` | Direction visitor should face on arrival (0–359°) |
+| `isHazard` | `boolean` | Marks zone as a routing obstacle (renders red on map) |
+
+**Two phases:**
+1. `navigate` — guides to within 8m of target zone center
+2. `align` — tells visitor to face `bearingDeg` using GPS travel heading
+
+**Direction instructions** use a state machine with 10° hysteresis: STRAIGHT / BEAR / TURN / AROUND. Heading source is GPS travel heading only (phone in pocket — device compass unreliable). Circular EMA (α=0.15) smooths heading.
+
+**Hazard avoidance**: Turf.js (lazy CDN load) buffers hazard zones 5m, checks if direct path intersects, routes tangent waypoints around them. Graceful degradation if offline.
+
+**API:**
+```js
+GuidanceBot.start({ targetZone, allZones, sayFn, onComplete, onInstruction })
+GuidanceBot.update(fix)  // { lat, lon, speed, headingTravel, acc, t }
+GuidanceBot.stop()
+GuidanceBot.active       // boolean
+GuidanceBot.phase        // 'navigate' | 'align' | 'done' | null
+GuidanceBot.targetBearing // current arrow bearing (toward waypoint in navigate, bearingDeg in align)
+```
+
+**TTS chain** (both engine and editor simulator): Kokoro neural (82M ONNX, browser-cached) → Workers AI speecht5_tts → browser speechSynthesis fallback.
+
+**Fence editor map visuals:**
+- Hazard zones render red (`#ff2f4e`) instead of coral
+- Amber dashed line shows `bearingDeg` direction from zone center
+- Green arrow on sim avatar points toward current waypoint/target during guidance
 
 **Chat API** (`/api/chat`): proxies to Groq streaming, builds a system prompt from:
 - Bot persona + knowledge base
