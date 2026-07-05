@@ -225,7 +225,7 @@ async function update(fix){
 
   else if(_phase==='align'){
     if(!_targetZone.bearingDeg&&_targetZone.bearingDeg!==0){ _finish(); return; }
-    if(hdg!=null&&fix.speed>=MIN_HDG_SPEED){
+    if(hdg!=null&&fix.speed>=MIN_HDG_SPEED*0.4){
       const delta=((_targetZone.bearingDeg-hdg+540)%360)-180;
       if(Math.abs(delta)<ALIGN_OK_DEG){
         _say("Perfect. Stop here — you're facing the right direction.");
@@ -280,9 +280,12 @@ window.GuidanceBot={
   stop(){ _active=false; _phase=null; _sayFn=null; _onComplete=null; _onInstruction=null; _lastUserPos=null; },
   get active(){ return _active; },
   get phase(){ return _phase; },
-  // returns bearing (0-360) from current pos to active waypoint/target, or null
+  // returns bearing (0-360) to display as the guidance arrow
+  // navigate phase: bearing toward current waypoint/target
+  // align phase: the bearingDeg the visitor should face
   get targetBearing(){
     if(!_active||!_targetZone) return null;
+    if(_phase==='align') return _targetZone.bearingDeg!=null?_targetZone.bearingDeg:null;
     const from=_lastUserPos;
     if(!from) return null;
     const to=_waypointQueue.length>0?[_waypointQueue[0].lat,_waypointQueue[0].lon]:_targetZone.center;
