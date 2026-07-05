@@ -1732,18 +1732,45 @@ function feedSim(lat,lon,acc,t){
 }
 
 let _ttsCtx=null;
+const SimKokoro={
+  tts:null, voice:'af_bella',
+  async tryLoad(){
+    if(this.tts) return;
+    try{
+      const{KokoroTTS}=await import('https://esm.sh/kokoro-js');
+      this.tts=await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0',{dtype:'q4',progress_callback:()=>{}});
+      simLogEv('sev-sys','Kokoro TTS ready — neural voice active');
+    }catch(e){}
+  }
+};
+SimKokoro.tryLoad();
+
+function _ttsEnsureCtx(){
+  if(!_ttsCtx) _ttsCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(_ttsCtx.state==='suspended') _ttsCtx.resume();
+  return _ttsCtx;
+}
+function _ttsPlayPCM(audio, sampleRate){
+  const ctx=_ttsEnsureCtx();
+  const buf=ctx.createBuffer(1,audio.length,sampleRate);
+  buf.getChannelData(0).set(audio);
+  const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination); src.start();
+}
 function simTTS(text){
+  if(SimKokoro.tts){
+    SimKokoro.tts.generate(text,{voice:SimKokoro.voice})
+      .then(r=>_ttsPlayPCM(r.audio,r.sampling_rate))
+      .catch(()=>_ttsWorkers(text));
+    return;
+  }
+  _ttsWorkers(text);
+}
+function _ttsWorkers(text){
   fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})})
     .then(r=>r.ok?r.arrayBuffer():Promise.reject())
-    .then(ab=>{
-      if(!_ttsCtx) _ttsCtx=new (window.AudioContext||window.webkitAudioContext)();
-      _ttsCtx.decodeAudioData(ab,buf=>{
-        const src=_ttsCtx.createBufferSource();
-        src.buffer=buf;
-        src.connect(_ttsCtx.destination);
-        src.start();
-      },()=>_ttsFallback(text));
-    })
+    .then(ab=>{ const ctx=_ttsEnsureCtx(); ctx.decodeAudioData(ab,buf=>{
+        const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination); src.start();
+      },()=>_ttsFallback(text)); })
     .catch(()=>_ttsFallback(text));
 }
 function _ttsFallback(text){
@@ -2586,8 +2613,6 @@ document.getElementById("simChatInput").addEventListener("keydown",e=>{
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
-  if(!_ttsCtx){_ttsCtx=new (window.AudioContext||window.webkitAudioContext)();}
-  else if(_ttsCtx.state==='suspended')_ttsCtx.resume();
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simPlay();};
