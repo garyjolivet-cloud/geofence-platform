@@ -2177,7 +2177,7 @@ function renderZoneBots(zone){
       gp.innerHTML=`<label style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:2px">Guide to zone</label>`
         +`<select style="width:100%;font-family:'Barlow Condensed';font-size:12px;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--snow);padding:5px 8px">`
         +`<option value="">— pick a target zone —</option>${zoneOpts}</select>`;
-      gp.querySelector("select").onchange=e=>{ slot.targetZoneId=e.target.value||null; };
+      gp.querySelector("select").onchange=e=>{ slot.targetZoneId=e.target.value||null; render(); };
       list.appendChild(row); list.appendChild(cp); list.appendChild(gp);
     } else {
       list.appendChild(row); list.appendChild(cp);
