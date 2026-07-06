@@ -97,8 +97,13 @@
                  white-space:nowrap;text-shadow:0 1px 3px #0a1018;pointer-events:none}
   /* map drag handles */
   .map-handle{width:14px;height:14px;border-radius:50%;border:2px solid #fff;cursor:grab;
-              box-shadow:0 0 0 3px rgba(0,0,0,.55);transition:transform .1s}
+              box-shadow:0 0 0 3px rgba(0,0,0,.55);transition:transform .1s;position:relative}
   .map-handle:hover{transform:scale(1.3)}
+  .mh-lbl{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+          background:rgba(10,16,24,.92);color:var(--ice);border:1px solid var(--rim);
+          font-family:"Barlow Condensed";font-size:11px;padding:2px 7px;border-radius:5px;
+          white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s;z-index:10}
+  .map-handle:hover .mh-lbl,.map-handle.mh-active .mh-lbl{opacity:1}
   .map-handle.mh-bearing{background:#ffc24d;width:16px;height:16px}
   .map-handle.mh-approach{background:#8fb6d4}
   .map-handle.mh-radius{background:#27d67b}
@@ -879,7 +884,12 @@ function clearHandles(){
   [..._handles,..._vertexHandles,..._tripHandles].forEach(m=>m.remove());
   _handles=[]; _vertexHandles=[]; _tripHandles=[];
 }
-function _mkHandle(cls){ const el=document.createElement("div"); el.className="map-handle "+cls; return el; }
+function _mkHandle(cls,label){
+  const el=document.createElement("div"); el.className="map-handle "+cls;
+  const lb=document.createElement("span"); lb.className="mh-lbl"; lb.textContent=label||"";
+  el.appendChild(lb); return el;
+}
+function _setLbl(el,txt){ const lb=el.querySelector(".mh-lbl"); if(lb) lb.textContent=txt; }
 
 function refreshHandles(z){
   clearHandles();
@@ -888,80 +898,95 @@ function refreshHandles(z){
 
   // ---- 1: bearing tip handle (amber) ----
   if(z.bearingDeg!=null){
-    const tip=destPoint(c,20,z.bearingDeg);
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-bearing"),draggable:true}).setLngLat(tip).addTo(map);
+    const el=_mkHandle("mh-bearing","bearing: "+z.bearingDeg+"°");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,20,z.bearingDeg)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); z.bearingDeg=Math.round(bearingTo(c,[ll.lng,ll.lat]));
-      document.getElementById("pBearing").value=z.bearingDeg; renderSources();
+      document.getElementById("pBearing").value=z.bearingDeg;
+      _setLbl(el,"bearing: "+z.bearingDeg+"°"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
   // ---- 2: approach ring handle (white, north) ----
   {
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-approach"),draggable:true})
-      .setLngLat(destPoint(c,z.approachM,0)).addTo(map);
+    const el=_mkHandle("mh-approach","approach: "+z.approachM+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,z.approachM,0)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); z.approachM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pApproach").value=z.approachM; renderSources();
+      document.getElementById("pApproach").value=z.approachM;
+      _setLbl(el,"approach: "+z.approachM+" m"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
   // ---- 3: circle radius handle (green, east) ----
   if(z.shape.type==="circle"){
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-radius"),draggable:true})
-      .setLngLat(destPoint(c,z.shape.radiusM,90)).addTo(map);
+    const el=_mkHandle("mh-radius","radius: "+z.shape.radiusM+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,z.shape.radiusM,90)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); z.shape.radiusM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pReveal").value=z.shape.radiusM; renderSources();
+      document.getElementById("pReveal").value=z.shape.radiusM;
+      _setLbl(el,"radius: "+z.shape.radiusM+" m"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
   // ---- 4: audio ring handle (blue, south) ----
   if((z.audioM||0)>0){
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-audio"),draggable:true})
-      .setLngLat(destPoint(c,z.audioM,180)).addTo(map);
+    const el=_mkHandle("mh-audio","audio fade: "+z.audioM+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,z.audioM,180)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); z.audioM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pAudio").value=z.audioM; renderSources();
+      document.getElementById("pAudio").value=z.audioM;
+      _setLbl(el,"audio fade: "+z.audioM+" m"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
   // ---- 5: broadcast ring handle (orange, west) — tracker circles only ----
   if(z.shape.type==="circle"&&z.trackerId){
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-broadcast"),draggable:true})
-      .setLngLat(destPoint(c,z.broadcastRadiusM||20,270)).addTo(map);
+    const bR=z.broadcastRadiusM||20;
+    const el=_mkHandle("mh-broadcast","broadcast: "+bR+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,bR,270)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); z.broadcastRadiusM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pBroadcast").value=z.broadcastRadiusM; renderSources();
+      document.getElementById("pBroadcast").value=z.broadcastRadiusM;
+      _setLbl(el,"broadcast: "+z.broadcastRadiusM+" m"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
   // ---- 6: polygon vertex handles (white squares) ----
   if(z.shape.type==="polygon"){
     z.shape.coords.forEach((coord,i)=>{
-      const mk=new maplibregl.Marker({element:_mkHandle("mh-vertex"),draggable:true}).setLngLat(coord).addTo(map);
+      const el=_mkHandle("mh-vertex","vertex "+(i+1));
+      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(coord).addTo(map);
+      mk.on("dragstart",()=>el.classList.add("mh-active"));
       mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
-      mk.on("dragend",()=>render());
+      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
       _vertexHandles.push(mk);
     });
   }
 
   // ---- 7: tripline endpoint handles (cyan) ----
   if(z.shape.type==="tripline"){
-    [{key:"from",coord:z.shape.from},{key:"to",coord:z.shape.to}].forEach(({key,coord})=>{
-      const mk=new maplibregl.Marker({element:_mkHandle("mh-tripend"),draggable:true}).setLngLat(coord).addTo(map);
+    [{key:"from",label:"start"},{key:"to",label:"end"}].forEach(({key,label})=>{
+      const el=_mkHandle("mh-tripend",label);
+      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(z.shape[key]).addTo(map);
+      mk.on("dragstart",()=>el.classList.add("mh-active"));
       mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape[key]=[ll.lng,ll.lat]; renderSources(); });
-      mk.on("dragend",()=>render());
+      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
       _tripHandles.push(mk);
     });
   }
@@ -974,42 +999,45 @@ function refreshHandles(z){
 
   // 8: voice range (purple, north)
   {
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-projrange"),draggable:true})
-      .setLngLat(destPoint(pc,rM,0)).addTo(map);
+    const el=_mkHandle("mh-projrange","voice range: "+rM+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(pc,rM,0)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); const v=Math.max(6,Math.min(160,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
       document.getElementById("audioRange").value=v; document.getElementById("audioRangeV").textContent=v;
-      renderSources();
+      _setLbl(el,"voice range: "+v+" m"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
   // 9: full-volume inner ring (dark purple, SE at 135°)
   {
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-projclear"),draggable:true})
-      .setLngLat(destPoint(pc,cM,135)).addTo(map);
+    const el=_mkHandle("mh-projclear","full vol: "+cM+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(pc,cM,135)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat();
       const maxV=+(document.getElementById("audioRange").value)||64;
       const v=Math.max(2,Math.min(maxV-1,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
       document.getElementById("audioClear").value=v; document.getElementById("audioClearV").textContent=v;
-      renderSources();
+      _setLbl(el,"full vol: "+v+" m"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
   // 10: visitor radius (cyan dashed, SW at 225°)
   {
-    const mk=new maplibregl.Marker({element:_mkHandle("mh-visitor"),draggable:true})
-      .setLngLat(destPoint(pc,vM,225)).addTo(map);
+    const el=_mkHandle("mh-visitor","visitor: "+vM+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(pc,vM,225)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); const v=Math.max(5,Math.min(80,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
       document.getElementById("visitorRadius").value=v; document.getElementById("visitorRadiusV").textContent=v;
-      renderSources();
+      _setLbl(el,"visitor: "+v+" m"); renderSources();
     });
-    mk.on("dragend",()=>render());
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 }
