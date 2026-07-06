@@ -15,7 +15,7 @@ const MIN_HDG_SPEED   = 0.5;  // m/s — minimum speed to trust GPS travel headi
 const EMA_ALPHA       = 0.15; // circular EMA smoothing factor
 const SPEAK_NEW_MS    = 6000; // min ms between different instructions
 const SPEAK_SAME_MS   = 15000;// min ms to repeat same instruction
-const HAZARD_BUF_KM   = 0.005;// 5m buffer around hazard zones
+const HAZARD_BUF_KM   = 0.015;// 15m buffer around hazard zones
 const DIR_DEAD        = 10;   // hysteresis dead-band in degrees
 
 // --- geometry helpers (match existing Geo.bearing / haversineM pattern) ---
@@ -120,14 +120,35 @@ function zoneToTurfPoly(zone, turf){
   return null;
 }
 
+// cross2d: sign tells which side of line O→A the point B is on
+function cross2d(O,A,B){ return (A[0]-O[0])*(B[1]-O[1])-(A[1]-O[1])*(B[0]-O[0]); }
+
+// Find the two tangent vertices from external point P to a convex polygon.
+// Returns [leftTangent, rightTangent] as [lon,lat], or nulls.
+// Path P→tangent just grazes the hull — guaranteed not to enter the polygon.
+function tangentVertices(P, hCoords){
+  const n=hCoords.length-1; // last = first (closed ring)
+  let left=null, right=null;
+  for(let i=0;i<n;i++){
+    const curr=hCoords[i];
+    const prev=hCoords[(i-1+n)%n];
+    const next=hCoords[(i+1)%n];
+    const cp=cross2d(P,curr,prev);
+    const cn=cross2d(P,curr,next);
+    if(cp<=0&&cn>0) right=curr; // right tangent
+    if(cp>=0&&cn<0) left=curr;  // left tangent
+  }
+  return [left,right];
+}
+
 async function computeBypassWaypoints(userLatLon, targetLatLon, allZones){
+  if(!userLatLon) return [];
   const hazards=(allZones||[]).filter(z=>z.isHazard);
   if(!hazards.length) return [];
   const turf=await loadTurf();
   if(!turf) return [];
   const waypoints=[];
-  const fromLL=userLatLon||[targetLatLon[0]-0.0001, targetLatLon[1]-0.0001];
-  const fromPt=[fromLL[1],fromLL[0]]; // [lon,lat] for turf
+  const fromPt=[userLatLon[1],userLatLon[0]];   // [lon,lat]
   const toPt=[targetLatLon[1],targetLatLon[0]];
 
   for(const hz of hazards){
@@ -139,21 +160,16 @@ async function computeBypassWaypoints(userLatLon, targetLatLon, allZones){
       const line=turf.lineString([fromPt,toPt]);
       if(!turf.booleanIntersects(line,hull)) continue;
 
-      // Classify hull vertices left/right of direct path
       const hCoords=hull.geometry.coordinates[0];
-      const [fx,fy]=fromPt, [tx,ty]=toPt;
-      const dx=tx-fx, dy=ty-fy;
-      let bestLeft=null, bestRight=null, bestLx=0, bestRx=0;
-      hCoords.forEach(([cx,cy])=>{
-        const cross=dx*(cy-fy)-dy*(cx-fx);
-        const mag=Math.abs(cross);
-        if(cross>0&&mag>bestLx){ bestLeft=[cy,cx]; bestLx=mag; } // back to [lat,lon]
-        if(cross<=0&&mag>bestRx){ bestRight=[cy,cx]; bestRx=mag; }
-      });
 
-      // Choose shorter path
-      const pathLen=wp=>wp?hav(fromLL,wp)+hav(wp,targetLatLon):Infinity;
-      const chosen=(pathLen(bestLeft)<pathLen(bestRight)?bestLeft:bestRight)||bestLeft||bestRight;
+      // Get proper tangent vertices — path to these is guaranteed clear
+      const [leftV,rightV]=tangentVertices(fromPt,hCoords);
+
+      // Convert back to [lat,lon] and pick shorter total path
+      const toLatlng=v=>v?[v[1],v[0]]:null;
+      const leftLL=toLatlng(leftV), rightLL=toLatlng(rightV);
+      const pathLen=wp=>wp?hav(userLatLon,wp)+hav(wp,targetLatLon):Infinity;
+      const chosen=(pathLen(leftLL)<pathLen(rightLL)?leftLL:rightLL)||leftLL||rightLL;
       if(chosen) waypoints.push({lat:chosen[0],lon:chosen[1]});
     }catch(e){}
   }
@@ -193,8 +209,8 @@ async function update(fix){
   if(_waypointQueue.length>0&&distToWp<WAYPOINT_M){
     _waypointQueue.shift();
   }
-  // Re-check hazards: on every tick when queue empty, throttled to every 4s
-  if(!_hazardChecking&&_phase==='navigate'&&now-_lastHazardCheck>4000){
+  // Re-check hazards only when queue is empty (don't overwrite in-progress bypass), throttled to 4s
+  if(!_hazardChecking&&_phase==='navigate'&&_waypointQueue.length===0&&now-_lastHazardCheck>4000){
     _hazardChecking=true; _lastHazardCheck=now;
     computeBypassWaypoints([fix.lat,fix.lon],_targetZone.center,_allZones)
       .then(wps=>{ if(_active) _waypointQueue=wps; })
