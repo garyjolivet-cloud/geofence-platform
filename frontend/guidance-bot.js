@@ -167,6 +167,8 @@ let _sayFn=null, _onComplete=null, _onInstruction=null;
 let _lastSpeakT=0, _lastInstrText=null;
 let _smoothedHdg=null, _prevDirState=null;
 let _waypointQueue=[];
+let _lastHazardCheck=0;  // epoch ms of last computeBypassWaypoints call
+let _hazardChecking=false; // prevent concurrent checks
 
 // --- update — called every GPS fix ---
 async function update(fix){
@@ -190,8 +192,14 @@ async function update(fix){
   // Pass waypoint?
   if(_waypointQueue.length>0&&distToWp<WAYPOINT_M){
     _waypointQueue.shift();
+  }
+  // Re-check hazards: on every tick when queue empty, throttled to every 4s
+  if(!_hazardChecking&&_phase==='navigate'&&now-_lastHazardCheck>4000){
+    _hazardChecking=true; _lastHazardCheck=now;
     computeBypassWaypoints([fix.lat,fix.lon],_targetZone.center,_allZones)
-      .then(wps=>{ _waypointQueue=wps; }).catch(()=>{});
+      .then(wps=>{ if(_active) _waypointQueue=wps; })
+      .catch(()=>{})
+      .finally(()=>{ _hazardChecking=false; });
   }
 
   if(_phase==='navigate'){
@@ -271,13 +279,11 @@ window.GuidanceBot={
     _sayFn=sayFn||null; _onComplete=onComplete||null; _onInstruction=onInstruction||null;
     _lastSpeakT=0; _lastInstrText=null;
     _smoothedHdg=null; _prevDirState=null; _waypointQueue=[];
-    // Pre-compute hazard waypoints (non-blocking, gracefully absent until ready)
-    computeBypassWaypoints(null,targetZone.center,allZones)
-      .then(wps=>{ if(_active) _waypointQueue=wps; }).catch(()=>{});
+    _lastHazardCheck=0; _hazardChecking=false;
     _say("Guidance started — walk toward the target.");
   },
   update,
-  stop(){ _active=false; _phase=null; _sayFn=null; _onComplete=null; _onInstruction=null; _lastUserPos=null; },
+  stop(){ _active=false; _phase=null; _sayFn=null; _onComplete=null; _onInstruction=null; _lastUserPos=null; _hazardChecking=false; },
   get active(){ return _active; },
   get phase(){ return _phase; },
   // returns bearing (0-360) to display as the guidance arrow
