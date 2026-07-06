@@ -15,7 +15,7 @@ geofence-platform/
 ├── frontend/
 │   ├── index.html           ← Homepage — lists projects, links to tools
 │   ├── dashboard.html       ← Admin dashboard (API key management, audit log)
-│   ├── fence-editor.html    ← Geofence zone editor (publishes bundles to D1; auto-saves draft to localStorage)
+│   ├── fence-editor.html    ← Geofence zone editor (publishes bundles to D1; auto-saves draft to localStorage; full map-interactive handles)
 │   ├── geofence-engine.html ← Tour player / engine (loads published bundles; Kokoro TTS)
 │   ├── guidance-bot.js      ← Guidance bot module (window.GuidanceBot)
 │   ├── geofence-sim.html    ← Geofence simulator (tests zones without live GPS)
@@ -130,10 +130,10 @@ Standalone IIFE module exposing `window.GuidanceBot`. Phone-in-pocket precision 
 
 **Zone fields added for guidance:**
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `bearingDeg` | `number\|null` | Direction visitor should face on arrival (0–359°) |
-| `isHazard` | `boolean` | Marks zone as a routing obstacle (renders red on map) |
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `bearingDeg` | `number` | `90` | Direction visitor should face on arrival (0–359°); amber arrow always shown on map |
+| `isHazard` | `boolean` | `false` | Marks zone as a routing obstacle (renders red on map) |
 
 **Two phases:**
 1. `navigate` — guides to within 8m of target zone center
@@ -141,7 +141,7 @@ Standalone IIFE module exposing `window.GuidanceBot`. Phone-in-pocket precision 
 
 **Direction instructions** use a state machine with 10° hysteresis: STRAIGHT / BEAR / TURN / AROUND. Heading source is GPS travel heading only (phone in pocket — device compass unreliable). Circular EMA (α=0.15) smooths heading.
 
-**Hazard avoidance**: Turf.js (lazy CDN load) buffers hazard zones 5m, checks if direct path intersects, routes tangent waypoints around them. Graceful degradation if offline.
+**Hazard avoidance**: Turf.js (lazy CDN load) buffers hazard zones 15m, uses convex-hull tangent waypoints (proper geometric tangent — path to waypoint is guaranteed clear). Re-checks only when `_waypointQueue` is empty to avoid overwriting an in-progress bypass. Graceful degradation if offline.
 
 **API:**
 ```js
@@ -157,8 +157,39 @@ GuidanceBot.targetBearing // current arrow bearing (toward waypoint in navigate,
 
 **Fence editor map visuals:**
 - Hazard zones render red (`#ff2f4e`) instead of coral
-- Amber dashed line shows `bearingDeg` direction from zone center
+- Amber solid line + draggable tip handle shows `bearingDeg` from zone center (default 90°)
+- Blue dotted ring shows `audioM` fade distance
+- Orange dotted ring shows `broadcastRadiusM` (tracker circles only)
 - Green arrow on sim avatar points toward current waypoint/target during guidance
+
+## Fence Editor — Map-Interactive Handles
+
+Every zone shows an amber bearing arrow at all times. When a zone is **selected** (click on map or in list), 7 draggable handles appear:
+
+| Handle | Color | Position | Controls |
+|--------|-------|----------|---------|
+| Bearing tip | Amber | Arrow end | `bearingDeg` — swing in circle |
+| Approach ring | White-blue | North | `approachM` — resize dashed ring |
+| Circle radius | Green | East | `shape.radiusM` — resize fill |
+| Audio fade | Blue | South | `audioM` — resize dotted ring |
+| Broadcast | Orange | West | `broadcastRadiusM` (tracker only) |
+| Polygon vertex | White square | Each corner | `shape.coords[i]` |
+| Tripline endpoint | Cyan | Each end | `shape.from` / `shape.to` |
+
+Each handle shows a floating label on hover that updates live while dragging (e.g. `approach: 45 m`).
+
+**Zone body interaction:** Click any zone to select + fly to it. Drag any zone body to move the entire zone. Click empty map to deselect.
+
+**Global settings** (Project Settings section): three dot-badge buttons (voice range, full vol, visitor). Click a dot → inline slider opens + ghost ring appears on map centered on all zones. Click again to close.
+
+**Panel minimize:** ◀ button collapses panel to 36px strip; ▶ expands.
+
+**Map Key:** ⬤ Key button (top-right, below base selector) opens modal legend describing all handles.
+
+**Geometry helpers in fence-editor.html:**
+- `destPoint(center, distM, bearing)` → `[lon, lat]` — destination point at distance/bearing
+- `bearingTo(a, b)` → 0–360° — compass bearing between two `[lon, lat]` points
+- `haversineM(a, b)` → metres — distance between two `[lon, lat]` points (existing)
 
 **Chat API** (`/api/chat`): proxies to Groq streaming, builds a system prompt from:
 - Bot persona + knowledge base
