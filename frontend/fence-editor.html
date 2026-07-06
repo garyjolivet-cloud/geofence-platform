@@ -95,6 +95,20 @@
   .tracker-label{position:absolute;top:20px;left:50%;transform:translateX(-50%);
                  font-family:"Barlow Condensed";font-size:11px;color:var(--ice);
                  white-space:nowrap;text-shadow:0 1px 3px #0a1018;pointer-events:none}
+  /* map drag handles */
+  .map-handle{width:14px;height:14px;border-radius:50%;border:2px solid #fff;cursor:grab;
+              box-shadow:0 0 0 3px rgba(0,0,0,.55);transition:transform .1s}
+  .map-handle:hover{transform:scale(1.3)}
+  .map-handle.mh-bearing{background:#ffc24d;width:16px;height:16px}
+  .map-handle.mh-approach{background:#8fb6d4}
+  .map-handle.mh-radius{background:#27d67b}
+  .map-handle.mh-audio{background:#6fbfff}
+  .map-handle.mh-broadcast{background:#ff9900}
+  .map-handle.mh-vertex{background:#fff;border-radius:3px;width:12px;height:12px}
+  .map-handle.mh-tripend{background:#00e5ff}
+  .map-handle.mh-projrange{background:#b96fff}
+  .map-handle.mh-projclear{background:#9b3fd4}
+  .map-handle.mh-visitor{background:#00e5ff;border-style:dashed}
   /* bot slot in zone props */
   .bot-slot{display:flex;align-items:center;gap:8px;background:var(--slate-2);border:1px solid var(--rim);
             border-radius:8px;padding:8px 10px;cursor:pointer;transition:.12s}
@@ -632,6 +646,19 @@ function haversineM(a,b){ const R=6371000, toR=Math.PI/180;
   const dLat=(b[1]-a[1])*toR, dLon=(b[0]-a[0])*toR, la1=a[1]*toR, la2=b[1]*toR;
   const x=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.sqrt(x)); }
+// destPoint: center=[lon,lat], distM, bearing(0=N,90=E) → [lon,lat]
+function destPoint(center,distM,bearing){
+  const R=6371000,toR=Math.PI/180;
+  const lat1=center[1]*toR, lon1=center[0]*toR, b=bearing*toR, d=distM/R;
+  const lat2=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(b));
+  const lon2=lon1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+  return [lon2/toR, lat2/toR];
+}
+// bearingTo: a=[lon,lat], b=[lon,lat] → 0..360
+function bearingTo(a,b){
+  const toR=Math.PI/180, la=a[1]*toR, lb=b[1]*toR, dl=(b[0]-a[0])*toR;
+  return (Math.atan2(Math.sin(dl)*Math.cos(lb),Math.cos(la)*Math.sin(lb)-Math.sin(la)*Math.cos(lb)*Math.cos(dl))/toR+360)%360;
+}
 function centroidLonLat(coords){
   let A=0,cx=0,cy=0;
   for(let i=0;i<coords.length;i++){ const j=(i+1)%coords.length;
@@ -668,14 +695,22 @@ function makeZone(name,shape){
 
 /* ---- render committed fences (target + approach ring) + draft ---- */
 function fc(features){ return {type:"FeatureCollection",features}; }
-function render(){
+
+function renderSources(){
   const feats=[];
   zones.forEach((z,i)=>{
     const s=z.shape, selected=(i===sel);
-    // approach ring (dashed)
     const c=zoneCenterLonLat(z), gr=zoneGenR(z);
+    // approach ring
     feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
       geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
+    // audio fade-in ring
+    if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
+      geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
+    // tracker broadcast ring (circles with trackerId only)
+    if(s.type==="circle"&&z.trackerId&&(z.broadcastRadiusM||0)>0)
+      feats.push({type:"Feature",properties:{kind:"broadcast",sel:selected},
+        geometry:{type:"Polygon",coordinates:[circleRing(c,z.broadcastRadiusM,48)]}});
     // target shape
     const hz=!!z.isHazard;
     if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name,isHazard:hz},
@@ -684,34 +719,56 @@ function render(){
         geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
     else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",sel:selected,name:z.name},
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
-    // label point — include bot avatar(s) for zones that have bots assigned
+    // label + bot avatar(s)
     const _bslots=Array.isArray(z.bots)?z.bots:(z.botId?[{botId:z.botId}]:[]);
-    const _botAv=_bslots.slice(0,3).map(s=>{const b=editorBots.find(x=>x.id===s.botId);return b?(b.avatar||"🤖"):"";}).filter(Boolean).join("");
+    const _botAv=_bslots.slice(0,3).map(sl=>{const b=editorBots.find(x=>x.id===sl.botId);return b?(b.avatar||"🤖"):"";}).filter(Boolean).join("");
     const _lp={kind:"label",name:z.name}; if(_botAv)_lp.botAv=_botAv;
     feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
   });
   map.getSource("fences").setData(fc(feats));
 
-  // bearing arrows — amber line 20m in bearingDeg direction from zone center
+  // project-level rings — centred on selected zone, shown as ghost overlays
+  if(map.getSource("project-rings")){
+    const pf=[];
+    if(sel>=0&&zones[sel]){
+      const pc=zoneCenterLonLat(zones[sel]);
+      const rM=+(document.getElementById("audioRange").value)||64;
+      const cM=+(document.getElementById("audioClear").value)||8;
+      const vM=+(document.getElementById("visitorRadius").value)||15;
+      pf.push({type:"Feature",properties:{pkind:"range"},geometry:{type:"Polygon",coordinates:[circleRing(pc,rM,64)]}});
+      pf.push({type:"Feature",properties:{pkind:"clear"},geometry:{type:"Polygon",coordinates:[circleRing(pc,cM,64)]}});
+      pf.push({type:"Feature",properties:{pkind:"visitor"},geometry:{type:"Polygon",coordinates:[circleRing(pc,vM,64)]}});
+      pf.push({type:"Feature",properties:{pkind:"rlabel",label:"voice range"},geometry:{type:"Point",coordinates:destPoint(pc,rM,0)}});
+      pf.push({type:"Feature",properties:{pkind:"rlabel",label:"full vol"},geometry:{type:"Point",coordinates:destPoint(pc,cM,135)}});
+      pf.push({type:"Feature",properties:{pkind:"rlabel",label:"visitor"},geometry:{type:"Point",coordinates:destPoint(pc,vM,225)}});
+    }
+    map.getSource("project-rings").setData(fc(pf));
+  }
+
+  // bearing arrows
   if(map.getSource("bearing-arrows")){
     const arrowFeats=zones.filter(z=>z.bearingDeg!=null).map(z=>{
-      const ctr=zoneCenterLonLat(z); // [lon,lat]
-      const latRad=ctr[1]*Math.PI/180;
-      const brRad=z.bearingDeg*Math.PI/180;
-      const tip=[ctr[0]+(20/(111320*Math.cos(latRad)))*Math.sin(brRad), ctr[1]+(20/111320)*Math.cos(brRad)];
+      const ctr=zoneCenterLonLat(z);
+      const tip=destPoint(ctr,20,z.bearingDeg);
       return {type:"Feature",properties:{},geometry:{type:"LineString",coordinates:[ctr,tip]}};
     });
     map.getSource("bearing-arrows").setData(fc(arrowFeats));
   }
 
+  // draft
   const d=[];
   if((tool==="polygon"||tool==="tripline")&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
   if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
         geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
   map.getSource("draft").setData(fc(d.concat(pts)));
+}
+
+function render(){
+  renderSources();
   drawList();
   autoSave();
+  if(sel>=0&&zones[sel]) refreshHandles(zones[sel]); else clearHandles();
 }
 
 map.on("load",()=>{
@@ -754,6 +811,23 @@ map.on("load",()=>{
      paint:{"line-color":"#ffc24d","line-width":3,"line-dasharray":[1,0]}});
   map.addLayer({id:"bearing-arrowhead",type:"circle",source:"bearing-arrows",filter:["==","$type","Point"],
      paint:{"circle-radius":5,"circle-color":"#ffc24d","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
+  // audio fade-in ring (blue-grey dotted)
+  map.addLayer({id:"audio-ring",type:"line",source:"fences",filter:["==","kind","audio"],
+     paint:{"line-color":"#6fbfff","line-width":1.2,"line-dasharray":[1,3],"line-opacity":0.65}});
+  // tracker broadcast ring (orange dotted)
+  map.addLayer({id:"broadcast-ring",type:"line",source:"fences",filter:["==","kind","broadcast"],
+     paint:{"line-color":"#ff9900","line-width":1.5,"line-dasharray":[1,2],"line-opacity":0.8}});
+  // project-level rings (voice range, full volume, visitor)
+  map.addSource("project-rings",{type:"geojson",data:fc([])});
+  map.addLayer({id:"proj-range-ring",type:"line",source:"project-rings",filter:["==","pkind","range"],
+     paint:{"line-color":"#b96fff","line-width":1.2,"line-dasharray":[4,3],"line-opacity":0.6}});
+  map.addLayer({id:"proj-clear-ring",type:"line",source:"project-rings",filter:["==","pkind","clear"],
+     paint:{"line-color":"#b96fff","line-width":1.5,"line-opacity":0.55}});
+  map.addLayer({id:"proj-visitor-ring",type:"line",source:"project-rings",filter:["==","pkind","visitor"],
+     paint:{"line-color":"#00e5ff","line-width":1.2,"line-dasharray":[2,3],"line-opacity":0.55}});
+  map.addLayer({id:"proj-ring-lbl",type:"symbol",source:"project-rings",filter:["==","pkind","rlabel"],
+     layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,0.8],"text-font":["Open Sans Regular"]},
+     paint:{"text-color":"#b96fff","text-halo-color":"#0a1018","text-halo-width":1.2,"text-opacity":0.8}});
   render();
   autoRestore();
 });
@@ -797,6 +871,147 @@ function finishShape(){
   document.getElementById("circleRow").style.display="none";
   document.getElementById("drawHint").textContent="stop added — set what it says below, or draw another";
   selectZone(zones.length-1);
+}
+
+/* ---- map drag handles ---- */
+let _handles=[], _vertexHandles=[], _tripHandles=[];
+function clearHandles(){
+  [..._handles,..._vertexHandles,..._tripHandles].forEach(m=>m.remove());
+  _handles=[]; _vertexHandles=[]; _tripHandles=[];
+}
+function _mkHandle(cls){ const el=document.createElement("div"); el.className="map-handle "+cls; return el; }
+
+function refreshHandles(z){
+  clearHandles();
+  if(!z||sel<0) return;
+  const c=zoneCenterLonLat(z); // [lon,lat]
+
+  // ---- 1: bearing tip handle (amber) ----
+  if(z.bearingDeg!=null){
+    const tip=destPoint(c,20,z.bearingDeg);
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-bearing"),draggable:true}).setLngLat(tip).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat(); z.bearingDeg=Math.round(bearingTo(c,[ll.lng,ll.lat]));
+      document.getElementById("pBearing").value=z.bearingDeg; renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
+
+  // ---- 2: approach ring handle (white, north) ----
+  {
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-approach"),draggable:true})
+      .setLngLat(destPoint(c,z.approachM,0)).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat(); z.approachM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
+      document.getElementById("pApproach").value=z.approachM; renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
+
+  // ---- 3: circle radius handle (green, east) ----
+  if(z.shape.type==="circle"){
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-radius"),draggable:true})
+      .setLngLat(destPoint(c,z.shape.radiusM,90)).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat(); z.shape.radiusM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])));
+      document.getElementById("pReveal").value=z.shape.radiusM; renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
+
+  // ---- 4: audio ring handle (blue, south) ----
+  if((z.audioM||0)>0){
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-audio"),draggable:true})
+      .setLngLat(destPoint(c,z.audioM,180)).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat(); z.audioM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
+      document.getElementById("pAudio").value=z.audioM; renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
+
+  // ---- 5: broadcast ring handle (orange, west) — tracker circles only ----
+  if(z.shape.type==="circle"&&z.trackerId){
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-broadcast"),draggable:true})
+      .setLngLat(destPoint(c,z.broadcastRadiusM||20,270)).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat(); z.broadcastRadiusM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])));
+      document.getElementById("pBroadcast").value=z.broadcastRadiusM; renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
+
+  // ---- 6: polygon vertex handles (white squares) ----
+  if(z.shape.type==="polygon"){
+    z.shape.coords.forEach((coord,i)=>{
+      const mk=new maplibregl.Marker({element:_mkHandle("mh-vertex"),draggable:true}).setLngLat(coord).addTo(map);
+      mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
+      mk.on("dragend",()=>render());
+      _vertexHandles.push(mk);
+    });
+  }
+
+  // ---- 7: tripline endpoint handles (cyan) ----
+  if(z.shape.type==="tripline"){
+    [{key:"from",coord:z.shape.from},{key:"to",coord:z.shape.to}].forEach(({key,coord})=>{
+      const mk=new maplibregl.Marker({element:_mkHandle("mh-tripend"),draggable:true}).setLngLat(coord).addTo(map);
+      mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape[key]=[ll.lng,ll.lat]; renderSources(); });
+      mk.on("dragend",()=>render());
+      _tripHandles.push(mk);
+    });
+  }
+
+  // ---- project-level handles (8,9,10) — always shown when a zone is selected ----
+  const pc=c;
+  const rM=+(document.getElementById("audioRange").value)||64;
+  const cM=+(document.getElementById("audioClear").value)||8;
+  const vM=+(document.getElementById("visitorRadius").value)||15;
+
+  // 8: voice range (purple, north)
+  {
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-projrange"),draggable:true})
+      .setLngLat(destPoint(pc,rM,0)).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat(); const v=Math.max(6,Math.min(160,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
+      document.getElementById("audioRange").value=v; document.getElementById("audioRangeV").textContent=v;
+      renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
+
+  // 9: full-volume inner ring (dark purple, SE at 135°)
+  {
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-projclear"),draggable:true})
+      .setLngLat(destPoint(pc,cM,135)).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat();
+      const maxV=+(document.getElementById("audioRange").value)||64;
+      const v=Math.max(2,Math.min(maxV-1,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
+      document.getElementById("audioClear").value=v; document.getElementById("audioClearV").textContent=v;
+      renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
+
+  // 10: visitor radius (cyan dashed, SW at 225°)
+  {
+    const mk=new maplibregl.Marker({element:_mkHandle("mh-visitor"),draggable:true})
+      .setLngLat(destPoint(pc,vM,225)).addTo(map);
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat(); const v=Math.max(5,Math.min(80,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
+      document.getElementById("visitorRadius").value=v; document.getElementById("visitorRadiusV").textContent=v;
+      renderSources();
+    });
+    mk.on("dragend",()=>render());
+    _handles.push(mk);
+  }
 }
 
 /* ---- selection + properties panel ---- */
@@ -885,11 +1100,12 @@ function clearToken(){ verifiedToken=""; try{ sessionStorage.removeItem("gp.admi
     try{ if(verifiedToken) sessionStorage.setItem("gp.admin",verifiedToken); }catch(e){} }); })();
 (function(){ try{ const t=sessionStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
   if(t && el){ el.value=t; verifiedToken=t; el.placeholder="admin token (session)"; } }catch(e){} })();
-// spatial audio range sliders — live labels
+// spatial audio range sliders — live labels + ring resize
 (function(){ const s=document.getElementById("audioRange"), v=document.getElementById("audioRangeV");
-  if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
+  if(s) s.oninput=()=>{ v.textContent=s.value; if(sel>=0) renderSources(); }; })();
 (function(){ const s=document.getElementById("audioClear"), v=document.getElementById("audioClearV");
-  if(s) s.oninput=()=>{ v.textContent=s.value; }; })();
+  if(s) s.oninput=()=>{ v.textContent=s.value; if(sel>=0) renderSources(); }; })();
+document.getElementById("visitorRadius").oninput=e=>{ document.getElementById("visitorRadiusV").textContent=e.target.value; if(sel>=0) renderSources(); };
 
 // app picker — organize projects into apps so they don't blend
 async function loadApps(sel){
@@ -2025,7 +2241,7 @@ document.getElementById("projCfgToggle").onclick=()=>{
   b.style.display=open?"none":"flex";
   document.getElementById("projCfgToggle").textContent=(open?"▸":"▾")+" Project Settings";
 };
-document.getElementById("visitorRadius").oninput=e=>document.getElementById("visitorRadiusV").textContent=e.target.value;
+// visitorRadius oninput is wired above (with renderSources)
 
 /* ---- advanced section toggle ---- */
 document.getElementById("advToggle").onclick=()=>{
