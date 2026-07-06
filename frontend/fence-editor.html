@@ -716,13 +716,13 @@ function renderSources(){
     if(s.type==="circle"&&z.trackerId&&(z.broadcastRadiusM||0)>0)
       feats.push({type:"Feature",properties:{kind:"broadcast",sel:selected},
         geometry:{type:"Polygon",coordinates:[circleRing(c,z.broadcastRadiusM,48)]}});
-    // target shape
+    // target shape — zIdx lets map clicks identify the zone
     const hz=!!z.isHazard;
-    if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name,isHazard:hz},
+    if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",zIdx:i,sel:selected,name:z.name,isHazard:hz},
         geometry:{type:"Polygon",coordinates:[circleRing(s.center,s.radiusM,64)]}});
-    else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",sel:selected,name:z.name,isHazard:hz},
+    else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",zIdx:i,sel:selected,name:z.name,isHazard:hz},
         geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
-    else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",sel:selected,name:z.name},
+    else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name},
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
     // label + bot avatar(s)
     const _bslots=Array.isArray(z.bots)?z.bots:(z.botId?[{botId:z.botId}]:[]);
@@ -837,15 +837,80 @@ map.on("load",()=>{
   autoRestore();
 });
 
-/* ---- map clicks ---- */
+/* ---- map clicks + zone select/drag ---- */
 map.on("mousemove",e=>{ document.getElementById("status").textContent=
    "lat "+e.lngLat.lat.toFixed(6)+", lon "+e.lngLat.lng.toFixed(6)+"  ·  zoom "+map.getZoom().toFixed(1); });
+
+// hover cursor on zone fills and lines
+["fence-fill","fence-line"].forEach(lid=>{
+  map.on("mouseenter",lid,()=>{ if(!tool) map.getCanvas().style.cursor="grab"; });
+  map.on("mouseleave",lid,()=>{ if(!tool&&!_zoneDrag) map.getCanvas().style.cursor=""; });
+});
+
+// --- zone body drag state ---
+let _zoneDrag=null;
+// mousedown on a zone: prepare to either select or drag it
+function _zoneMousedown(e){
+  if(tool) return;
+  const feat=e.features&&e.features[0]; if(!feat) return;
+  const zIdx=feat.properties.zIdx; if(zIdx==null||!zones[zIdx]) return;
+  e.preventDefault();
+  map.dragPan.disable();
+  const z=zones[zIdx];
+  // snapshot geometry for delta offset
+  let snap;
+  if(z.shape.type==="circle")    snap={center:[...z.shape.center]};
+  else if(z.shape.type==="polygon") snap={coords:z.shape.coords.map(c=>[...c])};
+  else                           snap={from:[...z.shape.from],to:[...z.shape.to]};
+  _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false};
+  map.getCanvas().style.cursor="grabbing";
+}
+map.on("mousedown","fence-fill",_zoneMousedown);
+map.on("mousedown","fence-line",_zoneMousedown);
+
+// mousemove: apply offset to zone geometry while dragging
+map.on("mousemove",e=>{
+  if(!_zoneDrag) return;
+  const dLng=e.lngLat.lng-_zoneDrag.startLng, dLat=e.lngLat.lat-_zoneDrag.startLat;
+  if(!_zoneDrag.moved&&Math.abs(dLng)<0.000015&&Math.abs(dLat)<0.000015) return;
+  _zoneDrag.moved=true;
+  const z=zones[_zoneDrag.zIdx], s=_zoneDrag.snap;
+  if(z.shape.type==="circle")    z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
+  else if(z.shape.type==="polygon") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
+  else { z.shape.from=[s.from[0]+dLng,s.from[1]+dLat]; z.shape.to=[s.to[0]+dLng,s.to[1]+dLat]; }
+  // select this zone if not already selected
+  if(sel!==_zoneDrag.zIdx){ sel=_zoneDrag.zIdx; refreshProps(); }
+  renderSources(); // fast update — no handle recreation during drag
+});
+
+// mouseup: commit drag or treat as click-select
+window.addEventListener("mouseup",()=>{
+  if(!_zoneDrag) return;
+  map.dragPan.enable();
+  map.getCanvas().style.cursor="grab";
+  if(!_zoneDrag.moved){
+    // click: select zone, fly to it
+    selectZone(_zoneDrag.zIdx);
+    map.flyTo({center:zoneCenterLonLat(zones[_zoneDrag.zIdx]),zoom:Math.max(map.getZoom(),17)});
+  } else {
+    // drag: full render (repositions handles too) + autosave
+    sel=_zoneDrag.zIdx; render(); refreshProps();
+  }
+  _zoneDrag=null;
+});
+
+// click empty space to deselect
 map.on("click",e=>{
-  if(!tool) return;
-  const p=[e.lngLat.lng,e.lngLat.lat];
-  if(tool==="circle"){ draft=[p]; finishShape(); }
-  else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
-  else if(tool==="polygon"){ draft.push(p); render(); }
+  if(tool){
+    const p=[e.lngLat.lng,e.lngLat.lat];
+    if(tool==="circle"){ draft=[p]; finishShape(); }
+    else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
+    else if(tool==="polygon"){ draft.push(p); render(); }
+    return;
+  }
+  // deselect when clicking empty map (zone mousedown handles zone clicks)
+  const hit=map.queryRenderedFeatures(e.point,{layers:["fence-fill","fence-line"]});
+  if(!hit.length) selectZone(-1);
 });
 
 /* ---- tools ---- */
