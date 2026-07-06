@@ -695,7 +695,7 @@ function makeZone(name,shape){
   return { id:slug(name), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS, needle:DEFAULTS.needle,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM,
-           bearingDeg:null, isHazard:false };
+           bearingDeg:90, isHazard:false };
 }
 
 /* ---- render committed fences (target + approach ring) + draft ---- */
@@ -750,11 +750,11 @@ function renderSources(){
     map.getSource("project-rings").setData(fc(pf));
   }
 
-  // bearing arrows
+  // bearing arrows — every zone gets one (default 90° east)
   if(map.getSource("bearing-arrows")){
-    const arrowFeats=zones.filter(z=>z.bearingDeg!=null).map(z=>{
-      const ctr=zoneCenterLonLat(z);
-      const tip=destPoint(ctr,20,z.bearingDeg);
+    const arrowFeats=zones.map(z=>{
+      const ctr=zoneCenterLonLat(z), bd=z.bearingDeg??90;
+      const tip=destPoint(ctr,20,bd);
       return {type:"Feature",properties:{},geometry:{type:"LineString",coordinates:[ctr,tip]}};
     });
     map.getSource("bearing-arrows").setData(fc(arrowFeats));
@@ -896,8 +896,9 @@ function refreshHandles(z){
   if(!z||sel<0) return;
   const c=zoneCenterLonLat(z); // [lon,lat]
 
-  // ---- 1: bearing tip handle (amber) ----
-  if(z.bearingDeg!=null){
+  // ---- 1: bearing tip handle (amber) — always shown, defaults to 90° ----
+  if(z.bearingDeg==null) z.bearingDeg=90;
+  {
     const el=_mkHandle("mh-bearing","bearing: "+z.bearingDeg+"°");
     const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,20,z.bearingDeg)).addTo(map);
     mk.on("dragstart",()=>el.classList.add("mh-active"));
@@ -1080,7 +1081,7 @@ function refreshProps(){
   document.getElementById("pAudioStatus").innerHTML = z.audioUrl
     ? "clip attached ✓ → <b>"+z.audioUrl+"</b>"
     : "no clip — uploads to the platform and plays spatially in the engine";
-  document.getElementById("pBearing").value = z.bearingDeg!=null ? z.bearingDeg : "";
+  document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   document.getElementById("pIsHazard").checked = !!z.isHazard;
 }
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
