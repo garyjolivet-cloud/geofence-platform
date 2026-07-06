@@ -16,7 +16,17 @@
   .cond{font-family:"Barlow Condensed",sans-serif}
   .panel{position:absolute;top:10px;left:10px;width:312px;max-height:calc(100vh - 20px);overflow-y:auto;
          background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
-         backdrop-filter:blur(6px)}
+         backdrop-filter:blur(6px);transition:width .2s,padding .2s}
+  .panel.mini{width:36px;padding:8px 6px;overflow:hidden}
+  .panel.mini .panel-body{display:none}
+  #panelMinBtn{background:none;border:none;color:var(--fog);cursor:pointer;padding:2px 4px;
+               font-size:14px;line-height:1;flex-shrink:0;margin-left:auto}
+  #panelMinBtn:hover{color:var(--snow)}
+  #panelExpandBtn{display:none;writing-mode:vertical-rl;font-family:"Barlow Condensed";font-size:11px;
+                  color:var(--fog);cursor:pointer;background:none;border:none;padding:4px 0;
+                  text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+  .panel.mini #panelExpandBtn{display:block}
+  .panel.mini #panelMinBtn{display:none}
   .panel h1{font-family:"Black Han Sans";font-size:17px;margin:0 0 4px}
   .panel h1 .v{font-family:"Barlow Condensed";font-size:12px;color:var(--coral);font-weight:600}
   .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
@@ -226,6 +236,23 @@
   .bz-add{border:1px dashed var(--rim);border-radius:8px;padding:8px;text-align:center;
           font-family:"Barlow Condensed";font-size:12px;color:var(--fog);cursor:pointer;margin-top:3px;transition:.12s}
   .bz-add:hover,.bz-add.drag-over{border-color:var(--coral);color:var(--coral)}
+  /* project setting dot-buttons */
+  .proj-dot-row{display:flex;gap:5px}
+  .proj-dot-btn{display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;
+                background:var(--slate-2);border:1px solid var(--rim);border-radius:10px;
+                padding:7px 5px;cursor:pointer;transition:.12s}
+  .proj-dot-btn:hover{border-color:var(--fog)}
+  .proj-dot-btn.active{border-color:var(--coral);background:rgba(255,106,61,.08)}
+  .proj-dot-icon{width:13px;height:13px;border-radius:50%;border:2px solid #fff;
+                 box-shadow:0 0 0 2px rgba(0,0,0,.45);flex-shrink:0}
+  .proj-dot-val{font-family:"Barlow Condensed";font-size:14px;font-weight:700;
+                color:var(--snow);line-height:1.1}
+  .proj-dot-name{font-family:"Barlow Condensed";font-size:10px;color:var(--fog);
+                 text-transform:uppercase;letter-spacing:.5px;line-height:1}
+  .proj-slider-wrap{margin-top:6px;padding:8px 10px;background:var(--slate-2);
+                    border:1px solid var(--rim);border-radius:8px}
+  .proj-slider-label{font-family:"Barlow Condensed";font-size:11px;color:var(--fog);
+                     text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px;display:block}
   /* map drag overlay targets */
   .map-drop-target{position:absolute;border-radius:50%;border:3px dashed var(--coral);
                    background:rgba(255,106,61,.15);pointer-events:all;display:flex;
@@ -318,7 +345,9 @@
   </div>
 </div>
 
-<div class="panel">
+<div class="panel" id="mainPanel">
+  <!-- collapse/expand buttons -->
+  <button id="panelExpandBtn" onclick="document.getElementById('mainPanel').classList.remove('mini')" title="Expand panel">▶</button>
   <!-- breadcrumb: Home › Client › Tour -->
   <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:12px">
     <a href="/" style="color:var(--fog);text-decoration:none;transition:.12s" onmouseover="this.style.color='var(--ice)'" onmouseout="this.style.color='var(--fog)'">← Home</a>
@@ -326,7 +355,9 @@
     <span id="clientCrumb" style="color:var(--fog)">—</span>
     <span style="color:var(--rim)">›</span>
     <span id="projCrumb" contenteditable="true" spellcheck="false" style="color:var(--ice);white-space:nowrap;overflow:hidden;outline:none;cursor:text;border-bottom:1px dashed var(--rim);min-width:40px" title="click to rename">new tour</span>
+    <button id="panelMinBtn" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
   </div>
+  <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
   <select id="appSel" style="display:none"><option value="">— app —</option></select>
 
@@ -352,14 +383,33 @@
     <div style="margin-top:6px">
       <button id="projCfgToggle" class="ghost" style="width:100%;font-size:11px;text-align:left;padding:6px 10px">▸ Project Settings</button>
       <div id="projCfgBody" style="display:none;padding-top:6px;flex-direction:column;gap:6px">
-        <label class="k">voice range — carries to <span id="audioRangeV">64</span> m</label>
-        <input type="range" id="audioRange" min="6" max="160" value="64" step="2" style="width:100%;accent-color:var(--coral)">
-        <label class="k" style="margin-top:2px">full volume within <span id="audioClearV">8</span> m of centre</label>
-        <input type="range" id="audioClear" min="2" max="40" value="8" step="1" style="width:100%;accent-color:var(--coral)">
+        <!-- dot buttons — click to reveal slider -->
+        <div class="proj-dot-row">
+          <button class="proj-dot-btn" id="pdVoiceBtn" onclick="openProjSlider('voice')">
+            <span class="proj-dot-icon" style="background:#b96fff"></span>
+            <span class="proj-dot-val"><span id="audioRangeV">64</span> m</span>
+            <span class="proj-dot-name">voice range</span>
+          </button>
+          <button class="proj-dot-btn" id="pdClearBtn" onclick="openProjSlider('clear')">
+            <span class="proj-dot-icon" style="background:#9b3fd4"></span>
+            <span class="proj-dot-val"><span id="audioClearV">8</span> m</span>
+            <span class="proj-dot-name">full vol</span>
+          </button>
+          <button class="proj-dot-btn" id="pdVisitorBtn" onclick="openProjSlider('visitor')">
+            <span class="proj-dot-icon" style="background:#00e5ff;border-style:dashed"></span>
+            <span class="proj-dot-val"><span id="visitorRadiusV">15</span> m</span>
+            <span class="proj-dot-name">visitor</span>
+          </button>
+        </div>
+        <!-- hidden sliders — shown one at a time by openProjSlider() -->
+        <div id="projSliderWrap" style="display:none" class="proj-slider-wrap">
+          <span class="proj-slider-label" id="projSliderLabel"></span>
+          <input type="range" id="audioRange"    min="6"  max="160" value="64" step="2"  style="width:100%;accent-color:var(--coral);display:none">
+          <input type="range" id="audioClear"    min="2"  max="40"  value="8"  step="1"  style="width:100%;accent-color:var(--coral);display:none">
+          <input type="range" id="visitorRadius" min="5"  max="80"  value="15" step="1"  style="width:100%;accent-color:var(--coral);display:none">
+        </div>
         <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
         <select id="visitorBotSel"><option value="">— none —</option></select>
-        <label class="k" style="margin-top:2px">visitor zone radius <span id="visitorRadiusV">15</span> m</label>
-        <input type="range" id="visitorRadius" min="5" max="80" value="15" step="1" style="width:100%;accent-color:var(--coral)">
       </div>
     </div>
   </div>
@@ -650,7 +700,8 @@
       <div id="alModelFill" style="height:100%;width:0%;background:var(--coral);transition:width .15s linear"></div>
     </div>
   </div>  </div><!-- /editSection -->
-</div>
+  </div><!-- /panel-body -->
+</div><!-- /mainPanel -->
 
 <div id="botPicker">
   <div id="botPickerBox">
@@ -839,20 +890,28 @@ function renderSources(){
   });
   map.getSource("fences").setData(fc(feats));
 
-  // project-level rings — centred on selected zone, shown as ghost overlays
+  // project-level rings — shown only when a dot button is active (centred on all-zones centroid)
   if(map.getSource("project-rings")){
     const pf=[];
-    if(sel>=0&&zones[sel]){
-      const pc=zoneCenterLonLat(zones[sel]);
+    if(_activeProjSetting&&zones.length){
+      // centroid of all zone centers
+      const allC=zones.map(z=>zoneCenterLonLat(z));
+      const pc=[allC.reduce((s,c)=>s+c[0],0)/allC.length, allC.reduce((s,c)=>s+c[1],0)/allC.length];
       const rM=+(document.getElementById("audioRange").value)||64;
       const cM=+(document.getElementById("audioClear").value)||8;
       const vM=+(document.getElementById("visitorRadius").value)||15;
-      pf.push({type:"Feature",properties:{pkind:"range"},geometry:{type:"Polygon",coordinates:[circleRing(pc,rM,64)]}});
-      pf.push({type:"Feature",properties:{pkind:"clear"},geometry:{type:"Polygon",coordinates:[circleRing(pc,cM,64)]}});
-      pf.push({type:"Feature",properties:{pkind:"visitor"},geometry:{type:"Polygon",coordinates:[circleRing(pc,vM,64)]}});
-      pf.push({type:"Feature",properties:{pkind:"rlabel",label:"voice range"},geometry:{type:"Point",coordinates:destPoint(pc,rM,0)}});
-      pf.push({type:"Feature",properties:{pkind:"rlabel",label:"full vol"},geometry:{type:"Point",coordinates:destPoint(pc,cM,135)}});
-      pf.push({type:"Feature",properties:{pkind:"rlabel",label:"visitor"},geometry:{type:"Point",coordinates:destPoint(pc,vM,225)}});
+      if(_activeProjSetting==="voice"||_activeProjSetting==="clear"){
+        pf.push({type:"Feature",properties:{pkind:"range"},geometry:{type:"Polygon",coordinates:[circleRing(pc,rM,64)]}});
+        pf.push({type:"Feature",properties:{pkind:"rlabel",label:"voice range"},geometry:{type:"Point",coordinates:destPoint(pc,rM,0)}});
+      }
+      if(_activeProjSetting==="clear"){
+        pf.push({type:"Feature",properties:{pkind:"clear"},geometry:{type:"Polygon",coordinates:[circleRing(pc,cM,64)]}});
+        pf.push({type:"Feature",properties:{pkind:"rlabel",label:"full vol"},geometry:{type:"Point",coordinates:destPoint(pc,cM,135)}});
+      }
+      if(_activeProjSetting==="visitor"){
+        pf.push({type:"Feature",properties:{pkind:"visitor"},geometry:{type:"Polygon",coordinates:[circleRing(pc,vM,64)]}});
+        pf.push({type:"Feature",properties:{pkind:"rlabel",label:"visitor"},geometry:{type:"Point",coordinates:destPoint(pc,vM,225)}});
+      }
     }
     map.getSource("project-rings").setData(fc(pf));
   }
@@ -1164,56 +1223,9 @@ function refreshHandles(z){
     });
   }
 
-  // ---- project-level handles (8,9,10) — always shown when a zone is selected ----
-  const pc=c;
-  const rM=+(document.getElementById("audioRange").value)||64;
-  const cM=+(document.getElementById("audioClear").value)||8;
-  const vM=+(document.getElementById("visitorRadius").value)||15;
-
-  // 8: voice range (purple, north)
-  {
-    const el=_mkHandle("mh-projrange","voice range: "+rM+" m");
-    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(pc,rM,0)).addTo(map);
-    mk.on("dragstart",()=>el.classList.add("mh-active"));
-    mk.on("drag",()=>{
-      const ll=mk.getLngLat(); const v=Math.max(6,Math.min(160,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
-      document.getElementById("audioRange").value=v; document.getElementById("audioRangeV").textContent=v;
-      _setLbl(el,"voice range: "+v+" m"); renderSources();
-    });
-    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-    _handles.push(mk);
-  }
-
-  // 9: full-volume inner ring (dark purple, SE at 135°)
-  {
-    const el=_mkHandle("mh-projclear","full vol: "+cM+" m");
-    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(pc,cM,135)).addTo(map);
-    mk.on("dragstart",()=>el.classList.add("mh-active"));
-    mk.on("drag",()=>{
-      const ll=mk.getLngLat();
-      const maxV=+(document.getElementById("audioRange").value)||64;
-      const v=Math.max(2,Math.min(maxV-1,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
-      document.getElementById("audioClear").value=v; document.getElementById("audioClearV").textContent=v;
-      _setLbl(el,"full vol: "+v+" m"); renderSources();
-    });
-    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-    _handles.push(mk);
-  }
-
-  // 10: visitor radius (cyan dashed, SW at 225°)
-  {
-    const el=_mkHandle("mh-visitor","visitor: "+vM+" m");
-    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(pc,vM,225)).addTo(map);
-    mk.on("dragstart",()=>el.classList.add("mh-active"));
-    mk.on("drag",()=>{
-      const ll=mk.getLngLat(); const v=Math.max(5,Math.min(80,Math.round(haversineM(pc,[ll.lng,ll.lat]))));
-      document.getElementById("visitorRadius").value=v; document.getElementById("visitorRadiusV").textContent=v;
-      _setLbl(el,"visitor: "+v+" m"); renderSources();
-    });
-    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-    _handles.push(mk);
-  }
 }
+// _activeProjSetting: which dot is open ('voice'|'clear'|'visitor'|null)
+let _activeProjSetting=null;
 
 /* ---- selection + properties panel ---- */
 function selectZone(i){ sel=i; render(); refreshProps(); }
@@ -1301,12 +1313,44 @@ function clearToken(){ verifiedToken=""; try{ sessionStorage.removeItem("gp.admi
     try{ if(verifiedToken) sessionStorage.setItem("gp.admin",verifiedToken); }catch(e){} }); })();
 (function(){ try{ const t=sessionStorage.getItem("gp.admin"); const el=document.getElementById("adminTok");
   if(t && el){ el.value=t; verifiedToken=t; el.placeholder="admin token (session)"; } }catch(e){} })();
-// spatial audio range sliders — live labels + ring resize
-(function(){ const s=document.getElementById("audioRange"), v=document.getElementById("audioRangeV");
-  if(s) s.oninput=()=>{ v.textContent=s.value; if(sel>=0) renderSources(); }; })();
-(function(){ const s=document.getElementById("audioClear"), v=document.getElementById("audioClearV");
-  if(s) s.oninput=()=>{ v.textContent=s.value; if(sel>=0) renderSources(); }; })();
-document.getElementById("visitorRadius").oninput=e=>{ document.getElementById("visitorRadiusV").textContent=e.target.value; if(sel>=0) renderSources(); };
+// proj setting sliders — live badge update + ring resize
+document.getElementById("audioRange").oninput=e=>{
+  document.getElementById("audioRangeV").textContent=e.target.value; renderSources(); };
+document.getElementById("audioClear").oninput=e=>{
+  document.getElementById("audioClearV").textContent=e.target.value; renderSources(); };
+document.getElementById("visitorRadius").oninput=e=>{
+  document.getElementById("visitorRadiusV").textContent=e.target.value; renderSources(); };
+
+// openProjSlider: toggle dot popover + show corresponding map ring
+const _projSliderCfg={
+  voice:  {slId:"audioRange",   btnId:"pdVoiceBtn",   label:"Voice range — audio carries this far"},
+  clear:  {slId:"audioClear",   btnId:"pdClearBtn",   label:"Full volume — inner radius at 100% volume"},
+  visitor:{slId:"visitorRadius",btnId:"pdVisitorBtn", label:"Visitor bubble — sim visitor zone radius"},
+};
+function openProjSlider(type){
+  const already=_activeProjSetting===type;
+  // close all
+  _activeProjSetting=null;
+  Object.values(_projSliderCfg).forEach(({slId,btnId})=>{
+    document.getElementById(slId).style.display="none";
+    document.getElementById(btnId).classList.remove("active");
+  });
+  document.getElementById("projSliderWrap").style.display="none";
+  if(!already){
+    // open new
+    _activeProjSetting=type;
+    const cfg=_projSliderCfg[type];
+    document.getElementById(cfg.slId).style.display="block";
+    document.getElementById(cfg.btnId).classList.add("active");
+    document.getElementById("projSliderLabel").textContent=cfg.label;
+    document.getElementById("projSliderWrap").style.display="block";
+    // open the project settings section if collapsed
+    const body=document.getElementById("projCfgBody");
+    if(body.style.display==="none"){ body.style.display="flex";
+      document.getElementById("projCfgToggle").textContent="▾ Project Settings"; }
+  }
+  renderSources(); // show/hide ring
+}
 
 // app picker — organize projects into apps so they don't blend
 async function loadApps(sel){
