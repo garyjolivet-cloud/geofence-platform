@@ -48,6 +48,37 @@
           border-radius:9px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice)}
   .base{position:absolute;top:10px;right:10px;z-index:5}
   .base select{width:auto}
+  /* map key button + modal */
+  #mapKeyBtn{position:absolute;bottom:10px;left:10px;z-index:5;background:rgba(10,16,24,.9);
+             border:1px solid var(--rim);border-radius:9px;padding:5px 11px;
+             font-family:"Barlow Condensed";font-size:12px;color:var(--ice);
+             cursor:pointer;letter-spacing:.4px;display:flex;align-items:center;gap:5px}
+  #mapKeyBtn:hover{border-color:var(--fog);color:var(--snow)}
+  #mapKeyOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);
+                 align-items:center;justify-content:center}
+  #mapKeyOverlay.open{display:flex}
+  #mapKeyBox{background:#151e2d;border:1px solid var(--rim);border-radius:16px;padding:18px 20px;
+             width:380px;max-height:85vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,.8)}
+  #mapKeyBox h2{font-family:"Barlow Condensed";font-size:15px;text-transform:uppercase;
+                letter-spacing:.8px;margin:0 0 12px;color:var(--snow);display:flex;
+                justify-content:space-between;align-items:center}
+  #mapKeyBox h2 button{background:none;border:none;color:var(--fog);font-size:18px;
+                       cursor:pointer;padding:0;line-height:1}
+  .key-section{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;
+               letter-spacing:.7px;color:var(--fog);margin:12px 0 5px}
+  .key-row{display:flex;align-items:flex-start;gap:10px;padding:5px 0;
+           border-top:1px solid rgba(46,63,88,.5)}
+  .key-dot{flex-shrink:0;width:14px;height:14px;border-radius:50%;border:2px solid #fff;
+           margin-top:1px;box-shadow:0 0 0 2px rgba(0,0,0,.5)}
+  .key-dot.sq{border-radius:3px}
+  .key-dot.dashed{border-style:dashed}
+  .key-row-text{flex:1}
+  .key-row-text b{font-family:"Barlow Condensed";font-size:13px;font-weight:600;
+                  color:var(--snow);display:block}
+  .key-row-text span{font-family:"Barlow";font-size:12px;color:var(--fog);line-height:1.4}
+  .key-move-row{display:flex;align-items:flex-start;gap:10px;padding:5px 0;
+                border-top:1px solid rgba(46,63,88,.5)}
+  .key-icon{flex-shrink:0;font-size:16px;margin-top:0px;width:14px;text-align:center}
   .maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim);font-family:"Barlow Condensed"}
   #r2Picker{display:none;position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.6);
             align-items:center;justify-content:center;padding:16px}
@@ -210,6 +241,82 @@
   <option value="sat">Satellite</option><option value="topo">Topo</option><option value="street">Street</option>
 </select></div>
 <div class="status" id="status">click the map to read coordinates</div>
+
+<button id="mapKeyBtn" title="Map handle legend">⬤ Key</button>
+
+<div id="mapKeyOverlay">
+  <div id="mapKeyBox">
+    <h2>Map Handle Legend <button onclick="document.getElementById('mapKeyOverlay').classList.remove('open')">✕</button></h2>
+
+    <div class="key-section">Zone interaction</div>
+    <div class="key-move-row">
+      <div class="key-icon">✥</div>
+      <div class="key-row-text"><b>Click zone</b><span>Select it — opens the properties panel and shows all its handles</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">⠿</div>
+      <div class="key-row-text"><b>Drag zone body</b><span>Move the entire zone to a new location on the map</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">◌</div>
+      <div class="key-row-text"><b>Click empty map</b><span>Deselect — hides all handles</span></div>
+    </div>
+
+    <div class="key-section">Per-zone handles (selected zone only)</div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#ffc24d;width:16px;height:16px"></div>
+      <div class="key-row-text"><b>Bearing (amber) — arrow tip</b><span>Drag in a circle to set the direction the visitor should face on arrival. Default east (90°).</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#8fb6d4"></div>
+      <div class="key-row-text"><b>Approach ring (white-blue) — north</b><span>Drag outward or inward to set how far away the zone starts to activate.</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#27d67b"></div>
+      <div class="key-row-text"><b>Reveal radius (green) — east</b><span>Circle zones only. Drag to resize the filled zone circle.</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#6fbfff"></div>
+      <div class="key-row-text"><b>Audio fade (blue) — south</b><span>Drag to set the distance at which zone audio starts fading in. Shown as a blue dotted ring.</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#ff9900"></div>
+      <div class="key-row-text"><b>Broadcast radius (orange) — west</b><span>Tracker circles only. Drag to set the moving zone bubble size for device-vs-zone intersection.</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot sq" style="background:#fff"></div>
+      <div class="key-row-text"><b>Polygon vertex (white square)</b><span>One handle per corner. Drag to reshape the polygon.</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#00e5ff"></div>
+      <div class="key-row-text"><b>Tripline endpoint (cyan)</b><span>Two handles, one at each end. Drag to reposition a crossing line.</span></div>
+    </div>
+
+    <div class="key-section">Project-wide handles (any selected zone)</div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#b96fff"></div>
+      <div class="key-row-text"><b>Voice range (purple) — north</b><span>Drag to set how far audio carries from any zone. Shown as a large purple dashed ring.</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot" style="background:#9b3fd4"></div>
+      <div class="key-row-text"><b>Full volume radius (dark purple) — SE</b><span>Drag to set the inner radius where audio plays at full volume. Always smaller than voice range.</span></div>
+    </div>
+    <div class="key-row">
+      <div class="key-dot dashed" style="background:#00e5ff"></div>
+      <div class="key-row-text"><b>Visitor bubble (cyan dashed) — SW</b><span>Drag to set the simulated visitor position radius used in the test simulator.</span></div>
+    </div>
+
+    <div class="key-section">Tips</div>
+    <div class="key-move-row">
+      <div class="key-icon" style="color:var(--fog)">↖</div>
+      <div class="key-row-text"><b>Hover any handle</b><span>Shows a label with the property name and current value</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon" style="color:var(--fog)">↔</div>
+      <div class="key-row-text"><b>While dragging</b><span>The label updates live (e.g. "approach: 45 m"). The panel number box updates too.</span></div>
+    </div>
+  </div>
+</div>
 
 <div class="panel">
   <!-- breadcrumb: Home › Client › Tour -->
@@ -2336,6 +2443,8 @@ document.getElementById("projCfgToggle").onclick=()=>{
   document.getElementById("projCfgToggle").textContent=(open?"▸":"▾")+" Project Settings";
 };
 // visitorRadius oninput is wired above (with renderSources)
+document.getElementById("mapKeyBtn").onclick=()=>document.getElementById("mapKeyOverlay").classList.toggle("open");
+document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.target===e.currentTarget) e.currentTarget.classList.remove("open"); });
 
 /* ---- advanced section toggle ---- */
 document.getElementById("advToggle").onclick=()=>{
