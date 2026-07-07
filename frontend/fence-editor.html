@@ -2733,8 +2733,8 @@ const KokoroVoice = {
 
   async load(onProgress) {
     if (this.tts) return true;
-    if (this._loading || this._error) return false;
-    this._loading = true;
+    if (this._loading) return false;
+    this._loading = true; this._error = null;
     try {
       const { KokoroTTS } = await import('https://esm.sh/kokoro-js');
       this.tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0', {
@@ -3337,18 +3337,20 @@ const AudioLab = {
       this.syncToSimVoice(); this.refresh();
     };
 
-    // voice selector
+    // voice selector — keep KokoroVoice and SimKokoro in sync
     $("alVoice").onchange=()=>{
-      KokoroVoice.voice=$("alVoice").value;
+      const v=$("alVoice").value;
+      KokoroVoice.voice=v;
+      SimKokoro.voice=v;
       if(KokoroVoice.tts){
-        const s=$("alModelStatus"); if(s){s.textContent="ready "+KokoroVoice.voice; s.style.color="var(--go)";}
+        const s=$("alModelStatus"); if(s){s.textContent="voice: "+v+" — ready"; s.style.color="var(--go)";}
       }
     };
 
-    // load model button
+    // load model button — retries on failure
     $("alModelLoad").onclick=async()=>{
       const btn=$("alModelLoad"), st=$("alModelStatus"), bar=$("alModelBar"), fill=$("alModelFill");
-      if(KokoroVoice.tts){ st.textContent="already loaded: "+KokoroVoice.voice; return; }
+      if(KokoroVoice.tts){ st.textContent="voice: "+KokoroVoice.voice+" — ready"; st.style.color="var(--go)"; return; }
       if(KokoroVoice._loading){ st.textContent="downloading..."; return; }
       btn.disabled=true; btn.textContent="...";
       bar.style.display="block"; fill.style.width="0%";
