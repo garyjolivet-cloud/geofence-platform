@@ -2197,10 +2197,16 @@ const SimKokoro={
   tts:null, voice:'af_bella',
   async tryLoad(){
     if(this.tts) return;
+    const models=['onnx-community/Kokoro-82M-v1.0','onnx-community/Kokoro-82M-v1.0_float16'];
     try{
-      const{KokoroTTS}=await import('https://esm.sh/kokoro-js');
-      this.tts=await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0',{dtype:'q4',progress_callback:()=>{}});
-      simLogEv('sev-sys','Kokoro TTS ready — neural voice active');
+      const{KokoroTTS}=await import('https://esm.sh/kokoro-js@1.2.1');
+      for(const m of models){
+        try{
+          this.tts=await KokoroTTS.from_pretrained(m,{dtype:'q4',progress_callback:()=>{}});
+          simLogEv('sev-sys','Kokoro TTS ready — neural voice active');
+          return;
+        }catch(e){}
+      }
     }catch(e){}
   }
 };
@@ -2735,13 +2741,20 @@ const KokoroVoice = {
     if (this.tts) return true;
     if (this._loading) return false;
     this._loading = true; this._error = null;
+    const models=['onnx-community/Kokoro-82M-v1.0','onnx-community/Kokoro-82M-v1.0_float16'];
     try {
-      const { KokoroTTS } = await import('https://esm.sh/kokoro-js');
-      this.tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0', {
-        dtype: 'q4', progress_callback: onProgress || (()=>{})
-      });
-      this._loading = false;
-      return true;
+      const { KokoroTTS } = await import('https://esm.sh/kokoro-js@1.2.1');
+      let last;
+      for(const m of models){
+        try {
+          this.tts = await KokoroTTS.from_pretrained(m, {
+            dtype: 'q4', progress_callback: onProgress || (()=>{})
+          });
+          this._loading = false;
+          return true;
+        } catch(e){ last=e; }
+      }
+      throw last;
     } catch(e) {
       this._error = e.message; this._loading = false;
       console.warn('Kokoro load failed:', e);
@@ -3368,7 +3381,14 @@ const AudioLab = {
       btn.disabled=false; btn.textContent="Load";
       bar.style.display="none"; fill.style.width="0%";
       if(ok){ st.style.color="var(--go)"; st.textContent="ready: "+KokoroVoice.voice; }
-      else  { st.style.color="var(--hazard)"; st.textContent="failed: "+(KokoroVoice._error||"unknown error")+" — try again"; }
+      else {
+        const msg=KokoroVoice._error||"unknown error";
+        const isAuth=msg.toLowerCase().includes("unauthorized")||msg.toLowerCase().includes("401");
+        st.style.color="var(--hazard)";
+        st.textContent=isAuth
+          ? "Hugging Face model is now gated (requires login) — using cloud TTS instead"
+          : "failed: "+msg+" — try again";
+      }
     };
   }
 };

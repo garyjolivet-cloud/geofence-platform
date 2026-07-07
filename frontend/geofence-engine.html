@@ -577,11 +577,17 @@ const EngineKokoro={
   tts:null, voice:'af_bella',
   async tryLoad(){
     if(this.tts) return;
+    const models=['onnx-community/Kokoro-82M-v1.0','onnx-community/Kokoro-82M-v1.0_float16'];
     try{
-      const{KokoroTTS}=await import('https://esm.sh/kokoro-js');
-      this.tts=await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0',{dtype:'q4',progress_callback:()=>{}});
-      HUD.log('ev-sys','Kokoro TTS ready');
-    }catch(e){ /* cached miss or no model yet — Workers AI fallback used */ }
+      const{KokoroTTS}=await import('https://esm.sh/kokoro-js@1.2.1');
+      for(const m of models){
+        try{
+          this.tts=await KokoroTTS.from_pretrained(m,{dtype:'q4',progress_callback:()=>{}});
+          HUD.log('ev-sys','Kokoro TTS ready');
+          return;
+        }catch(e){}
+      }
+    }catch(e){ /* Workers AI fallback used */ }
   }
 };
 
