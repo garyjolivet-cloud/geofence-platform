@@ -2813,19 +2813,18 @@ function _playKokoroResult(result, distM, text, onEnd) {
 async function simSpeak(text, onEnd) {
   if (!text) return;
   simSpeaking = true; _micBtnState();
+
+  // Selected browser voice is primary — instant, no network
+  const savedVoiceName = localStorage.getItem("gp.ttsVoice");
+  if (savedVoiceName && window.speechSynthesis) {
+    const v = speechSynthesis.getVoices().find(vv => vv.name === savedVoiceName);
+    if (v) { _fallbackSpeak(text, onEnd); return; }
+  }
+
+  // Workers AI TTS — when no browser voice selected (spatial filter applies)
   const distM = (simChatZone && simPrev)
     ? SimGeo.hav([simPrev.lat,simPrev.lon], simChatZone.center || [simPrev.lat,simPrev.lon])
     : 0;
-
-  // Kokoro loaded — best quality
-  if (KokoroVoice.tts) {
-    try {
-      const result = await KokoroVoice.generate(text);
-      if (result) { _playKokoroResult(result, distM, text, onEnd); return; }
-    } catch(e) { console.warn('Kokoro generate error:', e); }
-  }
-
-  // Workers AI TTS — fallback (spatial filter still applies)
   fetch('/api/tts', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({text})})
     .then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status))
     .then(ab => {
@@ -3361,11 +3360,20 @@ const AudioLab = {
       const saved=localStorage.getItem("gp.ttsVoice");
       if(saved && all.find(v=>v.name===saved)) sel.value=saved;
     }
-    _populateBrowserVoices();
-    if(speechSynthesis.onvoiceschanged!==undefined) speechSynthesis.onvoiceschanged=_populateBrowserVoices;
+    function _populateAndStatus(){ _populateBrowserVoices(); _updateVoiceStatus(); }
+    _populateAndStatus();
+    if(speechSynthesis.onvoiceschanged!==undefined) speechSynthesis.onvoiceschanged=_populateAndStatus;
+
+    function _updateVoiceStatus(){
+      const v=$("alVoice").value;
+      const st=$("alModelStatus");
+      if(v){ st.textContent="active: "+v; st.style.color="var(--go)"; }
+      else { st.textContent="no voice selected — pick one above"; st.style.color="var(--fog)"; }
+    }
 
     $("alVoice").onchange=()=>{
       localStorage.setItem("gp.ttsVoice", $("alVoice").value);
+      _updateVoiceStatus();
     };
 
     $("alVoiceTest").onclick=()=>{
