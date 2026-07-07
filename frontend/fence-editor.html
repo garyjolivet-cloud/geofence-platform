@@ -682,23 +682,11 @@
       <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
     </div>
 
-    <span class="k" style="margin:6px 0 0">voice (Kokoro TTS)</span>
+    <span class="k" style="margin:6px 0 0">fallback voice (browser)</span>
     <select id="alVoice" style="width:100%;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
-      <option value="af_bella">Bella &mdash; warm, female</option>
-      <option value="af_sarah">Sarah &mdash; clear, female</option>
-      <option value="af_sky">Sky &mdash; bright, female</option>
-      <option value="am_adam">Adam &mdash; male</option>
-      <option value="am_michael">Michael &mdash; male</option>
-      <option value="bf_emma">Emma &mdash; British female</option>
-      <option value="bm_george">George &mdash; British male</option>
+      <option value="">— loading voices —</option>
     </select>
-    <div style="display:flex;align-items:center;gap:6px;margin-top:2px">
-      <div id="alModelStatus" style="flex:1;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">not loaded &mdash; ~45 MB on first use, cached after</div>
-      <button id="alModelLoad" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 9px">Load</button>
-    </div>
-    <div id="alModelBar" style="display:none;height:4px;background:var(--rim);border-radius:2px;overflow:hidden;margin-top:3px">
-      <div id="alModelFill" style="height:100%;width:0%;background:var(--coral);transition:width .15s linear"></div>
-    </div>
+    <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
   </div>  </div><!-- /editSection -->
   </div><!-- /panel-body -->
 </div><!-- /mainPanel -->
@@ -2851,6 +2839,11 @@ function _fallbackSpeak(text, onEnd) {
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.rate=1.05; u.pitch=1.0;
+  const savedVoiceName=localStorage.getItem("gp.ttsVoice");
+  if(savedVoiceName){
+    const v=speechSynthesis.getVoices().find(vv=>vv.name===savedVoiceName);
+    if(v) u.voice=v;
+  }
   u.onend = () => { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); };
   speechSynthesis.speak(u);
 }
@@ -3350,45 +3343,26 @@ const AudioLab = {
       this.syncToSimVoice(); this.refresh();
     };
 
-    // voice selector — keep KokoroVoice and SimKokoro in sync
-    $("alVoice").onchange=()=>{
-      const v=$("alVoice").value;
-      KokoroVoice.voice=v;
-      SimKokoro.voice=v;
-      if(KokoroVoice.tts){
-        const s=$("alModelStatus"); if(s){s.textContent="voice: "+v+" — ready"; s.style.color="var(--go)";}
-      }
-    };
-
-    // load model button — retries on failure
-    $("alModelLoad").onclick=async()=>{
-      const btn=$("alModelLoad"), st=$("alModelStatus"), bar=$("alModelBar"), fill=$("alModelFill");
-      if(KokoroVoice.tts){ st.textContent="voice: "+KokoroVoice.voice+" — ready"; st.style.color="var(--go)"; return; }
-      if(KokoroVoice._loading){ st.textContent="downloading..."; return; }
-      btn.disabled=true; btn.textContent="...";
-      bar.style.display="block"; fill.style.width="0%";
-      st.style.color="var(--ice)"; st.textContent="starting download...";
-      const ok=await KokoroVoice.load(evt=>{
-        if(evt.status==="downloading"||evt.status==="progress"){
-          const pct=(evt.progress||0).toFixed(0);
-          fill.style.width=pct+"%";
-          const mb=evt.loaded?(evt.loaded/1048576).toFixed(1):"";
-          st.textContent="downloading "+pct+"%"+(mb?" - "+mb+" MB":"");
-        } else if(evt.status==="done"){
-          st.textContent="processing...";
-        }
+    // populate browser voice picker (voices may load async)
+    function _populateBrowserVoices(){
+      const sel=$("alVoice"); if(!sel) return;
+      const all=speechSynthesis.getVoices().filter(v=>v.lang.startsWith("en"));
+      if(!all.length) return;
+      sel.innerHTML="";
+      all.forEach(v=>{
+        const o=document.createElement("option");
+        o.value=v.name; o.textContent=v.name+(v.localService?" ★":"");
+        sel.appendChild(o);
       });
-      btn.disabled=false; btn.textContent="Load";
-      bar.style.display="none"; fill.style.width="0%";
-      if(ok){ st.style.color="var(--go)"; st.textContent="ready: "+KokoroVoice.voice; }
-      else {
-        const msg=KokoroVoice._error||"unknown error";
-        const isAuth=msg.toLowerCase().includes("unauthorized")||msg.toLowerCase().includes("401");
-        st.style.color="var(--hazard)";
-        st.textContent=isAuth
-          ? "Hugging Face model is now gated (requires login) — using cloud TTS instead"
-          : "failed: "+msg+" — try again";
-      }
+      // restore saved preference
+      const saved=localStorage.getItem("gp.ttsVoice");
+      if(saved && all.find(v=>v.name===saved)) sel.value=saved;
+    }
+    _populateBrowserVoices();
+    if(speechSynthesis.onvoiceschanged!==undefined) speechSynthesis.onvoiceschanged=_populateBrowserVoices;
+
+    $("alVoice").onchange=()=>{
+      localStorage.setItem("gp.ttsVoice", $("alVoice").value);
     };
   }
 };
