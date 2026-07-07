@@ -3368,7 +3368,7 @@ const AudioLab = {
       btn.disabled=false; btn.textContent="Load";
       bar.style.display="none"; fill.style.width="0%";
       if(ok){ st.style.color="var(--go)"; st.textContent="ready: "+KokoroVoice.voice; }
-      else  { st.style.color="var(--hazard)"; st.textContent="load failed - check console"; }
+      else  { st.style.color="var(--hazard)"; st.textContent="failed: "+(KokoroVoice._error||"unknown error")+" — try again"; }
     };
   }
 };
