@@ -682,10 +682,13 @@
       <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
     </div>
 
-    <span class="k" style="margin:6px 0 0">fallback voice (browser)</span>
-    <select id="alVoice" style="width:100%;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
-      <option value="">— loading voices —</option>
-    </select>
+    <span class="k" style="margin:6px 0 0">voice</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <select id="alVoice" style="flex:1;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
+        <option value="">— loading voices —</option>
+      </select>
+      <button id="alVoiceTest" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 10px">▶ Test</button>
+    </div>
     <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
   </div>  </div><!-- /editSection -->
   </div><!-- /panel-body -->
@@ -3363,6 +3366,21 @@ const AudioLab = {
 
     $("alVoice").onchange=()=>{
       localStorage.setItem("gp.ttsVoice", $("alVoice").value);
+    };
+
+    $("alVoiceTest").onclick=()=>{
+      const st=$("alModelStatus");
+      const voiceName=$("alVoice").value;
+      if(!voiceName){ st.textContent="no voice selected"; st.style.color="var(--hazard)"; return; }
+      speechSynthesis.cancel();
+      const u=new SpeechSynthesisUtterance("Welcome to Kicking Horse. Follow the trail ahead.");
+      u.rate=1.05;
+      const v=speechSynthesis.getVoices().find(vv=>vv.name===voiceName);
+      if(!v){ st.textContent="voice not found — try reloading"; st.style.color="var(--hazard)"; return; }
+      u.voice=v;
+      st.textContent="speaking with: "+v.name; st.style.color="var(--go)";
+      u.onend=()=>{ st.textContent="primary: cloud TTS — fallback: "+v.name; st.style.color="var(--fog)"; };
+      speechSynthesis.speak(u);
     };
   }
 };
