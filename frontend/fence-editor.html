@@ -3007,7 +3007,7 @@ async function _autoGreet(hint,log,rBotOverride){
     const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({regionBot:rBot,clientBot:simChatClientBot,
         messages:[{role:"user",content:hint}],geofenceState:geoState,isGreeting:true})});
-    if(!r.ok)throw new Error("HTTP "+r.status);
+    if(!r.ok){const t=await r.text().catch(()=>"");let d="HTTP "+r.status;try{const j=JSON.parse(t);d=(j.error||d)+(j.detail?" — "+j.detail.slice(0,140):"");}catch(e){}throw new Error(d);}
     const reader=r.body.getReader(),dec=new TextDecoder();
     let buf="",full="";respEl.textContent="";
     while(true){const{done,value}=await reader.read();if(done)break;
@@ -3018,7 +3018,13 @@ async function _autoGreet(hint,log,rBotOverride){
         try{const t=JSON.parse(d).choices?.[0]?.delta?.content;if(t){full+=t;respEl.textContent=full;log.scrollTop=log.scrollHeight;}}catch(e){}}}
     if(full){simChatMessages.push({role:"assistant",content:full});simSpeak(full);}
     else{respEl.remove();}
-  }catch(e){respEl.textContent="(greeting failed: "+e.message+")";}
+  }catch(e){
+    respEl.textContent="(greeting failed: "+e.message+") ";
+    const retryBtn=document.createElement("button");
+    retryBtn.textContent="↺ retry"; retryBtn.style.cssText="font-size:11px;background:none;border:1px solid var(--rim);color:var(--fog);border-radius:5px;padding:2px 7px;cursor:pointer;margin-left:4px";
+    retryBtn.onclick=()=>{respEl.remove(); simGreet(hint,rBotOverride);};
+    respEl.appendChild(retryBtn);
+  }
 }
 function closeSimChat(){
   speechSynthesis.cancel();
@@ -3054,7 +3060,7 @@ async function _doSendChat(text){
         regionBot: resolveBot(simChatZone.botId) || {persona:simChatZone.chatPersona||"",knowledge:simChatZone.chatKnowledge||"",greeting:simChatZone.chatGreeting||""},
         clientBot: simChatClientBot,
         messages:simChatMessages.slice(-10),geofenceState})});
-    if(!r.ok)throw new Error("HTTP "+r.status);
+    if(!r.ok){const t=await r.text().catch(()=>"");let d="HTTP "+r.status;try{const j=JSON.parse(t);d=(j.error||d)+(j.detail?" — "+j.detail.slice(0,140):"");}catch(e){}throw new Error(d);}
     const reader=r.body.getReader(),dec=new TextDecoder();
     let buf="",full="";respEl.textContent="";
     while(true){
