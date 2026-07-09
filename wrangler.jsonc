@@ -25,9 +25,10 @@
     }
   ],
   "ai": {
-    "binding": "AI"
+    "binding": "AI",
+    "remote": true
   },
   "triggers": {
-    "crons": ["0 * * * *", "0 15 * * *"]
+    "crons": ["*/5 * * * *", "0 * * * *", "0 15 * * *"]
   }
 }

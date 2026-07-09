@@ -116,6 +116,7 @@
       </div>
     </div>
     <nav>
+      <a href="/field" class="primary">Guide</a>
       <a href="/editor">Editor</a>
       <a href="/bots">Bots</a>
       <a href="/dashboard">Dashboard</a>
@@ -126,7 +127,7 @@
 
   <footer>
     <span><span class="dot" id="apidot"></span><span id="apitext">checking…</span></span>
-    <span><a href="/editor">Editor</a> · <a href="/bots">Bots</a> · <a href="/engine">Engine</a></span>
+    <span><a href="/editor">Editor</a> · <a href="/bots">Bots</a> · <a href="/engine">Engine</a> · <a href="/field">Guide</a></span>
   </footer>
 </div>
 
@@ -155,6 +156,7 @@ function tourCard(p, appId){
     <div class="tour-meta">${meta}</div>
     <div class="tour-btns">
       <a class="go" href="/engine?project=${id}">▶ Walk</a>
+      <a href="/field?project=${id}">Guide</a>
       <a href="/editor?project=${id}">Edit</a>
       <a href="/sim?project=${id}">Test</a>
     </div>
@@ -199,7 +201,9 @@ async function load(){
     });
     html+='</div>';
 
-    // orphaned tours (no client) — not shown; assign via editor or nuke
+    // Safety net: projects not matched to any known app still show
+    const orphans=projects.filter(p=>!p.appId||!apps.find(a=>a.id===p.appId));
+    if(orphans.length) html+=clientBlock({id:null,name:'Unsorted'},orphans);
 
     if(!apps.length&&!projects.length){
       html=`<div class="state">No clients yet.<br><br>

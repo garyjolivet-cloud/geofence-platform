@@ -239,8 +239,8 @@ async function update(fix){
       const text=buildInstruction(dir,side,distToTarget,'navigate');
       _maybeSpeak(text,now);
       if(_onInstruction) _onInstruction(text,distToTarget,'navigate');
-    }else if(now-_lastSpeakT>20000){
-      const text=`Walk ${Math.round(distToTarget)} metres to the target`;
+    }else if(now-_lastSpeakT>12000){
+      const text=distToTarget>15?`Keep walking — target is ${Math.round(distToTarget)} metres ahead`:`Almost there — ${Math.round(distToTarget)} metres`;
       _lastSpeakT=now;
       _say(text);
       if(_onInstruction) _onInstruction(text,distToTarget,'navigate');
@@ -264,7 +264,7 @@ async function update(fix){
         if(_onInstruction) _onInstruction(text,distToTarget,'align');
       }
     }else if(now-_lastSpeakT>10000){
-      _say("Keep walking to establish your direction.");
+      _say("Keep walking — I'll tell you when to turn once I have your direction.");
     }
   }
 }
@@ -296,7 +296,7 @@ window.GuidanceBot={
     _lastSpeakT=0; _lastInstrText=null;
     _smoothedHdg=null; _prevDirState=null; _waypointQueue=[];
     _lastHazardCheck=0; _hazardChecking=false;
-    _say("Guidance started — walk toward the target.");
+    _say("Guidance active — keep your phone in your pocket and start walking. I'll tell you when to turn.");
   },
   update,
   stop(){ _active=false; _phase=null; _sayFn=null; _onComplete=null; _onInstruction=null; _lastUserPos=null; _hazardChecking=false; },

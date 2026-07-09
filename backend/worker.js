@@ -44,6 +44,22 @@ function degToCompass(deg) {
   return d[Math.round(deg / 22.5) % 16];
 }
 
+async function cleanupLiveZones(env) {
+  const expired = await env.DB.prepare(
+    "SELECT id, zone_json FROM live_zone WHERE expires_at < ?"
+  ).bind(Date.now()).all();
+  for (const row of (expired.results || [])) {
+    try {
+      const z = JSON.parse(row.zone_json);
+      if (z.audioUrl) {
+        const key = z.audioUrl.replace('/api/audio/', '');
+        await env.AUDIO.delete(key).catch(() => {});
+      }
+    } catch (e) {}
+    await env.DB.prepare("DELETE FROM live_zone WHERE id=?").bind(row.id).run();
+  }
+}
+
 async function scrapeWeather(env) {
   const resp = await fetch('https://kickinghorseresort.com/conditions/advanced-weather-data/', {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GeofencePlatform/1.0)' },
@@ -187,8 +203,12 @@ function buildChatPrompt(regionBot, clientBot, state, weather, snowHistory) {
   }
   // MARKET DATA: (coming soon — Yahoo Finance cron scrape cached in D1)
   // NEWS: (coming soon — Al Jazeera RSS scrape cached in D1)
-  p += "\nKeep responses under 3 sentences unless asked for more. Stay in character.";
-  if (state && state.speedKmh > 15) p += " Visitor is skiing — 1 short sentence only.";
+  p += "\n\nRULES — follow these exactly:";
+  p += "\n1. Facts only. Every fact you state MUST be explicitly written in your KNOWLEDGE section above. Do not infer, extrapolate, or invent details not written there. If you don't have the information, say \"I don't have details on that\" — never guess.";
+  p += "\n2. No compass directions. Never say North, South, East, West, N, S, E, W, northeast, etc. Use landmarks, slope names, or relative terms (left, right, ahead) instead.";
+  p += "\n3. Short. Keep responses under 3 sentences unless the visitor explicitly asks for more.";
+  p += "\n4. Stay in persona as described above.";
+  if (state && state.speedKmh > 15) p += "\n5. Visitor is moving fast (skiing) — 1 short sentence only.";
   return p;
 }
 
@@ -263,6 +283,10 @@ export default {
   },
 
   async scheduled(event, env) {
+    if (event.cron === "*/5 * * * *") {
+      await cleanupLiveZones(env);
+      return;
+    }
     // Every hour: update real-time cache for Groq context
     await scrapeWeather(env);
     // At 15:00 UTC (8am MST): also save daily snow snapshot
@@ -289,7 +313,22 @@ async function api(request, env, url) {
       try { await env.DB.prepare(`DELETE FROM ${t}`).run(); wiped.push(t); }
       catch(e) { skipped.push(t); }
     }
-    return json({ ok: true, wiped, skipped }, 200, AC);
+    // Also wipe all R2 audio objects
+    let r2Deleted = 0;
+    if (env.AUDIO) {
+      try {
+        let cursor;
+        do {
+          const listed = await env.AUDIO.list({ cursor, limit: 1000 });
+          for (const obj of listed.objects) {
+            await env.AUDIO.delete(obj.key);
+            r2Deleted++;
+          }
+          cursor = listed.truncated ? listed.cursor : undefined;
+        } while (cursor);
+      } catch(e) {}
+    }
+    return json({ ok: true, wiped, skipped, r2Deleted }, 200, AC);
   }
 
   // --- API keys: create / list / revoke (master only) ---
@@ -401,10 +440,11 @@ async function api(request, env, url) {
     if (!b.name) return json({ error: "name required" }, 400, AC);
     const id = b.id || "bot_" + crypto.randomUUID().slice(0, 8);
     const now = new Date().toISOString();
+    const fnJson = b.functions ? JSON.stringify(b.functions) : null;
     await env.DB.prepare(
-      "INSERT INTO bot (id,app_id,name,type,avatar,persona,knowledge,greeting,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO bot (id,app_id,name,type,avatar,persona,knowledge,greeting,functions,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
     ).bind(id, b.appId || null, b.name, b.type || "region", b.avatar || "🤖",
-           b.persona || null, b.knowledge || null, b.greeting || null, now, now).run();
+           b.persona || null, b.knowledge || null, b.greeting || null, fnJson, now, now).run();
     return json({ ok: true, id }, 201, AC);
   }
 
@@ -415,11 +455,12 @@ async function api(request, env, url) {
     const bid = decodeURIComponent(mbot[1]);
     const b = await request.json().catch(() => ({}));
     const now = new Date().toISOString();
+    const fnJson = b.functions !== undefined ? (b.functions ? JSON.stringify(b.functions) : null) : undefined;
     await env.DB.prepare(
-      "UPDATE bot SET name=COALESCE(?,name), type=COALESCE(?,type), avatar=COALESCE(?,avatar), persona=?, knowledge=?, greeting=?, app_id=COALESCE(?,app_id), updated_at=? WHERE id=?"
+      "UPDATE bot SET name=COALESCE(?,name), type=COALESCE(?,type), avatar=COALESCE(?,avatar), persona=?, knowledge=?, greeting=?, functions=COALESCE(?,functions), app_id=COALESCE(?,app_id), updated_at=? WHERE id=?"
     ).bind(b.name || null, b.type || null, b.avatar || null,
            b.persona ?? null, b.knowledge ?? null, b.greeting ?? null,
-           b.appId || null, now, bid).run();
+           fnJson ?? null, b.appId || null, now, bid).run();
     return json({ ok: true }, 200, AC);
   }
 
@@ -489,6 +530,14 @@ async function api(request, env, url) {
       try { bundle = JSON.parse(row.json); }
       catch (e) { return json({ error: "stored bundle is corrupt" }, 500); }
       bundle.bundleVersion = row.version;
+      // Merge active live zones
+      const liveRows = await env.DB.prepare(
+        "SELECT zone_json FROM live_zone WHERE project_id=? AND expires_at > ?"
+      ).bind(pid, Date.now()).all();
+      if (liveRows.results.length) {
+        bundle.zones = [...(bundle.zones || []), ...liveRows.results.map(r => JSON.parse(r.zone_json))];
+      }
+      bundle.liveZoneCount = liveRows.results.length;
       return json(bundle);
     }
 
@@ -501,20 +550,36 @@ async function api(request, env, url) {
       catch (e) { return json({ error: "invalid JSON" }, 400); }
       if (!bundle || !Array.isArray(bundle.zones))
         return json({ error: "body must be a bundle with a zones array" }, 400);
-      const targetApp = (await projectAppId(env, pid)) || bundle.appId || null;
+      const existingAppId = await projectAppId(env, pid);
+      const targetApp = existingAppId || bundle.appId || null;
       const A = await auth(request, env);
       if (!scopeOk(A, "publish", targetApp)) return json({ error: "not authorized to publish to this app" }, 401, AC);
       const now = new Date().toISOString();
+      // Resolve appId — auto-assign so project always surfaces on home screen
+      let resolvedAppId = existingAppId || bundle.appId || null;
+      if (!resolvedAppId) {
+        const existingApp = await env.DB.prepare("SELECT id FROM app WHERE orgId=? LIMIT 1").bind(orgId).first();
+        if (existingApp) {
+          resolvedAppId = existingApp.id;
+        } else {
+          resolvedAppId = orgId;
+          await env.DB.prepare(
+            "INSERT OR IGNORE INTO app (id,orgId,name,slug,description,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)"
+          ).bind(resolvedAppId, orgId, bundle.name || "Default Workspace", resolvedAppId, null, now, now).run();
+        }
+      }
       const proj = await env.DB.prepare("SELECT bundleVersion FROM project WHERE id=?").bind(pid).first();
       const ver = ((proj && proj.bundleVersion) || 0) + 1;
-      // upsert project row BEFORE inserting bundle (foreign key requires project to exist first)
+      // Only auto-create the project row if the editor explicitly opts in
       if (proj) {
         await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId) WHERE id=?")
-          .bind(ver, now, bundle.appId || null, pid).run();
-      } else {
+          .bind(ver, now, resolvedAppId, pid).run();
+      } else if (bundle.createIfMissing) {
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, orgId, bundle.appId || null, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
+        ).bind(pid, orgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
+      } else {
+        return json({ error: "project not found — create it from the main screen first" }, 404, AC);
       }
       await env.DB.prepare(
         "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
@@ -533,6 +598,27 @@ async function api(request, env, url) {
       await logAudit(env, request, A, "publish", pid + " v" + ver);
       return json({ ok: true, version: ver }, 200, AC);
     }
+  }
+
+  // --- live zone: append a single ephemeral zone (scoped publish) ---
+  const mz = path.match(/^\/api\/projects\/([^/]+)\/zones$/);
+  if (mz && method === "POST") {
+    const pid = decodeURIComponent(mz[1]);
+    const appId = await projectAppId(env, pid);
+    const A = await auth(request, env);
+    if (!scopeOk(A, "publish", appId)) return json({ error: "not authorized" }, 401, AC);
+    let body;
+    try { body = await request.json(); } catch (e) { return json({ error: "invalid JSON" }, 400, AC); }
+    if (!body.zone || typeof body.zone !== "object") return json({ error: "zone object required" }, 400, AC);
+    const ttlMs = Math.min(Math.max(body.ttlMs || 300000, 30000), 3600000); // 30s–60min
+    const now = Date.now();
+    const expiresAt = now + ttlMs;
+    const zoneId = body.zone.id || ("live_" + now.toString(36));
+    const zone = { ...body.zone, id: zoneId, expiresAt };
+    await env.DB.prepare(
+      "INSERT INTO live_zone (id, project_id, zone_json, expires_at, created_at) VALUES (?,?,?,?,?)"
+    ).bind(zoneId, pid, JSON.stringify(zone), expiresAt, now).run();
+    return json({ ok: true, id: zoneId, expiresAt }, 200, AC);
   }
 
   // --- device register (public) ---
@@ -663,7 +749,7 @@ async function api(request, env, url) {
       if (!obj) return new Response("not found", { status: 404, headers: CORS_PUBLIC });
       const h = new Headers(CORS_PUBLIC);
       h.set("content-type", (obj.httpMetadata && obj.httpMetadata.contentType) || "audio/mpeg");
-      h.set("cache-control", "public, max-age=31536000");
+      h.set("cache-control", "no-cache");
       if (obj.httpEtag) h.set("etag", obj.httpEtag);
       return new Response(obj.body, { headers: h });
     }
@@ -784,7 +870,7 @@ async function api(request, env, url) {
         messages: [{ role: "system", content: sys }, ...messages.slice(-10)],
         stream: true,
         max_tokens: 300,
-        temperature: 0.75
+        temperature: 0.3
       })
     });
     if (!gr.ok) { const t = await gr.text(); return json({ error: "Groq " + gr.status, detail: t }, 502, CORS_PUBLIC); }

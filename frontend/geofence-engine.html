@@ -748,8 +748,17 @@ const SpatialVoice = {
   async load(url){
     if(this.buffers[url]) return this.buffers[url];
     const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
-    const ab=await r.arrayBuffer(); const raw=await this.ctx.decodeAudioData(ab);
-    const buf=this._toMono(raw); this.buffers[url]=buf; return buf;
+    const ct=(r.headers.get('content-type')||'audio/mpeg').split(';')[0].trim();
+    const ab=await r.arrayBuffer();
+    try{
+      const raw=await this.ctx.decodeAudioData(ab.slice(0));
+      const buf=this._toMono(raw); this.buffers[url]=buf; return buf;
+    }catch(e){}
+    // fMP4 from Safari iOS can't be decoded by decodeAudioData in Chrome — fall back to <audio> element
+    const blob=new Blob([ab],{type:ct});
+    const objUrl=URL.createObjectURL(blob);
+    const sentinel={_isElement:true,_objUrl:objUrl};
+    this.buffers[url]=sentinel; return sentinel;
   },
   _toMono(buf){
     if(buf.numberOfChannels<=1) return buf;
@@ -770,13 +779,25 @@ const SpatialVoice = {
     this.tuning.farM=range;
     this.tuning.clearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
     this.loadingUrl=url;
-    let buf; try{ buf=await this.load(url); }
+    let loaded; try{ loaded=await this.load(url); }
     catch(e){ this.loadingUrl=null; HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); return; }
     this.loadingUrl=null;
     const c=this.ctx;
-    if(this.src){ try{ this.src.stop(); }catch(e){} }     // swap clip
-    const src=c.createBufferSource(); src.buffer=buf; src.loop=true;
-    src.connect(this.nodes.mono); src.start();
+    // stop previous source
+    if(this.src){
+      if(this.src._el){ this.src._el.pause(); this.src._el.src=''; try{this.src.disconnect();}catch(e){} }
+      else{ try{ this.src.stop(); }catch(e){} }
+    }
+    let src;
+    if(loaded._isElement){
+      const el=new Audio(loaded._objUrl); el.loop=true;
+      src=c.createMediaElementSource(el);
+      src._el=el; src.connect(this.nodes.mono);
+      el.play().catch(()=>{});
+    } else {
+      src=c.createBufferSource(); src.buffer=loaded; src.loop=true;
+      src.connect(this.nodes.mono); src.start();
+    }
     this.src=src; this.currentUrl=url; this.playing=true;
     // fade in
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
@@ -801,7 +822,11 @@ const SpatialVoice = {
     const c=this.ctx, g=this.nodes.fade.gain;
     g.cancelScheduledValues(c.currentTime); g.setValueAtTime(g.value, c.currentTime);
     g.linearRampToValueAtTime(0, c.currentTime+0.6);
-    const s=this.src; setTimeout(()=>{ try{ s.stop(); }catch(e){} }, 650);
+    const s=this.src;
+    setTimeout(()=>{
+      if(s&&s._el){ s._el.pause(); s._el.src=''; try{s.disconnect();}catch(e){} }
+      else{ try{ s.stop(); }catch(e){} }
+    }, 650);
     this.playing=false; this.currentUrl=null; this.src=null;
   }
 };
@@ -1409,12 +1434,10 @@ EngineKokoro.tryLoad();
     try{ localStorage.setItem(LKEY, JSON.stringify(b)); }catch(e){}   // keep a copy for offline
     if(document.getElementById('simZones')) buildSimZones();
     HUD.log('ev-sys','loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' · '+b.zones.length+' stops (from platform)');
-    // staleness: remember the version we've seen; flag if this load is older than last seen
     try{ const key='gp.ver.'+pid, seen=+(localStorage.getItem(key)||0), now=+(b.bundleVersion||0);
       if(now>seen){ localStorage.setItem(key,String(now)); if(seen) HUD.log('ev-sys','updated to v'+now+' (was v'+seen+')'); }
       else if(now<seen) HUD.log('ev-warn','this bundle (v'+now+') is older than one you loaded before (v'+seen+')'); }catch(e){}
   }catch(e){
-    // offline (or unreachable): fall back to the last saved copy
     let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
     if(cached){ try{ const b=JSON.parse(cached);
       BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
@@ -1423,7 +1446,72 @@ EngineKokoro.tryLoad();
     }catch(_){ HUD.log('ev-warn','offline and saved copy unreadable — using built-in bundle'); } }
     else HUD.log('ev-warn','platform load failed: '+e.message+' — using built-in bundle (Save offline next time you have signal)');
   }
+  // Start polling for live guide stops regardless of initial load outcome
+  startLivePoll(pid);
 })();
+
+/* ---- live guide polling: hot-add ephemeral zones from a live guide ---- */
+let _pollVer=0, _pollLive=0, _pollFails=0;
+
+function startLivePoll(pid){
+  setInterval(async()=>{
+    try{
+      const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle',{cache:'no-store'});
+      if(!r.ok){ _pollFails++; if(_pollFails>=3) showGuideBanner(); return; }
+      const b=await r.json();
+      _pollFails=0; hideGuideBanner();
+      const liveCount=b.liveZoneCount||0;
+      if(b.bundleVersion!==_pollVer||liveCount!==_pollLive){
+        _pollVer=b.bundleVersion; _pollLive=liveCount;
+        const now=Date.now();
+        const zones=(b.zones||[]).filter(z=>!z.expiresAt||z.expiresAt>now);
+        hotPatchZones(zones);
+      }
+    }catch(e){ _pollFails++; if(_pollFails>=3) showGuideBanner(); }
+  }, 5000);
+}
+
+function hotPatchZones(newZones){
+  const newIds=new Set(newZones.map(z=>z.id));
+  const existingIds=new Set(BUNDLE.zones.map(z=>z.id));
+  // Add new zones
+  const added=newZones.filter(z=>!existingIds.has(z.id));
+  for(const z of added) BUNDLE.zones.push(z);
+  // Remove expired live zones (have expiresAt and no longer in server list)
+  BUNDLE.zones=BUNDLE.zones.filter(z=>!z.expiresAt||newIds.has(z.id));
+  if(added.length){
+    HUD.log('ev-sys',added.length+' live stop'+(added.length>1?'s':'')+' from guide');
+    try{ SpatialVoice.ensure(); }catch(e){}
+    for(const z of added){
+      if(z.audioUrl) SpatialVoice.load(z.audioUrl).catch(()=>{});
+    }
+  }
+}
+
+function showGuideBanner(){
+  if(document.getElementById('_guideBanner')) return;
+  const b=document.createElement('div');
+  b.id='_guideBanner';
+  b.style.cssText='position:fixed;top:0;left:0;right:0;background:rgba(255,47,78,.85);color:#fff;'+
+    'text-align:center;padding:6px 12px;font-family:"Barlow Condensed";font-size:13px;'+
+    'font-weight:600;z-index:9999;pointer-events:none';
+  b.textContent='Guide connection interrupted — existing stops still active';
+  document.body.prepend(b);
+  try{
+    const ctx=new AudioContext();
+    const osc=ctx.createOscillator(), g=ctx.createGain();
+    osc.connect(g); g.connect(ctx.destination);
+    osc.frequency.value=220; osc.type='sine';
+    g.gain.setValueAtTime(0.25,ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.6);
+    osc.start(); osc.stop(ctx.currentTime+0.6);
+    setTimeout(()=>ctx.close(),1200);
+  }catch(e){}
+}
+
+function hideGuideBanner(){
+  document.getElementById('_guideBanner')?.remove();
+}
 
 /* ---- offline: register the service worker + Save-for-offline pre-download ---- */
 if('serviceWorker' in navigator){

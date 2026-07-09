@@ -2,1076 +2,1102 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Chase Life — Field Recorder</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Field</title>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root{--night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
-      --snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d}
+:root{--night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;
+      --coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;
+      --hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d}
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--night);color:var(--snow);font-family:"Barlow",system-ui,sans-serif;overflow:hidden}
+html,body{height:100%;background:var(--night);color:var(--snow);
+          font-family:"Barlow Condensed",system-ui,sans-serif;overflow:hidden}
 
 /* ── sessions screen ── */
-#screenSessions{height:100%;overflow-y:auto;padding:20px 16px;max-width:500px;margin:0 auto}
-.s-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
-.s-hdr h1{font-family:"Black Han Sans";font-size:22px}
-.s-hdr a{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);text-decoration:none;
+#screenSessions{height:100%;display:flex;flex-direction:column}
+.ss-hdr{display:flex;align-items:center;justify-content:space-between;
+        padding:14px 16px;background:var(--slate);border-bottom:1px solid var(--rim);flex-shrink:0}
+.ss-hdr h1{font-size:18px;font-weight:700}
+.ss-hdr a{color:var(--ice);text-decoration:none;font-size:13px;
           border:1px solid var(--rim);border-radius:7px;padding:4px 10px}
-.sess-card{background:var(--slate);border:1px solid var(--rim);border-radius:14px;padding:14px;margin-bottom:10px}
-.sess-card.pending{border-color:var(--amber)}
-.sess-card .ttl{font-family:"Barlow Condensed";font-weight:700;font-size:16px;margin-bottom:3px}
-.sess-card .meta{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin-bottom:10px}
-.sess-card .acts{display:flex;gap:8px}
+#sessList{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.sess-card{background:var(--slate);border:1px solid var(--rim);border-radius:14px;padding:14px}
+.sess-card .sc-name{font-weight:700;font-size:16px;margin-bottom:2px}
+.sess-card .sc-id{font-size:12px;color:var(--fog);margin-bottom:6px}
+.sess-card .sc-meta{font-size:12px;color:var(--ice);margin-bottom:10px}
+.sess-card .sc-acts{display:flex;gap:8px}
+.sc-acts button,.sc-acts a{font-family:"Barlow Condensed";font-size:13px;font-weight:600;
+  border-radius:9px;padding:8px 14px;cursor:pointer;text-decoration:none;text-align:center}
+.sc-open{background:none;border:1px solid var(--ice);color:var(--ice);flex:1}
+.sc-pub{background:var(--coral);border:none;color:#1a0d07;flex:1}
+.empty-hint{color:var(--fog);font-size:14px;text-align:center;padding:40px 20px}
 
 /* ── field screen ── */
-#screenField{display:none;flex-direction:column;height:100%}
-#fieldBar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--slate);
-           border-bottom:1px solid var(--rim);font-family:"Barlow Condensed";font-size:13px;flex-shrink:0}
-.rdot{width:10px;height:10px;border-radius:50%;background:var(--fog);flex-shrink:0}
-.rdot.on{background:var(--hazard);animation:blink 1s infinite}
-.rdot.pause{background:var(--amber)}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-#tabContent{flex:1;overflow:hidden;position:relative}
-.tab-panel{position:absolute;inset:0;display:none;flex-direction:column;overflow-y:auto}
-.tab-panel.on{display:flex}
-#tabTrack{overflow:hidden}
+#screenField{height:100%;display:none;flex-direction:column}
 
-/* ── bottom nav ── */
-#nav{display:flex;background:var(--slate);border-top:1px solid var(--rim);flex-shrink:0}
-.nb{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;
-     padding:9px 4px 7px;background:none;border:none;color:var(--fog);
-     font-family:"Barlow Condensed";font-size:11px;letter-spacing:.3px;cursor:pointer}
-.nb .ic{font-size:19px;line-height:1}
-.nb.on{color:var(--coral)}
+/* signal banner */
+#signalBanner{flex-shrink:0;background:var(--hazard);color:#fff;display:none;
+  align-items:center;justify-content:center;gap:8px;padding:6px 14px;
+  font-size:13px;font-weight:700;text-align:center}
+#signalBanner.show{display:flex}
+#queueBadge{background:rgba(0,0,0,.3);border-radius:99px;padding:1px 8px;font-size:12px;display:none}
+#queueBadge.show{display:inline}
 
-/* ── track tab ── */
+/* header */
+#hdr{display:flex;align-items:center;gap:10px;padding:10px 14px;
+     background:var(--slate);border-bottom:1px solid var(--rim);flex-shrink:0}
+#hdr a{color:var(--ice);text-decoration:none;font-size:14px;flex-shrink:0}
+#projName{flex:1;font-weight:700;font-size:15px;text-align:center;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#btnPub{padding:6px 14px;border-radius:8px;background:var(--coral);border:none;
+        color:#1a0d07;font-family:"Barlow Condensed";font-weight:700;font-size:13px;
+        flex-shrink:0;cursor:pointer}
+#btnPub:disabled{opacity:.4;cursor:default}
+
+/* mode strip */
+#modeStrip{flex-shrink:0;background:var(--slate2);border-bottom:1px solid var(--rim);
+  padding:7px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.mode-toggle{display:flex;gap:4px}
+.mode-btn{height:30px;padding:0 12px;border-radius:8px;font-size:12px;font-weight:700;
+  font-family:"Barlow Condensed";border:1px solid var(--rim);background:var(--slate2);
+  color:var(--fog);cursor:pointer;transition:.12s}
+.mode-btn.sel{border-color:var(--coral);color:var(--coral);background:rgba(255,106,61,.10)}
+#activityRow{gap:4px;display:none}
+#activityRow.show{display:flex}
+.act-btn{height:30px;padding:0 10px;border-radius:8px;font-size:14px;
+  font-family:"Barlow Condensed";border:1px solid var(--rim);background:var(--slate2);
+  color:var(--fog);cursor:pointer;transition:.12s}
+.act-btn.sel{border-color:var(--amber);color:var(--amber)}
+
+/* map */
+#mapWrap{flex:1;position:relative;overflow:hidden;min-height:0}
 #map{position:absolute;inset:0}
-#coordBadge{position:absolute;top:10px;right:10px;background:rgba(10,16,24,.85);
-             border:1px solid var(--rim);border-radius:8px;padding:6px 10px;
-             font-family:"Barlow Condensed";font-size:12px;z-index:5;color:var(--ice)}
-#trackBtns{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
-            display:flex;gap:10px;z-index:5}
-#pauseToast{display:none;position:absolute;top:56px;left:50%;transform:translateX(-50%);
-             background:var(--slate);border:1px solid var(--amber);border-radius:12px;
-             padding:10px 14px;font-family:"Barlow Condensed";font-size:13px;
-             z-index:10;white-space:nowrap;align-items:center;gap:10px}
 
-/* ── record tab ── */
-.rec-wrap{padding:16px;display:flex;flex-direction:column;gap:12px}
-.gps-stamp{font-family:"Barlow Condensed";font-size:12px;color:var(--go)}
-#waveCanvas{width:100%;height:80px;background:var(--slate2);border:1px solid var(--rim);
-             border-radius:10px;cursor:ew-resize;touch-action:none;display:block}
-.trim-info{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);text-align:center}
-.big-rec{height:72px;border-radius:36px;font-family:"Barlow Condensed";font-weight:700;
-          font-size:16px;letter-spacing:1px;border:2px solid var(--hazard);
-          background:rgba(255,47,78,.12);color:var(--hazard);cursor:pointer;
-          display:flex;align-items:center;justify-content:center;gap:8px;width:100%}
-.big-rec.active{background:var(--hazard);color:#fff}
+/* stop panel */
+#stopPanel{flex-shrink:0;max-height:130px;overflow-y:auto;background:var(--slate);
+  border-top:1px solid var(--rim);display:none;flex-direction:column}
+#stopPanel.show{display:flex}
+.sp-row{display:flex;align-items:center;gap:8px;padding:7px 12px;
+  border-bottom:1px solid rgba(255,255,255,.04);flex-shrink:0}
+.sp-row:last-child{border-bottom:none}
+.sp-dot{font-size:9px;flex-shrink:0}
+.sp-name{flex:1;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp-countdown{font-size:12px;color:var(--fog);flex-shrink:0;min-width:38px;text-align:right}
+.sp-play{background:none;border:1px solid var(--rim);border-radius:6px;
+  color:var(--ice);font-size:11px;padding:3px 9px;cursor:pointer;flex-shrink:0;
+  font-family:"Barlow Condensed"}
+.sp-play:hover{border-color:var(--ice)}
 
-/* ── clips tab ── */
-.clips-wrap{padding:12px;display:flex;flex-direction:column;gap:8px}
-.clip-card{background:var(--slate);border:1px solid var(--rim);border-radius:12px;padding:12px}
-.clip-card.warn{border-color:var(--amber)}
-.clip-card .ct{font-family:"Barlow Condensed";font-weight:700;font-size:14px;margin-bottom:2px}
-.clip-card .cm{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin-bottom:8px}
-.clip-card .ca{display:flex;gap:6px;flex-wrap:wrap}
+/* footer */
+#ftr{flex-shrink:0;background:var(--slate);border-top:1px solid var(--rim);
+     padding:10px 14px env(safe-area-inset-bottom,10px)}
+#ftrBtns{display:flex;gap:10px}
+.fbt{flex:1;height:58px;border-radius:14px;font-family:"Barlow Condensed";font-weight:700;
+     font-size:16px;letter-spacing:.5px;border:2px solid var(--rim);
+     background:var(--slate2);color:var(--snow);cursor:pointer;
+     display:flex;align-items:center;justify-content:center;gap:7px}
+#btnMark{border-color:var(--go);color:var(--go)}
+#btnMark:disabled{opacity:.4;cursor:default}
+#btnRec{border-color:var(--hazard);color:var(--hazard)}
+#btnRec.active{background:var(--hazard);color:#fff}
+#btnRec:disabled{opacity:.4;cursor:default}
 
-/* ── sync tab ── */
-.sync-wrap{padding:16px;display:flex;flex-direction:column;gap:12px;max-width:500px;width:100%;margin:0 auto}
-.sync-box{background:var(--slate);border:1px solid var(--rim);border-radius:12px;padding:14px}
-.sync-box h3{font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.6px;
-              color:var(--ice);margin-bottom:10px}
-.prog-row{display:flex;align-items:center;gap:8px;font-family:"Barlow Condensed";font-size:13px;margin-bottom:4px}
-.prog-bar{flex:1;height:6px;background:var(--slate2);border-radius:3px;overflow:hidden}
-.prog-fill{height:100%;background:var(--coral);border-radius:3px;transition:width .1s}
+/* live button */
+#btnLive{display:none;border-color:var(--go);color:var(--go)}
+#btnLive.recording{background:var(--hazard);border-color:var(--hazard);color:#fff;animation:pulse 1.2s infinite}
+#btnLive.uploading{border-color:var(--amber);color:var(--amber);animation:pulse 1.2s infinite}
+#btnLive:disabled{opacity:.4;cursor:default;animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
 
-/* ── shared ── */
-button{font-family:"Barlow Condensed";font-weight:600;font-size:13px;letter-spacing:.4px;
-        color:var(--snow);background:var(--slate2);border:1px solid var(--rim);border-radius:9px;
-        padding:8px 12px;cursor:pointer}
-button.pri{background:var(--coral);border-color:var(--coral);color:#1a0d07}
-button.haz{color:var(--hazard);border-color:var(--hazard);background:none}
-button.go{color:var(--go);border-color:var(--go);background:none}
-button.full{width:100%;padding:12px;font-size:15px;border-radius:12px}
-button:disabled{opacity:.4;cursor:default}
-label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:11px;
-          letter-spacing:.6px;color:var(--fog);display:block;margin-bottom:4px}
-input,select,textarea{width:100%;font-family:"Barlow Condensed";font-size:14px;
-                       background:var(--slate2);color:var(--snow);border:1px solid var(--rim);
-                       border-radius:8px;padding:9px 11px}
-.hint{font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
-hr{border:none;border-top:1px solid var(--rim);margin:4px 0}
+#status{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);
+        text-align:center;margin-top:8px;min-height:16px}
 
-/* ── bottom sheet ── */
+/* ── sheet ── */
 #sheet{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);align-items:flex-end}
 #sheet.open{display:flex}
 #sheetBody{width:100%;max-width:500px;margin:0 auto;background:var(--slate);
-            border-radius:18px 18px 0 0;border:1px solid var(--rim);border-bottom:none;
-            padding:18px;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+           border-radius:18px 18px 0 0;border:1px solid var(--rim);border-bottom:none;
+           padding:18px;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
 #sheetBody h2{font-family:"Barlow Condensed";font-size:16px;font-weight:700;
-               text-transform:uppercase;letter-spacing:.5px}
+              text-transform:uppercase;letter-spacing:.5px}
 .sheet-btns{display:flex;gap:8px;margin-top:4px}
+label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:11px;
+         letter-spacing:.6px;color:var(--fog);display:block;margin-bottom:4px}
+input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
+             background:var(--slate2);color:var(--snow);border:1px solid var(--rim);
+             border-radius:8px;padding:9px 11px}
+.btn-pri{background:var(--coral);border:none;color:#1a0d07;font-family:"Barlow Condensed";
+         font-weight:700;font-size:14px;border-radius:9px;padding:10px 18px;
+         cursor:pointer;flex:2}
+.btn-sec{background:var(--slate2);border:1px solid var(--rim);color:var(--snow);
+         font-family:"Barlow Condensed";font-size:13px;border-radius:9px;
+         padding:9px 14px;cursor:pointer;flex:1}
+.hint{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);line-height:1.4}
+.prog-bar{height:6px;background:var(--slate2);border-radius:3px;overflow:hidden;margin-top:6px}
+.prog-fill{height:100%;background:var(--coral);border-radius:3px;transition:width .15s}
 </style>
 </head>
 <body>
 
-<!-- ════════════════════════════════════════════════════
-     SESSIONS SCREEN
-════════════════════════════════════════════════════ -->
+<!-- ── sessions screen (no ?project param) ── -->
 <div id="screenSessions">
-  <div class="s-hdr">
-    <h1>Field Recorder</h1>
+  <div class="ss-hdr">
+    <h1>Field Sessions</h1>
     <a href="/">⌂ Home</a>
   </div>
-  <button class="pri full" id="btnNew" style="margin-bottom:16px">+ New Session</button>
-  <div id="sessList"><div class="hint">No sessions yet.</div></div>
+  <div id="sessList"><div class="empty-hint">No field sessions yet.<br>Open a project and tap Field to start.</div></div>
 </div>
 
-<!-- ════════════════════════════════════════════════════
-     FIELD SCREEN
-════════════════════════════════════════════════════ -->
+<!-- ── field screen (?project param) ── -->
 <div id="screenField">
-
-  <!-- status bar -->
-  <div id="fieldBar">
-    <div class="rdot" id="rdot"></div>
-    <span id="elapsed">0:00:00</span>
-    <span id="gpsInfo" style="margin-left:auto;color:var(--ice)">GPS…</span>
+  <div id="signalBanner">⚠ NO SIGNAL — stops queued <span id="queueBadge"></span></div>
+  <div id="hdr">
+    <a href="/field">◀ Sessions</a>
+    <span id="projName">Field</span>
+    <button id="btnClear" onclick="clearCurrentSession()" title="Clear local data" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⚡</button>
+    <button id="btnPub" disabled>✓ Pub</button>
   </div>
-
-  <div id="tabContent">
-
-    <!-- ── TRACK TAB ── -->
-    <div class="tab-panel on" id="tabTrack">
-      <div id="map"></div>
-      <div id="coordBadge">acquiring GPS…</div>
-      <div id="trackBtns">
-        <button id="btnPause">⏸ Pause</button>
-        <button id="btnGoRec" class="pri">🎙 Clip</button>
-        <button id="btnAddStop">📍 Stop</button>
-      </div>
-      <div id="pauseToast">
-        Stopped moving —
-        <button id="btnToastYes" style="padding:4px 10px">📍 Create stop here</button>
-        <button id="btnToastNo"  style="padding:4px 10px">✕</button>
-      </div>
+  <div id="modeStrip">
+    <div class="mode-toggle">
+      <button id="btnModePers" class="mode-btn sel" onclick="setMode('persistent')">Persistent</button>
+      <button id="btnModeLive" class="mode-btn"     onclick="setMode('live')">Live ⬤</button>
     </div>
-
-    <!-- ── RECORD TAB ── -->
-    <div class="tab-panel" id="tabRecord">
-      <div class="rec-wrap">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span class="gps-stamp" id="recStamp">📍 —</span>
-          <span id="recTimer" style="font-family:'Barlow Condensed';font-size:13px;color:var(--fog)">0:00</span>
-        </div>
-
-        <canvas id="waveCanvas" height="80"></canvas>
-        <div class="trim-info" id="trimInfo">tap record — waveform appears after</div>
-
-        <button class="big-rec" id="btnRec">
-          <span id="recIcon">●</span><span id="recLbl"> TAP TO RECORD</span>
-        </button>
-
-        <button id="btnPrev" disabled>▶ Preview trimmed</button>
-
-        <label style="display:flex;gap:8px;align-items:center;font-family:'Barlow Condensed';font-size:13px;color:var(--snow)">
-          <input type="checkbox" id="chkNote" style="width:16px;height:16px">
-          Guide note only (won't publish)
-        </label>
-
-        <div>
-          <label class="k">assign to stop</label>
-          <select id="recZoneSel"><option value="">— assign later —</option></select>
-        </div>
-
-        <div style="display:flex;gap:8px">
-          <button id="btnDiscard" class="haz">✕ Discard</button>
-          <button id="btnSave" class="pri" disabled style="flex:1">✓ Save clip</button>
-        </div>
-      </div>
+    <div id="activityRow">
+      <button id="actWalk"  class="act-btn sel" onclick="setActivity('walk')">🚶</button>
+      <button id="actSki"   class="act-btn"     onclick="setActivity('ski')">⛷</button>
+      <button id="actDrive" class="act-btn"     onclick="setActivity('drive')">🚗</button>
     </div>
-
-    <!-- ── CLIPS TAB ── -->
-    <div class="tab-panel" id="tabClips">
-      <div class="clips-wrap">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 2px">
-          <span style="font-family:'Barlow Condensed';font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--ice)">Stops (<span id="stopCount">0</span>)</span>
-        </div>
-        <div id="stopsList"></div>
-        <hr style="margin:10px 0">
-        <div style="font-family:'Barlow Condensed';font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--ice);padding:4px 0 2px">Clips (<span id="clipCount">0</span>)</div>
-        <div id="clipsList"><div class="hint">No clips yet.</div></div>
-      </div>
+  </div>
+  <div id="mapWrap"><div id="map"></div></div>
+  <div id="stopPanel"></div>
+  <div id="ftr">
+    <div id="ftrBtns">
+      <button class="fbt" id="btnMark" disabled>📍 Mark Stop</button>
+      <button class="fbt" id="btnRec"  disabled>⏺ Record</button>
+      <button class="fbt" id="btnLive" disabled>🎙 Start Stop</button>
     </div>
+    <div id="status">Starting up…</div>
+  </div>
+</div>
 
-    <!-- ── SYNC TAB ── -->
-    <div class="tab-panel" id="tabSync">
-      <div class="sync-wrap">
-        <div class="sync-box">
-          <h3>Session</h3>
-          <div id="syncSessInfo" style="font-family:'Barlow Condensed';font-size:13px;line-height:1.6"></div>
-        </div>
-        <div class="sync-box">
-          <h3>Platform</h3>
-          <label class="k">project ID</label>
-          <input id="syncProj" placeholder="kh-village-walk">
-          <label class="k" style="margin-top:8px">app</label>
-          <select id="syncApp"><option value="">— unsorted —</option></select>
-          <label class="k" style="margin-top:8px">token</label>
-          <input id="syncTok" type="password" autocomplete="off" placeholder="admin or publish token">
-        </div>
-        <div class="sync-box" id="syncProgBox" style="display:none">
-          <h3>Progress</h3>
-          <div id="syncProgBody"></div>
-        </div>
-        <button class="pri full" id="btnSync">↑ Upload &amp; Publish</button>
-        <div class="hint" id="syncStatus">Upload when you're back on a network.</div>
-      </div>
-    </div>
-
-  </div><!-- /tabContent -->
-
-  <!-- bottom nav -->
-  <nav id="nav">
-    <button class="nb on" data-tab="tabTrack"><span class="ic">🗺</span>Track</button>
-    <button class="nb"    data-tab="tabRecord"><span class="ic">🎙</span>Record</button>
-    <button class="nb"    data-tab="tabClips"><span class="ic" id="clipsIc">🎵</span>Clips</button>
-    <button class="nb"    data-tab="tabSync"><span class="ic">☁</span>Sync</button>
-  </nav>
-
-</div><!-- /screenField -->
-
-<!-- ════════════════════════════════════════════════════
-     BOTTOM SHEET (modal)
-════════════════════════════════════════════════════ -->
+<!-- ── sheet (shared) ── -->
 <div id="sheet">
   <div id="sheetBody">
-    <h2 id="sheetTitle">—</h2>
+    <h2 id="sheetTitle"></h2>
     <div id="sheetContent"></div>
-    <div class="sheet-btns">
-      <button id="sheetCancel">Cancel</button>
-      <button id="sheetOk" class="pri" style="flex:1">Save</button>
-    </div>
+    <div class="sheet-btns" id="sheetBtns"></div>
   </div>
 </div>
 
 <script>
-"use strict";
+/* ── constants ─────────────────────────────────────── */
+const _qs    = new URLSearchParams(location.search);
+const projId = _qs.get("project") || "";
+const MIME   = ["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
+                 .find(t => MediaRecorder.isTypeSupported(t)) || "";
+const LIVE_TTL_MS = 300000;                       // 5 minutes
+const LIVE_RADIUS = {walk:25, ski:60, drive:100}; // default geofence radius per activity
 
-/* ═══════════════════════════════════════════════════════════
-   DATABASE  (IndexedDB)
-═══════════════════════════════════════════════════════════ */
-let _db = null;
-function openDB(){
-  if(_db) return Promise.resolve(_db);
+/* ── state ─────────────────────────────────────────── */
+let lastPos       = null;
+let micStream     = null;
+let mediaRec      = null;
+let recChunks     = [];
+let lastStop      = null;
+let stops         = [];
+let clips         = [];
+let session       = null;
+let headingBuffer = [];
+let liveMode      = false;
+let liveActivity  = "walk";
+let liveRecState  = "idle"; // "idle" | "recording" | "uploading"
+let liveStops     = [];     // successfully published live stops (in-memory for this session)
+let liveNum       = 0;      // auto-increment counter for live stop names
+let signalOk      = true;
+let db, map;
+
+/* ── helpers ────────────────────────────────────────── */
+function circularMean(degs){
+  if(!degs.length) return null;
+  const rads = degs.map(d => d * Math.PI / 180);
+  const sin  = rads.reduce((s,r) => s + Math.sin(r), 0);
+  const cos  = rads.reduce((s,r) => s + Math.cos(r), 0);
+  return Math.round(((Math.atan2(sin, cos) * 180 / Math.PI) + 360) % 360);
+}
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;"); }
+function getToken(){ return localStorage.getItem("gp.token")||""; }
+
+/* ── IndexedDB ─────────────────────────────────────── */
+function openDb(){
   return new Promise((res,rej)=>{
-    const req = indexedDB.open("chase-field",1);
-    req.onupgradeneeded = ev=>{
-      const db = ev.target.result;
-      if(!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions",{keyPath:"id"});
-      if(!db.objectStoreNames.contains("zones")){
-        const s=db.createObjectStore("zones",{keyPath:"id"}); s.createIndex("sid","sessionId");
-      }
-      if(!db.objectStoreNames.contains("clips")){
-        const s=db.createObjectStore("clips",{keyPath:"id"}); s.createIndex("sid","sessionId");
-      }
+    const r = indexedDB.open("chase-field-v2", 3);
+    r.onupgradeneeded = e => {
+      const d = e.target.result;
+      if(!d.objectStoreNames.contains("sessions"))   d.createObjectStore("sessions",{keyPath:"projId"});
+      if(!d.objectStoreNames.contains("stops"))      d.createObjectStore("stops",{keyPath:"id"});
+      if(!d.objectStoreNames.contains("clips"))      d.createObjectStore("clips",{keyPath:"id"});
+      if(!d.objectStoreNames.contains("live_queue")) d.createObjectStore("live_queue",{keyPath:"id"});
     };
-    req.onsuccess = ev=>{ _db=ev.target.result; res(_db); };
-    req.onerror = ev=>rej(ev.target.error);
+    r.onsuccess = e => { db = e.target.result; res(db); };
+    r.onerror   = () => rej(r.error);
   });
 }
-function dbPut(store,obj){ return openDB().then(db=>new Promise((res,rej)=>{
-  const tx=db.transaction(store,"readwrite");
-  tx.objectStore(store).put(obj).onsuccess=ev=>res(ev.target.result);
-  tx.onerror=()=>rej(tx.error);
-})); }
-function dbGet(store,key){ return openDB().then(db=>new Promise((res,rej)=>{
-  const tx=db.transaction(store);
-  tx.objectStore(store).get(key).onsuccess=ev=>res(ev.target.result);
-  tx.onerror=()=>rej(tx.error);
-})); }
-function dbAll(store){ return openDB().then(db=>new Promise((res,rej)=>{
-  const tx=db.transaction(store);
-  tx.objectStore(store).getAll().onsuccess=ev=>res(ev.target.result||[]);
-  tx.onerror=()=>rej(tx.error);
-})); }
-function dbByIdx(store,idx,key){ return openDB().then(db=>new Promise((res,rej)=>{
-  const tx=db.transaction(store);
-  tx.objectStore(store).index(idx).getAll(key).onsuccess=ev=>res(ev.target.result||[]);
-  tx.onerror=()=>rej(tx.error);
-})); }
-function dbDel(store,key){ return openDB().then(db=>new Promise((res,rej)=>{
-  const tx=db.transaction(store,"readwrite");
-  tx.objectStore(store).delete(key).onsuccess=()=>res();
-  tx.onerror=()=>rej(tx.error);
-})); }
-
-/* ═══════════════════════════════════════════════════════════
-   STATE
-═══════════════════════════════════════════════════════════ */
-let session=null, zones=[], clips=[], trackPts=[];
-let lastPos=null, gpsWatch=null;
-let sessStartTs=0, pausedMs=0, pauseStartTs=0;
-let elTimer=null, lastMoveTs=Date.now(), toastShown=false;
-
-/* ═══════════════════════════════════════════════════════════
-   UTILITIES
-═══════════════════════════════════════════════════════════ */
-function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
-function fmtS(s){ return Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0"); }
-function fmtMs(ms){
-  const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
-  return h+":"+String(m).padStart(2,"0")+":"+String(sec).padStart(2,"0");
+function dbPut(store, obj){
+  return new Promise((res,rej)=>{
+    const t = db.transaction(store,"readwrite");
+    t.objectStore(store).put(obj).onsuccess = () => res();
+    t.onerror = () => rej(t.error);
+  });
 }
+function dbGet(store, key){
+  return new Promise((res,rej)=>{
+    const r = db.transaction(store,"readonly").objectStore(store).get(key);
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
+  });
+}
+function dbGetAll(store){
+  return new Promise((res,rej)=>{
+    const r = db.transaction(store,"readonly").objectStore(store).getAll();
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
+  });
+}
+function dbDelete(store, key){
+  return new Promise((res,rej)=>{
+    const t = db.transaction(store,"readwrite");
+    t.objectStore(store).delete(key).onsuccess = () => res();
+    t.onerror = () => rej(t.error);
+  });
+}
+
+/* ── sessions list screen ──────────────────────────── */
+async function renderSessionsList(){
+  let sessions = await dbGetAll("sessions");
+  const allStops = await dbGetAll("stops");
+  const allClips = await dbGetAll("clips");
+  const list = document.getElementById("sessList");
+
+  // Validate sessions against server — drop any whose project no longer exists
+  try{
+    const r = await fetch("/api/projects",{cache:"no-store"});
+    if(r.ok){
+      const data = await r.json();
+      const liveIds = new Set((data.projects||[]).map(p=>p.id));
+      // Update session names from server and prune stale sessions
+      for(const s of sessions){
+        const proj = (data.projects||[]).find(p=>p.id===s.projId);
+        if(proj && proj.name !== s.name){
+          s.name = proj.name;
+          await dbPut("sessions",s);
+        }
+      }
+      const stale = sessions.filter(s=>!liveIds.has(s.projId));
+      for(const s of stale){
+        await dbDelete("sessions",s.projId);
+        for(const st of allStops.filter(x=>x.projId===s.projId)) await dbDelete("stops",st.id);
+        for(const c  of allClips.filter(x=>x.projId===s.projId))  await dbDelete("clips",c.id);
+      }
+      sessions = sessions.filter(s=>liveIds.has(s.projId));
+    }
+  }catch(e){ /* offline — show cached sessions as-is */ }
+
+  // Projects with no local session yet — show as "open" tiles
+  let availableProjects = [];
+  try{
+    const r2 = await fetch("/api/projects",{cache:"no-store"});
+    if(r2.ok){
+      const data = await r2.json();
+      const sessionIds = new Set(sessions.map(s=>s.projId));
+      availableProjects = (data.projects||[]).filter(p=>!sessionIds.has(p.id));
+    }
+  }catch(e){}
+
+  if(!sessions.length && !availableProjects.length){
+    list.innerHTML = '<div class="empty-hint">No projects found.<br>Create a project from <a href="/" style="color:var(--coral)">home</a> first.</div>';
+    return;
+  }
+
+  const availHtml = availableProjects.map(p=>`
+    <div class="sess-card" style="opacity:.75">
+      <div class="sc-name">${esc(p.name||p.id)}</div>
+      <div class="sc-id">${esc(p.id)}</div>
+      <div class="sc-meta">No local session — tap to start</div>
+      <div class="sc-acts">
+        <a class="sc-open" href="/field?project=${esc(p.id)}">Open Guide</a>
+      </div>
+    </div>`).join("");
+
+  const sessHtml = sessions.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)).map(s=>{
+    const sStops  = allStops.filter(st=>st.projId===s.projId);
+    const sClips  = allClips.filter(c=>c.projId===s.projId);
+    const pending = sClips.filter(c=>!c.audioUrl&&c.blob).length;
+    const meta    = sStops.length+" stop"+(sStops.length!==1?"s":"")
+                  +" · "+sClips.length+" clip"+(sClips.length!==1?"s":"")
+                  +(pending?" · "+pending+" not yet uploaded":"");
+    return `<div class="sess-card">
+      <div class="sc-name">${esc(s.name)}</div>
+      <div class="sc-id">${esc(s.projId)}</div>
+      <div class="sc-meta">${meta}</div>
+      <div class="sc-acts">
+        <a class="sc-open" href="/field?project=${esc(s.projId)}">Open</a>
+        <button class="sc-pub" onclick="pubFromList('${esc(s.projId)}','${esc(s.name)}')">✓ Pub</button>
+        <button class="sc-del" onclick="deleteSession('${esc(s.projId)}','${esc(s.name)}')" style="background:none;border:1px solid rgba(255,47,78,.35);color:rgba(255,47,78,.6);border-radius:9px;padding:8px 12px;cursor:pointer;font-family:'Barlow Condensed';font-size:13px;font-weight:600">✕</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  list.innerHTML = sessHtml + (availHtml ? `
+    <div style="font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase;
+                letter-spacing:1px;color:var(--fog);padding:10px 4px 4px">Available projects</div>
+    ${availHtml}` : "");
+}
+
+async function deleteSession(pid, pname){
+  if(!confirm("Clear all local data for \""+pname+"\"?\n\nThis removes stops, clips and session from this device only. Published data on the server is unaffected.")) return;
+  const allStops = await dbGetAll("stops");
+  const allClips = await dbGetAll("clips");
+  for(const s of allStops.filter(s=>s.projId===pid)) await dbDelete("stops",s.id);
+  for(const c of allClips.filter(c=>c.projId===pid)) await dbDelete("clips",c.id);
+  await dbDelete("sessions",pid);
+  await renderSessionsList();
+}
+
+async function pubFromList(pid, pname){
+  const allStops = await dbGetAll("stops");
+  const allClips = await dbGetAll("clips");
+  stops = allStops.filter(s=>s.projId===pid);
+  clips = allClips;
+  const token = getToken();
+  openSheet("Publish · "+pname,
+    `<div class="hint">${stops.length} stop(s) for <strong>${esc(pid)}</strong></div>`+
+    (!token?`<label class="k" style="margin-top:10px">API token</label>
+             <input id="pubTok" type="password" placeholder="your-api-key" autocomplete="off">`:"")+
+    `<div id="pubStatus" style="margin-top:8px;display:none">
+       <div class="hint" id="pubMsg"></div>
+       <div class="prog-bar"><div class="prog-fill" id="pubFill" style="width:0%"></div></div>
+     </div>`,
+    async () => {
+      const tok = (document.getElementById("pubTok")?.value || token).trim();
+      document.getElementById("pubStatus").style.display = "block";
+      if(!tok){ setProg("Enter an API token above",0); return; }
+      if(!token) localStorage.setItem("gp.token",tok);
+      await doPublish(pid, pname, tok);
+    }, "✓ Publish", true);
+}
+
+/* ── map ───────────────────────────────────────────── */
 function circleRing(lat,lon,rM,n=48){
   const pts=[];
   for(let i=0;i<=n;i++){
     const a=(2*Math.PI*i)/n;
-    const dLat=(rM/111320)*Math.sin(a);
-    const dLon=(rM/(111320*Math.cos(lat*Math.PI/180)))*Math.cos(a);
-    pts.push([lon+dLon,lat+dLat]);
+    pts.push([lon+(rM/(111320*Math.cos(lat*Math.PI/180)))*Math.cos(a),lat+(rM/111320)*Math.sin(a)]);
   }
   return pts;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MAP
-═══════════════════════════════════════════════════════════ */
-let map=null, mapReady=false;
-
 function initMap(){
-  if(mapReady) return;
-  mapReady=true;
-  map=new maplibregl.Map({
+  map = new maplibregl.Map({
     container:"map",
     style:{version:8,
       sources:{base:{type:"raster",
         tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
         tileSize:256,attribution:"Esri"}},
       layers:[{id:"base",type:"raster",source:"base"}]},
-    center:[0,0],zoom:2
+    center:[0,0], zoom:2
   });
   map.addControl(new maplibregl.NavigationControl({showCompass:false}),"top-left");
   map.on("load",()=>{
-    map.addSource("track",{type:"geojson",data:{type:"Feature",geometry:{type:"LineString",coordinates:[]}}});
     map.addSource("zones",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
-    map.addSource("clips",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
-    map.addSource("dot",{type:"geojson",data:{type:"Feature",geometry:{type:"Point",coordinates:[0,0]}}});
-
-    map.addLayer({id:"track-line",type:"line",source:"track",
-      paint:{"line-color":"#ff6a3d","line-width":3,"line-opacity":.85}});
+    map.addSource("dot",  {type:"geojson",data:{type:"Feature",geometry:{type:"Point",coordinates:[0,0]}}});
     map.addLayer({id:"zone-fill",type:"fill",source:"zones",
-      paint:{"fill-color":"#38e0a6","fill-opacity":.15}});
+      paint:{
+        "fill-color":["case",["get","isLive"],"#ff2f4e",["get","hasClip"],"#38e0a6","#ff6a3d"],
+        "fill-opacity":.18
+      }});
     map.addLayer({id:"zone-line",type:"line",source:"zones",
-      paint:{"line-color":"#38e0a6","line-width":2}});
+      paint:{
+        "line-color":["case",["get","isLive"],"#ff2f4e",["get","hasClip"],"#38e0a6","#ff6a3d"],
+        "line-width":2
+      }});
     map.addLayer({id:"zone-lbl",type:"symbol",source:"zones",
-      layout:{"text-field":["get","name"],"text-size":12,"text-offset":[0,1.6]},
+      layout:{"text-field":["get","name"],"text-size":12,"text-anchor":"top","text-offset":[0,0.5]},
       paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.5}});
-    map.addLayer({id:"clip-pt",type:"circle",source:"clips",
-      paint:{"circle-color":"#ffc24d","circle-radius":7,"circle-stroke-color":"#fff","circle-stroke-width":1.5}});
     map.addLayer({id:"gps-dot",type:"circle",source:"dot",
-      paint:{"circle-color":"#ff6a3d","circle-radius":11,"circle-stroke-color":"#fff","circle-stroke-width":2.5}});
-
+      paint:{"circle-color":"#ff6a3d","circle-radius":10,"circle-stroke-color":"#fff","circle-stroke-width":2.5}});
     refreshMap();
   });
 }
 
 function refreshMap(){
   if(!map||!map.isStyleLoaded()) return;
-  map.getSource("track")?.setData({type:"Feature",geometry:{type:"LineString",coordinates:trackPts.map(p=>[p.lon,p.lat])}});
-  map.getSource("zones")?.setData({type:"FeatureCollection",features:zones.map(z=>({
-    type:"Feature",properties:{name:z.name},
-    geometry:{type:"Polygon",coordinates:[circleRing(z.lat,z.lon,z.radiusM)]}
-  }))});
-  map.getSource("clips")?.setData({type:"FeatureCollection",features:clips.filter(c=>!c.isNote&&c.lat!=null).map(c=>({
-    type:"Feature",properties:{name:c.name||"Clip"},
-    geometry:{type:"Point",coordinates:[c.lon,c.lat]}
-  }))});
+  const now = Date.now();
+  const allFeatures = [
+    ...stops.map(s=>({
+      type:"Feature",
+      properties:{name:s.name, hasClip:!!s.clipId, isLive:false},
+      geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||12)]}
+    })),
+    ...liveStops.filter(s=>s.expiresAt>now).map(s=>({
+      type:"Feature",
+      properties:{name:s.name, hasClip:true, isLive:true},
+      geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||25)]}
+    }))
+  ];
+  map.getSource("zones")?.setData({type:"FeatureCollection",features:allFeatures});
   if(lastPos) map.getSource("dot")?.setData({type:"Feature",geometry:{type:"Point",coordinates:[lastPos.lon,lastPos.lat]}});
 }
 
-/* ═══════════════════════════════════════════════════════════
-   GPS
-═══════════════════════════════════════════════════════════ */
-function startGPS(){
-  if(!navigator.geolocation||gpsWatch!==null) return;
-  gpsWatch=navigator.geolocation.watchPosition(pos=>{
-    const {latitude:lat,longitude:lon,accuracy:acc,speed,heading}=pos.coords;
-    lastPos={lat,lon,acc,speed:speed||0,heading:heading||null};
+/* ── stop panel ─────────────────────────────────────── */
+function renderStopList(){
+  const panel = document.getElementById("stopPanel");
+  const now = Date.now();
 
-    if(session&&session.status==="active"){
-      trackPts.push({lat,lon,acc,ts:Date.now()});
-      if(lastPos.speed>0.8){
-        lastMoveTs=Date.now();
-        if(toastShown){ document.getElementById("pauseToast").style.display="none"; toastShown=false; }
-      } else if(!toastShown&&Date.now()-lastMoveTs>30000){
-        document.getElementById("pauseToast").style.display="flex"; toastShown=true;
+  // Merge and sort recent first (up to 6 items)
+  const activeLive = liveStops.filter(s => s.expiresAt > now);
+  const allItems = [
+    ...activeLive.map(s=>({...s, _live:true})),
+    ...stops.slice(-Math.max(0, 6-activeLive.length)).map(s=>({...s, _live:false}))
+  ].slice(0, 6);
+
+  if(!allItems.length){ panel.classList.remove("show"); return; }
+  panel.classList.add("show");
+
+  panel.innerHTML = allItems.map(s => {
+    const audioUrl = s._live ? s.audioUrl : clips.find(c=>c.id===s.clipId&&c.audioUrl)?.audioUrl;
+    const playBtn  = audioUrl
+      ? `<button class="sp-play" onclick="playStopAudio('${esc(audioUrl)}')">▶</button>`
+      : "";
+    if(s._live){
+      const rem  = Math.max(0, s.expiresAt - now);
+      const mins = Math.floor(rem/60000);
+      const secs = String(Math.floor((rem%60000)/1000)).padStart(2,"0");
+      return `<div class="sp-row">
+        <span class="sp-dot" style="color:var(--hazard)">⬤</span>
+        <span class="sp-name">${esc(s.name)}</span>
+        <span class="sp-countdown" data-expires="${s.expiresAt}">${mins}:${secs}</span>
+        ${playBtn}
+      </div>`;
+    } else {
+      return `<div class="sp-row">
+        <span class="sp-dot" style="color:var(--go)">●</span>
+        <span class="sp-name">${esc(s.name)}</span>
+        <span class="sp-countdown"></span>
+        ${playBtn}
+      </div>`;
+    }
+  }).join("");
+}
+
+// Tick countdowns every second, remove expired
+setInterval(()=>{
+  const now = Date.now();
+  let changed = false;
+  document.querySelectorAll(".sp-countdown[data-expires]").forEach(el=>{
+    const rem = Math.max(0, parseInt(el.dataset.expires) - now);
+    if(rem === 0){
+      liveStops = liveStops.filter(s => s.expiresAt > now - 1000);
+      changed = true;
+    } else {
+      const mins = Math.floor(rem/60000);
+      const secs = String(Math.floor((rem%60000)/1000)).padStart(2,"0");
+      el.textContent = `${mins}:${secs}`;
+    }
+  });
+  if(changed){ renderStopList(); refreshMap(); }
+}, 1000);
+
+function playStopAudio(url){
+  const a = new Audio(url);
+  a.play().catch(e => setStatus("Playback: "+e.message));
+}
+
+/* ── mode & activity ────────────────────────────────── */
+function setMode(mode){
+  if(mode === "live"){
+    const tok = getToken();
+    if(!tok){
+      openSheet("API Token Required",
+        `<div class="hint">A publish API token is needed to broadcast live stops.</div>
+         <label class="k" style="margin-top:10px">API token</label>
+         <input id="liveTok" type="password" placeholder="your-publish-key" autocomplete="off">`,
+        ()=>{
+          const t = document.getElementById("liveTok")?.value.trim();
+          if(!t) return;
+          localStorage.setItem("gp.token", t);
+          liveMode = true;
+          updateModeUI();
+        }, "Save & Enable Live");
+      return;
+    }
+    liveMode = true;
+  } else {
+    liveMode = false;
+  }
+  updateModeUI();
+}
+
+function setActivity(act){
+  liveActivity = act;
+  document.querySelectorAll(".act-btn").forEach(b=>b.classList.remove("sel"));
+  document.getElementById("act"+act.charAt(0).toUpperCase()+act.slice(1))?.classList.add("sel");
+}
+
+function updateModeUI(){
+  const isLive = liveMode;
+  document.getElementById("btnModePers").classList.toggle("sel", !isLive);
+  document.getElementById("btnModeLive").classList.toggle("sel",  isLive);
+  document.getElementById("activityRow").classList.toggle("show", isLive);
+  // Footer buttons
+  document.getElementById("btnMark").style.display = isLive ? "none" : "flex";
+  document.getElementById("btnRec").style.display  = isLive ? "none" : "flex";
+  document.getElementById("btnLive").style.display = isLive ? "flex" : "none";
+  renderStopList();
+}
+
+/* ── permissions ────────────────────────────────────── */
+async function initPermissions(){
+  setStatus("Requesting mic & GPS…");
+  if(!MIME){ setStatus("Browser can't record audio — use Chrome or Safari"); return; }
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio:{channelCount:2,sampleRate:48000,echoCancellation:false,noiseSuppression:false,autoGainControl:true},
+      video:false
+    });
+  } catch(e){
+    setStatus("Mic permission denied — enable in browser settings");
+    return;
+  }
+
+  document.getElementById("btnRec").disabled  = false;
+  document.getElementById("btnLive").disabled = false;
+  setStatus("GPS…");
+
+  navigator.geolocation.watchPosition(
+    pos => {
+      const {latitude:lat,longitude:lon,accuracy:acc,heading,speed} = pos.coords;
+      const first = !lastPos;
+      lastPos = {lat,lon,acc};
+      if(heading != null && !isNaN(heading) && (speed||0) > 0.5){
+        headingBuffer.push(heading);
+        if(headingBuffer.length > 10) headingBuffer.shift();
       }
-    }
-
-    const a=acc<5?"⊕ ":acc<15?"◉ ":"○ ";
-    const spd=lastPos.speed>0.4?" · "+(lastPos.speed*3.6).toFixed(1)+" km/h":"";
-    document.getElementById("gpsInfo").textContent=a+acc.toFixed(0)+"m"+spd;
-    document.getElementById("coordBadge").textContent=lat.toFixed(5)+"° "+lon.toFixed(5)+"°  "+a+acc.toFixed(0)+"m";
-    document.getElementById("recStamp").textContent="📍 "+lat.toFixed(5)+", "+lon.toFixed(5);
-
-    if(trackPts.length===1&&map) map.flyTo({center:[lon,lat],zoom:17});
-    refreshMap();
-  },
-  err=>{ document.getElementById("gpsInfo").textContent="GPS: "+err.message; },
-  {enableHighAccuracy:true,maximumAge:3000,timeout:15000});
+      document.getElementById("btnMark").disabled = false;
+      refreshMap();
+      if(first){ map.flyTo({center:[lon,lat],zoom:17}); setStatus("Ready"); }
+    },
+    err => setStatus("GPS: "+err.message),
+    {enableHighAccuracy:true,maximumAge:2000,timeout:30000}
+  );
 }
 
-function stopGPS(){
-  if(gpsWatch!==null){ navigator.geolocation.clearWatch(gpsWatch); gpsWatch=null; }
-}
+window.addEventListener("pagehide",()=>{ micStream?.getTracks().forEach(t=>t.stop()); });
 
-/* ═══════════════════════════════════════════════════════════
-   ELAPSED TIMER
-═══════════════════════════════════════════════════════════ */
-function startElapsedTimer(){
-  if(elTimer) return;
-  elTimer=setInterval(()=>{
-    if(session&&session.status==="active"){
-      document.getElementById("elapsed").textContent=fmtMs(Date.now()-sessStartTs-pausedMs);
-    }
-  },1000);
-}
+/* ── persistent record ──────────────────────────────── */
+const btnRec = document.getElementById("btnRec");
+btnRec.onclick = () => mediaRec?.state === "recording" ? stopRec() : startRec();
 
-/* ═══════════════════════════════════════════════════════════
-   AUDIO — recording
-═══════════════════════════════════════════════════════════ */
-let mediaRec=null, recChunks=[], recStartTs=0, recInt=null;
-let audioCtx=null, curBuf=null, peaks=[], trimFrac={start:0,end:1};
-let dragHandle=null, prevSrc=null, pendingClip=null;
-
-function ensureCtx(){
-  if(!audioCtx||audioCtx.state==="closed") audioCtx=new AudioContext();
-  if(audioCtx.state==="suspended") audioCtx.resume();
-}
-
-async function startRec(){
-  ensureCtx();
-  pendingClip=null; curBuf=null; peaks=[]; trimFrac={start:0,end:1};
-  drawWave();
-  document.getElementById("btnSave").disabled=true;
-  document.getElementById("btnPrev").disabled=true;
-  document.getElementById("trimInfo").textContent="recording…";
-
-  let stream;
-  try{ stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
-  catch(e){ document.getElementById("trimInfo").textContent="mic denied: "+e.message; return; }
-
+function startRec(){
+  if(!micStream) return;
   recChunks=[];
-  const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
-    .find(t=>MediaRecorder.isTypeSupported(t))||"";
-  mediaRec=new MediaRecorder(stream,mime?{mimeType:mime}:{});
-  mediaRec.ondataavailable=ev=>{ if(ev.data.size>0) recChunks.push(ev.data); };
-  mediaRec.onstop=async()=>{
-    stream.getTracks().forEach(t=>t.stop());
-    const blob=new Blob(recChunks,{type:mediaRec.mimeType||"audio/webm"});
-    recChunks=[];
-    try{
-      ensureCtx();
-      const ab=await blob.arrayBuffer();
-      const buf=await audioCtx.decodeAudioData(ab);
-      curBuf=buf;
-      pendingClip={lat:lastPos?.lat??null,lon:lastPos?.lon??null,ts:recStartTs,blob,mimeType:blob.type,durationS:buf.duration};
-      buildPeaks(buf); trimFrac={start:0,end:1};
-      drawWave(); updateTrimInfo();
-      document.getElementById("btnSave").disabled=false;
-      document.getElementById("btnPrev").disabled=false;
-    }catch(e){ document.getElementById("trimInfo").textContent="decode error: "+e.message; }
-  };
-  mediaRec.start(250);
-  recStartTs=Date.now();
+  const bCtx = new AudioContext({sampleRate:48000});
+  const src  = bCtx.createMediaStreamSource(micStream);
+  const gain = bCtx.createGain(); gain.gain.value = 4;
+  const dest = bCtx.createMediaStreamDestination();
+  src.connect(gain); gain.connect(dest);
 
-  const btn=document.getElementById("btnRec");
-  btn.classList.add("active");
-  document.getElementById("recIcon").textContent="⏹";
-  document.getElementById("recLbl").textContent=" STOP";
-
-  recInt=setInterval(()=>{
-    document.getElementById("recTimer").textContent=fmtS((Date.now()-recStartTs)/1000);
-  },200);
+  mediaRec = new MediaRecorder(dest.stream,{mimeType:MIME,audioBitsPerSecond:192000});
+  mediaRec.ondataavailable = e => { if(e.data.size>0) recChunks.push(e.data); };
+  mediaRec.onstop = async () => { bCtx.close().catch(()=>{}); await saveClip(); };
+  mediaRec.start(1000);
+  btnRec.textContent = "⏹ Stop";
+  btnRec.classList.add("active");
+  setStatus("Recording"+(lastStop?" · "+lastStop.name:" — mark a stop first"));
 }
 
 function stopRec(){
-  if(mediaRec&&mediaRec.state!=="inactive") mediaRec.stop();
-  clearInterval(recInt);
-  const btn=document.getElementById("btnRec");
-  btn.classList.remove("active");
-  document.getElementById("recIcon").textContent="●";
-  document.getElementById("recLbl").textContent=" TAP TO RECORD";
-  document.getElementById("trimInfo").textContent="decoding…";
+  if(mediaRec?.state === "recording") mediaRec.stop();
+  btnRec.textContent = "⏺ Record";
+  btnRec.classList.remove("active");
 }
 
-/* ── waveform ── */
-function buildPeaks(buf){
-  const data=buf.getChannelData(0), N=220, step=Math.floor(data.length/N);
-  peaks=[];
-  for(let i=0;i<N;i++){
-    let mx=0;
-    for(let j=0;j<step;j++) mx=Math.max(mx,Math.abs(data[i*step+j]||0));
-    peaks.push(mx);
-  }
-}
-
-function drawWave(){
-  const cv=document.getElementById("waveCanvas");
-  const ctx=cv.getContext("2d");
-  const dpr=window.devicePixelRatio||1;
-  const W=cv.clientWidth||300, H=80;
-  cv.width=W*dpr; cv.height=H*dpr;
-  ctx.scale(dpr,dpr);
-  ctx.clearRect(0,0,W,H);
-
-  if(!peaks.length){
-    ctx.fillStyle="#1b2738"; ctx.fillRect(0,0,W,H); return;
-  }
-  const mid=H/2, bw=W/peaks.length;
-  const si=Math.floor(trimFrac.start*peaks.length);
-  const ei=Math.ceil(trimFrac.end*peaks.length);
-
-  peaks.forEach((p,i)=>{
-    const x=i*bw, bh=Math.max(2,p*(H-8)/2);
-    ctx.fillStyle=(i>=si&&i<ei)?"#ff6a3d":"#26344a";
-    ctx.fillRect(x+1,mid-bh,Math.max(1,bw-1),bh*2);
-  });
-
-  // trim handles
-  [trimFrac.start,trimFrac.end].forEach((f,idx)=>{
-    const x=f*W;
-    ctx.strokeStyle="#fff"; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
-    ctx.fillStyle="#fff";
-    ctx.beginPath(); ctx.arc(x,mid,9,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=idx===0?"#ff6a3d":"#38e0a6";
-    ctx.beginPath(); ctx.arc(x,mid,6,0,Math.PI*2); ctx.fill();
-  });
-}
-
-function updateTrimInfo(){
-  if(!curBuf) return;
-  const dur=curBuf.duration;
-  const s=trimFrac.start*dur, e=trimFrac.end*dur;
-  document.getElementById("trimInfo").textContent=
-    "trim: "+fmtS(s)+" → "+fmtS(e)+"  ("+fmtS(e-s)+" kept)";
-}
-
-/* drag handles */
-(function(){
-  const cv=document.getElementById("waveCanvas");
-  cv.addEventListener("pointerdown",ev=>{
-    if(!peaks.length) return;
-    const r=cv.getBoundingClientRect(), x=(ev.clientX-r.left)/r.width;
-    dragHandle=Math.abs(x-trimFrac.start)<=Math.abs(x-trimFrac.end)?"start":"end";
-    cv.setPointerCapture(ev.pointerId);
-  });
-  cv.addEventListener("pointermove",ev=>{
-    if(!dragHandle) return;
-    const r=cv.getBoundingClientRect();
-    let x=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
-    if(dragHandle==="start") trimFrac.start=Math.min(x,trimFrac.end-0.04);
-    else trimFrac.end=Math.max(x,trimFrac.start+0.04);
-    drawWave(); updateTrimInfo();
-  });
-  cv.addEventListener("pointerup",()=>{ dragHandle=null; });
-  cv.addEventListener("pointercancel",()=>{ dragHandle=null; });
-})();
-
-function previewTrimmed(){
-  if(!curBuf) return;
-  if(prevSrc){ try{prevSrc.stop();}catch(e){} prevSrc=null; document.getElementById("btnPrev").textContent="▶ Preview trimmed"; return; }
-  ensureCtx();
-  const dur=curBuf.duration;
-  const start=trimFrac.start*dur, len=(trimFrac.end-trimFrac.start)*dur;
-  const src=audioCtx.createBufferSource();
-  src.buffer=curBuf; src.connect(audioCtx.destination); src.start(0,start,len);
-  prevSrc=src; document.getElementById("btnPrev").textContent="■ Stop";
-  src.onended=()=>{ prevSrc=null; document.getElementById("btnPrev").textContent="▶ Preview trimmed"; };
-}
-
-/* ═══════════════════════════════════════════════════════════
-   CLIPS — list + assign
-═══════════════════════════════════════════════════════════ */
-function renderStops(){
-  const list=document.getElementById("stopsList");
-  document.getElementById("stopCount").textContent=zones.length;
-  if(!zones.length){ list.innerHTML='<div class="hint" style="padding:4px 0 8px">No stops yet — tap 📍 Stop on the map.</div>'; return; }
-  list.innerHTML="";
-  zones.forEach(z=>{
-    const clip=clips.find(c=>c.id===z.clipId);
-    const card=document.createElement("div");
-    card.className="clip-card";
-    card.innerHTML=
-      '<div class="ct">📍 '+z.name+'  <span style="color:var(--fog);font-weight:400">'+z.radiusM+'m radius</span></div>'+
-      '<div class="cm">'+(clip?"🎵 "+clip.name:"no clip assigned")+'</div>'+
-      '<div class="ca">'+
-        '<button class="sz-rec">🎙 Record</button>'+
-        '<button class="sz-del haz">✕ Delete</button>'+
-      '</div>';
-    card.querySelector(".sz-rec").onclick=()=>{
-      document.getElementById("recZoneSel").value=z.id;
-      switchTab("tabRecord");
-    };
-    card.querySelector(".sz-del").onclick=async()=>{
-      if(!confirm('Delete stop "'+z.name+'"?')) return;
-      // unlink any clip that was assigned to this zone
-      clips.filter(c=>c.zoneId===z.id).forEach(c=>{ c.zoneId=null; dbPut("clips",c); });
-      zones=zones.filter(zn=>zn.id!==z.id);
-      await dbDel("zones",z.id);
-      populateZoneSels(); renderStops(); renderClips(); refreshMap();
-    };
-    list.appendChild(card);
-  });
-}
-
-function renderClips(){
-  const list=document.getElementById("clipsList");
-  const unassigned=clips.filter(c=>!c.zoneId&&!c.isNote).length;
-  document.getElementById("clipsIc").textContent=unassigned?"🎵"+unassigned:"🎵";
-  document.getElementById("clipCount").textContent=clips.length;
-  renderStops();
-
-  if(!clips.length){ list.innerHTML='<div class="hint" style="padding:4px 0 8px">No clips yet.</div>'; return; }
-  list.innerHTML="";
-  clips.slice().reverse().forEach(clip=>{
-    const zone=zones.find(z=>z.id===clip.zoneId);
-    const dur=clip.durationS?fmtS(clip.durationS):"?:??";
-    const trimmed=clip.trimFrac.start>0.02||clip.trimFrac.end<0.98;
-    const where=clip.isNote?"📝 guide note":zone?"→ "+zone.name:"⚠ unassigned";
-    const card=document.createElement("div");
-    card.className="clip-card"+((!clip.zoneId&&!clip.isNote)?" warn":"");
-    card.innerHTML=
-      '<div class="ct">🎵 '+(clip.name||"Clip")+'  <span style="color:var(--fog);font-weight:400">'+dur+(trimmed?" (trimmed)":"")+'</span></div>'+
-      '<div class="cm">'+new Date(clip.ts).toLocaleTimeString()+" · "+where+'</div>'+
-      '<div class="ca">'+
-        '<button data-id="'+clip.id+'" class="cp-play">▶ Play</button>'+
-        '<button data-id="'+clip.id+'" class="cp-asgn">📍 Assign</button>'+
-        '<button data-id="'+clip.id+'" class="cp-del haz">✕</button>'+
-      '</div>';
-    card.querySelector(".cp-play").onclick=()=>playClip(clip);
-    card.querySelector(".cp-asgn").onclick=()=>assignSheet(clip);
-    card.querySelector(".cp-del").onclick=async()=>{
-      if(!confirm("Delete this clip?")) return;
-      clips=clips.filter(c=>c.id!==clip.id);
-      await dbDel("clips",clip.id);
-      renderClips(); refreshMap();
-    };
-    list.appendChild(card);
-  });
-}
-
-let clipPrevSrc=null;
-function playClip(clip){
-  if(clipPrevSrc){ try{clipPrevSrc.stop();}catch(e){} clipPrevSrc=null; return; }
-  ensureCtx();
-  clip.blob.arrayBuffer()
-    .then(ab=>audioCtx.decodeAudioData(ab))
-    .then(buf=>{
-      const dur=buf.duration;
-      const s=(clip.trimFrac.start||0)*dur, len=((clip.trimFrac.end||1)-(clip.trimFrac.start||0))*dur;
-      const src=audioCtx.createBufferSource();
-      src.buffer=buf; src.connect(audioCtx.destination); src.start(0,s,len);
-      clipPrevSrc=src; src.onended=()=>{ clipPrevSrc=null; };
-    }).catch(()=>{});
-}
-
-function assignSheet(clip){
-  const opts=zones.map(z=>'<option value="'+z.id+'"'+(clip.zoneId===z.id?" selected":"")+'>'+z.name+'</option>').join("");
-  openSheet("Assign Clip",
-    ()=>'<label class="k">stop</label><select id="sZone"><option value="">— unassigned —</option>'+opts+'</select>',
-    async()=>{
-      const zid=document.getElementById("sZone").value||null;
-      clip.zoneId=zid;
-      if(zid){ const z=zones.find(z=>z.id===zid); if(z&&!z.clipId){ z.clipId=clip.id; await dbPut("zones",z); } }
-      await dbPut("clips",clip);
-      renderClips();
-    });
-}
-
-/* ═══════════════════════════════════════════════════════════
-   ZONES
-═══════════════════════════════════════════════════════════ */
-function populateZoneSels(){
-  const opts='<option value="">— assign later —</option>'+
-    zones.map(z=>'<option value="'+z.id+'">'+z.name+'</option>').join("");
-  document.getElementById("recZoneSel").innerHTML=opts;
-}
-
-function createStopSheet(lat,lon){
-  openSheet("Create Stop",
-    ()=>'<label class="k">name</label><input id="sName" placeholder="Mountain Flower Garden">'+
-        '<label class="k" style="margin-top:8px">radius (metres)</label>'+
-        '<input id="sRadius" type="number" value="12" min="3" max="300">',
-    async()=>{
-      const name=(document.getElementById("sName").value||"Stop "+(zones.length+1)).trim();
-      const r=Math.max(3,+(document.getElementById("sRadius").value)||12);
-      const z={id:uid(),sessionId:session.id,name,lat,lon,radiusM:r,clipId:null};
-      zones.push(z);
-      await dbPut("zones",z);
-      populateZoneSels(); refreshMap();
-    });
-}
-
-/* ═══════════════════════════════════════════════════════════
-   SAVE CLIP
-═══════════════════════════════════════════════════════════ */
 async function saveClip(){
-  if(!pendingClip) return;
-  const zoneId=document.getElementById("recZoneSel").value||null;
-  const isNote=document.getElementById("chkNote").checked;
-  const clip={
-    id:uid(), sessionId:session.id,
-    name:"Clip "+(clips.length+1),
-    lat:pendingClip.lat, lon:pendingClip.lon, ts:pendingClip.ts,
-    blob:pendingClip.blob, mimeType:pendingClip.mimeType,
-    durationS:pendingClip.durationS,
-    trimFrac:{...trimFrac},
-    zoneId, isNote, synced:false
-  };
-  if(zoneId){ const z=zones.find(z=>z.id===zoneId); if(z&&!z.clipId){ z.clipId=clip.id; await dbPut("zones",z); } }
+  if(!recChunks.length) return;
+  const blob = new Blob(recChunks,{type:MIME||"audio/mp4"});
+  const clip = {id:uid(), projId, stopId:lastStop?.id||null, blob, audioUrl:null};
   clips.push(clip);
-  await dbPut("clips",clip);
-
-  pendingClip=null; curBuf=null; peaks=[]; trimFrac={start:0,end:1};
-  drawWave();
-  document.getElementById("trimInfo").textContent="saved ✓ — tap to record another";
-  document.getElementById("btnSave").disabled=true;
-  document.getElementById("btnPrev").disabled=true;
-  document.getElementById("recTimer").textContent="0:00";
-  document.getElementById("chkNote").checked=false;
-  renderClips(); refreshMap();
-}
-
-/* ═══════════════════════════════════════════════════════════
-   SYNC
-═══════════════════════════════════════════════════════════ */
-function mimeToExt(mime){
-  if(!mime) return "webm";
-  if(mime.includes("mp4")) return "m4a";
-  if(mime.includes("ogg")) return "ogg";
-  return "webm";
-}
-
-async function getUploadBlob(clip){
-  const needsTrim=clip.trimFrac.start>0.02||clip.trimFrac.end<0.98;
-  if(!needsTrim){
-    const ext=mimeToExt(clip.mimeType);
-    return {blob:clip.blob,ext,type:clip.mimeType};
-  }
-
-  // Re-encode trimmed section through MediaRecorder (browser's native compressed codec)
-  const ab=await clip.blob.arrayBuffer();
-  const tmp=new AudioContext();
-  const buf=await tmp.decodeAudioData(ab); await tmp.close();
-
-  const s0=clip.trimFrac.start*buf.duration, s1=clip.trimFrac.end*buf.duration;
-  const duration=s1-s0;
-
-  // Prefer mp4/aac, fall back to webm/opus
-  const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
-    .find(t=>MediaRecorder.isTypeSupported(t))||"";
-
-  const ctx=new AudioContext({sampleRate:buf.sampleRate});
-  const dest=ctx.createMediaStreamDestination();
-
-  const blob=await new Promise(resolve=>{
-    const chunks=[];
-    const rec=new MediaRecorder(dest.stream,mime?{mimeType:mime}:{});
-    rec.ondataavailable=e=>{ if(e.data.size>0) chunks.push(e.data); };
-    rec.onstop=()=>{ ctx.close(); resolve(new Blob(chunks,{type:rec.mimeType||mime||"audio/webm"})); };
-    rec.start(100);
-    const src=ctx.createBufferSource();
-    src.buffer=buf; src.connect(dest); src.start(0,s0,duration);
-    src.onended=()=>{ if(rec.state!=="inactive") rec.stop(); };
-    setTimeout(()=>{ if(rec.state!=="inactive") rec.stop(); },(duration+2)*1000);
-  });
-
-  const outMime=blob.type||mime||"audio/webm";
-  return {blob,ext:mimeToExt(outMime),type:outMime};
-}
-
-function logProg(msg,pct){
-  const b=document.getElementById("syncProgBody");
-  const d=document.createElement("div"); d.className="prog-row";
-  d.innerHTML='<span style="flex:1">'+msg+'</span>'+(pct!=null?
-    '<div class="prog-bar"><div class="prog-fill" style="width:'+pct+'%"></div></div>':'');
-  b.appendChild(d); b.scrollTop=b.scrollHeight;
-}
-
-async function doSync(){
-  const projId=document.getElementById("syncProj").value.trim();
-  const token=document.getElementById("syncTok").value.trim();
-  const appId=document.getElementById("syncApp").value;
-  if(!projId){ document.getElementById("syncStatus").textContent="Set a project ID first."; return; }
-  if(!token){ document.getElementById("syncStatus").textContent="Enter a token."; return; }
-  if(!navigator.onLine){ document.getElementById("syncStatus").textContent="No network — try again later."; return; }
-
-  const toUpload=clips.filter(c=>!c.isNote&&!c.synced);
-  document.getElementById("syncProgBox").style.display="block";
-  document.getElementById("syncProgBody").innerHTML="";
-  document.getElementById("btnSync").disabled=true;
-
-  for(let i=0;i<toUpload.length;i++){
-    const clip=toUpload[i];
-    logProg("encoding clip "+(i+1)+"/"+toUpload.length+"…");
-    try{
-      const {blob,ext,type}=await getUploadBlob(clip);
-      const key=projId+"/"+clip.id+"."+ext;
-      const r=await fetch("/api/audio/"+key,{
-        method:"PUT",headers:{authorization:"Bearer "+token,"content-type":type},body:blob});
-      if(!r.ok) throw new Error("HTTP "+r.status);
-      clip.audioUrl="/api/audio/"+key; clip.synced=true;
-      await dbPut("clips",clip);
-      logProg("✓ "+(clip.name||clip.id),100);
-    }catch(e){ logProg("✕ clip failed: "+e.message); }
-  }
-
-  logProg("publishing bundle…");
-  try{
-    // Ensure project exists
-    await fetch("/api/projects",{method:"POST",
-      headers:{authorization:"Bearer "+token,"content-type":"application/json"},
-      body:JSON.stringify({id:projId,name:session.name,slug:projId,appId:appId||null})});
-
-    const lats=zones.map(z=>z.lat), lons=zones.map(z=>z.lon);
-    const ref=zones.length?[lats.reduce((a,b)=>a+b,0)/lats.length,lons.reduce((a,b)=>a+b,0)/lons.length]:[0,0];
-
-    const bundleZones=zones.map(z=>{
-      const clip=clips.find(c=>c.id===z.clipId&&c.audioUrl);
-      const genR=Math.max(30,z.radiusM*2.5);
-      return {
-        id:z.id, name:z.name, center:[z.lat,z.lon], audibleFromM:40,
-        layers:[{kind:"general",radiusM:genR},{kind:"target",radiusM:z.radiusM}],
-        triggers:[
-          {fires_on:"enter",layer:"general",needle:true,oncePerVisit:true},
-          {fires_on:"enter",layer:"target",oncePerVisit:true}
-        ],
-        ...(clip?{audioUrl:clip.audioUrl}:{})
-      };
-    });
-
-    const bundle={project:projId,name:session.name,ref,
-      spatialRangeM:64,spatialClearM:8,appId:appId||null,zones:bundleZones};
-
-    const r=await fetch("/api/projects/"+encodeURIComponent(projId)+"/bundle",{
-      method:"PUT",headers:{authorization:"Bearer "+token,"content-type":"application/json"},
-      body:JSON.stringify(bundle)});
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error||"HTTP "+r.status);
-
-    session.synced=true; session.lastSyncAt=Date.now(); session.projectId=projId;
-    await dbPut("sessions",session);
-    logProg("✓ published v"+j.version,100);
-    document.getElementById("syncStatus").textContent="Published v"+j.version+" — "+new Date().toLocaleTimeString();
-  }catch(e){
-    logProg("✕ publish failed: "+e.message);
-    document.getElementById("syncStatus").textContent="Failed: "+e.message;
-  }
-  document.getElementById("btnSync").disabled=false;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   BOTTOM SHEET
-═══════════════════════════════════════════════════════════ */
-let sheetOkFn=null;
-function openSheet(title,contentFn,okFn){
-  document.getElementById("sheetTitle").textContent=title;
-  document.getElementById("sheetContent").innerHTML=contentFn();
-  sheetOkFn=okFn;
-  document.getElementById("sheet").classList.add("open");
-  setTimeout(()=>{ const el=document.getElementById("sheetContent").querySelector("input"); if(el) el.focus(); },80);
-}
-document.getElementById("sheetOk").onclick=async()=>{
-  if(sheetOkFn) await sheetOkFn();
-  document.getElementById("sheet").classList.remove("open"); sheetOkFn=null;
-};
-document.getElementById("sheetCancel").onclick=()=>{
-  document.getElementById("sheet").classList.remove("open"); sheetOkFn=null;
-};
-document.getElementById("sheet").onclick=ev=>{
-  if(ev.target===document.getElementById("sheet")){
-    document.getElementById("sheet").classList.remove("open"); sheetOkFn=null;
-  }
-};
-
-/* ═══════════════════════════════════════════════════════════
-   UI ROUTING
-═══════════════════════════════════════════════════════════ */
-function switchTab(id){
-  document.querySelectorAll(".tab-panel").forEach(p=>p.classList.remove("on"));
-  document.querySelectorAll(".nb").forEach(b=>b.classList.remove("on"));
-  document.getElementById(id).classList.add("on");
-  document.querySelector('.nb[data-tab="'+id+'"]').classList.add("on");
-  if(id==="tabTrack"){ if(!mapReady) initMap(); else if(map) setTimeout(()=>map.resize(),50); }
-  if(id==="tabClips"){ renderStops(); renderClips(); }
-  if(id==="tabSync") refreshSyncTab();
-}
-
-function refreshSyncTab(){
-  if(!session) return;
-  const ms=session.status==="active"?Date.now()-sessStartTs-pausedMs:(session.durationMs||0);
-  document.getElementById("syncSessInfo").innerHTML=
-    "<b>"+session.name+"</b><br>"+
-    new Date(session.startedAt).toLocaleDateString()+" · "+fmtMs(ms)+"<br>"+
-    zones.length+" stops · "+clips.filter(c=>!c.isNote).length+" voice clips<br>"+
-    (navigator.onLine?"✓ online":"✕ offline");
-  if(session.projectId) document.getElementById("syncProj").value=session.projectId;
-  document.getElementById("syncStatus").textContent=session.lastSyncAt
-    ?"Last sync: "+new Date(session.lastSyncAt).toLocaleTimeString()
-    :"Not synced yet.";
-}
-
-/* ── sessions screen ── */
-async function renderSessions(){
-  const all=await dbAll("sessions");
-  all.sort((a,b)=>b.startedAt-a.startedAt);
-  const list=document.getElementById("sessList");
-  if(!all.length){ list.innerHTML='<div class="hint">No sessions yet — tap + New Session.</div>'; return; }
-  list.innerHTML="";
-  all.forEach(s=>{
-    const card=document.createElement("div");
-    card.className="sess-card"+(s.synced?"":" pending");
-    card.innerHTML=
-      '<div class="ttl">'+s.name+'</div>'+
-      '<div class="meta">'+new Date(s.startedAt).toLocaleDateString()+(s.synced?" · ✓ synced":" · pending sync")+'</div>'+
-      '<div class="acts">'+
-        '<button class="s-cont pri" data-id="'+s.id+'">Continue →</button>'+
-        '<button class="s-del haz"  data-id="'+s.id+'">✕</button>'+
-      '</div>';
-    card.querySelector(".s-cont").onclick=()=>loadSession(s.id);
-    card.querySelector(".s-del").onclick=async()=>{
-      if(!confirm("Delete session \""+s.name+"\"? This removes all local clips.")) return;
-      const sz=await dbByIdx("zones","sid",s.id);
-      const sc=await dbByIdx("clips","sid",s.id);
-      await Promise.all([dbDel("sessions",s.id),...sz.map(z=>dbDel("zones",z.id)),...sc.map(c=>dbDel("clips",c.id))]);
-      renderSessions();
-    };
-    list.appendChild(card);
-  });
-}
-
-async function loadSession(id){
-  const s=await dbGet("sessions",id);
-  if(!s) return;
-  session=s;
-  zones=await dbByIdx("zones","sid",id);
-  clips=await dbByIdx("clips","sid",id);
-  trackPts=[];
-  sessStartTs=s.startedAt; pausedMs=s.pausedMs||0;
-  enterField();
-}
-
-function enterField(){
-  document.getElementById("screenSessions").style.display="none";
-  document.getElementById("screenField").style.display="flex";
-
-  const dot=document.getElementById("rdot");
-  dot.className="rdot"+(session.status==="active"?" on":session.status==="paused"?" pause":"");
-  document.getElementById("btnPause").textContent=session.status==="active"?"⏸ Pause":"▶ Resume";
-
-  initMap(); startGPS(); startElapsedTimer(); populateZoneSels();
-
-  fetch("/api/apps").then(r=>r.json()).then(j=>{
-    const sel=document.getElementById("syncApp");
-    sel.innerHTML='<option value="">— unsorted —</option>'+
-      (j.apps||[]).map(a=>'<option value="'+a.id+'">'+a.name+'</option>').join("");
-    if(session.appId) sel.value=session.appId;
-  }).catch(()=>{});
-
-  switchTab("tabTrack");
-}
-
-/* ═══════════════════════════════════════════════════════════
-   EVENTS
-═══════════════════════════════════════════════════════════ */
-/* new session */
-document.getElementById("btnNew").onclick=()=>{
-  openSheet("New Session",
-    ()=>'<label class="k">name</label><input id="sName" placeholder="KH Village Walk — '+new Date().toLocaleDateString()+'">',
-    async()=>{
-      const name=(document.getElementById("sName").value||"Session "+new Date().toLocaleDateString()).trim();
-      const s={id:uid(),name,startedAt:Date.now(),status:"active",pausedMs:0,projectId:"",appId:"",synced:false};
-      await dbPut("sessions",s);
-      session=s; zones=[]; clips=[]; trackPts=[];
-      sessStartTs=s.startedAt; pausedMs=0;
-      enterField();
-    });
-};
-
-/* pause / resume */
-document.getElementById("btnPause").onclick=async()=>{
-  if(!session) return;
-  if(session.status==="active"){
-    session.status="paused"; pauseStartTs=Date.now();
-    document.getElementById("rdot").className="rdot pause";
-    document.getElementById("btnPause").textContent="▶ Resume";
+  await dbPut("clips", clip);
+  if(lastStop){
+    lastStop.clipId = clip.id;
+    await dbPut("stops", lastStop);
+    refreshMap();
+    renderStopList();
+    setStatus("✓ "+lastStop.name+" — audio saved");
   } else {
-    session.status="active"; pausedMs+=Date.now()-pauseStartTs; session.pausedMs=pausedMs;
-    document.getElementById("rdot").className="rdot on";
-    document.getElementById("btnPause").textContent="⏸ Pause";
+    setStatus("✓ Clip saved — tap Mark Stop to assign a location");
   }
-  await dbPut("sessions",session);
+  document.getElementById("btnPub").disabled = false;
+  touchSession();
+}
+
+/* ── live stop flow ─────────────────────────────────── */
+const btnLive = document.getElementById("btnLive");
+btnLive.onclick = () => {
+  if(liveRecState === "idle")      startLiveStop();
+  else if(liveRecState === "recording") stopLiveStop();
 };
 
-/* create stop */
-document.getElementById("btnAddStop").onclick=()=>{
-  if(!lastPos){ alert("Waiting for GPS fix…"); return; }
-  createStopSheet(lastPos.lat,lastPos.lon);
+async function startLiveStop(){
+  if(!micStream){ setStatus("Mic not ready"); return; }
+  if(!lastPos){ setStatus("No GPS yet"); return; }
+
+  liveNum++;
+  const stop = {
+    id:        "live_"+uid(),
+    name:      "Live "+liveNum,
+    lat:       lastPos.lat,
+    lon:       lastPos.lon,
+    radiusM:   LIVE_RADIUS[liveActivity] || 25,
+    bearingDeg: circularMean(headingBuffer),
+    live:      true,
+    expiresAt: Date.now() + LIVE_TTL_MS
+  };
+
+  recChunks = [];
+  const bCtx = new AudioContext({sampleRate:48000});
+  const src  = bCtx.createMediaStreamSource(micStream);
+  const gain = bCtx.createGain(); gain.gain.value = 4;
+  const dest = bCtx.createMediaStreamDestination();
+  src.connect(gain); gain.connect(dest);
+
+  mediaRec = new MediaRecorder(dest.stream,{mimeType:MIME,audioBitsPerSecond:192000});
+  mediaRec.ondataavailable = e => { if(e.data.size>0) recChunks.push(e.data); };
+  mediaRec.onstop = async () => { bCtx.close().catch(()=>{}); await finishLiveStop(stop); };
+  mediaRec.start(1000);
+
+  liveRecState = "recording";
+  updateLiveBtn();
+  setStatus("⏺ Recording "+stop.name+"…");
+}
+
+function stopLiveStop(){
+  if(mediaRec?.state === "recording") mediaRec.stop();
+  liveRecState = "uploading";
+  updateLiveBtn();
+  setStatus("Uploading…");
+}
+
+async function finishLiveStop(stop){
+  const tok = getToken();
+  if(!tok){
+    setStatus("No API token — switch to Persistent mode to set one");
+    liveRecState = "idle";
+    updateLiveBtn();
+    return;
+  }
+  const blob = new Blob(recChunks,{type:MIME||"audio/mp4"});
+  const ext  = MIME.includes("webm") ? "webm" : "mp4";
+  const key  = `${projId}/${stop.id}.${ext}`;
+
+  try {
+    const r = await fetch("/api/audio/"+key,{
+      method:"PUT",
+      headers:{"Content-Type":MIME||"audio/mp4","Authorization":"Bearer "+tok},
+      body:blob
+    });
+    if(!r.ok) throw new Error("audio upload "+r.status);
+
+    stop.audioUrl = "/api/audio/"+key;
+    const zone = buildLiveZone(stop);
+
+    const zr = await fetch(`/api/projects/${encodeURIComponent(projId)}/zones`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+tok},
+      body:JSON.stringify({zone, ttlMs:LIVE_TTL_MS})
+    });
+    if(!zr.ok) throw new Error("zone publish "+zr.status);
+
+    liveStops.push(stop);
+    renderStopList();
+    refreshMap();
+    setStatus("✓ "+stop.name+" LIVE — 5:00");
+    touchSession();
+  } catch(e) {
+    await queueLiveStop(stop, blob, LIVE_TTL_MS);
+    updateQueueBadge();
+    setStatus("Queued — will upload when signal returns");
+  } finally {
+    liveRecState = "idle";
+    updateLiveBtn();
+  }
+}
+
+function buildLiveZone(stop){
+  const genR = Math.max(50, (stop.radiusM||25)*2.5);
+  return {
+    id:         stop.id,
+    name:       stop.name,
+    center:     [stop.lat, stop.lon],
+    audibleFromM: 40,
+    bearingDeg: stop.bearingDeg ?? null,
+    layers:     [{kind:"general",radiusM:genR},{kind:"target",radiusM:stop.radiusM||25}],
+    triggers:   [{event:"enter",action:"play"},{event:"exit",action:"fadeout"}],
+    audioUrl:   stop.audioUrl,
+    expiresAt:  stop.expiresAt
+  };
+}
+
+function updateLiveBtn(){
+  const btn = document.getElementById("btnLive");
+  btn.classList.remove("recording","uploading");
+  if(liveRecState === "recording"){
+    btn.textContent = "⏹ Stop Recording";
+    btn.classList.add("recording");
+    btn.disabled = false;
+  } else if(liveRecState === "uploading"){
+    btn.textContent = "⏳ Uploading…";
+    btn.classList.add("uploading");
+    btn.disabled = true;
+  } else {
+    btn.textContent = "🎙 Start Stop";
+    btn.disabled = false;
+  }
+}
+
+/* ── offline queue ──────────────────────────────────── */
+async function queueLiveStop(stop, blob, ttlMs){
+  const reader = new FileReader();
+  const b64 = await new Promise(res=>{
+    reader.onload = e => res(e.target.result.split(",")[1]);
+    reader.readAsDataURL(blob);
+  });
+  await dbPut("live_queue",{
+    id:stop.id, stop:{...stop}, blobB64:b64, mimeType:MIME||"audio/mp4",
+    projId, ttlMs, queuedAt:Date.now()
+  });
+}
+
+async function retryQueue(){
+  const tok = getToken();
+  if(!tok) return;
+  const entries = (await dbGetAll("live_queue")).filter(e=>e.projId===projId);
+  for(const entry of entries){
+    const elapsed     = Date.now() - entry.queuedAt;
+    const remainingTtl = entry.ttlMs - elapsed;
+    if(remainingTtl <= 0){ await dbDelete("live_queue",entry.id); updateQueueBadge(); continue; }
+    try{
+      const ext  = entry.mimeType.includes("webm")?"webm":"mp4";
+      const key  = `${projId}/${entry.stop.id}.${ext}`;
+      const blob = b64toBlob(entry.blobB64, entry.mimeType);
+
+      const r = await fetch("/api/audio/"+key,{
+        method:"PUT",
+        headers:{"Content-Type":entry.mimeType,"Authorization":"Bearer "+tok},
+        body:blob
+      });
+      if(!r.ok) continue;
+
+      entry.stop.audioUrl = "/api/audio/"+key;
+      entry.stop.expiresAt = Date.now() + remainingTtl;
+      const zone = buildLiveZone(entry.stop);
+
+      const zr = await fetch(`/api/projects/${encodeURIComponent(projId)}/zones`,{
+        method:"POST",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+tok},
+        body:JSON.stringify({zone, ttlMs:remainingTtl})
+      });
+      if(!zr.ok) continue;
+
+      await dbDelete("live_queue",entry.id);
+      liveStops.push(entry.stop);
+      renderStopList();
+      refreshMap();
+      updateQueueBadge();
+    }catch(e){ /* still offline */ }
+  }
+}
+
+function b64toBlob(b64, type){
+  const bytes = atob(b64);
+  const arr   = new Uint8Array(bytes.length);
+  for(let i=0;i<bytes.length;i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr],{type});
+}
+
+async function updateQueueBadge(){
+  const entries = (await dbGetAll("live_queue")).filter(e=>e.projId===projId);
+  const badge   = document.getElementById("queueBadge");
+  if(entries.length){
+    badge.textContent = entries.length+" queued";
+    badge.classList.add("show");
+  } else {
+    badge.classList.remove("show");
+  }
+}
+
+/* ── connectivity ────────────────────────────────────── */
+function initConnectivity(){
+  window.addEventListener("offline", onSignalLost);
+  window.addEventListener("online",  onSignalRestored);
+  setInterval(async()=>{
+    try{
+      const r = await fetch("/api/health",{method:"HEAD",cache:"no-store"});
+      if(r.ok && !signalOk) onSignalRestored();
+    }catch(e){
+      if(signalOk) onSignalLost();
+    }
+  }, 30000);
+}
+
+function onSignalLost(){
+  if(!signalOk) return;
+  signalOk = false;
+  document.getElementById("signalBanner").classList.add("show");
+  playSignalChime(false);
+  try{ speechSynthesis.speak(Object.assign(new SpeechSynthesisUtterance("Signal lost"),{volume:1,rate:1})); }catch(e){}
+}
+
+function onSignalRestored(){
+  if(signalOk) return;
+  signalOk = true;
+  document.getElementById("signalBanner").classList.remove("show");
+  playSignalChime(true);
+  try{ speechSynthesis.speak(Object.assign(new SpeechSynthesisUtterance("Signal restored"),{volume:1,rate:1})); }catch(e){}
+  setTimeout(retryQueue, 800);
+}
+
+function playSignalChime(ascending){
+  try{
+    const ctx   = new AudioContext();
+    const freqs = ascending ? [440,880] : [880,440];
+    freqs.forEach((freq,i)=>{
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = freq; osc.type = "sine";
+      gain.gain.setValueAtTime(0.4, ctx.currentTime + i*0.25);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.25 + 0.3);
+      osc.start(ctx.currentTime + i*0.25);
+      osc.stop( ctx.currentTime + i*0.25 + 0.3);
+    });
+    setTimeout(()=>ctx.close(), 1500);
+  }catch(e){}
+}
+
+/* ── mark stop (persistent mode) ────────────────────── */
+document.getElementById("btnMark").onclick = () => {
+  if(!lastPos){ setStatus("No GPS yet"); return; }
+  const bearing = circularMean(headingBuffer);
+  const bearingHint = bearing != null
+    ? `<div class="hint" style="margin-top:4px">auto bearing: <strong>${bearing}°</strong> (avg of last ${headingBuffer.length} headings)</div>`
+    : `<div class="hint" style="margin-top:4px">bearing: n/a — walk toward the stop to capture heading</div>`;
+  openSheet("Mark Stop",
+    `<label class="k">name</label>
+     <input id="sName" placeholder="Mountain Flower Garden" autocomplete="off">
+     <label class="k" style="margin-top:10px">radius (metres)</label>
+     <input id="sRadius" type="number" value="12" min="3" max="500">
+     ${bearingHint}`,
+    async () => {
+      const name = document.getElementById("sName").value.trim() || ("Stop "+(stops.length+1));
+      const r    = parseInt(document.getElementById("sRadius").value)||12;
+      const stop = {id:uid(), projId, name, lat:lastPos.lat, lon:lastPos.lon, radiusM:r,
+                    bearingDeg:circularMean(headingBuffer), clipId:null};
+      stops.push(stop); lastStop = stop;
+      await dbPut("stops", stop);
+      refreshMap();
+      renderStopList();
+      map.flyTo({center:[stop.lon,stop.lat],zoom:17});
+      setStatus("📍 "+name+(stop.bearingDeg!=null?" · "+stop.bearingDeg+"°":"")+" — tap Record to capture audio");
+      document.getElementById("btnPub").disabled = false;
+      touchSession();
+    });
 };
 
-/* go to record tab */
-document.getElementById("btnGoRec").onclick=()=>switchTab("tabRecord");
-
-/* pause toast */
-document.getElementById("btnToastYes").onclick=()=>{
-  document.getElementById("pauseToast").style.display="none"; toastShown=false;
-  if(lastPos) createStopSheet(lastPos.lat,lastPos.lon);
-};
-document.getElementById("btnToastNo").onclick=()=>{
-  document.getElementById("pauseToast").style.display="none"; toastShown=false;
-  lastMoveTs=Date.now();
-};
-
-/* record button */
-document.getElementById("btnRec").onclick=()=>{
-  if(mediaRec&&mediaRec.state==="recording") stopRec();
-  else startRec();
-};
-
-/* preview */
-document.getElementById("btnPrev").onclick=previewTrimmed;
-
-/* discard */
-document.getElementById("btnDiscard").onclick=()=>{
-  if(mediaRec&&mediaRec.state==="recording") stopRec();
-  pendingClip=null; curBuf=null; peaks=[]; trimFrac={start:0,end:1};
-  drawWave();
-  document.getElementById("trimInfo").textContent="tap to record — waveform appears after";
-  document.getElementById("btnSave").disabled=true;
-  document.getElementById("btnPrev").disabled=true;
-  document.getElementById("recTimer").textContent="0:00";
+/* ── publish (persistent) ───────────────────────────── */
+document.getElementById("btnPub").onclick = () => {
+  if(!projId){ setStatus("No project ID"); return; }
+  const token = getToken();
+  openSheet("Publish · "+(session?.name||projId),
+    `<div class="hint">${stops.length} stop(s) · ${clips.filter(c=>c.projId===projId&&!c.audioUrl).length} clip(s) to upload</div>`+
+    (!token?`<label class="k" style="margin-top:10px">API token</label>
+             <input id="pubTok" type="password" placeholder="your-api-key" autocomplete="off">`:"")+
+    `<div id="pubStatus" style="margin-top:8px;display:none">
+       <div class="hint" id="pubMsg"></div>
+       <div class="prog-bar"><div class="prog-fill" id="pubFill" style="width:0%"></div></div>
+     </div>`,
+    async () => {
+      const tok = (document.getElementById("pubTok")?.value || token).trim();
+      document.getElementById("pubStatus").style.display = "block";
+      if(!tok){ setProg("Enter an API token above",0); return; }
+      if(!token) localStorage.setItem("gp.token",tok);
+      await doPublish(projId, session?.name||projId, tok);
+    }, "✓ Publish", true);
 };
 
-/* save */
-document.getElementById("btnSave").onclick=saveClip;
+/* ── core publish logic ─────────────────────────────── */
+async function doPublish(pid, pname, token){
+  // Guard: project must already exist on server — guide cannot create projects
+  try{
+    const chk = await fetch("/api/projects",{cache:"no-store"});
+    if(chk.ok){
+      const data = await chk.json();
+      if(!(data.projects||[]).find(p=>p.id===pid)){
+        setProg("Project not found on server — create it from home first",0);
+        return;
+      }
+    }
+  }catch(e){ /* offline — allow attempt, server will validate */ }
 
-/* sync */
-document.getElementById("btnSync").onclick=doSync;
+  const hdr     = {"Authorization":"Bearer "+token};
+  const myStops = stops.filter(s=>s.projId===pid);
+  const toUp    = clips.filter(c=>c.projId===pid&&!c.audioUrl&&c.blob);
+  let done = 0;
 
-/* bottom nav */
-document.querySelectorAll(".nb").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+  for(const cl of toUp){
+    setProg(`Uploading audio ${done+1}/${toUp.length}…`, done/Math.max(toUp.length,1)*0.8);
+    const key = `${pid}/${cl.id}.mp4`;
+    const r   = await fetch("/api/audio/"+key,{
+      method:"PUT",headers:{...hdr,"Content-Type":MIME||"audio/mp4"},body:cl.blob});
+    if(!r.ok){ setProg("Upload failed ("+r.status+") — check API token",0); return; }
+    cl.audioUrl = `/api/audio/${key}`;
+    await dbPut("clips", cl);
+    done++;
+  }
 
-/* ═══════════════════════════════════════════════════════════
-   INIT
-═══════════════════════════════════════════════════════════ */
-if("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(()=>{});
-drawWave();
-renderSessions();
+  setProg("Publishing bundle…", 0.88);
+  const zones = myStops.map(s=>{
+    const cl   = clips.find(c=>c.id===s.clipId&&c.audioUrl);
+    const genR = Math.max(30,(s.radiusM||12)*2.5);
+    return {
+      id:s.id, name:s.name, center:[s.lat,s.lon], audibleFromM:40, bearingDeg:s.bearingDeg??null,
+      layers:[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM||12}],
+      triggers:[{event:"enter",action:"play"},{event:"exit",action:"fadeout"}],
+      ...(cl?{audioUrl:cl.audioUrl}:{})
+    };
+  });
+
+  const bp = await fetch(`/api/projects/${encodeURIComponent(pid)}/bundle`,{
+    method:"PUT",headers:{...hdr,"Content-Type":"application/json"},
+    body:JSON.stringify({name:pname, zones, version:1})
+  });
+  if(!bp.ok){
+    const msg = await bp.text().catch(()=>"");
+    setProg("Publish failed ("+bp.status+"): "+msg.slice(0,80),0);
+    return;
+  }
+  setProg("Done! "+myStops.length+" stops live",1);
+  setTimeout(()=>{ closeSheet(); setStatus("✓ Published — "+myStops.length+" stops live"); renderStopList(); }, 800);
+}
+
+function setProg(msg,frac){
+  document.getElementById("pubMsg").textContent = msg;
+  document.getElementById("pubFill").style.width = (frac*100)+"%";
+}
+
+/* ── sheet helpers ──────────────────────────────────── */
+function openSheet(title, html, onConfirm, confirmLabel="✓ Save", keepOpen=false){
+  document.getElementById("sheetTitle").textContent = title;
+  document.getElementById("sheetContent").innerHTML = html;
+  const btns = document.getElementById("sheetBtns");
+  btns.innerHTML = "";
+  const cancel = document.createElement("button"); cancel.className="btn-sec"; cancel.textContent="Cancel"; cancel.onclick=closeSheet;
+  const save   = document.createElement("button"); save.className="btn-pri";   save.textContent=confirmLabel;
+  save.onclick = async () => { await onConfirm(); if(!keepOpen) closeSheet(); };
+  btns.appendChild(cancel); btns.appendChild(save);
+  document.getElementById("sheet").classList.add("open");
+  setTimeout(()=>{ document.getElementById("sheetContent").querySelector("input")?.focus(); },80);
+}
+function closeSheet(){ document.getElementById("sheet").classList.remove("open"); }
+document.getElementById("sheet").onclick = e => { if(e.target===document.getElementById("sheet")) closeSheet(); };
+
+function setStatus(msg){ document.getElementById("status").textContent = msg; }
+
+async function touchSession(){
+  if(!session) return;
+  session.updatedAt = new Date().toISOString();
+  await dbPut("sessions", session);
+}
+
+async function clearCurrentSession(){
+  if(!projId) return;
+  const name = session?.name || projId;
+  if(!confirm("Clear all local data for \""+name+"\"?\n\nStops, clips and session will be removed from this device. Published server data is unaffected.")) return;
+  for(const s of stops) await dbDelete("stops",s.id);
+  for(const c of clips.filter(c=>c.projId===projId)) await dbDelete("clips",c.id);
+  await dbDelete("sessions",projId);
+  stops=[]; clips=[]; liveStops=[]; lastStop=null; session=null;
+  document.getElementById("btnPub").disabled=true;
+  refreshMap();
+  renderStopList();
+  setStatus("Session cleared");
+}
+
+/* ── init ───────────────────────────────────────────── */
+async function init(){
+  await openDb();
+
+  if(!projId){
+    document.getElementById("screenSessions").style.display = "flex";
+    await renderSessionsList();
+    return;
+  }
+
+  // Verify project exists on server and get its name
+  let projectName = null;
+  try{
+    const r = await fetch("/api/projects",{cache:"no-store"});
+    if(r.ok){
+      const data = await r.json();
+      const proj = (data.projects||[]).find(p=>p.id===projId);
+      if(proj){
+        projectName = proj.name;
+      } else {
+        // Project not found on server (e.g. after nuke) — clear local data and redirect
+        const localStops = (await dbGetAll("stops")).filter(s=>s.projId===projId);
+        const localClips = (await dbGetAll("clips")).filter(c=>c.projId===projId);
+        for(const s of localStops) await dbDelete("stops",s.id);
+        for(const c of localClips)  await dbDelete("clips",c.id);
+        await dbDelete("sessions",projId);
+        document.getElementById("screenSessions").style.display = "flex";
+        document.getElementById("sessList").innerHTML =
+          `<div class="empty-hint">Project <strong>${esc(projId)}</strong> not found on server.<br><br>
+           <a href="/" style="color:var(--coral)">← Return to home to select a project</a></div>`;
+        return;
+      }
+    }
+    // offline — continue with local data, projectName stays null
+  }catch(e){}
+
+  document.getElementById("screenSessions").style.display = "none";
+  document.getElementById("screenField").style.display = "flex";
+
+  session  = await dbGet("sessions", projId);
+  stops    = (await dbGetAll("stops")).filter(s=>s.projId===projId);
+  clips    =  await dbGetAll("clips");
+  lastStop = stops.length ? stops[stops.length-1] : null;
+
+  // Create/update local session using server name (no user prompt)
+  const displayName = projectName || session?.name || projId;
+  if(!session || (projectName && session.name !== projectName)){
+    session = {projId, name:displayName, updatedAt:new Date().toISOString()};
+    await dbPut("sessions", session);
+  }
+
+  document.getElementById("projName").textContent = displayName;
+  if(stops.length) document.getElementById("btnPub").disabled = false;
+
+  updateModeUI();
+  updateQueueBadge();
+  initConnectivity();
+  initMap();
+  map.on("load", () => { map.resize(); refreshMap(); renderStopList(); });
+  await initPermissions();
+}
+
+init();
 </script>
 </body>
 </html>

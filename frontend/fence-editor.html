@@ -179,9 +179,13 @@
   .spd-btn.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
   /* bot tray */
   .bot-tray{border-top:1px solid var(--rim);padding-top:8px;margin-top:6px}
-  .bot-tray-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .bot-tray-head{display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;margin-bottom:0}
   .bot-tray-head .k{margin:0}
-  .bot-tray-scroll{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+  .bot-tray-head .arr{font-size:9px;color:var(--fog);transition:transform .15s;margin-right:4px}
+  .bot-tray-head.open .arr{transform:rotate(90deg)}
+  .bot-tray-scroll{display:none;gap:8px;overflow-x:auto;padding-bottom:4px;margin-top:6px}
+  .bot-tray-head.open+.bot-tray-scroll{display:flex}
+  #zlist{max-height:35vh;overflow-y:auto;margin-top:2px}
   .bot-tray-scroll::-webkit-scrollbar{height:4px}
   .bot-tray-scroll::-webkit-scrollbar-thumb{background:var(--rim);border-radius:2px}
   .bot-card{flex:0 0 60px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:grab;
@@ -253,6 +257,42 @@
                     border:1px solid var(--rim);border-radius:8px}
   .proj-slider-label{font-family:"Barlow Condensed";font-size:11px;color:var(--fog);
                      text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px;display:block}
+  /* voices & audio section */
+  .va-section{border-top:1px solid var(--rim);margin-top:8px;padding-top:8px}
+  .va-label{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin-bottom:5px}
+  .va-audio-row{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .va-audio-icon{font-size:16px;flex:0 0 auto}
+  .va-audio-label{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .va-audio-label.has-clip{color:var(--go)}
+  .va-audio-btns{display:flex;gap:4px;flex-shrink:0}
+  .va-audio-btns button{padding:5px 8px;font-size:11px}
+  .va-summary{font-family:"Barlow Condensed";font-size:12px;color:var(--ice);padding:5px 8px;
+              background:rgba(200,223,242,.06);border:1px solid rgba(200,223,242,.1);
+              border-radius:7px;margin:4px 0;min-height:26px}
+  .va-summary.empty{color:var(--fog);font-style:italic}
+  .va-timing{margin:4px 0 6px}
+  /* bot row inline editor */
+  .bz-show-when{font-family:"Barlow Condensed";font-size:11px;background:var(--slate);
+                border:1px solid var(--rim);border-radius:6px;color:var(--fog);
+                padding:2px 4px;cursor:pointer;flex:0 0 auto;max-width:88px}
+  .bz-edit-btn{background:none;border:1px solid var(--rim);border-radius:5px;color:var(--fog);
+               font-size:12px;padding:2px 5px;cursor:pointer;flex:0 0 auto;line-height:1}
+  .bz-edit-btn:hover,.bz-edit-btn.open{border-color:var(--ice);color:var(--snow)}
+  .bz-inline-editor{background:#0c1421;border:1px solid var(--rim);border-radius:9px;
+                    padding:10px;display:flex;flex-direction:column;gap:5px;
+                    margin:-2px 0 4px 0}
+  .bz-inline-editor .bie-row{display:flex;gap:6px;align-items:flex-end}
+  .bz-inline-editor .bie-av-wrap{display:flex;flex-direction:column;align-items:center;gap:3px;flex:0 0 auto}
+  .bz-inline-editor .bie-av-preview{width:36px;height:36px;border-radius:50%;background:var(--slate);
+                                     font-size:22px;display:flex;align-items:center;justify-content:center}
+  .bz-inline-editor .bie-save{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  .bz-inline-editor .bie-msg{font-family:"Barlow Condensed";font-size:11px;color:var(--go);
+                              min-height:14px;text-align:center}
+  /* bot function chips */
+  .fn-chip{font-family:"Barlow Condensed";font-size:10px;padding:2px 6px;border-radius:9px;
+           background:rgba(255,106,61,.13);border:1px solid rgba(255,106,61,.3);color:var(--coral)}
+  .fn-chip.hazard{background:rgba(255,47,78,.13);border-color:rgba(255,47,78,.35);color:var(--hazard)}
+  .fn-chip.webhook{background:rgba(138,165,191,.1);border-color:var(--rim);color:var(--fog)}
   /* map drag overlay targets */
   .map-drop-target{position:absolute;border-radius:50%;border:3px dashed var(--coral);
                    background:rgba(255,106,61,.15);pointer-events:all;display:flex;
@@ -505,17 +545,82 @@
     <h2 id="pTitle">Stop</h2>
     <label class="k">name</label>
     <input id="pName" placeholder="Mountain Flower Garden">
+    <label class="chk" style="margin:4px 0 6px">
+      <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
+    </label>
 
-    <!-- multi-bot priority list -->
-    <label class="k" style="margin-top:8px">region bots — drag to set priority</label>
-    <div class="bz-list" id="pBotList"></div>
-    <div class="bz-add" id="pBotDrop">+ Drop a bot here</div>
-    <!-- hidden inputs kept for compatibility -->
-    <select id="pBotId" style="display:none"><option value="">— none —</option></select>
-    <select id="pClientBotId" style="display:none"><option value="">— none —</option></select>
+    <!-- ── Voices & Audio ── -->
+    <div class="va-section">
+      <div class="va-label">Voices &amp; Audio</div>
 
-    <label class="k" style="margin-top:8px">greeting prompt — what should the bot say on entry?</label>
-    <input id="pChatGreeting" placeholder="Greet the visitor and tell them the current temperature and wind">
+      <!-- audio clip (moved out of Advanced) -->
+      <div class="va-audio-row">
+        <span class="va-audio-icon">🎵</span>
+        <span class="va-audio-label" id="pAudioLabel">no clip</span>
+        <div class="va-audio-btns">
+          <label class="file" style="border:1px solid var(--rim);border-radius:8px;padding:5px 8px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';text-transform:uppercase;font-size:11px;letter-spacing:.4px;flex:0 0 auto">
+            Upload<input type="file" id="pAudioFile" accept="audio/*" style="display:none">
+          </label>
+          <button id="pAudioBrowse" class="ghost">Files</button>
+          <button id="pAudioPlay" class="ghost">▶</button>
+          <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)">✕</button>
+        </div>
+      </div>
+      <div id="pAudioBar" style="display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:2px 0 2px">
+        <div id="pAudioFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
+      </div>
+      <div id="pAudioStatus" class="hint" style="display:none;font-size:10px;margin:0 0 4px"></div>
+
+      <!-- voice capture -->
+      <div id="pVoiceRow" style="margin-top:2px">
+        <div id="pVoiceIdle">
+          <button id="btnVoiceRec" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:5px 8px">🎙 Record voice clip</button>
+        </div>
+        <div id="pVoiceRecording" style="display:none;gap:6px;align-items:center">
+          <span id="pVoiceTimerDisp" style="font-family:'Barlow Condensed';font-size:12px;color:var(--hazard);flex:1">● 0:00</span>
+          <button id="btnVoiceStop" class="ghost" style="color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:5px 8px">⏹ Stop</button>
+        </div>
+        <div id="pVoiceDone" style="display:none;flex-direction:column;gap:5px">
+          <input id="pVoiceName" placeholder="clip name" style="font-size:12px;padding:6px 8px">
+          <div style="display:flex;gap:4px">
+            <button id="btnVoicePlay2" class="ghost" style="font-size:11px;padding:5px 8px">▶</button>
+            <button id="btnVoiceSave"    class="ghost" style="flex:1;color:var(--go);border-color:var(--go);font-size:11px;padding:5px 8px">✓ Save</button>
+            <button id="btnVoiceDiscard" class="ghost" style="color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:5px 8px">✕</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- what-plays summary -->
+      <div class="va-summary empty" id="vaSummary">nothing set — add a clip or a bot</div>
+    </div>
+
+    <!-- ── Bots & Chat ── (collapsed by default; auto-expands when bots/TTS set) -->
+    <div class="adv-toggle" id="botToggle"><span class="arr">▶</span> Bots &amp; Chat</div>
+    <div class="adv-body" id="botBody">
+      <!-- bot greeting delay (shown only when clip + bot both set) -->
+      <div class="va-timing" id="vaTiming" style="display:none">
+        <label class="k">bot greeting delay — clip plays first</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" id="pBotDelay" min="0" max="30" step="1" value="0" style="flex:1;accent-color:var(--coral)">
+          <span id="pBotDelayV" style="font-family:'Barlow Condensed';font-size:13px;color:var(--ice);flex:0 0 40px">0 s</span>
+        </div>
+      </div>
+
+      <!-- multi-bot priority list -->
+      <label class="k" style="margin-top:4px">🤖 bots — drag to set priority</label>
+      <div class="bz-list" id="pBotList"></div>
+      <div class="bz-add" id="pBotDrop">+ Drop a bot here</div>
+      <!-- hidden inputs kept for compatibility -->
+      <select id="pBotId" style="display:none"><option value="">— none —</option></select>
+      <select id="pClientBotId" style="display:none"><option value="">— none —</option></select>
+
+      <label class="k" style="margin-top:8px">greeting prompt</label>
+      <input id="pChatGreeting" placeholder="Greet the visitor and tell them the current temperature and wind">
+
+      <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
+      <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
+      <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
+    </div>
 
     <label class="k" style="margin-top:8px">speak when</label>
     <select id="pFires">
@@ -526,10 +631,6 @@
       <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
       <input id="pDwell" type="number" value="20" min="2" style="flex:1">
     </div>
-
-    <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
-    <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
-    <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
 
     <!-- Advanced collapsible -->
     <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
@@ -553,20 +654,6 @@
       </div>
       <label class="k">audio fades in from (m)</label>
       <input id="pAudio" type="number" value="40" min="0">
-      <hr>
-      <label class="k">voice / audio clip</label>
-      <div class="row">
-        <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:9px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';text-transform:uppercase;font-size:13px;letter-spacing:.4px">
-          Upload clip<input type="file" id="pAudioFile" accept="audio/*" style="display:none">
-        </label>
-        <button id="pAudioBrowse" class="ghost">Browse R2</button>
-        <button id="pAudioPlay" class="ghost">▶</button>
-        <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)">✕</button>
-      </div>
-      <div class="hint" id="pAudioStatus">no clip</div>
-      <div id="pAudioBar" style="display:none;height:9px;background:#1a2433;border-radius:5px;overflow:hidden;margin:4px 0">
-        <div id="pAudioFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
-      </div>
       <hr>
       <label class="k">webhook (fires on event)</label>
       <div class="row">
@@ -597,9 +684,6 @@
         <input id="pBearing" type="number" min="0" max="359" placeholder="none" style="flex:1">
         <span style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 auto">° (0–359)</span>
       </div>
-      <label class="chk" style="margin-top:6px">
-        <input type="checkbox" id="pIsHazard"> mark as hazard — guidance routes visitors around this zone
-      </label>
     </div>
 
     <div class="row" style="margin-top:10px">
@@ -608,11 +692,11 @@
     </div>
   </div>
 
-  <!-- bot tray -->
+  <!-- bot tray (collapsed by default) -->
   <div class="bot-tray" id="botTray">
-    <div class="bot-tray-head">
-      <label class="k">🤖 Region Bots</label>
-      <a href="/bots" target="_blank" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
+    <div class="bot-tray-head" id="botTrayHead">
+      <label class="k" style="cursor:pointer"><span class="arr">▶</span> 🤖 Region Bots</label>
+      <a href="/bots" target="_blank" onclick="event.stopPropagation()" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
     </div>
     <div class="bot-tray-scroll" id="botTrayScroll"></div>
   </div>
@@ -717,13 +801,14 @@
     <canvas id="trimCanvas" height="80"></canvas>
     <div id="trimLabel"></div>
     <div style="margin:6px 0 2px">
-      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save as (R2 key)</label>
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save as</label>
       <input id="trimKey" style="width:100%;margin-top:4px;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--snow);font-family:'Barlow Condensed';font-size:13px;padding:7px 10px" placeholder="project/stop-name.m4a">
     </div>
     <div class="row" style="margin:0">
-      <button id="trimPrev" class="ghost" style="flex:0 0 auto">▶ Preview</button>
-      <button id="trimSkip" class="ghost" style="flex:1">Upload as-is</button>
-      <button id="trimOk"   class="on"    style="flex:1">✓ Trim &amp; Upload</button>
+      <button id="trimCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
+      <button id="trimPrev"   class="ghost" style="flex:0 0 auto">▶ Preview</button>
+      <button id="trimSkip"   class="ghost" style="flex:1">Upload as-is</button>
+      <button id="trimOk"     class="on"    style="flex:1">✓ Trim &amp; Upload</button>
     </div>
   </div>
 </div>
@@ -876,7 +961,7 @@ function renderSources(){
     // label + bot avatar(s)
     const _bslots=Array.isArray(z.bots)?z.bots:(z.botId?[{botId:z.botId}]:[]);
     const _botAv=_bslots.slice(0,3).map(sl=>{const b=editorBots.find(x=>x.id===sl.botId);return b?(b.avatar||"🤖"):"";}).filter(Boolean).join("");
-    const _lp={kind:"label",name:z.name}; if(_botAv)_lp.botAv=_botAv;
+    const _lp={kind:"label",name:z.name,zIdx:i}; if(_botAv)_lp.botAv=_botAv;
     feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
   });
   map.getSource("fences").setData(fc(feats));
@@ -991,7 +1076,7 @@ map.on("load",()=>{
      layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,0.8],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#b96fff","text-halo-color":"#0a1018","text-halo-width":1.2,"text-opacity":0.8}});
   render();
-  autoRestore();
+  if(!_pid) autoRestore(); // skip if a project is loading from URL — it would overwrite the bundle
 });
 
 /* ---- map clicks + zone select/drag ---- */
@@ -1055,6 +1140,17 @@ window.addEventListener("mouseup",()=>{
   }
   _zoneDrag=null;
 });
+
+// click bot avatar on map → select zone + open first bot's inline editor
+map.on("click","bot-lbl",e=>{
+  const f=e.features[0]; if(!f) return;
+  const zIdx=f.properties.zIdx; if(zIdx==null||!zones[zIdx]) return;
+  selectZone(zIdx);
+  setTimeout(()=>document.querySelector("#pBotList .bz-edit-btn")?.click(), 300);
+  e.stopPropagation();
+});
+map.on("mouseenter","bot-lbl",()=>map.getCanvas().style.cursor="pointer");
+map.on("mouseleave","bot-lbl",()=>map.getCanvas().style.cursor="");
 
 // click empty space to deselect
 map.on("click",e=>{
@@ -1253,11 +1349,47 @@ function refreshProps(){
   document.getElementById("clientBotRow").style.display=z.trackerId?"block":"none";
   const advClientSel=document.getElementById("pClientBotIdAdv");
   if(advClientSel) advClientSel.value=z.clientBotId||"";
-  document.getElementById("pAudioStatus").innerHTML = z.audioUrl
-    ? "clip attached ✓ → <b>"+z.audioUrl+"</b>"
-    : "no clip — uploads to the platform and plays spatially in the engine";
+  // audio label (top of props)
+  const aLbl=document.getElementById("pAudioLabel");
+  if(aLbl){ const clip=z.audioUrl; aLbl.textContent=clip?(clip.split("/").pop()||"clip"):"no clip";
+    aLbl.className="va-audio-label"+(clip?" has-clip":""); }
+  document.getElementById("pBotDelay").value=z.botGreetingDelayS||0;
+  document.getElementById("pBotDelayV").textContent=(z.botGreetingDelayS||0)+" s";
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   document.getElementById("pIsHazard").checked = !!z.isHazard;
+  updateVaSummary(z);
+  // Auto-expand Bots & Chat when zone already has bots or TTS content
+  const hasBotContent=(z.bots||[]).length>0||!!(z.say||"").trim();
+  const botTgl=document.getElementById("botToggle");
+  const botBdy=document.getElementById("botBody");
+  if(botTgl&&botBdy){
+    if(hasBotContent){ botTgl.classList.add("open"); botBdy.classList.add("open"); }
+    else{ botTgl.classList.remove("open"); botBdy.classList.remove("open"); }
+  }
+}
+function updateVaSummary(zone){
+  const el=document.getElementById("vaSummary"); if(!el) return;
+  const timingEl=document.getElementById("vaTiming");
+  const hasClip=!!zone.audioUrl;
+  const firstSlot=(zone.bots||[])[0];
+  const firstBot=firstSlot?editorBots.find(b=>b.id===firstSlot.botId):null;
+  const hasSay=!!(zone.say||"").trim();
+  const fires=zone.fires||"enter";
+  const fireLabel=fires==="dwell"?"on dwell":"on entry";
+  let txt="", isEmpty=false;
+  if(hasClip&&firstBot){
+    txt="🎵 clip → "+(firstBot.avatar||"🤖")+" "+firstBot.name+" "+fireLabel;
+  } else if(hasClip){
+    txt="🎵 audio clip plays spatially — no bot";
+  } else if(firstBot){
+    txt=(firstBot.avatar||"🤖")+" "+firstBot.name+" greets "+fireLabel;
+  } else if(hasSay){
+    txt='💬 TTS: "'+zone.say.slice(0,40)+(zone.say.length>40?"…":"")+'"';
+  } else {
+    txt="nothing set — add a clip or a bot"; isEmpty=true;
+  }
+  el.textContent=txt; el.className="va-summary"+(isEmpty?" empty":"");
+  if(timingEl) timingEl.style.display=(hasClip&&firstBot)?"block":"none";
 }
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
 bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
@@ -1271,6 +1403,13 @@ bindProp("pTrackerId",z=>{ z.trackerId=document.getElementById("pTrackerId").val
 bindProp("pBroadcast",z=>{ z.broadcastRadiusM=+document.getElementById("pBroadcast").value||20; });
 bindProp("pSubject",z=>{ z.triggerSubject=document.getElementById("pSubject").value; });
 bindProp("pChatGreeting",z=>{ z.chatGreeting=document.getElementById("pChatGreeting").value; });
+document.getElementById("pBotDelay").addEventListener("input",()=>{
+  if(sel<0) return;
+  const v=+document.getElementById("pBotDelay").value;
+  zones[sel].botGreetingDelayS=v;
+  document.getElementById("pBotDelayV").textContent=v+" s";
+  autoSave();
+});
 bindProp("pBearing",z=>{ const v=document.getElementById("pBearing").value; z.bearingDeg=(v!==""&&v!==null)?(+v+360)%360:null; });
 document.getElementById("pIsHazard").addEventListener("change",()=>{ if(sel<0)return; zones[sel].isHazard=document.getElementById("pIsHazard").checked; render(); });
 bindProp("pBotId",z=>{ z.botId=document.getElementById("pBotId").value||null; });
@@ -1350,6 +1489,7 @@ async function loadApps(sel){
     as.innerHTML='<option value="">— unsorted —</option>'+
       apps.map(a=>'<option value="'+a.id+'">'+(a.name||a.id)+'</option>').join("");
     if(keep) as.value=keep;
+    else if(apps.length===1) as.value=apps[0].id;
     updateClientCrumb();
   }catch(e){}
 }
@@ -1382,7 +1522,7 @@ document.getElementById("tokTest").onclick=async()=>{
     else ps().innerHTML="token <b style='color:var(--hazard)'>rejected ✕</b> — doesn't match the server's ADMIN_TOKEN secret";
   }catch(e){ ps().textContent="couldn't reach the server to check"; }
 };
-const aStat=()=>document.getElementById("pAudioStatus");
+const aStat=()=>{const el=document.getElementById("pAudioStatus");if(el)el.style.display="block";return el;};
 const aBar=()=>document.getElementById("pAudioBar");
 const aFill=()=>document.getElementById("pAudioFill");
 function showBar(p){ aBar().style.display="block"; aFill().style.width=Math.round(p)+"%"; }
@@ -1424,7 +1564,71 @@ document.getElementById("pAudioClear").onclick=async()=>{
       if(dr.ok && "caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(url)))); }catch(e){}
     }catch(e){}
   }
-  delete z.audioUrl; hideBar(); aStat().textContent="clip removed"; };
+  delete z.audioUrl; hideBar(); aStat().textContent="clip removed";
+  const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent="no clip";aLbl.className="va-audio-label";}
+  updateVaSummary(z); };
+
+/* ── in-editor voice capture ────────────────────────── */
+const _vMime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"";
+let _vStream=null,_vRec=null,_vChunks=[],_vBlob=null,_vPrev=null,_vTimer=null,_vT0=0;
+
+function _vState(s){
+  document.getElementById("pVoiceIdle").style.display      = s==="idle"      ? "":"none";
+  document.getElementById("pVoiceRecording").style.display = s==="recording" ? "flex":"none";
+  document.getElementById("pVoiceDone").style.display      = s==="done"      ? "flex":"none";
+}
+document.getElementById("btnVoiceRec").onclick=async()=>{
+  if(sel<0){ aStat().textContent="select a zone first"; return; }
+  if(!_vStream){
+    try{ _vStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
+    catch(e){ aStat().textContent="mic denied: "+e.message; return; }
+  }
+  _vChunks=[]; _vBlob=null;
+  const bCtx=new AudioContext({sampleRate:48000});
+  const src=bCtx.createMediaStreamSource(_vStream);
+  const dest=bCtx.createMediaStreamDestination();
+  src.connect(dest);
+  _vRec=new MediaRecorder(dest.stream,{mimeType:_vMime,audioBitsPerSecond:192000});
+  _vRec.ondataavailable=e=>{if(e.data.size>0)_vChunks.push(e.data);};
+  _vRec.onstop=()=>{
+    bCtx.close().catch(()=>{});
+    _vBlob=new Blob(_vChunks,{type:_vMime||"audio/mp4"});
+    clearInterval(_vTimer);
+    const z=zones[sel];
+    document.getElementById("pVoiceName").value=slug(z.name||"clip");
+    _vState("done");
+  };
+  _vRec.start(500);
+  _vT0=Date.now();
+  _vTimer=setInterval(()=>{
+    const s=Math.floor((Date.now()-_vT0)/1000);
+    document.getElementById("pVoiceTimerDisp").textContent="● "+Math.floor(s/60)+":"+(s%60).toString().padStart(2,"0");
+  },500);
+  _vState("recording");
+};
+document.getElementById("btnVoiceStop").onclick=()=>{
+  if(_vRec&&_vRec.state==="recording") _vRec.stop();
+};
+document.getElementById("btnVoicePlay2").onclick=()=>{
+  const btn=document.getElementById("btnVoicePlay2");
+  if(_vPrev){ _vPrev.pause(); _vPrev=null; btn.textContent="▶"; return; }
+  if(!_vBlob) return;
+  const url=URL.createObjectURL(_vBlob);
+  _vPrev=new Audio(url); _vPrev.play(); btn.textContent="■";
+  _vPrev.onended=()=>{ _vPrev=null; btn.textContent="▶"; URL.revokeObjectURL(url); };
+};
+document.getElementById("btnVoiceSave").onclick=()=>{
+  if(!_vBlob||sel<0) return;
+  const name=(document.getElementById("pVoiceName").value.trim()||"clip").replace(/[^a-z0-9._-]/gi,"-");
+  const proj=slug(projName())||"project";
+  const ext=_vMime.includes("mp4")?"m4a":"webm";
+  doXhrUpload(_vBlob, proj+"/"+name+"."+ext, _vMime);
+  _vBlob=null; _vChunks=[]; _vState("idle");
+};
+document.getElementById("btnVoiceDiscard").onclick=()=>{
+  if(_vPrev){ _vPrev.pause(); _vPrev=null; }
+  _vBlob=null; _vChunks=[]; clearInterval(_vTimer); _vState("idle");
+};
 
 function closeR2Picker(){
   const p=document.getElementById("r2Picker");
@@ -1435,17 +1639,17 @@ async function doBrowseR2(){
   const tokEl=document.getElementById("adminTok");
   let token=(tokEl&&tokEl.value.trim())||verifiedToken||(()=>{try{return sessionStorage.getItem("gp.admin")||"";}catch(e){return "";}})();
   if(!token){
-    alert("Paste your admin/API token into the token field at the top of the panel, then click Browse R2 again.");
+    alert("Paste your API token into the token field at the top of the panel, then click Files again.");
     tokEl&&tokEl.focus(); return;
   }
   if(!verifiedToken){ verifiedToken=token; try{sessionStorage.setItem("gp.admin",token);}catch(e){} }
   try{
     const r=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
-    if(r.status===401){ alert("Browse R2: token rejected (401).\n\nYour token needs 'publish' or 'audio' scope.\nRe-enter a valid token in the token field."); clearToken(); return; }
+    if(r.status===401){ alert("Token rejected (401).\n\nYour token needs 'publish' or 'audio' scope.\nRe-enter a valid token in the token field."); clearToken(); return; }
     const objects=r.ok ? ((await r.json()).objects||[]) : [];
-    if(!objects.length){ alert("Browse R2: bucket is empty — no clips uploaded yet."); return; }
+    if(!objects.length){ alert("No audio files saved yet."); return; }
 
-    document.getElementById("r2PickerTitle").textContent="R2 clips — all projects";
+    document.getElementById("r2PickerTitle").textContent="Audio files — all projects";
     document.getElementById("r2PickerCount").textContent=objects.length+" file"+(objects.length===1?"":"s")+" — full path shown";
 
     const list=document.getElementById("r2PickerList");
@@ -1456,18 +1660,19 @@ async function doBrowseR2(){
       if(sel>=0) aStat().textContent="downloading for trim…";
       try{
         const buf=await _decodeUrl(url);
-        const pj=slug(projName())||"project";
         const z=sel>=0?zones[sel]:null;
-        const trimDefaultKey=z?pj+"/"+z.id+".m4a":key;
+        // Default to overwriting the source key so Files picker shows the trimmed version.
+        // Extension may change (e.g. mp3→webm); key extension is cosmetic — R2 uses content-type.
+        const trimDefaultKey=key;
         openTrimmer(buf, trimDefaultKey,
           _key=>{ if(z) z.audioUrl=url; if(sel>=0) aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
           async(blob,userKey)=>{
             const ext=_mimeExt(blob.type);
-            const fallback=z?pj+"/"+z.id+"."+ext:key.replace(/\.[^.]+$/,"."+ext);
-            doXhrUpload(blob, userKey||fallback, blob.type);
+            const resolvedKey=(userKey||key).replace(/\.[^.]+$/,"."+ext);
+            doXhrUpload(blob, resolvedKey, blob.type);
           }
         );
-      }catch(e){ alert("Browse R2: download failed — "+e.message); }
+      }catch(e){ alert("Download failed — "+e.message); }
     };
 
     objects.forEach(o=>{
@@ -1490,6 +1695,8 @@ async function doBrowseR2(){
       useBtn.addEventListener("click",()=>{
         if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
         zones[sel].audioUrl=o.url;
+        const _aLbl=document.getElementById("pAudioLabel"); if(_aLbl){_aLbl.textContent=o.key.split("/").pop();_aLbl.className="va-audio-label has-clip";}
+        updateVaSummary(zones[sel]);
         aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
         closeR2Picker();
       });
@@ -1513,7 +1720,7 @@ async function doBrowseR2(){
     });
 
     document.getElementById("r2Picker").style.display="flex";
-  }catch(e){ alert("Browse R2 error: "+e.message); }
+  }catch(e){ alert("Browse files error: "+e.message); }
 }
 document.getElementById("r2Picker").addEventListener("click",ev=>{ if(ev.target===document.getElementById("r2Picker")) closeR2Picker(); });
 document.getElementById("r2PickerCancel").addEventListener("click",closeR2Picker);
@@ -1536,7 +1743,8 @@ function drawList(){
   zones.forEach((z,i)=>{
     const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
     const cue=z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive");
-    d.innerHTML='<div class="t"><b class="cond">'+z.name+'</b>'
+    const hzBadge=z.isHazard?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
+    d.innerHTML='<div class="t"><b class="cond">'+z.name+hzBadge+'</b>'
       +'<span class="tag">'+z.shape.type+' · '+cue+'</span>'
       +'<button class="del" title="delete">✕</button></div>';
     d.querySelector(".del").onclick=(ev)=>{ ev.stopPropagation(); zones.splice(i,1); if(sel===i)sel=-1; else if(sel>i)sel--; render(); refreshProps(); };
@@ -1576,6 +1784,7 @@ function zoneToEngine(z){
   if(z.clientBotId) zo.clientBotId=z.clientBotId;
   if(Array.isArray(z.actions) && z.actions.length) zo.actions=z.actions;
   if(z.audioUrl) zo.audioUrl=z.audioUrl;
+  if(z.botGreetingDelayS) zo.botGreetingDelayS=z.botGreetingDelayS;
   if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
   if(z.isHazard) zo.isHazard=true;
   return zo;
@@ -1644,7 +1853,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
     zones=b.zones.map(engineToZone); sel=-1; tool=null; draft=[];
     editorBots=Array.isArray(b.bots)?b.bots:[];
-    renderBotList();
+    renderBotTray();
     if(b.name) document.getElementById("projCrumb").textContent=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
@@ -1704,7 +1913,7 @@ async function publishToPlatform(){
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle",{
       method:"PUT", headers:{"content-type":"application/json","authorization":"Bearer "+token},
-      body:JSON.stringify(b) });
+      body:JSON.stringify({...b, createIfMissing:true}) });
     const j=await r.json().catch(()=>({}));
     if(r.ok){ _currentProjectId=id; document.getElementById("projCrumb").textContent=b.name||id; ps().innerHTML="published v"+j.version+" ✓"; }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared, try again"; }
@@ -1783,11 +1992,12 @@ if(_aid) loadApps(_aid); // pre-select app from home page "+" button
    AUDIO TRIMMER
 ════════════════════════════════════════════════════ */
 let _tBuf=null, _tFrac={start:0,end:1}, _tDrag=null, _tPeaks=[], _tPrevSrc=null;
-let _tOnSkip=null, _tOnOk=null, _tACtx=null;
+let _tOnSkip=null, _tOnOk=null, _tACtx=null, _tNeedle=null, _tRAF=null, _tCtxT0=0;
 
 function openTrimmer(buf, defaultKey, onSkip, onOk){
   _tBuf=buf; _tFrac={start:0,end:1}; _tOnSkip=onSkip; _tOnOk=onOk;
-  _tPeaks=_buildPeaks(buf);
+  _tPeaks=_buildPeaks(buf); _tNeedle=null;
+  if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; }
   _drawTrim(); _trimLabel();
   document.getElementById("trimKey").value=defaultKey||"";
   document.getElementById("trimOk").textContent="✓ Trim & Upload";
@@ -1796,6 +2006,8 @@ function openTrimmer(buf, defaultKey, onSkip, onOk){
 }
 function closeTrimmer(){
   document.getElementById("trimOverlay").style.display="none";
+  if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; }
+  _tNeedle=null;
   if(_tPrevSrc){ try{_tPrevSrc.stop();}catch(e){} _tPrevSrc=null; }
   document.getElementById("trimPrev").textContent="▶ Preview";
   _tBuf=null;
@@ -1830,6 +2042,11 @@ function _drawTrim(){
     ctx.fillStyle=idx===0?"#ff6a3d":"#38e0a6";
     ctx.beginPath(); ctx.arc(x,mid,6,0,Math.PI*2); ctx.fill();
   });
+  if(_tNeedle!==null){
+    const x=_tNeedle*W;
+    ctx.strokeStyle="rgba(255,255,255,0.85)"; ctx.lineWidth=2; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+  }
 }
 function _trimLabel(){
   if(!_tBuf) return;
@@ -1859,15 +2076,34 @@ function _trimLabel(){
 })();
 document.getElementById("trimPrev").onclick=()=>{
   if(!_tBuf) return;
-  if(_tPrevSrc){ try{_tPrevSrc.stop();}catch(e){} _tPrevSrc=null;
-    document.getElementById("trimPrev").textContent="▶ Preview"; return; }
+  if(_tPrevSrc){
+    try{_tPrevSrc.stop();}catch(e){} _tPrevSrc=null;
+    if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; }
+    _tNeedle=null; _drawTrim();
+    document.getElementById("trimPrev").textContent="▶ Preview"; return;
+  }
   if(!_tACtx||_tACtx.state==="closed") _tACtx=new AudioContext();
   if(_tACtx.state==="suspended") _tACtx.resume();
   const dur=_tBuf.duration, s=_tFrac.start*dur, len=(_tFrac.end-_tFrac.start)*dur;
   const src=_tACtx.createBufferSource();
-  src.buffer=_tBuf; src.connect(_tACtx.destination); src.start(0,s,len);
+  src.buffer=_tBuf; src.connect(_tACtx.destination);
+  _tCtxT0=_tACtx.currentTime;
+  src.start(0,s,len);
   _tPrevSrc=src; document.getElementById("trimPrev").textContent="■ Stop";
-  src.onended=()=>{ _tPrevSrc=null; document.getElementById("trimPrev").textContent="▶ Preview"; };
+  (function animNeedle(){
+    if(!_tPrevSrc||!_tACtx||!_tBuf){ _tNeedle=null; _drawTrim(); return; }
+    const elapsed=_tACtx.currentTime-_tCtxT0;
+    _tNeedle=Math.min(_tFrac.start+elapsed/dur, _tFrac.end);
+    _drawTrim();
+    if(_tNeedle<_tFrac.end) _tRAF=requestAnimationFrame(animNeedle);
+    else{ _tNeedle=null; _drawTrim(); }
+  })();
+  src.onended=()=>{
+    _tPrevSrc=null;
+    if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; }
+    _tNeedle=null; _drawTrim();
+    document.getElementById("trimPrev").textContent="▶ Preview";
+  };
 };
 document.getElementById("trimSkip").onclick=async()=>{
   const key=document.getElementById("trimKey").value.trim();
@@ -1877,29 +2113,41 @@ document.getElementById("trimOk").onclick=async()=>{
   if(!_tBuf) return;
   const key=document.getElementById("trimKey").value.trim();
   const btn=document.getElementById("trimOk"); btn.textContent="encoding…"; btn.disabled=true;
-  try{ const blob=await _reenc(_tBuf,_tFrac.start,_tFrac.end);
+  // Create AudioContext NOW while we're in the click handler (gesture context).
+  // If created inside _reenc (after an await), Chrome suspends it and renders no audio.
+  const encCtx=new AudioContext({sampleRate:_tBuf.sampleRate});
+  try{
+    const blob=await _reenc(_tBuf,_tFrac.start,_tFrac.end,encCtx);
+    encCtx.close().catch(()=>{});
+    if(!blob.size){ throw new Error("encoded clip is empty — try again"); }
     const fn=_tOnOk; closeTrimmer(); if(fn) await fn(blob,key);
-  }catch(e){ btn.textContent="✓ Trim & Upload"; btn.disabled=false; alert("encode failed: "+e.message); }
+  }catch(e){ encCtx.close().catch(()=>{}); btn.textContent="✓ Trim & Upload"; btn.disabled=false; alert("encode failed: "+e.message); }
 };
+document.getElementById("trimCancel").onclick=()=>closeTrimmer();
 document.getElementById("trimOverlay").onclick=ev=>{
   if(ev.target===document.getElementById("trimOverlay")) closeTrimmer();
 };
-async function _reenc(buf,f0,f1){
+async function _reenc(buf,f0,f1,ctx){
   const s=f0*buf.duration, e=f1*buf.duration, dur=e-s;
   const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
     .find(t=>MediaRecorder.isTypeSupported(t))||"";
-  const ctx=new AudioContext({sampleRate:buf.sampleRate});
+  // ctx is passed in from the click handler (gesture context) so it starts running.
+  // Fall back to creating one here only if called without a gesture context.
+  const ownCtx=!ctx;
+  if(!ctx){ ctx=new AudioContext({sampleRate:buf.sampleRate}); try{ await ctx.resume(); }catch(_){} }
   const dest=ctx.createMediaStreamDestination();
   return new Promise((res,rej)=>{
     const chunks=[];
-    const rec=new MediaRecorder(dest.stream,mime?{mimeType:mime}:{});
+    let rec;
+    try{ rec=new MediaRecorder(dest.stream,mime?{mimeType:mime}:{}); }
+    catch(e){ if(ownCtx) ctx.close().catch(()=>{}); rej(e); return; }
     rec.ondataavailable=ev=>{ if(ev.data.size>0) chunks.push(ev.data); };
-    rec.onstop=()=>{ ctx.close(); res(new Blob(chunks,{type:rec.mimeType||mime||"audio/webm"})); };
-    rec.start(100);
+    rec.onstop=()=>{ if(ownCtx) ctx.close().catch(()=>{}); res(new Blob(chunks,{type:rec.mimeType||mime||"audio/webm"})); };
+    try{ rec.start(100); }catch(e){ if(ownCtx) ctx.close().catch(()=>{}); rej(e); return; }
     const src=ctx.createBufferSource();
     src.buffer=buf; src.connect(dest); src.start(0,s,dur);
-    src.onended=()=>{ if(rec.state!=="inactive") rec.stop(); };
-    setTimeout(()=>{ if(rec.state!=="inactive") rec.stop(); },(dur+2)*1000);
+    src.onended=()=>{ try{ if(rec.state!=="inactive") rec.stop(); }catch(e){ rej(e); } };
+    setTimeout(()=>{ try{ if(rec.state!=="inactive") rec.stop(); }catch(_){} },(dur+2)*1000);
   });
 }
 async function _decodeUrl(url){
@@ -1922,10 +2170,14 @@ function doXhrUpload(blob, key, mimeType, label){
   xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){
     const p=ev.loaded/ev.total*100, secs=(Date.now()-t0)/1000, rate=ev.loaded/1024/Math.max(.1,secs);
     showBar(p); aStat().textContent="uploading "+sizeStr+" — "+Math.round(p)+"% · "+rate.toFixed(0)+" KB/s"; } };
-  xhr.onload=()=>{
+  xhr.onload=async()=>{
     const secs=((Date.now()-t0)/1000).toFixed(1); let j={}; try{j=JSON.parse(xhr.responseText);}catch(_){}
     if(xhr.status>=200&&xhr.status<300){
-      if(sel>=0) zones[sel].audioUrl=j.url||("/api/audio/"+key);
+      const audioUrl=j.url||("/api/audio/"+key);
+      if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(audioUrl)))); }catch(_){}
+      if(sel>=0){ zones[sel].audioUrl=audioUrl;
+        const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
+        updateVaSummary(zones[sel]); }
       showBar(100);
       aStat().innerHTML="uploaded ✓ "+sizeStr+" in "+secs+"s → <b>/api/audio/"+key+"</b>";
       setTimeout(hideBar,1500);
@@ -2072,20 +2324,40 @@ const SimVoice={
     if(this._dead&&this._dead.has(url))throw new Error("skipped (previous 404)");
     const r=await fetch(url,{cache:"no-cache"});
     if(!r.ok){if(!this._dead)this._dead=new Set();this._dead.add(url);throw new Error(r.status+" — "+url);}
-    const ab=await r.arrayBuffer();this.ensure();const raw=await this.ctx.decodeAudioData(ab);
-    if(raw.numberOfChannels>1){const len=raw.length,out=this.ctx.createBuffer(1,len,raw.sampleRate),o=out.getChannelData(0);
-      for(let ch=0;ch<raw.numberOfChannels;ch++){const d=raw.getChannelData(ch);for(let i=0;i<len;i++)o[i]+=d[i];}
-      let pk=0;for(let i=0;i<len;i++)pk=Math.max(pk,Math.abs(o[i]));if(pk>1)for(let i=0;i<len;i++)o[i]/=pk;
-      this.buffers[url]=out;return out;}
-    this.buffers[url]=raw;return raw;},
+    const ct=(r.headers.get('content-type')||'audio/mpeg').split(';')[0].trim();
+    const ab=await r.arrayBuffer();this.ensure();
+    try{
+      const raw=await this.ctx.decodeAudioData(ab.slice(0));
+      if(raw.numberOfChannels>1){const len=raw.length,out=this.ctx.createBuffer(1,len,raw.sampleRate),o=out.getChannelData(0);
+        for(let ch=0;ch<raw.numberOfChannels;ch++){const d=raw.getChannelData(ch);for(let i=0;i<len;i++)o[i]+=d[i];}
+        let pk=0;for(let i=0;i<len;i++)pk=Math.max(pk,Math.abs(o[i]));if(pk>1)for(let i=0;i<len;i++)o[i]/=pk;
+        this.buffers[url]=out;return out;}
+      this.buffers[url]=raw;return raw;
+    }catch(e){}
+    // fMP4 from Safari iOS fallback
+    const blob=new Blob([ab],{type:ct});
+    const objUrl=URL.createObjectURL(blob);
+    const sentinel={_isElement:true,_objUrl:objUrl};
+    this.buffers[url]=sentinel;return sentinel;},
   async playZone(zone){if(!zone||!zone.audioUrl||!simSoundOn)return;
     const url=zone.audioUrl;if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
     this.ensure();this.loadingUrl=url;
-    let buf;try{buf=await this.load(url);}catch(e){this.loadingUrl=null;simLogEv("sev-warn","audio load failed: "+e.message);return;}
+    let loaded;try{loaded=await this.load(url);}catch(e){this.loadingUrl=null;simLogEv("sev-warn","audio load failed: "+e.message);return;}
     this.loadingUrl=null;if(this.ctx.state==="suspended")this.ctx.resume();
-    if(this.src){try{this.src.stop();}catch(e){}}
-    const src=this.ctx.createBufferSource();src.buffer=buf;src.loop=true;
-    src.connect(this.nodes.mono);src.start();this.src=src;this.currentUrl=url;this.playing=true;
+    if(this.src){
+      if(this.src._el){this.src._el.pause();this.src._el.src='';try{this.src.disconnect();}catch(e){}}
+      else{try{this.src.stop();}catch(e){}}
+    }
+    let src;
+    if(loaded._isElement){
+      const el=new Audio(loaded._objUrl);el.loop=true;
+      src=this.ctx.createMediaElementSource(el);src._el=el;
+      src.connect(this.nodes.mono);el.play().catch(()=>{});
+    }else{
+      src=this.ctx.createBufferSource();src.buffer=loaded;src.loop=true;
+      src.connect(this.nodes.mono);src.start();
+    }
+    this.src=src;this.currentUrl=url;this.playing=true;
     const g=this.nodes.fade.gain;g.cancelScheduledValues(this.ctx.currentTime);
     g.setValueAtTime(g.value,this.ctx.currentTime);g.linearRampToValueAtTime(1,this.ctx.currentTime+0.8);
     simLogEv("sev-sys","▶ "+zone.name);},
@@ -2105,7 +2377,9 @@ const SimVoice={
   fadeOut(){if(!this.playing)return;const c=this.ctx,g=this.nodes.fade.gain;
     g.cancelScheduledValues(c.currentTime);g.setValueAtTime(g.value,c.currentTime);
     g.linearRampToValueAtTime(0,c.currentTime+0.6);
-    const s=this.src;setTimeout(()=>{try{s.stop();}catch(e){}},650);
+    const s=this.src;setTimeout(()=>{
+      if(s&&s._el){s._el.pause();s._el.src='';try{s.disconnect();}catch(e){}}
+      else{try{s.stop();}catch(e){}};},650);
     this.playing=false;this.currentUrl=null;this.src=null;},
   stop(){this.fadeOut();this.buffers={};this._dead=new Set();this.loadingUrl=null;}
 };
@@ -2267,7 +2541,8 @@ SimFencer.onEvent=e=>{
         // check for guidance bot on this zone
         const guidanceSlot=(e.zone.bots||[]).find(slot=>{
           const bot=resolveBot(slot.botId);
-          return bot&&bot.type==='guidance';
+          if(!bot) return false;
+          return bot.type==='guidance'||(bot.functions||[]).some(f=>f.type==='guide');
         });
         if(guidanceSlot&&typeof GuidanceBot!=='undefined'){
           const targetZone=(simBundle.zones||[]).find(z=>z.id===guidanceSlot.targetZoneId);
@@ -2493,6 +2768,18 @@ document.getElementById("advToggle").onclick=()=>{
   document.getElementById("advBody").classList.toggle("open");
 };
 
+/* ---- bots & chat section toggle ---- */
+document.getElementById("botToggle").onclick=()=>{
+  document.getElementById("botToggle").classList.toggle("open");
+  document.getElementById("botBody").classList.toggle("open");
+};
+
+/* ---- bot tray collapse ---- */
+document.getElementById("botTrayHead").onclick=()=>{
+  document.getElementById("botTrayHead").classList.toggle("open");
+};
+
+
 /* ---- bot system ---- */
 function _botUid(){ return "bot_"+Math.random().toString(36).slice(2,9); }
 
@@ -2508,7 +2795,9 @@ async function fetchAndMergeBots(){
     const r=await fetch(url);
     if(r.ok){
       const {bots}=await r.json();
-      (bots||[]).forEach(sb=>{ const idx=editorBots.findIndex(b=>b.id===sb.id);
+      (bots||[]).forEach(sb=>{
+        if(typeof sb.functions==="string"){ try{ sb.functions=JSON.parse(sb.functions); }catch(e){ sb.functions=[]; } }
+        const idx=editorBots.findIndex(b=>b.id===sb.id);
         if(idx>=0) editorBots[idx]={...editorBots[idx],...sb}; else editorBots.push(sb); });
     }
   }catch(e){}
@@ -2521,6 +2810,23 @@ async function fetchAndMergeBots(){
 function migrateZoneBots(z){
   if(Array.isArray(z.bots)) return;
   z.bots=z.botId?[{botId:z.botId,priority:1,suppressIf:null,promoteIf:null}]:[];
+}
+async function saveInlineBotEdit(botId, fields, zone){
+  // update in-memory
+  const idx=editorBots.findIndex(b=>b.id===botId);
+  if(idx>=0) Object.assign(editorBots[idx], fields);
+  // persist via API
+  const tok=getToken();
+  if(tok){
+    try{
+      await fetch("/api/bots/"+botId,{method:"PUT",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+tok},
+        body:JSON.stringify(fields)});
+    }catch(e){ /* offline — in-memory only */ }
+  }
+  // re-render tray + bot rows + summary
+  renderBotTray();
+  if(sel>=0){ renderZoneBots(zones[sel]); updateVaSummary(zones[sel]); }
 }
 
 function renderBotTray(){
@@ -2566,6 +2872,13 @@ const COND_OPTS=[
 function _condOpts(sel){ return COND_OPTS.map(o=>`<option value="${o.v}"${o.v===sel?" selected":""}>${o.l}</option>`).join(""); }
 function _condNeedsNum(type){ return (COND_OPTS.find(o=>o.v===type)||{}).num; }
 
+function _slotToShowWhen(slot){
+  const s=slot.suppressIf, p=slot.promoteIf;
+  if(!s&&!p) return "always";
+  if(s&&s.type==="visited"&&!p) return "first";
+  if(p&&p.type==="visited"&&!s) return "returning";
+  return "advanced";
+}
 function renderZoneBots(zone){
   migrateZoneBots(zone);
   const list=document.getElementById("pBotList");
@@ -2574,18 +2887,24 @@ function renderZoneBots(zone){
   (zone.bots||[]).forEach((slot,i)=>{
     const bot=editorBots.find(b=>b.id===slot.botId);
     if(!bot) return;
-    const hasCond=slot.suppressIf||slot.promoteIf;
     const isActive=zone.id&&activeBotPerZone[zone.id]===slot.botId;
+    const showWhen=_slotToShowWhen(slot);
+    const hasAdvCond=showWhen==="advanced";
     // row
     const row=document.createElement("div"); row.className="bz-row"+(isActive?" bz-active":""); row.draggable=true;
     row.innerHTML=`<span class="bz-handle">⠿</span>`
       +`<div class="bz-av">${bot.avatar||"🤖"}</div>`
       +`<span class="bz-nm">${bot.name||"Bot"}</span>`
-      +`<span class="bz-pri" title="${isActive?"speaking — locked until chat closes":"priority "+(i+1)}">${isActive?"🔊":i+1}</span>`
-      +`<button class="bz-cond-btn${hasCond?" active":""}" title="conditions">⚙</button>`
+      +`<select class="bz-show-when" title="show this bot when">`
+      +`<option value="always"${showWhen==="always"?" selected":""}>always</option>`
+      +`<option value="first"${showWhen==="first"?" selected":""}>first visit</option>`
+      +`<option value="returning"${showWhen==="returning"?" selected":""}>returning</option>`
+      +`<option value="advanced"${hasAdvCond?" selected":""}>advanced…</option>`
+      +`</select>`
+      +`<button class="bz-edit-btn" title="edit bot">✎</button>`
       +`<button class="bz-rm" title="remove from zone">✕</button>`;
-    // condition panel
-    const cp=document.createElement("div"); cp.className="bz-cond-panel";
+    // advanced condition panel (hidden by default, shown when showWhen==="advanced")
+    const cp=document.createElement("div"); cp.className="bz-cond-panel"+(hasAdvCond?" open":"");
     const sType=slot.suppressIf?slot.suppressIf.type:"";
     const sVal=slot.suppressIf&&slot.suppressIf.value!=null?slot.suppressIf.value:"";
     const pType=slot.promoteIf?slot.promoteIf.type:"";
@@ -2597,12 +2916,62 @@ function renderZoneBots(zone){
       +`<select class="bz-promote-type">${_condOpts(pType)}</select>`
       +`<input class="bz-promote-val" type="number" value="${pVal}" style="display:${_condNeedsNum(pType)?"":"none"}">`
       +`</div>`;
-    // events
-    row.querySelector(".bz-cond-btn").onclick=e=>{e.stopPropagation();cp.classList.toggle("open");};
+    // inline editor (collapsed)
+    const ie=document.createElement("div"); ie.className="bz-inline-editor"; ie.style.display="none";
+    ie.innerHTML=`<div class="bie-row">`
+      +`<div class="bie-av-wrap"><div class="bie-av-preview">${bot.avatar||"🤖"}</div>`
+      +`<input class="bie-avatar" maxlength="2" value="${bot.avatar||""}" style="width:42px;text-align:center;font-size:16px;padding:4px"></div>`
+      +`<div style="flex:1"><label class="k" style="margin:0 0 2px">name</label>`
+      +`<input class="bie-name" value="${(bot.name||"").replace(/"/g,"&quot;")}" placeholder="Bot name"></div></div>`
+      +`<label class="k">persona — who is speaking</label>`
+      +`<textarea class="bie-persona say" rows="2" placeholder="You are a warm mountain guide…">${(bot.persona||"").replace(/</g,"&lt;")}</textarea>`
+      +`<label class="k">knowledge base</label>`
+      +`<textarea class="bie-knowledge say" rows="2" placeholder="Facts about this location…">${(bot.knowledge||"").replace(/</g,"&lt;")}</textarea>`
+      +`<label class="k">greeting prompt</label>`
+      +`<input class="bie-greeting" value="${(bot.greeting||"").replace(/"/g,"&quot;")}" placeholder="Welcome to…">`
+      +`<div class="row" style="margin-top:2px;gap:6px"><button class="bie-cancel ghost">Cancel</button>`
+      +`<button class="bie-save">Save bot</button></div>`
+      +`<div class="bie-msg"></div>`;
+    // show-when select handler
+    row.querySelector(".bz-show-when").onchange=e=>{
+      e.stopPropagation();
+      const v=e.target.value;
+      if(v==="always")   { slot.suppressIf=null; slot.promoteIf=null; cp.classList.remove("open"); }
+      if(v==="first")    { slot.suppressIf={type:"visited"}; slot.promoteIf=null; cp.classList.remove("open"); }
+      if(v==="returning"){ slot.promoteIf={type:"visited"}; slot.suppressIf=null; cp.classList.remove("open"); }
+      if(v==="advanced") { cp.classList.add("open"); }
+      autoSave();
+    };
+    // pencil edit toggle
+    const editBtn=row.querySelector(".bz-edit-btn");
+    editBtn.onclick=e=>{ e.stopPropagation();
+      const open=ie.style.display!=="none";
+      // collapse all other inline editors first
+      list.querySelectorAll(".bz-inline-editor").forEach(el=>{ el.style.display="none"; });
+      list.querySelectorAll(".bz-edit-btn").forEach(el=>el.classList.remove("open"));
+      if(!open){ ie.style.display="flex"; ie.style.flexDirection="column"; editBtn.classList.add("open"); }
+    };
+    // inline editor events
+    ie.querySelector(".bie-avatar").oninput=e=>{ ie.querySelector(".bie-av-preview").textContent=e.target.value||"🤖"; };
+    ie.querySelector(".bie-cancel").onclick=e=>{ e.stopPropagation(); ie.style.display="none"; editBtn.classList.remove("open"); };
+    ie.querySelector(".bie-save").onclick=async e=>{ e.stopPropagation();
+      const fields={
+        avatar: ie.querySelector(".bie-avatar").value||"🤖",
+        name:   ie.querySelector(".bie-name").value,
+        persona:ie.querySelector(".bie-persona").value,
+        knowledge:ie.querySelector(".bie-knowledge").value,
+        greeting:ie.querySelector(".bie-greeting").value
+      };
+      const msg=ie.querySelector(".bie-msg");
+      msg.textContent="saving…"; msg.style.color="var(--fog)";
+      await saveInlineBotEdit(slot.botId, fields, zone);
+      msg.textContent="saved ✓"; msg.style.color="var(--go)";
+      setTimeout(()=>{ ie.style.display="none"; editBtn.classList.remove("open"); },800);
+    };
+    // remove
     row.querySelector(".bz-rm").onclick=e=>{ e.stopPropagation();
-      // if removing the active bot, release the lock so next entry can pick a new one
       if(zone.id&&activeBotPerZone[zone.id]===slot.botId) delete activeBotPerZone[zone.id];
-      zone.bots.splice(i,1); renderZoneBots(zone); render(); };
+      zone.bots.splice(i,1); renderZoneBots(zone); updateVaSummary(zone); render(); };
     function saveCond(){
       const st=cp.querySelector(".bz-suppress-type").value;
       const sv=cp.querySelector(".bz-suppress-val").value;
@@ -2610,7 +2979,8 @@ function renderZoneBots(zone){
       const pv=cp.querySelector(".bz-promote-val").value;
       slot.suppressIf=st?{type:st,...(_condNeedsNum(st)?{value:+sv}:{})}:null;
       slot.promoteIf=pt?{type:pt,...(_condNeedsNum(pt)?{value:+pv}:{})}:null;
-      row.querySelector(".bz-cond-btn").classList.toggle("active",!!(slot.suppressIf||slot.promoteIf));
+      // snap show-when select back to named option if possible
+      row.querySelector(".bz-show-when").value=_slotToShowWhen(slot);
     }
     cp.querySelector(".bz-suppress-type").onchange=e=>{
       cp.querySelector(".bz-suppress-val").style.display=_condNeedsNum(e.target.value)?"":"none"; saveCond();};
@@ -2629,8 +2999,24 @@ function renderZoneBots(zone){
       if(isNaN(from)||from===i)return; e.stopPropagation();
       const [moved]=zone.bots.splice(from,1); zone.bots.splice(i,0,moved);
       renderZoneBots(zone); render(); };
-    // guidance bot: add a zone-picker below the slot row
-    if(bot.type==="guidance"){
+    // function chips row
+    const botFns=bot.functions||[];
+    if(botFns.length){
+      const chipRow=document.createElement("div");
+      chipRow.style.cssText="display:flex;gap:4px;flex-wrap:wrap;margin:2px 0 4px 34px";
+      chipRow.innerHTML=botFns.map(f=>{
+        if(f.type==="guide")   return '<span class="fn-chip">🧭 Guide</span>';
+        if(f.type==="hazard")  return '<span class="fn-chip hazard">⚠️ Hazard</span>';
+        if(f.type==="webhook") return '<span class="fn-chip webhook">🔗 Webhook</span>';
+        return '';
+      }).filter(Boolean).join('');
+      list.appendChild(row); list.appendChild(chipRow); list.appendChild(cp); list.appendChild(ie);
+    } else {
+      list.appendChild(row); list.appendChild(cp); list.appendChild(ie);
+    }
+    // guide function OR guidance type: zone-picker
+    const hasGuide=bot.type==="guidance"||(bot.functions||[]).some(f=>f.type==="guide");
+    if(hasGuide){
       const gp=document.createElement("div");
       gp.style.cssText="margin:2px 8px 6px 34px";
       const zoneOpts=zones.map(z=>`<option value="${z.id}"${slot.targetZoneId===z.id?" selected":""}>${z.name}</option>`).join("");
@@ -2638,13 +3024,12 @@ function renderZoneBots(zone){
         +`<select style="width:100%;font-family:'Barlow Condensed';font-size:12px;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--snow);padding:5px 8px">`
         +`<option value="">— pick a target zone —</option>${zoneOpts}</select>`;
       gp.querySelector("select").onchange=e=>{ slot.targetZoneId=e.target.value||null; render(); };
-      list.appendChild(row); list.appendChild(cp); list.appendChild(gp);
-    } else {
-      list.appendChild(row); list.appendChild(cp);
+      list.appendChild(gp);
     }
   });
   // sync legacy botId to first bot
   document.getElementById("pBotId").value=(zone.bots&&zone.bots[0])?zone.bots[0].botId:"";
+  updateVaSummary(zone);
 }
 
 function addBotToZone(zone, botId){
@@ -2994,7 +3379,11 @@ async function openSimChat(zone, clientBotOverride){
   document.getElementById("simChat").style.display="flex";
   _micBtnState();
   const greeting=rBot?rBot.greeting:(zone.chatGreeting||zone.greeting||"");
-  if(greeting) _autoGreet(greeting,log,rBot);
+  if(greeting){
+    const delayMs=(zone.botGreetingDelayS||0)*1000;
+    if(delayMs>0) setTimeout(()=>_autoGreet(greeting,log,rBot),delayMs);
+    else _autoGreet(greeting,log,rBot);
+  }
 }
 async function _autoGreet(hint,log,rBotOverride){
   // greeting field is a Groq prompt — generate a live response using full context
@@ -3022,7 +3411,7 @@ async function _autoGreet(hint,log,rBotOverride){
     respEl.textContent="(greeting failed: "+e.message+") ";
     const retryBtn=document.createElement("button");
     retryBtn.textContent="↺ retry"; retryBtn.style.cssText="font-size:11px;background:none;border:1px solid var(--rim);color:var(--fog);border-radius:5px;padding:2px 7px;cursor:pointer;margin-left:4px";
-    retryBtn.onclick=()=>{respEl.remove(); simGreet(hint,rBotOverride);};
+    retryBtn.onclick=()=>{respEl.remove(); _autoGreet(hint,log,rBotOverride);};
     respEl.appendChild(retryBtn);
   }
 }

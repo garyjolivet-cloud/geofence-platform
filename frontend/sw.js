@@ -19,14 +19,20 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // audio clips — cache-first (large, rarely change)
+  // audio clips — network-first so edits/re-uploads are always reflected;
+  // fall back to SW cache when offline
   if (url.pathname.startsWith('/api/audio/')) {
-    e.respondWith(caches.open(CACHE).then(async c => {
-      const hit = await c.match(req);
-      if (hit) return hit;
-      try { const res = await fetch(req); if (res.ok) c.put(req, res.clone()); return res; }
-      catch (err) { return hit || new Response('', { status: 504 }); }
-    }));
+    e.respondWith((async () => {
+      const c = await caches.open(CACHE);
+      try {
+        const res = await fetch(req);
+        if (res.ok) c.put(req, res.clone());
+        return res;
+      } catch (err) {
+        const hit = await c.match(req);
+        return hit || new Response('', { status: 504 });
+      }
+    })());
     return;
   }
 
