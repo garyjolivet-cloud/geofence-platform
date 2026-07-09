@@ -264,6 +264,7 @@ export default {
       catch (e) { return json({ error: String((e && e.message) || e) }, 500); }
     }
     const FRIENDLY = {
+      "/privacy": "/privacy.html",
       "/editor": "/fence-editor.html",
       "/sim": "/geofence-sim.html",
       "/engine": "/geofence-engine.html",
@@ -538,7 +539,9 @@ async function api(request, env, url) {
         bundle.zones = [...(bundle.zones || []), ...liveRows.results.map(r => JSON.parse(r.zone_json))];
       }
       bundle.liveZoneCount = liveRows.results.length;
-      return json(bundle);
+      return new Response(JSON.stringify(bundle), {
+        headers: { "content-type": "application/json", "cache-control": "no-store", ...AC }
+      });
     }
 
     if (method === "PUT") {

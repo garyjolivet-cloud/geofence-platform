@@ -290,45 +290,7 @@ const TUNING = {
 
 /* ---------- BUNDLE (the project the engine runs). Edit coords with real
    captures from fieldtest.html. Built-in sample = the KH village walk. ---------- */
-let BUNDLE = {
-  project: "kh-village-walk",
-  name: "KH Village Walk",
-  ref: [51.3027, -117.0547],          // near the village stops, for planar math
-  zones: [
-    { id:"mclauglin-house", name:"Mclauglin House", center:[51.302757,-117.054644], audibleFromM:30,
-      layers:[ {kind:"general", radiusM:25}, {kind:"target", radiusM:15} ],
-      triggers:[
-        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
-        {fires_on:"enter", layer:"target", say:"Look at Mclauglan house", oncePerVisit:true} ] },
-
-    { id:"jolivet-house", name:"Jolivet House", center:[51.303025,-117.054772], audibleFromM:30,
-      layers:[ {kind:"general", radiusM:30},
-               {kind:"target", geometry:{type:"polygon", coords:[
-                 [51.303166,-117.055064],[51.303020,-117.055012],
-                 [51.303023,-117.054798],[51.303166,-117.054840]]}} ],
-      triggers:[
-        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
-        {fires_on:"enter", layer:"target", say:"Turn to Gary and Karens House", oncePerVisit:true} ] },
-
-    { id:"james-janice-house", name:"James Janice House", center:[51.303361,-117.054911], audibleFromM:25,
-      layers:[ {kind:"general", radiusM:25},
-               {kind:"target", geometry:{type:"tripline",
-                 from:[51.303365,-117.055022], to:[51.303357,-117.054800]}} ],
-      triggers:[
-        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
-        {fires_on:"enter", layer:"target", say:"Turn and Look at James House", oncePerVisit:true} ] },
-
-    { id:"carols-house", name:"Carols House", center:[51.302089,-117.054256], audibleFromM:60,
-      layers:[ {kind:"general", radiusM:60},
-               {kind:"target", geometry:{type:"polygon", coords:[
-                 [51.302194,-117.054592],[51.302100,-117.054634],
-                 [51.301853,-117.054437],[51.302064,-117.053818],
-                 [51.302224,-117.053918],[51.302266,-117.054306]]}} ],
-      triggers:[
-        {fires_on:"enter", layer:"general", needle:true, oncePerVisit:true},
-        {fires_on:"enter", layer:"target", say:"Look at Carols House", oncePerVisit:true} ] }
-  ]
-};
+let BUNDLE = { project: null, name: "", zones: [], ref: [0, 0] };
 
 /* ============================ GEO MATH ============================ */
 const Geo = {
@@ -1422,12 +1384,14 @@ EngineKokoro.tryLoad();
   const LKEY='gp.bundle.'+pid;
   HUD.log('ev-sys','loading project "'+pid+'" from platform…');
   try{
-    const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle');
+    const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle',{cache:'no-store'});
     if(!r.ok){ const e=await r.json().catch(()=>({}));
-      HUD.log('ev-warn','platform: '+(e.error||('HTTP '+r.status))+' — using built-in bundle'); return; }
+      try{ localStorage.removeItem(LKEY); localStorage.removeItem('gp.ver.'+pid); }catch(_){}
+      HUD.log('ev-warn','project bundle not found (HTTP '+r.status+') — no stops loaded'); return; }
     const b=await r.json();
     if(!b || !Array.isArray(b.zones) || !b.zones.length){
-      HUD.log('ev-warn','platform bundle empty — using built-in bundle'); return; }
+      try{ localStorage.removeItem(LKEY); }catch(_){}
+      HUD.log('ev-warn','no stops published for this project yet'); return; }
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
       ['hiHz','loHz','minGain','reverbMax','tau','curve'].forEach(k=>{ if(st[k]!=null) t[k]=st[k]; }); }
@@ -1548,7 +1512,7 @@ if('serviceWorker' in navigator){
   window.hasConsent=function(scope){ return !!window.__consent[scope]; };
 
   function _consentSetup(){
-  const CONSENT_VERSION="2026-06-26";
+  const CONSENT_VERSION="2026-07-08";
   function lsGet(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
   function lsSet(k,v){ try{localStorage.setItem(k,v);}catch(e){} }
   function lsDel(k){ try{localStorage.removeItem(k);}catch(e){} }
@@ -1610,8 +1574,7 @@ if('serviceWorker' in navigator){
        font-family:'Barlow',system-ui,sans-serif;color:var(--snow)">
     <h2 style="font-family:'Barlow Condensed';font-weight:700;font-size:22px;margin:0 0 4px">Before you start</h2>
     <p style="color:var(--ice);font-size:14.5px;line-height:1.5;margin:0 0 16px">
-      This walk runs on your phone. It uses your location to know when you reach a stop —
-      that stays on your device. <b>Nothing is collected unless you turn it on below.</b>
+      This walk uses your location to know when you reach a stop. Your GPS never leaves your device unless you opt into Route Recording below. The tour audio is pre-recorded narration — <b>your voice is never recorded.</b> Nothing else is collected unless you turn it on.
     </p>
 
     <label style="display:flex;gap:12px;align-items:flex-start;padding:13px;border:1px solid var(--rim);
@@ -1619,7 +1582,7 @@ if('serviceWorker' in navigator){
       <input type="checkbox" id="tStore" style="width:20px;height:20px;margin-top:2px;flex:0 0 auto;accent-color:var(--coral)">
       <span>
         <span style="font-family:'Barlow Condensed';font-weight:600;font-size:16px;display:block">Anonymous usage</span>
-        <span style="color:var(--fog);font-size:13px;line-height:1.45">Share which stops fire and how the audio lands, so the tour can be tuned. No name, no path, no personal info.</span>
+        <span style="color:var(--fog);font-size:13px;line-height:1.45">Share which stops triggered and how audio landed, so the tour can be improved. No name, no location path, no personal information.</span>
       </span>
     </label>
 
@@ -1628,12 +1591,15 @@ if('serviceWorker' in navigator){
       <input type="checkbox" id="tTrack" style="width:20px;height:20px;margin-top:2px;flex:0 0 auto;accent-color:var(--coral)">
       <span>
         <span style="font-family:'Barlow Condensed';font-weight:600;font-size:16px;display:block">Record my route</span>
-        <span style="color:var(--fog);font-size:13px;line-height:1.45">Save the path you walk this time. A location trace is personal data — kept on the platform until you delete it.</span>
+        <span style="color:var(--fog);font-size:13px;line-height:1.45">Send your GPS path to the platform so this walk can be replayed. Location coordinates are personal data — retained until you erase them.</span>
       </span>
     </label>
 
-    <p style="color:var(--fog);font-size:12px;line-height:1.45;margin:12px 0 16px">
-      Your device gets a random, anonymous id — not your name. You can change these choices or erase the device anytime under <b style="color:var(--ice)">Privacy</b>.
+    <p style="color:var(--fog);font-size:12px;line-height:1.45;margin:12px 0 6px">
+      Your device gets a random anonymous ID — not your name or contact info. Data is processed on servers in the United States (Cloudflare). You can change these choices or erase all data anytime under <b style="color:var(--ice)">Privacy</b>.
+    </p>
+    <p style="color:var(--fog);font-size:12px;line-height:1.45;margin:0 0 16px">
+      <a href="/privacy" target="_blank" style="color:var(--coral)">Full Privacy Policy</a> · Operated under PIPEDA and BC PIPA.
     </p>
 
     <button id="consentStart" style="width:100%;background:var(--coral);color:#1a0d07;border:none;
