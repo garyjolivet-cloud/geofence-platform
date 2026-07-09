@@ -58,6 +58,8 @@ async function cleanupLiveZones(env) {
     } catch (e) {}
     await env.DB.prepare("DELETE FROM live_zone WHERE id=?").bind(row.id).run();
   }
+  // Prune stale presence rows (walkers gone more than 60s ago)
+  await env.DB.prepare("DELETE FROM presence WHERE updated_at < ?").bind(Date.now() - 60000).run().catch(() => {});
 }
 
 async function scrapeWeather(env) {
@@ -622,6 +624,33 @@ async function api(request, env, url) {
       "INSERT INTO live_zone (id, project_id, zone_json, expires_at, created_at) VALUES (?,?,?,?,?)"
     ).bind(zoneId, pid, JSON.stringify(zone), expiresAt, now).run();
     return json({ ok: true, id: zoneId, expiresAt }, 200, AC);
+  }
+
+  // --- walker presence: ping (public POST) + fetch (public GET) ---
+  const mp = path.match(/^\/api\/projects\/([^/]+)\/presence$/);
+  if (mp) {
+    const pid = decodeURIComponent(mp[1]);
+    if (method === "POST") {
+      let body;
+      try { body = await request.json(); } catch (e) { return json({ error: "invalid JSON" }, 400); }
+      const { deviceId, lat, lon, label } = body;
+      if (!deviceId || lat == null || lon == null) return json({ error: "deviceId, lat, lon required" }, 400);
+      try {
+        await env.DB.prepare(
+          "INSERT INTO presence (device_id,project_id,lat,lon,label,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(device_id,project_id) DO UPDATE SET lat=excluded.lat,lon=excluded.lon,label=excluded.label,updated_at=excluded.updated_at"
+        ).bind(deviceId, pid, lat, lon, label || null, Date.now()).run();
+      } catch (e) { return json({ error: "presence unavailable" }, 503); }
+      return json({ ok: true });
+    }
+    if (method === "GET") {
+      let rows;
+      try {
+        rows = await env.DB.prepare(
+          "SELECT device_id,lat,lon,label,updated_at FROM presence WHERE project_id=? AND updated_at > ?"
+        ).bind(pid, Date.now() - 30000).all();
+      } catch (e) { return json({ walkers: [] }); }
+      return json({ walkers: rows.results || [] });
+    }
   }
 
   // --- device register (public) ---

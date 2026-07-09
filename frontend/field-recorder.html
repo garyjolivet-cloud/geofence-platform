@@ -427,6 +427,12 @@ function initMap(){
       paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.5}});
     map.addLayer({id:"gps-dot",type:"circle",source:"dot",
       paint:{"circle-color":"#ff6a3d","circle-radius":10,"circle-stroke-color":"#fff","circle-stroke-width":2.5}});
+    map.addSource("walkers",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addLayer({id:"walker-dot",type:"circle",source:"walkers",
+      paint:{"circle-color":"#ffc24d","circle-radius":8,"circle-stroke-color":"#fff","circle-stroke-width":2}});
+    map.addLayer({id:"walker-lbl",type:"symbol",source:"walkers",
+      layout:{"text-field":["get","label"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-1.2]},
+      paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.5}});
     refreshMap();
   });
 }
@@ -448,6 +454,24 @@ function refreshMap(){
   ];
   map.getSource("zones")?.setData({type:"FeatureCollection",features:allFeatures});
   if(lastPos) map.getSource("dot")?.setData({type:"Feature",geometry:{type:"Point",coordinates:[lastPos.lon,lastPos.lat]}});
+}
+
+/* ── walker presence poll ───────────────────────────── */
+function startPresencePoll(pid){
+  setInterval(async()=>{
+    if(!map||!map.isStyleLoaded()) return;
+    try{
+      const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/presence',{cache:'no-store'});
+      if(!r.ok) return;
+      const {walkers}=await r.json();
+      const features=(walkers||[]).map(w=>({
+        type:"Feature",
+        properties:{label:w.label||"Walker"},
+        geometry:{type:"Point",coordinates:[w.lon,w.lat]}
+      }));
+      map.getSource("walkers")?.setData({type:"FeatureCollection",features});
+    }catch(e){}
+  },5000);
 }
 
 /* ── stop panel ─────────────────────────────────────── */
@@ -1094,6 +1118,7 @@ async function init(){
   initConnectivity();
   initMap();
   map.on("load", () => { map.resize(); refreshMap(); renderStopList(); });
+  startPresencePoll(projId);
   await initPermissions();
 }
 

@@ -752,12 +752,12 @@ const SpatialVoice = {
     }
     let src;
     if(loaded._isElement){
-      const el=new Audio(loaded._objUrl); el.loop=true;
+      const el=new Audio(loaded._objUrl); el.loop=false;
       src=c.createMediaElementSource(el);
       src._el=el; src.connect(this.nodes.mono);
       el.play().catch(()=>{});
     } else {
-      src=c.createBufferSource(); src.buffer=loaded; src.loop=true;
+      src=c.createBufferSource(); src.buffer=loaded; src.loop=false;
       src.connect(this.nodes.mono); src.start();
     }
     this.src=src; this.currentUrl=url; this.playing=true;
@@ -1412,6 +1412,7 @@ EngineKokoro.tryLoad();
   }
   // Start polling for live guide stops regardless of initial load outcome
   startLivePoll(pid);
+  startPresencePing(pid);
 })();
 
 /* ---- live guide polling: hot-add ephemeral zones from a live guide ---- */
@@ -1477,6 +1478,23 @@ function hideGuideBanner(){
   document.getElementById('_guideBanner')?.remove();
 }
 
+/* ---- walker presence: ping server every 5s when live-tracking consent is on ---- */
+function startPresencePing(pid){
+  setInterval(async()=>{
+    if(!window.hasConsent || !window.hasConsent('live-tracking')) return;
+    if(!HUD.pos) return;
+    const deviceId=localStorage.getItem('gp.device')||''; if(!deviceId) return;
+    const walkerName=localStorage.getItem('gp.walker.name')||'';
+    const label=walkerName||('Walker '+deviceId.slice(-4).toUpperCase());
+    try{
+      await fetch('/api/projects/'+encodeURIComponent(pid)+'/presence',{
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({deviceId,lat:HUD.pos.lat,lon:HUD.pos.lon,label})
+      });
+    }catch(e){}
+  },5000);
+}
+
 /* ---- offline: register the service worker + Save-for-offline pre-download ---- */
 if('serviceWorker' in navigator){
   navigator.serviceWorker.register('/sw.js').catch(()=>{ /* offline cache unavailable; app still runs online */ });
@@ -1537,7 +1555,7 @@ if('serviceWorker' in navigator){
   async function forget(){
     const id=deviceId();
     try{ await fetch('/api/devices/'+encodeURIComponent(id)+'/forget',{method:'POST'}); }catch(e){}
-    lsDel('gp.consent'); lsDel('gp.device'); apply({});
+    lsDel('gp.consent'); lsDel('gp.device'); lsDel('gp.walker.name'); apply({});
   }
 
   const ov=document.getElementById('consentOverlay');
@@ -1545,12 +1563,15 @@ if('serviceWorker' in navigator){
   function open(){ const c=stored()||{scopes:{}};
     tA.checked=!!(c.scopes&&c.scopes["store-history"]);
     tB.checked=!!(c.scopes&&c.scopes["live-tracking"]);
+    document.getElementById('walkerName').value=lsGet('gp.walker.name')||'';
     ov.style.display='flex'; }
   function close(){ ov.style.display='none'; }
 
   document.getElementById('consentStart').onclick=async function(){
+    const wn=document.getElementById('walkerName').value.trim();
+    if(wn) lsSet('gp.walker.name',wn); else lsDel('gp.walker.name');
     await record({ "store-history":tA.checked, "live-tracking":tB.checked }); close();
-    HUD.log('ev-sys','privacy set · analytics '+(tA.checked?'on':'off')+' · route '+(tB.checked?'on':'off')); };
+    HUD.log('ev-sys','privacy set · analytics '+(tA.checked?'on':'off')+' · route '+(tB.checked?'on':'off')+(wn?' · name: '+wn:'')); };
   document.getElementById('consentForget').onclick=async function(){
     if(confirm('Erase this device id and all of its data from the platform?')){
       await forget(); tA.checked=false; tB.checked=false;
@@ -1587,13 +1608,21 @@ if('serviceWorker' in navigator){
     </label>
 
     <label style="display:flex;gap:12px;align-items:flex-start;padding:13px;border:1px solid var(--rim);
-           border-radius:12px;margin-bottom:6px;cursor:pointer">
+           border-radius:12px;margin-bottom:10px;cursor:pointer">
       <input type="checkbox" id="tTrack" style="width:20px;height:20px;margin-top:2px;flex:0 0 auto;accent-color:var(--coral)">
       <span>
         <span style="font-family:'Barlow Condensed';font-weight:600;font-size:16px;display:block">Record my route</span>
-        <span style="color:var(--fog);font-size:13px;line-height:1.45">Send your GPS path to the platform so this walk can be replayed. Location coordinates are personal data — retained until you erase them.</span>
+        <span style="color:var(--fog);font-size:13px;line-height:1.45">Send your GPS path to the platform so this walk can be replayed. Your live position is also visible to the tour guide on their map. Location coordinates are personal data — retained until you erase them.</span>
       </span>
     </label>
+
+    <div style="padding:11px 13px;border:1px solid var(--rim);border-radius:12px;margin-bottom:6px">
+      <span style="font-family:'Barlow Condensed';font-weight:600;font-size:15px;display:block;margin-bottom:7px;color:var(--ice)">Your name <span style="font-weight:400;color:var(--fog)">(optional)</span></span>
+      <input id="walkerName" type="text" placeholder="e.g. Sarah" maxlength="30"
+             style="width:100%;background:rgba(255,255,255,.06);border:1px solid var(--rim);border-radius:8px;
+                    padding:8px 11px;color:var(--snow);font-family:'Barlow Condensed';font-size:15px;box-sizing:border-box">
+      <span style="color:var(--fog);font-size:12px;line-height:1.4;display:block;margin-top:5px">Shown on the guide's map when route recording is on.</span>
+    </div>
 
     <p style="color:var(--fog);font-size:12px;line-height:1.45;margin:12px 0 6px">
       Your device gets a random anonymous ID — not your name or contact info. Data is processed on servers in the United States (Cloudflare). You can change these choices or erase all data anytime under <b style="color:var(--ice)">Privacy</b>.
