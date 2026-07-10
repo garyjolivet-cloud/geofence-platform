@@ -291,6 +291,8 @@ const TUNING = {
 /* ---------- BUNDLE (the project the engine runs). Edit coords with real
    captures from fieldtest.html. Built-in sample = the KH village walk. ---------- */
 let BUNDLE = { project: null, name: "", zones: [], ref: [0, 0] };
+let _activeLinkToken = null;  // set when visitor arrives via walk link — passed with analytics events
+let _activeLinkGuide = null;  // guide ID from walk link — used to filter live stops to this guide only
 
 /* ============================ GEO MATH ============================ */
 const Geo = {
@@ -966,6 +968,7 @@ const Analytics = {
       if(batch.length){
         const r=await fetch('/api/events',{ method:'POST', headers:{'content-type':'application/json'},
           body:JSON.stringify({ deviceId:dev, projectId:(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null,
+            linkToken:_activeLinkToken||null,
             events:batch.map(e=>({id:e.id,projectId:e.projectId,type:e.type,ts:e.ts,data:e.data})) }) });
         if(r.ok){ await this.del(batch.map(e=>e.id)); HUD.log('ev-flick','analytics synced '+batch.length+' event(s)'); }
       }
@@ -1376,15 +1379,30 @@ HUD.log('ev-sys','tap Start GPS on the trail, or Sim to test logic here');
 // try Kokoro from cache silently -- instant if editor already downloaded it
 EngineKokoro.tryLoad();
 
-/* if opened as ?project=<id>, load that published bundle from the platform;
+/* if opened as ?project=<id> or ?t=<walkToken>, load that published bundle;
    keep the built-in bundle if offline or the fetch fails */
 (async function loadProject(){
-  const pid=new URLSearchParams(location.search).get('project');
+  const params=new URLSearchParams(location.search);
+  let pid=params.get('project');
+  const walkToken=params.get('t');
+  // Resolve visitor walk token → project id
+  if(!pid && walkToken){
+    try{
+      const tr=await fetch('/api/links/'+encodeURIComponent(walkToken));
+      if(tr.status===410){ HUD.log('ev-warn','This tour link has expired. Ask your guide for a new link.'); return; }
+      if(!tr.ok){ HUD.log('ev-warn','Walk link is invalid or has been revoked.'); return; }
+      const tj=await tr.json();
+      pid=tj.projectId;
+      _activeLinkToken=walkToken;
+      _activeLinkGuide=tj.guideId||null; // scope live stops to this guide's session
+    }catch(e){ HUD.log('ev-warn','Could not verify walk link: '+e.message); return; }
+  }
   if(!pid) return;
   const LKEY='gp.bundle.'+pid;
   HUD.log('ev-sys','loading project "'+pid+'" from platform…');
   try{
-    const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle',{cache:'no-store'});
+    const _initGuideParam=_activeLinkGuide?'?guide='+encodeURIComponent(_activeLinkGuide):'';
+    const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle'+_initGuideParam,{cache:'no-store'});
     if(!r.ok){ const e=await r.json().catch(()=>({}));
       try{ localStorage.removeItem(LKEY); localStorage.removeItem('gp.ver.'+pid); }catch(_){}
       HUD.log('ev-warn','project bundle not found (HTTP '+r.status+') — no stops loaded'); return; }
@@ -1421,7 +1439,8 @@ let _pollVer=0, _pollLive=0, _pollFails=0;
 function startLivePoll(pid){
   setInterval(async()=>{
     try{
-      const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle',{cache:'no-store'});
+      const _guideParam=_activeLinkGuide?'?guide='+encodeURIComponent(_activeLinkGuide):'';
+      const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle'+_guideParam,{cache:'no-store'});
       if(!r.ok){ _pollFails++; if(_pollFails>=3) showGuideBanner(); return; }
       const b=await r.json();
       _pollFails=0; hideGuideBanner();

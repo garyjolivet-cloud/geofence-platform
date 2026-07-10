@@ -156,7 +156,7 @@ function tourCard(p, appId){
     <div class="tour-meta">${meta}</div>
     <div class="tour-btns">
       <a class="go" href="/engine?project=${id}">▶ Walk</a>
-      <a href="/field?project=${id}">Guide</a>
+      <a href="/field">Guide</a>
       <a href="/editor?project=${id}">Edit</a>
       <a href="/sim?project=${id}">Test</a>
     </div>
@@ -179,7 +179,7 @@ function clientBlock(app, tours){
         ${app.description?`<div class="client-meta">${esc(app.description)}</div>`:`<div class="client-meta">${count}</div>`}
       </div>
       <div class="client-actions">
-        <button onclick="newTour('${esc(app.id)}')">+ Tour</button>
+        <button onclick="renameClient('${esc(app.id)}','${esc(app.name)}')">Rename</button>
         <button onclick="deleteClient('${esc(app.id)}','${esc(app.name)}')" style="color:rgba(255,47,78,.5);border-color:rgba(255,47,78,.2)">✕</button>
       </div>
     </div>
@@ -237,6 +237,18 @@ async function newClient(){
     const r=await fetch("/api/apps",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+token},body:JSON.stringify({name})});
     if(r.ok) load();
     else{ const j=await r.json().catch(()=>({})); alert("Couldn't create client: "+(j.error||r.status));
+      if(r.status===401) try{localStorage.removeItem("gp.admin");}catch(e){} }
+  }catch(e){ alert("Failed: "+e.message); }
+}
+
+async function renameClient(id, current){
+  const name=(prompt("New name for this client:", current)||"").trim();
+  if(!name||name===current)return;
+  const token=await askToken(); if(!token)return;
+  try{
+    const r=await fetch("/api/apps/"+encodeURIComponent(id),{method:"PUT",headers:{"content-type":"application/json","authorization":"Bearer "+token},body:JSON.stringify({name})});
+    if(r.ok) load();
+    else{ const j=await r.json().catch(()=>({})); alert("Rename failed: "+(j.error||r.status));
       if(r.status===401) try{localStorage.removeItem("gp.admin");}catch(e){} }
   }catch(e){ alert("Failed: "+e.message); }
 }

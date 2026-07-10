@@ -3,7 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Geofence Platform — Analytics</title>
+<title>Geofence Platform — Dashboard</title>
+<script>
+(function(){
+  var s=localStorage.getItem('gp.session');
+  if(!s){location.replace('/login?next=/dashboard');return;}
+  fetch('/api/auth/me',{headers:{authorization:'Bearer '+s}}).then(function(r){return r.ok?r.json():null;}).then(function(me){
+    if(!me){localStorage.removeItem('gp.session');location.replace('/login?next=/dashboard');return;}
+    if(me.role==='guide'){location.replace('/field');return;}
+  }).catch(function(){});
+})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
@@ -51,6 +61,21 @@
   .state{border:1px dashed var(--rim);border-radius:14px;padding:30px;text-align:center;color:var(--fog);font-family:"Barlow Condensed";font-size:15px}
   .state b{color:var(--snow)} .state a{color:var(--coral);font-weight:600}
   .note{color:var(--fog);font-size:12.5px;font-style:italic;margin:8px 2px 0}
+  .inv-box{margin-top:14px;padding:14px 16px;background:rgba(56,224,166,.07);border:1px solid rgba(56,224,166,.25);border-radius:10px;display:none}
+  .inv-url{font-family:monospace;font-size:12.5px;color:var(--go);word-break:break-all;margin:6px 0 10px}
+  .inv-copy{background:rgba(56,224,166,.12);border:1px solid rgba(56,224,166,.3);color:var(--go);border-radius:7px;padding:5px 12px;cursor:pointer;font-family:"Barlow Condensed";font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+  .form-row.trio{grid-template-columns:1fr 1fr auto}
+  .form-col{display:flex;flex-direction:column;gap:4px}
+  .form-col label{font-family:"Barlow Condensed";font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--fog)}
+  .form-col input,.form-col select{background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:"Barlow Condensed";font-size:13px}
+  .role-badge{font-family:"Barlow Condensed";font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:.3px}
+  .role-admin{color:#ffc24d;background:rgba(255,194,77,.1);border:1px solid rgba(255,194,77,.3)}
+  .role-operator{color:var(--coral);background:rgba(255,106,61,.1);border:1px solid rgba(255,106,61,.3)}
+  .role-guide{color:var(--ice);background:rgba(143,182,212,.1);border:1px solid rgba(143,182,212,.25)}
+  .role-inactive{color:var(--fog);background:rgba(91,112,136,.1);border:1px solid rgba(91,112,136,.3)}
+  button.sm{font-family:"Barlow Condensed";font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:4px 10px;border-radius:7px;cursor:pointer;border:1px solid var(--rim);background:var(--slate2);color:var(--ice)}
+  button.sm:hover{border-color:var(--coral);color:var(--snow)}
 </style>
 </head>
 <body>
@@ -58,43 +83,205 @@
   <header>
     <div class="brand">
       <div class="glyph"></div>
-      <div><h1>Analytics</h1><p>Geofence Platform · Back office</p></div>
+      <div><h1>Dashboard</h1><p>Geofence Platform · Back office</p></div>
     </div>
     <nav>
-      <select id="projSel"><option value="">— project —</option></select>
+      <button class="nav" id="tabAnalytics" onclick="showTab('analytics')">Analytics</button>
+      <button class="nav" id="tabTeam" onclick="showTab('team')" style="color:var(--go);border-color:rgba(56,224,166,.35)">Team</button>
+      <button class="nav" id="tabLinks" onclick="showTab('links')" style="color:var(--amber);border-color:rgba(255,194,77,.35)">Walk Links</button>
+      <select id="projSel" style="display:none"><option value="">— project —</option></select>
       <input class="tokenin" id="tok" type="password" placeholder="admin token" style="width:140px">
-      <button class="go" id="load">Load</button>
+      <button class="go" id="load" style="display:none">Load</button>
       <a href="/">Home</a>
+      <button class="nav" onclick="signOut()" style="color:var(--fog)">Sign out</button>
     </nav>
   </header>
 
-  <div id="body">
-    <div class="state" id="state">Pick a project, enter your admin token, and Load to see analytics.</div>
+  <!-- Walk Links panel -->
+  <div id="panelLinks" style="display:none">
+    <section>
+      <h2>Walk Links</h2>
+      <p class="hint">Generate a time-limited URL for visitors. The link opens the walk app for one specific project and stops working when it expires. Share it via text, email, or QR code.</p>
+      <div class="panel" style="margin-bottom:20px">
+        <div class="form-row" style="margin-bottom:10px">
+          <div class="form-col"><label>Guide</label><select id="lnkGuide"><option value="">— all guides —</option></select></div>
+          <div class="form-col"><label>Visitor name / label</label><input id="lnkLabel" type="text" placeholder="e.g. John Smith" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px;width:100%"></div>
+        </div>
+        <div class="form-row trio" style="align-items:end">
+          <div class="form-col"><label>Project</label><select id="lnkProj"><option value="">— select project —</option></select></div>
+          <div class="form-col"><label>Link valid for</label>
+            <select id="lnkDur">
+              <option value="2">2 hours</option>
+              <option value="8">8 hours</option>
+              <option value="24" selected>24 hours</option>
+              <option value="72">3 days</option>
+              <option value="168">7 days</option>
+              <option value="">No expiry</option>
+            </select>
+          </div>
+          <button class="go" id="genLinkBtn" style="height:38px">Generate link</button>
+        </div>
+        <div class="inv-box" id="linkBox">
+          <div style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Walk link — copy and share with visitors:</div>
+          <div class="inv-url" id="linkUrl"></div>
+          <span id="linkExpiry" style="font-family:'Barlow Condensed';font-size:12px;color:var(--fog);display:block;margin-bottom:8px"></span>
+          <button class="inv-copy" style="background:rgba(255,194,77,.12);border-color:rgba(255,194,77,.3);color:var(--amber)"
+            onclick="navigator.clipboard.writeText(document.getElementById('linkUrl').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy link',1800)})">Copy link</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Active links</h2>
+      <p class="hint">Select a project to see its active walk links. Revoke a link to immediately invalidate it.</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+        <select id="lnkListGuide" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px"><option value="">— all guides —</option></select>
+        <select id="lnkListProj" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px"><option value="">— select project —</option></select>
+        <button class="go" id="loadLinksBtn">Load</button>
+      </div>
+      <div class="panel">
+        <table id="linkTable">
+          <tr><th>Label / created</th><th>Expires</th><th>Link</th><th></th></tr>
+        </table>
+        <p class="note" id="linkMsg">Select a project and click Load.</p>
+      </div>
+    </section>
+  </div>
+
+  <!-- Analytics panel -->
+  <div id="panelAnalytics" style="display:none">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap">
+      <select id="projSel2"><option value="">— project —</option></select>
+      <button class="go" id="load2">Load analytics</button>
+    </div>
+    <div class="state" id="state">Pick a project, enter your admin token above, and Load to see analytics.</div>
+    <div id="analyticsBody"></div>
+  </div>
+
+  <!-- Team panel -->
+  <div id="panelTeam" style="display:none">
+    <section>
+      <h2>Team members</h2>
+      <p class="hint">Guides and operators who have access to this platform. Create an invite link and send it manually.</p>
+      <div class="panel" style="margin-bottom:20px">
+        <table id="userTable">
+          <tr><th>Name</th><th>Email</th><th>Role</th><th>Last login</th><th></th></tr>
+        </table>
+        <p class="note" id="teamMsg">Enter your admin token above and click Load Team.</p>
+      </div>
+      <button class="go" id="loadTeam" style="margin-bottom:24px">Load Team</button>
+    </section>
+
+    <section>
+      <h2>Invite new user</h2>
+      <p class="hint">Creates an account and generates a one-time invite link valid for 7 days. Copy the link and send it to the person.</p>
+      <div class="panel">
+        <div class="form-row trio">
+          <div class="form-col"><label>Email</label><input id="invEmail" type="email" placeholder="guide@example.com"></div>
+          <div class="form-col"><label>Name (optional)</label><input id="invName" placeholder="Sarah Smith"></div>
+          <div class="form-col"><label>Role</label>
+            <select id="invRole">
+              <option value="guide">Guide</option>
+              <option value="operator">Operator</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <button class="go" id="inviteBtn">Create &amp; get invite link</button>
+        <div class="inv-box" id="inviteBox">
+          <div style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Copy and send this link to the new user:</div>
+          <div class="inv-url" id="inviteUrl"></div>
+          <button class="inv-copy" onclick="navigator.clipboard.writeText(document.getElementById('inviteUrl').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy link',1800)})">Copy link</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- Guide project assignment modal -->
+<div id="assignModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:flex-end;justify-content:center">
+  <div style="width:100%;max-width:500px;background:#141d2b;border:1px solid #26344a;border-radius:18px 18px 0 0;padding:20px;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h2 id="assignTitle" style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:.5px"></h2>
+      <button onclick="closeAssign()" style="background:none;border:none;color:#5b7088;font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <p class="hint">Check a project to give this guide field-recorder access to it. Uncheck to remove access.</p>
+    <div id="assignList" style="display:flex;flex-direction:column;gap:8px"></div>
   </div>
 </div>
 
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
-const state=$("state"), body=$("body");
+const state=$("state");
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
-function tok(){ return $("tok").value || sessionStorage.getItem("gp.admin") || ""; }
+function tok(){ return $("tok").value || sessionStorage.getItem("gp.admin") || localStorage.getItem("gp.session") || ""; }
 
+let activeTab = "team";
+function showTab(t) {
+  activeTab = t;
+  $("panelAnalytics").style.display = t==="analytics" ? "" : "none";
+  $("panelTeam").style.display = t==="team" ? "" : "none";
+  $("panelLinks").style.display = t==="links" ? "" : "none";
+  [["tabAnalytics","analytics",""],["tabTeam","team","var(--go)","rgba(56,224,166,.35)"],["tabLinks","links","var(--amber)","rgba(255,194,77,.35)"]].forEach(([id,name,inactiveColor,inactiveBorder])=>{
+    const el=$(id); if(!el) return;
+    const active=t===name;
+    el.style.color = active ? "var(--snow)" : (inactiveColor||"");
+    el.style.borderColor = active ? "var(--coral)" : (inactiveBorder||"");
+  });
+}
+showTab("team");
+
+let _allProjects=[];
 async function loadProjects(){
   try{ const r=await fetch("/api/projects"); const j=await r.json();
-    const sel=$("projSel"); (j.projects||[]).forEach(p=>{ const o=document.createElement("option");
-      o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
+    _allProjects=j.projects||[];
+    [$("projSel2")].forEach(sel=>{ if(!sel) return; _allProjects.forEach(p=>{ const o=document.createElement("option");
+      o.value=p.id; o.textContent=p.name+(p.scheduled_date?" · "+p.scheduled_date:""); sel.appendChild(o); }); });
+    populateLinkProjects();
   }catch(e){}
 }
+function populateLinkProjects(){
+  const fill=(sel)=>{
+    if(!sel) return;
+    const cur=sel.value;
+    sel.innerHTML='<option value="">— select project —</option>';
+    _allProjects.forEach(p=>{
+      const o=document.createElement("option");
+      o.value=p.id; o.textContent=p.name+(p.scheduled_date?" · "+p.scheduled_date:"");
+      sel.appendChild(o);
+    });
+    if(cur) sel.value=cur;
+  };
+  fill($("lnkProj"));
+  fill($("lnkListProj"));
+}
+let _guidesList=[];
+async function loadGuidesList(){
+  try{
+    const useTok=tok(); if(!useTok) return;
+    const r=await fetch("/api/users?role=guide",{headers:{authorization:"Bearer "+useTok}});
+    if(!r.ok) return;
+    _guidesList=(await r.json()).users||[];
+    [$("lnkGuide"),$("lnkListGuide")].forEach(sel=>{
+      if(!sel) return;
+      sel.innerHTML='<option value="">— all guides —</option>'+
+        _guidesList.map(g=>'<option value="'+esc(g.id)+'">'+(esc(g.name||g.email))+'</option>').join('');
+    });
+  }catch(e){}
+}
+$("lnkGuide")&&($("lnkGuide").onchange=populateLinkProjects);
+$("lnkListGuide")&&($("lnkListGuide").onchange=populateLinkProjects);
 function parseEvents(rows){
   return rows.map(r=>{ let d={}; try{ d=JSON.parse(r.data||"{}"); }catch(e){} return {type:r.type, ts:r.ts, deviceId:r.deviceId, d}; });
 }
 function bar(pct,cls){ return '<div class="bar '+(cls||'')+'" style="width:'+Math.max(2,Math.round(pct*100))+'%"></div>'; }
 
 function render(events){
+  const analyticsBody=$("analyticsBody");
   if(!events.length){ state.style.display="block";
-    state.innerHTML='No analytics yet for this project. Walk the tour in the engine with <b>Anonymous usage</b> turned on, then reload.'; 
-    body.querySelectorAll("section,.cards").forEach(n=>n.remove()); return; }
+    state.innerHTML='No analytics yet for this project. Walk the tour in the engine with <b>Anonymous usage</b> turned on, then reload.';
+    analyticsBody.querySelectorAll("section,.cards").forEach(n=>n.remove()); return; }
   state.style.display="none";
 
   const spatial=events.filter(e=>e.type==="SPATIAL_TRANSITION");
@@ -172,20 +359,20 @@ function render(events){
     html+='</table></div>'; }
   html+='</section>';
 
-  body.querySelectorAll("section,.cards").forEach(n=>n.remove());
-  body.insertAdjacentHTML("beforeend", html);
+  analyticsBody.querySelectorAll("section,.cards").forEach(n=>n.remove());
+  analyticsBody.insertAdjacentHTML("beforeend", html);
 }
 function stat(n,l){ return '<div class="stat"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
 function avg(a){ return a&&a.length?a.reduce((s,x)=>s+x,0)/a.length:null; }
 
 async function load(){
-  const pid=$("projSel").value; const t=$("tok").value;
+  const pid=$("projSel2").value; const t=$("tok").value;
   if(!pid){ state.style.display="block"; state.textContent="Pick a project first."; return; }
   if(t) sessionStorage.setItem("gp.admin", t);
   const useTok=tok();
   if(!useTok){ state.style.display="block"; state.textContent="Enter your admin token."; return; }
   state.style.display="block"; state.textContent="Loading analytics…";
-  body.querySelectorAll("section,.cards").forEach(n=>n.remove());
+  $("analyticsBody").querySelectorAll("section,.cards").forEach(n=>n.remove());
   try{
     const r=await fetch("/api/analytics?project="+encodeURIComponent(pid)+"&limit=10000",
       { headers:{ authorization:"Bearer "+useTok } });
@@ -195,10 +382,193 @@ async function load(){
     render(parseEvents(j.events||[]));
   }catch(e){ state.textContent="Load failed: "+e.message; }
 }
-$("load").onclick=load;
-$("tok").addEventListener("keydown",e=>{ if(e.key==="Enter") load(); });
+$("load2").onclick=load;
+$("tok").addEventListener("keydown",e=>{ if(e.key==="Enter" && activeTab==="analytics") load(); });
+
+// ---- Team management ----
+async function loadTeam() {
+  const useTok=tok(); if(!useTok){ $("teamMsg").textContent="Enter your admin token above first."; return; }
+  const t=$("tok").value; if(t) sessionStorage.setItem("gp.admin",t);
+  $("teamMsg").textContent="Loading…"; $("teamMsg").style.display="block";
+  try {
+    const r=await fetch("/api/users",{headers:{authorization:"Bearer "+useTok}});
+    if(r.status===401){ $("teamMsg").textContent="Unauthorized — check admin token."; return; }
+    const j=await r.json();
+    const users=j.users||[];
+    const tbl=$("userTable"); tbl.innerHTML='<tr><th>Name</th><th>Email</th><th>Role</th><th>Last login</th><th></th></tr>';
+    if(!users.length){ $("teamMsg").textContent="No users yet. Create an invite below."; return; }
+    $("teamMsg").style.display="none";
+    users.forEach(u=>{
+      const lastLogin=u.last_login_at?new Date(u.last_login_at).toLocaleDateString():"Never";
+      const roleClass="role-"+(u.role||"guide");
+      tbl.insertAdjacentHTML("beforeend",
+        `<tr>
+          <td>${esc(u.name||"—")}</td>
+          <td style="color:var(--ice)">${esc(u.email)}</td>
+          <td><span class="role-badge ${roleClass}">${esc(u.role)}</span></td>
+          <td style="color:var(--fog);font-size:13px">${lastLogin}</td>
+          <td style="text-align:right;white-space:nowrap">
+            ${u.role==='guide'?`<button class="sm" onclick="openAssign('${esc(u.id)}','${esc(u.name||u.email)}')" style="margin-right:6px">Assign projects</button>`:''}
+            <button class="sm" onclick="resendInvite('${esc(u.id)}','${esc(u.email)}')" title="Resend invite">Resend invite</button>
+          </td>
+        </tr>`
+      );
+    });
+  } catch(e){ $("teamMsg").textContent="Load failed: "+e.message; }
+}
+$("loadTeam").onclick=loadTeam;
+
+async function resendInvite(uid, email) {
+  const useTok=tok(); if(!useTok){ alert("Enter your admin token first."); return; }
+  const r=await fetch("/api/users/"+encodeURIComponent(uid)+"/invite",{method:"POST",headers:{authorization:"Bearer "+useTok}});
+  const j=await r.json();
+  if(!r.ok){ alert("Error: "+(j.error||r.status)); return; }
+  $("inviteUrl").textContent=j.inviteUrl;
+  $("inviteBox").style.display="block";
+  alert("Invite link regenerated for "+email+". See below.");
+}
+
+$("inviteBtn").onclick=async function(){
+  const useTok=tok();
+  if(!useTok){alert("Enter your admin token first.");return;}
+  const t=$("tok").value; if(t) sessionStorage.setItem("gp.admin",t);
+  const email=$("invEmail").value.trim();
+  if(!email){alert("Email is required.");return;}
+  $("inviteBtn").disabled=true; $("inviteBtn").textContent="Creating…";
+  $("inviteBox").style.display="none";
+  try{
+    const r=await fetch("/api/users",{method:"POST",
+      headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
+      body:JSON.stringify({email,name:$("invName").value.trim(),role:$("invRole").value})});
+    const j=await r.json();
+    if(!r.ok){alert("Error: "+(j.error||r.status));return;}
+    $("inviteUrl").textContent=j.inviteUrl;
+    $("inviteBox").style.display="block";
+    $("invEmail").value=""; $("invName").value="";
+    loadTeam();
+  }catch(e){alert("Network error: "+e.message);}
+  finally{$("inviteBtn").disabled=false; $("inviteBtn").textContent="Create & get invite link";}
+};
+
+// ---- Guide project assignment ----
+let _assignGuideId='', _assignGuideName='';
+async function openAssign(uid, uname){
+  _assignGuideId=uid; _assignGuideName=uname;
+  $("assignTitle").textContent="Projects — "+uname;
+  $("assignList").innerHTML='<div class="hint">Loading…</div>';
+  $("assignModal").style.display="flex";
+  const useTok=tok();
+  try{
+    const rAll=await fetch("/api/projects");
+    const allProjs=(await rAll.json()).projects||[];
+    if(!allProjs.length){ $("assignList").innerHTML='<div class="hint">No projects yet.</div>'; return; }
+    // check which projects this guide is assigned to via project_guide table
+    let assignedIds=new Set();
+    try{
+      const rg=await fetch("/api/projects/"+encodeURIComponent(uid)+"/assigned");
+      if(rg.ok){ const ids=await rg.json(); assignedIds=new Set(ids||[]); }
+    }catch(_){}
+    $("assignList").innerHTML=allProjs.map(p=>{
+      const checked=assignedIds.has(p.id)?'checked':'';
+      return `<label style="display:flex;align-items:center;gap:10px;background:#1b2738;border:1px solid #26344a;border-radius:9px;padding:10px 14px;cursor:pointer">
+        <input type="checkbox" data-pid="${esc(p.id)}" ${checked} onchange="toggleAssign(this,'${esc(p.id)}')" style="width:16px;height:16px;accent-color:var(--coral)">
+        <span style="flex:1;font-family:'Barlow Condensed';font-size:14px;font-weight:600">${esc(p.name||p.id)}</span>
+      </label>`;
+    }).join('');
+  }catch(e){ $("assignList").innerHTML='<div class="hint">Load failed: '+esc(e.message)+'</div>'; }
+}
+function closeAssign(){ $("assignModal").style.display="none"; }
+async function toggleAssign(cb, pid){
+  const useTok=tok();
+  if(cb.checked){
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/guides",{method:"POST",
+      headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
+      body:JSON.stringify({guideId:_assignGuideId})});
+    if(!r.ok){ cb.checked=false; alert("Failed to assign: "+((await r.json().catch(()=>({}))).error||r.status)); }
+  } else {
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/guides/"+encodeURIComponent(_assignGuideId),
+      {method:"DELETE",headers:{authorization:"Bearer "+useTok}});
+    if(!r.ok){ cb.checked=true; alert("Failed to remove: "+((await r.json().catch(()=>({}))).error||r.status)); }
+  }
+}
+$("assignModal").addEventListener("click",e=>{ if(e.target===$("assignModal")) closeAssign(); });
+
+// ---- Walk links ----
+$("genLinkBtn").onclick = async function(){
+  const pid=$("lnkProj").value; if(!pid){alert("Select a project first.");return;}
+  const useTok=tok(); if(!useTok){alert("Enter your admin token or sign in first.");return;}
+  const dur=$("lnkDur").value;
+  $("genLinkBtn").disabled=true; $("genLinkBtn").textContent="Generating…";
+  $("linkBox").style.display="none";
+  try{
+    const guideId=$("lnkGuide").value||null;
+    const label=($("lnkLabel").value||"").trim()||null;
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/links",{method:"POST",
+      headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
+      body:JSON.stringify({expiresInHours:dur?Number(dur):null, guideId, label})});
+    const j=await r.json();
+    if(!r.ok){alert("Error: "+(j.error||r.status));return;}
+    $("linkUrl").textContent=j.url;
+    $("linkExpiry").textContent=j.expiresAt
+      ? "Expires: "+new Date(j.expiresAt).toLocaleString()
+      : "No expiry";
+    $("linkBox").style.display="block";
+  }catch(e){alert("Network error: "+e.message);}
+  finally{$("genLinkBtn").disabled=false;$("genLinkBtn").textContent="Generate link";}
+};
+
+async function loadLinks(){
+  const pid=$("lnkListProj").value; if(!pid){$("linkMsg").textContent="Select a project first.";return;}
+  const useTok=tok(); if(!useTok){$("linkMsg").textContent="Sign in or enter token.";return;}
+  $("linkMsg").textContent="Loading…"; $("linkMsg").style.display="block";
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/links",{headers:{authorization:"Bearer "+useTok}});
+    const j=await r.json();
+    const links=j.links||[];
+    const tbl=$("linkTable");
+    tbl.innerHTML='<tr><th>Visitor</th><th>Created</th><th>Expires</th><th>Link</th><th></th></tr>';
+    if(!links.length){$("linkMsg").textContent="No links yet for this project.";return;}
+    $("linkMsg").style.display="none";
+    links.forEach(lnk=>{
+      const exp=lnk.expires_at?new Date(lnk.expires_at).toLocaleString():"Never";
+      const expired=lnk.expires_at&&lnk.expires_at<Date.now();
+      const fullUrl="https://geofence-platform.gary-jolivet.workers.dev/engine?t="+lnk.token;
+      tbl.insertAdjacentHTML("beforeend",
+        `<tr style="${expired?'opacity:.45':''}">
+          <td style="font-family:'Barlow Condensed';font-weight:600;font-size:14px">${esc(lnk.label||'—')}</td>
+          <td style="color:var(--fog);font-size:13px">${new Date(lnk.created_at).toLocaleString()}</td>
+          <td style="font-size:13px;color:${expired?'var(--hazard)':'var(--ice)'}">${exp}${expired?' (expired)':''}</td>
+          <td><button class="sm" onclick="navigator.clipboard.writeText('${fullUrl.replace(/'/g,"\\'")}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button></td>
+          <td><button class="sm" style="color:var(--hazard);border-color:rgba(255,47,78,.3)" onclick="revokeLink('${esc(lnk.token)}')">Revoke</button></td>
+        </tr>`
+      );
+    });
+  }catch(e){$("linkMsg").textContent="Load failed: "+e.message;}
+}
+$("loadLinksBtn").onclick=loadLinks;
+
+async function revokeLink(token){
+  if(!confirm("Revoke this link? Anyone with it won't be able to use it.")) return;
+  const useTok=tok();
+  const r=await fetch("/api/links/"+encodeURIComponent(token),{method:"DELETE",headers:{authorization:"Bearer "+useTok}});
+  if(r.ok) loadLinks(); else alert("Revoke failed.");
+}
+
+async function signOut(){
+  const s=localStorage.getItem("gp.session");
+  if(s) await fetch("/api/auth/logout",{method:"POST",headers:{authorization:"Bearer "+s}}).catch(()=>{});
+  localStorage.removeItem("gp.session"); localStorage.removeItem("gp.user");
+  location.href="/login";
+}
 loadProjects();
 if(sessionStorage.getItem("gp.admin")) $("tok").placeholder="admin token (saved)";
+// Auto-load team if already signed in via session
+if(localStorage.getItem("gp.session")){
+  const u=localStorage.getItem("gp.user"); try{ const uj=JSON.parse(u||"{}");
+    if(uj.name) $("tok").placeholder="signed in as "+uj.name; }catch(e){}
+  loadTeam();
+  loadGuidesList();
+}
 </script>
 </body>
 </html>

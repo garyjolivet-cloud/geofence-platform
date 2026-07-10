@@ -230,10 +230,25 @@ async function auth(request, env) {
   try {
     const hash = await sha256hex(tok);
     const row = await env.DB.prepare("SELECT id,appId,scopes FROM api_key WHERE keyHash=? AND revokedAt IS NULL").bind(hash).first();
-    if (!row) return null;
-    env.DB.prepare("UPDATE api_key SET lastUsedAt=? WHERE id=?").bind(new Date().toISOString(), row.id).run().catch(() => {});
-    return { master: false, appId: row.appId, scopes: row.scopes || "", keyId: row.id };
+    if (row) {
+      env.DB.prepare("UPDATE api_key SET lastUsedAt=? WHERE id=?").bind(new Date().toISOString(), row.id).run().catch(() => {});
+      return { master: false, appId: row.appId, scopes: row.scopes || "", keyId: row.id };
+    }
+    const sess = await env.DB.prepare(
+      "SELECT s.id AS sid, u.id AS uid, u.role, u.org_id, u.email, u.name FROM user_session s JOIN user_account u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?"
+    ).bind(hash, Date.now()).first();
+    if (sess) return {
+      master: sess.role === "admin",
+      appId: sess.org_id,
+      scopes: scopesForRole(sess.role),
+      keyId: "user:" + sess.uid,
+      userId: sess.uid,
+      role: sess.role,
+      name: sess.name,
+      email: sess.email
+    };
   } catch (e) { return null; }
+  return null;
 }
 function scopeOk(A, scope, targetAppId) {
   if (!A) return false;
@@ -242,6 +257,11 @@ function scopeOk(A, scope, targetAppId) {
   const hasScope = scopes.includes("*") || scopes.includes(scope);
   const appOk = (A.appId == null) || (targetAppId == null) || (A.appId === targetAppId);
   return hasScope && appOk;
+}
+function scopesForRole(role) {
+  if (role === "admin" || role === "operator") return "*";
+  if (role === "guide") return "publish,audio";
+  return "";
 }
 async function projectAppId(env, idOrSlug) {
   try {
@@ -255,6 +275,40 @@ async function logAudit(env, request, A, action, target) {
       .bind(crypto.randomUUID(), new Date().toISOString(), (A && A.keyId) || "?", action, target || "",
             request.headers.get("cf-connecting-ip") || "").run();
   } catch (e) {}
+}
+function randomHex(n = 32) {
+  return [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+async function hashPassword(password, salt) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: enc.encode(salt), iterations: 100000, hash: "SHA-256" }, key, 256
+  );
+  return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+async function createSession(env, userId, ip) {
+  const raw = randomHex(32);
+  const hash = await sha256hex(raw);
+  await env.DB.prepare(
+    "INSERT INTO user_session (id, user_id, token_hash, expires_at, created_at, ip) VALUES (?,?,?,?,?,?)"
+  ).bind(crypto.randomUUID(), userId, hash, Date.now() + 30 * 24 * 3600 * 1000, new Date().toISOString(), ip || "").run();
+  return raw;
+}
+function appUrl(env, path, request) {
+  if (env.APP_URL) return env.APP_URL.replace(/\/+$/, "") + path;
+  if (request) { try { return new URL(request.url).origin + path; } catch(e) {} }
+  return path;
+}
+async function sendEmail(env, { to, subject, html }) {
+  if (!env.RESEND_API_KEY) return { stubbed: true };
+  const r = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + env.RESEND_API_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: env.FROM_EMAIL || "noreply@example.com", to, subject, html })
+  });
+  if (!r.ok) throw new Error("Resend " + r.status + ": " + await r.text());
+  return { sent: true };
 }
 
 export default {
@@ -274,7 +328,10 @@ export default {
       "/share": "/share.html",
       "/audio": "/audio-bench.html",
       "/field": "/field-recorder.html",
-      "/bots": "/bot-library.html"
+      "/bots": "/bot-library.html",
+      "/login": "/login.html",
+      "/invite": "/invite.html",
+      "/walk": "/geofence-engine.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     if (FRIENDLY[clean] && env.ASSETS) {
@@ -306,6 +363,163 @@ async function api(request, env, url) {
   const AC = adminCors(env);
 
   if (path === "/api/health") return json({ ok: true, db: !!env.DB, ts: Date.now() });
+
+  // --- auth: seed first admin (master token required; errors if admin already exists) ---
+  if (path === "/api/auth/seed-admin" && method === "POST") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    if (!b.email || !b.password) return json({ error: "email and password required" }, 400, AC);
+    const existing = await env.DB.prepare("SELECT id FROM user_account WHERE role='admin' LIMIT 1").first().catch(() => null);
+    if (existing) return json({ error: "admin already exists" }, 409, AC);
+    const id = crypto.randomUUID();
+    const salt = randomHex(16);
+    const hash = await hashPassword(b.password, salt);
+    const orgId2 = env.ORG_ID || "chase-life";
+    await env.DB.prepare(
+      "INSERT INTO user_account (id,email,password_hash,salt,org_id,role,name,created_at) VALUES (?,?,?,?,?,?,?,?)"
+    ).bind(id, b.email.toLowerCase().trim(), hash, salt, orgId2, "admin", b.name || b.email, new Date().toISOString()).run();
+    return json({ ok: true, id }, 200, AC);
+  }
+
+  // --- auth: login ---
+  if (path === "/api/auth/login" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const email = (b.email || "").toLowerCase().trim();
+    if (!email || !b.password) return json({ error: "email and password required" }, 400, AC);
+    const user = await env.DB.prepare(
+      "SELECT id,email,name,role,password_hash,salt FROM user_account WHERE email=? AND role!='inactive'"
+    ).bind(email).first().catch(() => null);
+    if (!user || !user.password_hash) return json({ error: "invalid credentials" }, 401, AC);
+    const computed = await hashPassword(b.password, user.salt);
+    if (computed !== user.password_hash) return json({ error: "invalid credentials" }, 401, AC);
+    const token = await createSession(env, user.id, request.headers.get("cf-connecting-ip") || "");
+    env.DB.prepare("UPDATE user_account SET last_login_at=? WHERE id=?").bind(new Date().toISOString(), user.id).run().catch(() => {});
+    return json({ ok: true, token, user: { id: user.id, email: user.email, name: user.name, role: user.role } }, 200, AC);
+  }
+
+  // --- auth: logout ---
+  if (path === "/api/auth/logout" && method === "POST") {
+    const tok = bearer(request);
+    if (tok && env.DB) {
+      const h = await sha256hex(tok).catch(() => null);
+      if (h) env.DB.prepare("DELETE FROM user_session WHERE token_hash=?").bind(h).run().catch(() => {});
+    }
+    return json({ ok: true }, 200, AC);
+  }
+
+  // --- auth: me ---
+  if (path === "/api/auth/me" && method === "GET") {
+    const A = await auth(request, env);
+    if (!A || !A.userId) return json({ error: "not authenticated" }, 401, AC);
+    return json({ id: A.userId, email: A.email, name: A.name, role: A.role, orgId: A.appId }, 200, AC);
+  }
+
+  // --- auth: accept invite + set password ---
+  if (path === "/api/auth/set-password" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    if (!b.token || !b.password) return json({ error: "token and password required" }, 400, AC);
+    const tokenHash = await sha256hex(b.token);
+    const user = await env.DB.prepare(
+      "SELECT id,email,name,role FROM user_account WHERE invite_token=? AND invite_expires>?"
+    ).bind(tokenHash, Date.now()).first().catch(() => null);
+    if (!user) return json({ error: "invalid or expired invite link" }, 400, AC);
+    const salt = randomHex(16);
+    const hash = await hashPassword(b.password, salt);
+    await env.DB.prepare(
+      "UPDATE user_account SET password_hash=?,salt=?,name=COALESCE(?,name),invite_token=NULL,invite_expires=NULL,last_login_at=? WHERE id=?"
+    ).bind(hash, salt, b.name || null, new Date().toISOString(), user.id).run();
+    const token = await createSession(env, user.id, request.headers.get("cf-connecting-ip") || "");
+    return json({ ok: true, token, user: { id: user.id, email: user.email, name: b.name || user.name, role: user.role } }, 200, AC);
+  }
+
+  // --- users: list ---
+  if (path === "/api/users" && method === "GET") {
+    const A = await auth(request, env);
+    if (!A) return json({ error: "authentication required" }, 401, AC);
+    if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const orgFilter = A.master ? null : A.appId;
+    const roleFilter = url.searchParams.get("role");
+    const conditions = [], binds = [];
+    if (orgFilter) { conditions.push("org_id=?"); binds.push(orgFilter); }
+    if (roleFilter) { conditions.push("role=?"); binds.push(roleFilter); }
+    const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
+    const sql = "SELECT id,email,name,role,org_id,created_at,last_login_at FROM user_account" + where + " ORDER BY name ASC";
+    const { results } = await (binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql)).all();
+    return json({ users: results || [] }, 200, AC);
+  }
+
+  // --- users: create + invite ---
+  if (path === "/api/users" && method === "POST") {
+    const A = await auth(request, env);
+    if (!A) return json({ error: "authentication required" }, 401, AC);
+    if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const email = (b.email || "").toLowerCase().trim();
+    if (!email) return json({ error: "email required" }, 400, AC);
+    const existing = await env.DB.prepare("SELECT id FROM user_account WHERE email=?").bind(email).first().catch(() => null);
+    if (existing) return json({ error: "email already in use" }, 409, AC);
+    const id = crypto.randomUUID();
+    const rawToken = randomHex(32);
+    const tokenHash = await sha256hex(rawToken);
+    const inviteExpires = Date.now() + 7 * 24 * 3600 * 1000;
+    const orgId2 = A.master ? (b.orgId || (env.ORG_ID || "chase-life")) : (A.appId || (env.ORG_ID || "chase-life"));
+    await env.DB.prepare(
+      "INSERT INTO user_account (id,email,name,org_id,role,invite_token,invite_expires,created_at) VALUES (?,?,?,?,?,?,?,?)"
+    ).bind(id, email, b.name || "", orgId2, b.role || "guide", tokenHash, inviteExpires, new Date().toISOString()).run();
+    const inviteUrl = appUrl(env, "/invite?token=" + rawToken, request);
+    await sendEmail(env, {
+      to: email, subject: "You've been invited to Chase Life",
+      html: `<p>You've been added to the Chase Life guide platform.</p><p><a href="${inviteUrl}">Set your password and get started</a></p><p>This link expires in 7 days.</p>`
+    }).catch(() => {});
+    await logAudit(env, request, A, "user.create", id);
+    return json({ ok: true, id, inviteUrl }, 200, AC);
+  }
+
+  // --- users: update / deactivate / resend invite (matched by id) ---
+  const muser = path.match(/^\/api\/users\/([^/]+)$/);
+  if (muser) {
+    const A = await auth(request, env);
+    if (!A) return json({ error: "authentication required" }, 401, AC);
+    if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
+    const uid = decodeURIComponent(muser[1]);
+    if (method === "PUT") {
+      const b = await request.json().catch(() => ({}));
+      await env.DB.prepare("UPDATE user_account SET name=COALESCE(?,name), role=COALESCE(?,role) WHERE id=?")
+        .bind(b.name || null, b.role || null, uid).run();
+      return json({ ok: true }, 200, AC);
+    }
+    if (method === "DELETE") {
+      await env.DB.prepare("UPDATE user_account SET role='inactive' WHERE id=?").bind(uid).run();
+      await env.DB.prepare("DELETE FROM user_session WHERE user_id=?").bind(uid).run().catch(() => {});
+      return json({ ok: true }, 200, AC);
+    }
+  }
+
+  // --- users: resend invite ---
+  const museri = path.match(/^\/api\/users\/([^/]+)\/invite$/);
+  if (museri && method === "POST") {
+    const A = await auth(request, env);
+    if (!A) return json({ error: "authentication required" }, 401, AC);
+    if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
+    const uid = decodeURIComponent(museri[1]);
+    const user = await env.DB.prepare("SELECT id,email,name FROM user_account WHERE id=?").bind(uid).first().catch(() => null);
+    if (!user) return json({ error: "user not found" }, 404, AC);
+    const rawToken = randomHex(32);
+    const tokenHash = await sha256hex(rawToken);
+    await env.DB.prepare("UPDATE user_account SET invite_token=?,invite_expires=? WHERE id=?")
+      .bind(tokenHash, Date.now() + 7 * 24 * 3600 * 1000, uid).run();
+    const inviteUrl = appUrl(env, "/invite?token=" + rawToken, request);
+    await sendEmail(env, {
+      to: user.email, subject: "Your Chase Life invite link",
+      html: `<p>Here is your updated invite link for Chase Life:</p><p><a href="${inviteUrl}">Set your password</a></p><p>This link expires in 7 days.</p>`
+    }).catch(() => {});
+    return json({ ok: true, inviteUrl }, 200, AC);
+  }
 
   // --- nuke all data (master only) — wipes every row, keeps schema ---
   if (path === "/api/nuke" && method === "DELETE") {
@@ -403,8 +617,22 @@ async function api(request, env, url) {
     return json({ ok: true, id, slug, name, created: true }, 200, AC);
   }
 
-  // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
+  // --- rename an app (master only) ---
   const mda = path.match(/^\/api\/apps\/([^/]+)$/);
+  if (mda && method === "PUT") {
+    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    const aid = decodeURIComponent(mda[1]);
+    const b = await request.json();
+    const name = (b.name || "").trim();
+    if (!name) return json({ error: "name required" }, 400, AC);
+    const now = new Date().toISOString();
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, now, aid).run();
+    await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
+    return json({ ok: true, id: aid, name }, 200, AC);
+  }
+
+  // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
   if (mda && method === "DELETE") {
     if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
     const aid = decodeURIComponent(mda[1]);
@@ -486,10 +714,22 @@ async function api(request, env, url) {
   }
 
   if (path === "/api/projects" && method === "GET") {
+    const conditions = [], binds = [];
     const appFilter = url.searchParams.get("app");
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId FROM project" +
-                (appFilter ? " WHERE appId=?" : "") + " ORDER BY updatedAt DESC";
-    const stmt = appFilter ? env.DB.prepare(sql).bind(appFilter) : env.DB.prepare(sql);
+    const dateFilter = url.searchParams.get("date");
+    const guideFilter = url.searchParams.get("guide");
+    const templateFilter = url.searchParams.get("template");
+    const archivedFilter = url.searchParams.get("archived");
+    if (appFilter) { conditions.push("appId=?"); binds.push(appFilter); }
+    if (dateFilter) { conditions.push("scheduled_date=?"); binds.push(dateFilter); }
+    if (guideFilter) { conditions.push("(guide_id=? OR id IN (SELECT project_id FROM project_guide WHERE guide_id=?))"); binds.push(guideFilter, guideFilter); }
+    if (templateFilter !== null) { conditions.push("is_template=?"); binds.push(Number(templateFilter)); }
+    if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
+    else if (archivedFilter === "1") { conditions.push("archived=1"); }
+    const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,guide_id,is_template,tour_type,archived FROM project" +
+                where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
+    const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
     return json({ projects: results || [] });
   }
@@ -502,8 +742,9 @@ async function api(request, env, url) {
     if (!id || !b.name) return json({ error: "need id and name" }, 400);
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
-    ).bind(id, b.orgId || orgId, b.appId || null, b.name, b.slug || id, b.mode || "walking-tour", "draft", 1, now, now).run();
+      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,scheduled_date,guide_id,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    ).bind(id, b.orgId || orgId, b.appId || null, b.name, b.slug || id, b.mode || "walking-tour", "draft", 1, now, now,
+           b.scheduledDate || null, b.guideId || null, b.isTemplate ? 1 : 0, b.tourType || null).run();
     return json({ ok: true, id }, 200, AC);
   }
 
@@ -517,6 +758,139 @@ async function api(request, env, url) {
     await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
     await logAudit(env, request, { keyId: "master" }, "project.delete", pid);
     return json({ ok: true, deleted: pid }, 200, AC);
+  }
+
+  // --- copy a project from template ---
+  const mcp = path.match(/^\/api\/projects\/([^/]+)\/copy$/);
+  if (mcp && method === "POST") {
+    const A = await auth(request, env);
+    if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
+    const srcId = decodeURIComponent(mcp[1]);
+    const b = await request.json().catch(() => ({}));
+    if (!b.name) return json({ error: "name required" }, 400, AC);
+    const src = await env.DB.prepare("SELECT id,orgId,appId,mode,tour_type FROM project WHERE id=?").bind(srcId).first();
+    if (!src) return json({ error: "source project not found" }, 404, AC);
+    const srcBundle = await env.DB.prepare(
+      "SELECT json FROM published_bundle WHERE projectId=? ORDER BY version DESC LIMIT 1"
+    ).bind(srcId).first();
+    const newId = "proj_" + Date.now().toString(36) + "_" + randomHex(4);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,scheduled_date,guide_id,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    ).bind(newId, src.orgId || orgId, src.appId, b.name, newId, src.mode || "walking-tour", "draft", 0, now, now,
+           b.scheduledDate || null, b.guideId || null, 0, b.tourType || src.tour_type || null).run();
+    if (srcBundle) {
+      let bundleJson = srcBundle.json;
+      try { const p = JSON.parse(bundleJson); p.name = b.name; bundleJson = JSON.stringify(p); } catch(e) {}
+      await env.DB.prepare(
+        "INSERT INTO published_bundle (id,projectId,version,json,publishedAt) VALUES (?,?,?,?,?)"
+      ).bind(crypto.randomUUID(), newId, 1, bundleJson, now).run();
+      await env.DB.prepare("UPDATE project SET bundleVersion=1, status='live' WHERE id=?").bind(newId).run();
+    }
+    await logAudit(env, request, A, "project.copy", newId);
+    return json({ ok: true, id: newId }, 200, AC);
+  }
+
+  // --- guide walk links lookup (public) — returns all active links for a guide on a project ---
+  if (path === "/api/guide-links" && method === "GET") {
+    const pid = url.searchParams.get("project");
+    const guideId = url.searchParams.get("guide");
+    if (!pid || !guideId) return json({ links: [] }, 200, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT token, label FROM project_link WHERE project_id=? AND guide_id=? AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at ASC"
+    ).bind(pid, guideId, Date.now()).all();
+    const links = (results || []).map(r => ({
+      label: r.label || "Visitor",
+      url: appUrl(env, "/engine?t=" + r.token, request)
+    }));
+    return json({ links }, 200, AC);
+  }
+
+  // --- walk links: create / list (per project) ---
+  const mlnk = path.match(/^\/api\/projects\/([^/]+)\/links$/);
+  if (mlnk) {
+    const pid = decodeURIComponent(mlnk[1]);
+    if (method === "POST") {
+      const A = await auth(request, env);
+      if (!A) return json({ error: "authentication required" }, 401, AC);
+      if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
+      const b = await request.json().catch(() => ({}));
+      const token = randomHex(24);
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const expiresAt = b.expiresInHours ? Date.now() + b.expiresInHours * 3600000 : null;
+      await env.DB.prepare(
+        "INSERT INTO project_link (id,project_id,token,expires_at,label,created_at,guide_id) VALUES (?,?,?,?,?,?,?)"
+      ).bind(id, pid, token, expiresAt, b.label || null, now, b.guideId || null).run();
+      const url = appUrl(env, "/engine?t=" + token, request);
+      return json({ ok: true, id, token, url, expiresAt }, 200, AC);
+    }
+    if (method === "GET") {
+      const A = await auth(request, env);
+      if (!A) return json({ error: "authentication required" }, 401, AC);
+      const { results } = await env.DB.prepare(
+        "SELECT id,token,label,expires_at,created_at FROM project_link WHERE project_id=? ORDER BY created_at DESC"
+      ).bind(pid).all();
+      return json({ links: results || [] }, 200, AC);
+    }
+  }
+
+  // --- walk links: resolve (public) / revoke (auth) ---
+  const mltok = path.match(/^\/api\/links\/([^/]+)$/);
+  if (mltok) {
+    const token = decodeURIComponent(mltok[1]);
+    if (method === "GET") {
+      const row = await env.DB.prepare(
+        "SELECT project_id, expires_at, guide_id FROM project_link WHERE token=?"
+      ).bind(token).first();
+      if (!row) return json({ error: "link not found" }, 404, AC);
+      if (row.expires_at && row.expires_at < Date.now()) return json({ error: "link expired", expired: true }, 410, AC);
+      return json({ projectId: row.project_id, guideId: row.guide_id || null, valid: true }, 200, AC);
+    }
+    if (method === "DELETE") {
+      const A = await auth(request, env);
+      if (!A) return json({ error: "authentication required" }, 401, AC);
+      await env.DB.prepare("DELETE FROM project_link WHERE token=?").bind(token).run();
+      return json({ ok: true }, 200, AC);
+    }
+  }
+
+  // --- get project IDs assigned to a guide (public — only returns IDs) ---
+  const mga = path.match(/^\/api\/projects\/([^/]+)\/assigned$/);
+  if (mga && method === "GET") {
+    const guideId = decodeURIComponent(mga[1]);
+    const { results } = await env.DB.prepare(
+      "SELECT project_id FROM project_guide WHERE guide_id=?"
+    ).bind(guideId).all();
+    return json((results || []).map(r => r.project_id), 200, AC);
+  }
+
+  // --- project guide assignments (M:M) ---
+  const mpg = path.match(/^\/api\/projects\/([^/]+)\/guides(?:\/([^/]+))?$/);
+  if (mpg) {
+    const pid = decodeURIComponent(mpg[1]);
+    const gid = mpg[2] ? decodeURIComponent(mpg[2]) : null;
+    const A = await auth(request, env);
+    if (!A || !(A.master || A.role === "operator")) return json({ error: "admin or operator required" }, 401, AC);
+    if (method === "GET") {
+      const { results } = await env.DB.prepare(
+        "SELECT u.id,u.name,u.email,u.role,pg.assigned_at FROM project_guide pg JOIN user_account u ON u.id=pg.guide_id WHERE pg.project_id=? ORDER BY pg.assigned_at"
+      ).bind(pid).all();
+      return json({ guides: results || [] }, 200, AC);
+    }
+    if (method === "POST") {
+      const b = await request.json();
+      if (!b.guideId) return json({ error: "need guideId" }, 400);
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO project_guide (project_id,guide_id,assigned_at) VALUES (?,?,?)"
+      ).bind(pid, b.guideId, now).run();
+      return json({ ok: true }, 200, AC);
+    }
+    if (method === "DELETE" && gid) {
+      await env.DB.prepare("DELETE FROM project_guide WHERE project_id=? AND guide_id=?").bind(pid, gid).run();
+      return json({ ok: true }, 200, AC);
+    }
   }
 
   // --- a project's bundle: GET latest (public) / PUT new version (scoped) ---
@@ -533,10 +907,11 @@ async function api(request, env, url) {
       try { bundle = JSON.parse(row.json); }
       catch (e) { return json({ error: "stored bundle is corrupt" }, 500); }
       bundle.bundleVersion = row.version;
-      // Merge active live zones
-      const liveRows = await env.DB.prepare(
-        "SELECT zone_json FROM live_zone WHERE project_id=? AND expires_at > ?"
-      ).bind(pid, Date.now()).all();
+      // Merge active live zones — filtered by guide when visitor arrived via a guide's walk link
+      const liveGuide = url.searchParams.get("guide");
+      const liveRows = liveGuide
+        ? await env.DB.prepare("SELECT zone_json FROM live_zone WHERE project_id=? AND expires_at>? AND guide_id=?").bind(pid, Date.now(), liveGuide).all()
+        : await env.DB.prepare("SELECT zone_json FROM live_zone WHERE project_id=? AND expires_at>?").bind(pid, Date.now()).all();
       if (liveRows.results.length) {
         bundle.zones = [...(bundle.zones || []), ...liveRows.results.map(r => JSON.parse(r.zone_json))];
       }
@@ -559,6 +934,7 @@ async function api(request, env, url) {
       const targetApp = existingAppId || bundle.appId || null;
       const A = await auth(request, env);
       if (!scopeOk(A, "publish", targetApp)) return json({ error: "not authorized to publish to this app" }, 401, AC);
+      if (A && A.role === "guide") return json({ error: "guides cannot publish persistent stops — use live mode" }, 403, AC);
       const now = new Date().toISOString();
       // Resolve appId — auto-assign so project always surfaces on home screen
       let resolvedAppId = existingAppId || bundle.appId || null;
@@ -577,12 +953,12 @@ async function api(request, env, url) {
       const ver = ((proj && proj.bundleVersion) || 0) + 1;
       // Only auto-create the project row if the editor explicitly opts in
       if (proj) {
-        await env.DB.prepare("UPDATE project SET bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId) WHERE id=?")
-          .bind(ver, now, resolvedAppId, pid).run();
+        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id) WHERE id=?")
+          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, pid).run();
       } else if (bundle.createIfMissing) {
         await env.DB.prepare(
-          "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, orgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now).run();
+          "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ).bind(pid, orgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
       } else {
         return json({ error: "project not found — create it from the main screen first" }, 404, AC);
       }
@@ -612,17 +988,25 @@ async function api(request, env, url) {
     const appId = await projectAppId(env, pid);
     const A = await auth(request, env);
     if (!scopeOk(A, "publish", appId)) return json({ error: "not authorized" }, 401, AC);
+    if (A && A.role === "guide") {
+      const assigned = await env.DB.prepare(
+        "SELECT 1 FROM project_guide WHERE project_id=? AND guide_id=? UNION SELECT 1 FROM project WHERE id=? AND guide_id=?"
+      ).bind(pid, A.userId, pid, A.userId).first().catch(() => null);
+      if (!assigned) return json({ error: "not assigned to this project" }, 403, AC);
+    }
     let body;
     try { body = await request.json(); } catch (e) { return json({ error: "invalid JSON" }, 400, AC); }
     if (!body.zone || typeof body.zone !== "object") return json({ error: "zone object required" }, 400, AC);
-    const ttlMs = Math.min(Math.max(body.ttlMs || 300000, 30000), 3600000); // 30s–60min
+    const isGuide = A && A.role === "guide";
+    const ttlMs = isGuide ? 300000 : Math.min(Math.max(body.ttlMs || 300000, 30000), 3600000);
     const now = Date.now();
     const expiresAt = now + ttlMs;
     const zoneId = body.zone.id || ("live_" + now.toString(36));
     const zone = { ...body.zone, id: zoneId, expiresAt };
+    const guideId = isGuide ? A.userId : (A ? A.userId : null);
     await env.DB.prepare(
-      "INSERT INTO live_zone (id, project_id, zone_json, expires_at, created_at) VALUES (?,?,?,?,?)"
-    ).bind(zoneId, pid, JSON.stringify(zone), expiresAt, now).run();
+      "INSERT INTO live_zone (id, project_id, zone_json, expires_at, created_at, guide_id) VALUES (?,?,?,?,?,?)"
+    ).bind(zoneId, pid, JSON.stringify(zone), expiresAt, now, guideId).run();
     return json({ ok: true, id: zoneId, expiresAt }, 200, AC);
   }
 
@@ -723,13 +1107,14 @@ async function api(request, env, url) {
     ).bind(b.deviceId).first();
     if (!c || !c.granted) return json({ error: "no analytics consent on record" }, 403);
     const stmts = [];
+    const linkToken = b.linkToken || null;
     for (const e of evs.slice(0, 500)) {
       const pid = e.projectId || b.projectId;
       if (!e.id || !pid) continue;
       stmts.push(env.DB.prepare(
-        "INSERT OR IGNORE INTO event (id,projectId,userId,deviceId,type,ts,data) VALUES (?,?,?,?,?,?,?)"
+        "INSERT OR IGNORE INTO event (id,projectId,userId,deviceId,type,ts,data,link_token) VALUES (?,?,?,?,?,?,?,?)"
       ).bind(e.id, pid, null, b.deviceId, e.type || "event", e.ts || Date.now(),
-             typeof e.data === "string" ? e.data : JSON.stringify(e.data || {})));
+             typeof e.data === "string" ? e.data : JSON.stringify(e.data || {}), linkToken));
     }
     if (stmts.length) await env.DB.batch(stmts);
     return json({ ok: true, accepted: stmts.length });
@@ -741,9 +1126,12 @@ async function api(request, env, url) {
     const A = await auth(request, env);
     if (!scopeOk(A, "analytics", await projectAppId(env, pid))) return json({ error: "not authorized for this app's analytics" }, 401, AC);
     const lim = Math.min(parseInt(url.searchParams.get("limit") || "5000", 10) || 5000, 20000);
+    const linkToken = url.searchParams.get("linkToken");
+    const aConds = ["projectId=?"], aBinds = [pid];
+    if (linkToken) { aConds.push("link_token=?"); aBinds.push(linkToken); }
     const { results } = await env.DB.prepare(
-      "SELECT id,type,ts,deviceId,data FROM event WHERE projectId=? ORDER BY ts DESC LIMIT ?"
-    ).bind(pid, lim).all();
+      "SELECT id,type,ts,deviceId,data,link_token FROM event WHERE " + aConds.join(" AND ") + " ORDER BY ts DESC LIMIT ?"
+    ).bind(...aBinds, lim).all();
     return json({ project: pid, count: (results || []).length, events: results || [] }, 200, AC);
   }
 

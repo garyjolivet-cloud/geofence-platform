@@ -144,7 +144,10 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
 <div id="screenSessions">
   <div class="ss-hdr">
     <h1>Field Sessions</h1>
-    <a href="/">⌂ Home</a>
+    <div style="display:flex;gap:10px;align-items:center">
+      <a href="/">⌂ Home</a>
+      <a href="#" onclick="frSignOut(event)" style="color:var(--fog);font-size:13px">Sign out</a>
+    </div>
   </div>
   <div id="sessList"><div class="empty-hint">No field sessions yet.<br>Open a project and tap Field to start.</div></div>
 </div>
@@ -194,9 +197,27 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
 /* ── constants ─────────────────────────────────────── */
 const _qs    = new URLSearchParams(location.search);
 const projId = _qs.get("project") || "";
+
+// Auth gate: require login; all roles land on sessions screen to pick their project
+let _me = null;
+(function(){
+  const _sess = localStorage.getItem("gp.session");
+  if (!_sess) { location.replace("/login?next=" + encodeURIComponent(location.pathname + location.search)); return; }
+  fetch("/api/auth/me", { headers: { authorization: "Bearer " + _sess } })
+    .then(r => r.ok ? r.json() : null)
+    .then(me => {
+      if (!me) { localStorage.removeItem("gp.session"); location.replace("/login"); return; }
+      _me = me;
+      if (me.role === 'guide') {
+        document.querySelector('.ss-hdr h1').textContent = 'My Bookings';
+        const homeLink = document.querySelector('.ss-hdr a[href="/"]');
+        if (homeLink) homeLink.style.display = 'none';
+      }
+    }).catch(() => {});
+})();
 const MIME   = ["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
                  .find(t => MediaRecorder.isTypeSupported(t)) || "";
-const LIVE_TTL_MS = 300000;                       // 5 minutes
+let liveTtlMs = 300000;                            // default 5 min; overwritten from bundle on init
 const LIVE_RADIUS = {walk:25, ski:60, drive:100}; // default geofence radius per activity
 
 /* ── state ─────────────────────────────────────────── */
@@ -227,7 +248,7 @@ function circularMean(degs){
 }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;"); }
-function getToken(){ return localStorage.getItem("gp.token")||""; }
+function getToken(){ return localStorage.getItem("gp.session")||localStorage.getItem("gp.token")||""; }
 
 /* ── IndexedDB ─────────────────────────────────────── */
 function openDb(){
@@ -280,40 +301,77 @@ async function renderSessionsList(){
   const allClips = await dbGetAll("clips");
   const list = document.getElementById("sessList");
 
-  // Validate sessions against server — drop any whose project no longer exists
-  try{
-    const r = await fetch("/api/projects",{cache:"no-store"});
-    if(r.ok){
-      const data = await r.json();
-      const liveIds = new Set((data.projects||[]).map(p=>p.id));
-      // Update session names from server and prune stale sessions
-      for(const s of sessions){
-        const proj = (data.projects||[]).find(p=>p.id===s.projId);
-        if(proj && proj.name !== s.name){
-          s.name = proj.name;
-          await dbPut("sessions",s);
-        }
-      }
-      const stale = sessions.filter(s=>!liveIds.has(s.projId));
-      for(const s of stale){
-        await dbDelete("sessions",s.projId);
-        for(const st of allStops.filter(x=>x.projId===s.projId)) await dbDelete("stops",st.id);
-        for(const c  of allClips.filter(x=>x.projId===s.projId))  await dbDelete("clips",c.id);
-      }
-      sessions = sessions.filter(s=>liveIds.has(s.projId));
-    }
-  }catch(e){ /* offline — show cached sessions as-is */ }
+  const isGuide = _me && _me.role === 'guide';
+  const _guideQ = isGuide ? '?guide=' + encodeURIComponent(_me.id) : '';
 
-  // Projects with no local session yet — show as "open" tiles
-  let availableProjects = [];
+  // Fetch projects from server
+  let serverProjects = [];
   try{
-    const r2 = await fetch("/api/projects",{cache:"no-store"});
-    if(r2.ok){
-      const data = await r2.json();
-      const sessionIds = new Set(sessions.map(s=>s.projId));
-      availableProjects = (data.projects||[]).filter(p=>!sessionIds.has(p.id));
-    }
+    const r = await fetch("/api/projects" + _guideQ);
+    if(r.ok){ serverProjects = (await r.json()).projects || []; }
   }catch(e){}
+
+  // Guide view: simple project + walk link cards, no session management
+  if(isGuide){
+    if(!serverProjects.length){
+      list.innerHTML = '<div class="empty-hint">No projects assigned yet.<br>Ask your admin to assign you to a project.</div>';
+      return;
+    }
+    const cards = await Promise.all(serverProjects.map(async p=>{
+      let links = [];
+      try{
+        const rl = await fetch("/api/guide-links?project="+encodeURIComponent(p.id)+"&guide="+encodeURIComponent(_me.id));
+        if(rl.ok){ links=(await rl.json()).links||[]; }
+      }catch(_){}
+      const dateStr = p.scheduled_date
+        ? new Date(p.scheduled_date+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",year:"numeric",month:"long",day:"numeric"})
+        : "No date set";
+      const visitorsHtml = links.length
+        ? links.map(lk=>`
+            <div style="background:#0d1520;border-radius:8px;padding:9px 12px;display:flex;align-items:center;gap:8px">
+              <span style="font-family:'Barlow Condensed';font-size:14px;font-weight:600;color:var(--ice);flex:1">${esc(lk.label)}</span>
+              <button onclick="navigator.clipboard.writeText('${esc(lk.url)}').then(()=>this.textContent='✓').catch(()=>{})" style="background:var(--coral);border:none;border-radius:6px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 12px;cursor:pointer;flex-shrink:0">Copy</button>
+            </div>`).join("")
+        : `<div style="font-family:'Barlow Condensed';font-size:13px;color:var(--fog);padding:4px 0">No visitors assigned — ask your admin to add walk links</div>`;
+      return `<div class="sess-card">
+        <div class="sc-name">${esc(p.name||p.id)}</div>
+        <div style="font-family:'Barlow Condensed';font-size:13px;color:var(--coral);margin-bottom:10px">${dateStr}</div>
+        <div style="font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--fog);margin-bottom:6px">Visitors${links.length?" ("+links.length+")":""}</div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">${visitorsHtml}</div>
+        <div class="sc-acts">
+          <a class="sc-open" href="/field?project=${esc(p.id)}">▶ Field Recording</a>
+        </div>
+      </div>`;
+    }));
+    // Sort by scheduled_date ascending (soonest first)
+    serverProjects.sort((a,b)=>(a.scheduled_date||"9999").localeCompare(b.scheduled_date||"9999"));
+    list.innerHTML = cards.join("");
+    return;
+  }
+
+  // Admin/operator view: full session management
+  const liveIds = new Set(serverProjects.map(p=>p.id));
+  for(const s of sessions){
+    const proj = serverProjects.find(p=>p.id===s.projId);
+    if(proj && proj.name !== s.name){ s.name=proj.name; await dbPut("sessions",s); }
+  }
+  const stale = sessions.filter(s=>!liveIds.has(s.projId));
+  for(const s of stale){
+    await dbDelete("sessions",s.projId);
+    for(const st of allStops.filter(x=>x.projId===s.projId)) await dbDelete("stops",st.id);
+    for(const c  of allClips.filter(x=>x.projId===s.projId))  await dbDelete("clips",c.id);
+  }
+  sessions = sessions.filter(s=>liveIds.has(s.projId));
+
+  // Auto-remove empty sessions (no stops, no clips) — they were never used
+  const emptySessions = sessions.filter(s=>{
+    return !allStops.some(st=>st.projId===s.projId) && !allClips.some(c=>c.projId===s.projId);
+  });
+  for(const s of emptySessions){ await dbDelete("sessions",s.projId); }
+  sessions = sessions.filter(s=>!emptySessions.some(e=>e.projId===s.projId));
+
+  const sessionIds = new Set(sessions.map(s=>s.projId));
+  const availableProjects = serverProjects.filter(p=>!sessionIds.has(p.id));
 
   if(!sessions.length && !availableProjects.length){
     list.innerHTML = '<div class="empty-hint">No projects found.<br>Create a project from <a href="/" style="color:var(--coral)">home</a> first.</div>';
@@ -337,13 +395,14 @@ async function renderSessionsList(){
     const meta    = sStops.length+" stop"+(sStops.length!==1?"s":"")
                   +" · "+sClips.length+" clip"+(sClips.length!==1?"s":"")
                   +(pending?" · "+pending+" not yet uploaded":"");
+    const hasPub = sClips.length > 0;
     return `<div class="sess-card">
       <div class="sc-name">${esc(s.name)}</div>
       <div class="sc-id">${esc(s.projId)}</div>
       <div class="sc-meta">${meta}</div>
       <div class="sc-acts">
         <a class="sc-open" href="/field?project=${esc(s.projId)}">Open</a>
-        <button class="sc-pub" onclick="pubFromList('${esc(s.projId)}','${esc(s.name)}')">✓ Pub</button>
+        ${hasPub?`<button class="sc-pub" onclick="pubFromList('${esc(s.projId)}','${esc(s.name)}')">✓ Pub</button>`:''}
         <button class="sc-del" onclick="deleteSession('${esc(s.projId)}','${esc(s.name)}')" style="background:none;border:1px solid rgba(255,47,78,.35);color:rgba(255,47,78,.6);border-radius:9px;padding:8px 12px;cursor:pointer;font-family:'Barlow Condensed';font-size:13px;font-weight:600">✕</button>
       </div>
     </div>`;
@@ -687,7 +746,7 @@ async function startLiveStop(){
     radiusM:   LIVE_RADIUS[liveActivity] || 25,
     bearingDeg: circularMean(headingBuffer),
     live:      true,
-    expiresAt: Date.now() + LIVE_TTL_MS
+    expiresAt: Date.now() + liveTtlMs
   };
 
   recChunks = [];
@@ -740,17 +799,18 @@ async function finishLiveStop(stop){
     const zr = await fetch(`/api/projects/${encodeURIComponent(projId)}/zones`,{
       method:"POST",
       headers:{"Content-Type":"application/json","Authorization":"Bearer "+tok},
-      body:JSON.stringify({zone, ttlMs:LIVE_TTL_MS})
+      body:JSON.stringify({zone, ttlMs:liveTtlMs})
     });
     if(!zr.ok) throw new Error("zone publish "+zr.status);
 
     liveStops.push(stop);
     renderStopList();
     refreshMap();
-    setStatus("✓ "+stop.name+" LIVE — 5:00");
+    const _dm=Math.floor(liveTtlMs/60000), _ds=String(Math.floor((liveTtlMs%60000)/1000)).padStart(2,'0');
+    setStatus("✓ "+stop.name+" LIVE — "+_dm+":"+_ds);
     touchSession();
   } catch(e) {
-    await queueLiveStop(stop, blob, LIVE_TTL_MS);
+    await queueLiveStop(stop, blob, liveTtlMs);
     updateQueueBadge();
     setStatus("Queued — will upload when signal returns");
   } finally {
@@ -1095,6 +1155,12 @@ async function init(){
     // offline — continue with local data, projectName stays null
   }catch(e){}
 
+  // Read project settings (liveTtlMs) from published bundle
+  try{
+    const br = await fetch("/api/projects/"+encodeURIComponent(projId)+"/bundle",{cache:"no-store"});
+    if(br.ok){ const b=await br.json(); if(b.liveTtlMs>=30000) liveTtlMs=b.liveTtlMs; }
+  }catch(e){ /* offline — keep default */ }
+
   document.getElementById("screenSessions").style.display = "none";
   document.getElementById("screenField").style.display = "flex";
 
@@ -1113,6 +1179,14 @@ async function init(){
   document.getElementById("projName").textContent = displayName;
   if(stops.length) document.getElementById("btnPub").disabled = false;
 
+  // Guides are live-only: persistent recording is admin/operator only
+  if(_me && _me.role === "guide"){
+    document.getElementById("btnModePers").style.display = "none";
+    document.getElementById("btnModeLive").style.display = "none";
+    document.getElementById("btnPub").style.display = "none";
+    liveMode = true; // force live before updateModeUI
+  }
+
   updateModeUI();
   updateQueueBadge();
   initConnectivity();
@@ -1123,6 +1197,13 @@ async function init(){
 }
 
 init();
+async function frSignOut(e){
+  e.preventDefault();
+  const s=localStorage.getItem("gp.session");
+  if(s) await fetch("/api/auth/logout",{method:"POST",headers:{authorization:"Bearer "+s}}).catch(()=>{});
+  localStorage.removeItem("gp.session"); localStorage.removeItem("gp.user");
+  location.href="/login";
+}
 </script>
 </body>
 </html>

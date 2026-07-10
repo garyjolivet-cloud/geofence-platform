@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set your password — Chase Life</title>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--night:#0a1018;--slate:#141d2b;--rim:#2e3f58;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6}
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100vh;background:var(--night);color:var(--snow);font-family:"Barlow",system-ui,sans-serif;display:flex;align-items:center;justify-content:center}
+  .card{width:100%;max-width:400px;background:var(--slate);border:1px solid var(--rim);border-radius:18px;padding:36px 32px 32px;margin:24px}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:28px}
+  .glyph{width:32px;height:32px;border-radius:9px;background:linear-gradient(150deg,var(--coral),#ff9166);position:relative;flex-shrink:0}
+  .glyph::after{content:"";position:absolute;inset:8px;border-radius:50%;border:2px solid #1a0d07}
+  .brand h1{font-family:"Black Han Sans";font-weight:400;font-size:18px;margin:0;line-height:1}
+  .brand p{margin:0;font-family:"Barlow Condensed";font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--fog)}
+  h2{font-family:"Barlow Condensed";font-weight:700;font-size:22px;letter-spacing:.5px;margin:0 0 6px;color:var(--snow)}
+  .sub{color:var(--fog);font-size:14px;margin:0 0 22px;line-height:1.4}
+  label{display:block;font-family:"Barlow Condensed";font-size:12px;letter-spacing:.7px;text-transform:uppercase;color:var(--fog);margin-bottom:5px}
+  input{display:block;width:100%;background:#0d1623;border:1px solid var(--rim);color:var(--snow);border-radius:9px;padding:10px 12px;font-family:"Barlow";font-size:15px;margin-bottom:16px;outline:none;transition:border-color .15s}
+  input:focus{border-color:var(--coral)}
+  button.go{display:block;width:100%;background:var(--coral);border:none;color:#1a0d07;font-family:"Barlow Condensed";font-weight:700;font-size:15px;letter-spacing:.5px;text-transform:uppercase;border-radius:9px;padding:12px;cursor:pointer;margin-top:4px;transition:opacity .15s}
+  button.go:hover{opacity:.88}
+  button.go:disabled{opacity:.45;cursor:not-allowed}
+  .err{color:#ff6a6a;font-family:"Barlow Condensed";font-size:13px;margin-bottom:12px;display:none}
+  .expired{text-align:center;padding:12px 0}
+  .expired p{color:var(--fog);font-size:14px;margin:0 0 12px}
+  .expired a{color:var(--coral);font-family:"Barlow Condensed";font-size:14px}
+  #form{display:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <div class="glyph"></div>
+    <div><h1>Chase Life</h1><p>Guide Platform</p></div>
+  </div>
+
+  <div id="loading" style="text-align:center;color:var(--fog);font-family:'Barlow Condensed';padding:20px 0">Checking invite link…</div>
+
+  <div id="expired" class="expired" style="display:none">
+    <h2 style="color:var(--coral)">Link expired</h2>
+    <p>This invite link has expired or already been used.<br>Contact your administrator to get a new one.</p>
+    <a href="/login">Go to sign-in page</a>
+  </div>
+
+  <div id="form">
+    <h2>Welcome to Chase Life</h2>
+    <p class="sub">You've been invited as a guide. Set your name and password to get started.</p>
+    <div class="err" id="err"></div>
+    <label for="name">Your name</label>
+    <input id="name" type="text" autocomplete="name" placeholder="Sarah Smith" maxlength="60">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="new-password" placeholder="Choose a password">
+    <label for="pw2">Confirm password</label>
+    <input id="pw2" type="password" autocomplete="new-password" placeholder="Repeat password">
+    <button class="go" id="btn">Set password &amp; sign in</button>
+  </div>
+</div>
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const token = params.get("token") || "";
+const err = document.getElementById("err");
+const btn = document.getElementById("btn");
+
+if (!token) {
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("expired").style.display = "block";
+}
+
+// Show the form immediately — we validate the token on submit
+// (avoids a round-trip; bad token → clear error message)
+if (token) {
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("form").style.display = "block";
+}
+
+async function submit() {
+  const name = document.getElementById("name").value.trim();
+  const pw = document.getElementById("pw").value;
+  const pw2 = document.getElementById("pw2").value;
+  if (!name) { showErr("Enter your name."); return; }
+  if (!pw) { showErr("Choose a password."); return; }
+  if (pw !== pw2) { showErr("Passwords don't match."); return; }
+  btn.disabled = true; btn.textContent = "Setting password…"; err.style.display = "none";
+  try {
+    const r = await fetch("/api/auth/set-password", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token, name, password: pw })
+    });
+    const j = await r.json();
+    if (!r.ok) {
+      if (r.status === 400) {
+        document.getElementById("form").style.display = "none";
+        document.getElementById("expired").style.display = "block";
+      } else {
+        showErr(j.error || "Something went wrong.");
+      }
+      return;
+    }
+    localStorage.setItem("gp.session", j.token);
+    localStorage.setItem("gp.user", JSON.stringify(j.user));
+    location.href = "/";
+  } catch(e) { showErr("Network error — try again."); }
+  finally { btn.disabled = false; btn.textContent = "Set password & sign in"; }
+}
+function showErr(msg) { err.textContent = msg; err.style.display = "block"; }
+btn && btn.addEventListener("click", submit);
+document.getElementById("pw2") && document.getElementById("pw2").addEventListener("keydown", e => { if(e.key==="Enter") submit(); });
+</script>
+</body>
+</html>

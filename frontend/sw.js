@@ -2,7 +2,7 @@
    Online: always fetch fresh (so deploys show immediately).
    Offline: fall back to the cached copy.
    Audio is cache-first (large, stable). Bump CACHE to wipe old caches. */
-const CACHE = 'gp-offline-v3';
+const CACHE = 'gp-offline-v4';
 
 self.addEventListener('install', e => { self.skipWaiting(); });
 

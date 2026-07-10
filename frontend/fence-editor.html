@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chase Life — Fence Editor</title>
+<script>
+(function(){
+  var s=localStorage.getItem('gp.session');
+  if(!s){location.replace('/login?next='+encodeURIComponent(location.pathname+location.search));return;}
+  fetch('/api/auth/me',{headers:{authorization:'Bearer '+s}}).then(function(r){return r.ok?r.json():null;}).then(function(me){
+    if(!me){localStorage.removeItem('gp.session');location.replace('/login?next='+encodeURIComponent(location.pathname+location.search));return;}
+    if(me.role==='guide'){location.replace('/field');return;}
+  }).catch(function(){});
+})();
+</script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -450,6 +460,15 @@
         </div>
         <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
         <select id="visitorBotSel"><option value="">— none —</option></select>
+        <label class="k" style="margin-top:6px">live stop duration</label>
+        <select id="liveTtlMs">
+          <option value="120000">2 min</option>
+          <option value="300000" selected>5 min (default)</option>
+          <option value="600000">10 min</option>
+          <option value="900000">15 min</option>
+          <option value="1800000">30 min</option>
+          <option value="3600000">60 min</option>
+        </select>
       </div>
     </div>
   </div>
@@ -580,14 +599,7 @@
           <span id="pVoiceTimerDisp" style="font-family:'Barlow Condensed';font-size:12px;color:var(--hazard);flex:1">● 0:00</span>
           <button id="btnVoiceStop" class="ghost" style="color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:5px 8px">⏹ Stop</button>
         </div>
-        <div id="pVoiceDone" style="display:none;flex-direction:column;gap:5px">
-          <input id="pVoiceName" placeholder="clip name" style="font-size:12px;padding:6px 8px">
-          <div style="display:flex;gap:4px">
-            <button id="btnVoicePlay2" class="ghost" style="font-size:11px;padding:5px 8px">▶</button>
-            <button id="btnVoiceSave"    class="ghost" style="flex:1;color:var(--go);border-color:var(--go);font-size:11px;padding:5px 8px">✓ Save</button>
-            <button id="btnVoiceDiscard" class="ghost" style="color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:5px 8px">✕</button>
-          </div>
-        </div>
+        <div id="pVoiceDone" style="display:none"></div>
       </div>
 
       <!-- what-plays summary -->
@@ -1076,7 +1088,7 @@ map.on("load",()=>{
      layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,0.8],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#b96fff","text-halo-color":"#0a1018","text-halo-width":1.2,"text-opacity":0.8}});
   render();
-  if(!_pid) autoRestore(); // skip if a project is loading from URL — it would overwrite the bundle
+  if(!_pid && !_aid) autoRestore(); // skip if loading a project or starting a new tour from home
 });
 
 /* ---- map clicks + zone select/drag ---- */
@@ -1432,12 +1444,17 @@ function getToken(){
   const el=document.getElementById("adminTok");
   let t=(el && el.value.trim()) || "";
   if(!t){ try{ t=sessionStorage.getItem("gp.admin")||""; }catch(e){} }
+  if(!t){ try{ t=localStorage.getItem("gp.session")||""; }catch(e){} }
   if(!t){ t=(prompt("Admin token:")||"").trim(); }
   if(t){ verifiedToken=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} }
   return t;
 }
-function clearToken(){ verifiedToken=""; try{ sessionStorage.removeItem("gp.admin"); }catch(e){}
-  const el=document.getElementById("adminTok"); if(el) el.value=""; }
+function clearToken(){
+  verifiedToken="";
+  try{ sessionStorage.removeItem("gp.admin"); }catch(e){}
+  const el=document.getElementById("adminTok"); if(el) el.value="";
+  try{ if(localStorage.getItem("gp.session")){ localStorage.removeItem("gp.session"); location.replace("/login?next="+encodeURIComponent(location.href)); } }catch(e){}
+}
 (function(){ const el=document.getElementById("adminTok"); if(!el) return;
   el.addEventListener("input", ()=>{ verifiedToken=el.value.trim();
     try{ if(verifiedToken) sessionStorage.setItem("gp.admin",verifiedToken); }catch(e){} }); })();
@@ -1578,57 +1595,63 @@ function _vState(s){
   document.getElementById("pVoiceDone").style.display      = s==="done"      ? "flex":"none";
 }
 document.getElementById("btnVoiceRec").onclick=async()=>{
-  if(sel<0){ aStat().textContent="select a zone first"; return; }
-  if(!_vStream){
-    try{ _vStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
-    catch(e){ aStat().textContent="mic denied: "+e.message; return; }
+  if(sel<0){ alert("Click a zone on the map or in the list first, then record."); return; }
+  try{
+    if(!_vStream){
+      _vStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    }
+  }catch(e){
+    alert("Microphone access denied.\n\n"+e.message+"\n\nCheck browser site settings and allow the mic, then try again.");
+    return;
   }
-  _vChunks=[]; _vBlob=null;
-  const bCtx=new AudioContext({sampleRate:48000});
-  const src=bCtx.createMediaStreamSource(_vStream);
-  const dest=bCtx.createMediaStreamDestination();
-  src.connect(dest);
-  _vRec=new MediaRecorder(dest.stream,{mimeType:_vMime,audioBitsPerSecond:192000});
-  _vRec.ondataavailable=e=>{if(e.data.size>0)_vChunks.push(e.data);};
-  _vRec.onstop=()=>{
-    bCtx.close().catch(()=>{});
-    _vBlob=new Blob(_vChunks,{type:_vMime||"audio/mp4"});
-    clearInterval(_vTimer);
-    const z=zones[sel];
-    document.getElementById("pVoiceName").value=slug(z.name||"clip");
-    _vState("done");
-  };
-  _vRec.start(500);
-  _vT0=Date.now();
-  _vTimer=setInterval(()=>{
-    const s=Math.floor((Date.now()-_vT0)/1000);
-    document.getElementById("pVoiceTimerDisp").textContent="● "+Math.floor(s/60)+":"+(s%60).toString().padStart(2,"0");
-  },500);
-  _vState("recording");
+  try{
+    _vChunks=[]; _vBlob=null;
+    const bCtx=new AudioContext({sampleRate:48000});
+    const src=bCtx.createMediaStreamSource(_vStream);
+    const dest=bCtx.createMediaStreamDestination();
+    src.connect(dest);
+    const mime=_vMime||"";
+    _vRec=mime ? new MediaRecorder(dest.stream,{mimeType:mime,audioBitsPerSecond:192000})
+               : new MediaRecorder(dest.stream,{audioBitsPerSecond:192000});
+    _vRec.ondataavailable=e=>{if(e.data.size>0)_vChunks.push(e.data);};
+    _vRec.onstop=async()=>{
+      bCtx.close().catch(()=>{});
+      clearInterval(_vTimer);
+      _vState("idle");
+      const blob=new Blob(_vChunks,{type:_vRec.mimeType||"audio/mp4"});
+      const z=zones[sel];
+      const proj=slug(projName())||"project";
+      const ext=blob.type.includes("mp4")?"m4a":"webm";
+      const defaultKey=proj+"/"+(slug(z.name||"clip")||"clip")+"-"+Date.now().toString(36)+"."+ext;
+      aStat().textContent="decoding…";
+      try{
+        const ab=await blob.arrayBuffer();
+        const tmp=new AudioContext();
+        const buf=await tmp.decodeAudioData(ab);
+        await tmp.close();
+        aStat().style.display="none";
+        openTrimmer(buf, defaultKey,
+          ()=>{ doXhrUpload(blob, defaultKey, blob.type); },
+          (trimmed,key)=>{ doXhrUpload(trimmed, key||defaultKey, trimmed.type); }
+        );
+      }catch(e){ aStat().textContent="decode failed: "+e.message; }
+    };
+    _vRec.start(500);
+    _vT0=Date.now();
+    _vTimer=setInterval(()=>{
+      const s=Math.floor((Date.now()-_vT0)/1000);
+      document.getElementById("pVoiceTimerDisp").textContent="● "+Math.floor(s/60)+":"+(s%60).toString().padStart(2,"0");
+    },500);
+    _vState("recording");
+  }catch(e){
+    alert("Recording failed: "+e.message);
+    _vStream=null;
+  }
 };
 document.getElementById("btnVoiceStop").onclick=()=>{
   if(_vRec&&_vRec.state==="recording") _vRec.stop();
 };
-document.getElementById("btnVoicePlay2").onclick=()=>{
-  const btn=document.getElementById("btnVoicePlay2");
-  if(_vPrev){ _vPrev.pause(); _vPrev=null; btn.textContent="▶"; return; }
-  if(!_vBlob) return;
-  const url=URL.createObjectURL(_vBlob);
-  _vPrev=new Audio(url); _vPrev.play(); btn.textContent="■";
-  _vPrev.onended=()=>{ _vPrev=null; btn.textContent="▶"; URL.revokeObjectURL(url); };
-};
-document.getElementById("btnVoiceSave").onclick=()=>{
-  if(!_vBlob||sel<0) return;
-  const name=(document.getElementById("pVoiceName").value.trim()||"clip").replace(/[^a-z0-9._-]/gi,"-");
-  const proj=slug(projName())||"project";
-  const ext=_vMime.includes("mp4")?"m4a":"webm";
-  doXhrUpload(_vBlob, proj+"/"+name+"."+ext, _vMime);
-  _vBlob=null; _vChunks=[]; _vState("idle");
-};
-document.getElementById("btnVoiceDiscard").onclick=()=>{
-  if(_vPrev){ _vPrev.pause(); _vPrev=null; }
-  _vBlob=null; _vChunks=[]; clearInterval(_vTimer); _vState("idle");
-};
+// pVoiceDone handlers removed — recording now opens the trimmer directly
 
 function closeR2Picker(){
   const p=document.getElementById("r2Picker");
@@ -1803,6 +1826,8 @@ function exportBundle(){
               appId:document.getElementById("appSel").value||null,
               bots:editorBots,
               visitorBotId:document.getElementById("visitorBotSel").value||null,
+              guideId:null,
+              liveTtlMs:+document.getElementById("liveTtlMs").value,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -1861,6 +1886,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
     refreshBotDropdowns();
     if(b.visitorBotId) document.getElementById("visitorBotSel").value=b.visitorBotId;
+    if(b.liveTtlMs) document.getElementById("liveTtlMs").value=String(b.liveTtlMs);
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
@@ -2128,13 +2154,23 @@ document.getElementById("trimOverlay").onclick=ev=>{
   if(ev.target===document.getElementById("trimOverlay")) closeTrimmer();
 };
 async function _reenc(buf,f0,f1,ctx){
-  const s=f0*buf.duration, e=f1*buf.duration, dur=e-s;
+  const sr=buf.sampleRate, nch=buf.numberOfChannels;
+  const s=f0*buf.duration, dur=(f1-f0)*buf.duration;
+  const frameCount=Math.round(dur*sr);
+
+  // Step 1: render trimmed slice offline — no timing drift, exact frame count
+  const offline=new OfflineAudioContext(nch,frameCount,sr);
+  const offSrc=offline.createBufferSource();
+  offSrc.buffer=buf; offSrc.connect(offline.destination);
+  offSrc.start(0,s,dur);
+  const trimmed=await offline.startRendering();
+
+  // Step 2: encode trimmed buffer to compressed audio via MediaRecorder
   const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
     .find(t=>MediaRecorder.isTypeSupported(t))||"";
-  // ctx is passed in from the click handler (gesture context) so it starts running.
-  // Fall back to creating one here only if called without a gesture context.
   const ownCtx=!ctx;
-  if(!ctx){ ctx=new AudioContext({sampleRate:buf.sampleRate}); try{ await ctx.resume(); }catch(_){} }
+  if(!ctx) ctx=new AudioContext({sampleRate:sr});
+  try{ await ctx.resume(); }catch(_){}
   const dest=ctx.createMediaStreamDestination();
   return new Promise((res,rej)=>{
     const chunks=[];
@@ -2145,9 +2181,11 @@ async function _reenc(buf,f0,f1,ctx){
     rec.onstop=()=>{ if(ownCtx) ctx.close().catch(()=>{}); res(new Blob(chunks,{type:rec.mimeType||mime||"audio/webm"})); };
     try{ rec.start(100); }catch(e){ if(ownCtx) ctx.close().catch(()=>{}); rej(e); return; }
     const src=ctx.createBufferSource();
-    src.buffer=buf; src.connect(dest); src.start(0,s,dur);
+    src.buffer=trimmed; src.connect(dest);
+    // schedule slightly in future so recorder is ready before audio starts
+    src.start(ctx.currentTime+0.05);
     src.onended=()=>{ try{ if(rec.state!=="inactive") rec.stop(); }catch(e){ rej(e); } };
-    setTimeout(()=>{ try{ if(rec.state!=="inactive") rec.stop(); }catch(_){} },(dur+2)*1000);
+    setTimeout(()=>{ try{ if(rec.state!=="inactive") rec.stop(); }catch(_){} },(dur+3)*1000);
   });
 }
 async function _decodeUrl(url){
