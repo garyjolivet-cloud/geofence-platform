@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chase Life — Geofence Platform</title>
+<script src="role-gate.js"></script>
+<script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
@@ -116,7 +118,8 @@
       </div>
     </div>
     <nav>
-      <a href="/field" class="primary">Guide</a>
+      <a href="/clients" class="primary">Clients</a>
+      <a href="/field">Guide</a>
       <a href="/editor">Editor</a>
       <a href="/bots">Bots</a>
       <a href="/dashboard">Dashboard</a>
@@ -187,12 +190,17 @@ function clientBlock(app, tours){
   </div>`;
 }
 
+function sessionAuthHeader(){
+  const t=localStorage.getItem("gp.session");
+  return t?{authorization:"Bearer "+t}:{};
+}
 async function load(){
   try{
-    const [ra,rp]=await Promise.all([fetch("/api/apps"),fetch("/api/projects")]);
+    const h={headers:sessionAuthHeader()};
+    const [ra,rp]=await Promise.all([fetch("/api/apps",h),fetch("/api/projects",h)]);
     const apps=(await ra.json()).apps||[];
     const projects=(await rp.json()).projects||[];
-    setApi(true, apps.length+" client"+(apps.length===1?"":"s")+" · "+projects.length+" tour"+(projects.length===1?"":"s"));
+    setApi(true, apps.length+" workspace"+(apps.length===1?"":"s")+" · "+projects.length+" tour"+(projects.length===1?"":"s"));
 
     let html='<div class="clients">';
     apps.forEach(a=>{
@@ -206,17 +214,17 @@ async function load(){
     if(orphans.length) html+=clientBlock({id:null,name:'Unsorted'},orphans);
 
     if(!apps.length&&!projects.length){
-      html=`<div class="state">No clients yet.<br><br>
-        Start by creating a <b>client</b> — e.g. <i>Kicking Horse Resort</i> or <i>Town of Golden</i>.<br>
+      html=`<div class="state">No workspaces yet.<br><br>
+        Start by creating a <b>workspace</b> — e.g. <i>Kicking Horse Resort</i> or <i>Town of Golden</i>.<br>
         Then add tours inside it — e.g. <i>Village Walk</i>, <i>Ski Patrol Route</i>.<br><br>
-        <a onclick="newClient()" style="cursor:pointer;color:var(--coral);font-weight:600">+ Create your first client →</a></div>`;
+        <a onclick="newClient()" style="cursor:pointer;color:var(--coral);font-weight:600">+ Create your first workspace →</a></div>`;
     }
 
     mainEl.innerHTML=html;
 
-    // new client button
+    // new workspace button
     if(apps.length){
-      mainEl.innerHTML+=`<div class="new-client" onclick="newClient()"><span>+ New client</span></div>`;
+      mainEl.innerHTML+=`<div class="new-client" onclick="newClient()"><span>+ New workspace</span></div>`;
     }
   }catch(e){
     setApi(false,"platform unreachable");
@@ -230,19 +238,19 @@ async function askToken(){ let t=getToken(); if(t)return t;
   if(t){try{localStorage.setItem("gp.admin",t);}catch(e){}} return t; }
 
 async function newClient(){
-  const name=(prompt("Client name\n\nExamples: Kicking Horse Resort, Town of Golden, Golden Nordic")||"").trim();
+  const name=(prompt("Workspace name\n\nExamples: Kicking Horse Resort, Town of Golden, Golden Nordic")||"").trim();
   if(!name)return;
   const token=await askToken(); if(!token)return;
   try{
     const r=await fetch("/api/apps",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+token},body:JSON.stringify({name})});
     if(r.ok) load();
-    else{ const j=await r.json().catch(()=>({})); alert("Couldn't create client: "+(j.error||r.status));
+    else{ const j=await r.json().catch(()=>({})); alert("Couldn't create workspace: "+(j.error||r.status));
       if(r.status===401) try{localStorage.removeItem("gp.admin");}catch(e){} }
   }catch(e){ alert("Failed: "+e.message); }
 }
 
 async function renameClient(id, current){
-  const name=(prompt("New name for this client:", current)||"").trim();
+  const name=(prompt("New name for this workspace:", current)||"").trim();
   if(!name||name===current)return;
   const token=await askToken(); if(!token)return;
   try{
@@ -260,7 +268,7 @@ function newTour(appId){
 }
 
 async function deleteClient(id,name){
-  if(!confirm("Delete client \""+name+"\" and all its tours? Cannot be undone."))return;
+  if(!confirm("Delete workspace \""+name+"\" and all its tours? Cannot be undone."))return;
   const token=await askToken(); if(!token)return;
   try{
     const r=await fetch("/api/apps/"+encodeURIComponent(id)+"?cascade=true",{method:"DELETE",headers:{"authorization":"Bearer "+token}});

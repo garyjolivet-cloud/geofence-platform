@@ -31,7 +31,7 @@
 <div class="card">
   <div class="brand">
     <div class="glyph"></div>
-    <div><h1>Chase Life</h1><p>Guide Platform</p></div>
+    <div><h1 id="brandName">Chase Life</h1><p>Guide Platform</p></div>
   </div>
   <h2>Sign in</h2>
   <div class="err" id="err"></div>
@@ -48,6 +48,18 @@ const next = new URLSearchParams(location.search).get("next") || "/";
 const err = document.getElementById("err");
 const btn = document.getElementById("btn");
 
+// Client-scoped login, e.g. /c/chase-life/login — same page, just shows
+// which client you're signing into and enforces the account belongs to it.
+const clientSlugMatch = location.pathname.match(/^\/c\/([^/]+)\/login$/);
+const clientSlug = clientSlugMatch ? clientSlugMatch[1] : null;
+let clientId = null; // resolved below — slug and id aren't guaranteed identical
+if (clientSlug) {
+  fetch("/api/clients/" + encodeURIComponent(clientSlug))
+    .then(r => r.ok ? r.json() : null)
+    .then(c => { if (c) { clientId = c.id; document.getElementById("brandName").textContent = c.name; } })
+    .catch(() => {});
+}
+
 async function login() {
   const email = document.getElementById("email").value.trim();
   const pw = document.getElementById("pw").value;
@@ -56,7 +68,7 @@ async function login() {
   try {
     const r = await fetch("/api/auth/login", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password: pw })
+      body: JSON.stringify({ email, password: pw, client: clientId || clientSlug || undefined })
     });
     const j = await r.json();
     if (!r.ok) { showErr(j.error || "Sign-in failed."); return; }

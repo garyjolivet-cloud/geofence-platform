@@ -259,9 +259,11 @@ function scopeOk(A, scope, targetAppId) {
   return hasScope && appOk;
 }
 function scopesForRole(role) {
-  if (role === "admin" || role === "operator") return "*";
+  if (role === "admin") return "*";
+  if (role === "operator") return "analytics";
   if (role === "guide") return "publish,audio";
-  return "";
+  return ""; // front_desk and anything else: no blanket scope — see explicit
+             // role checks on /copy, /links, and /guides instead.
 }
 async function projectAppId(env, idOrSlug) {
   try {
@@ -331,9 +333,18 @@ export default {
       "/bots": "/bot-library.html",
       "/login": "/login.html",
       "/invite": "/invite.html",
-      "/walk": "/geofence-engine.html"
+      "/walk": "/geofence-engine.html",
+      "/clients": "/clients.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
+    // Client-scoped login, e.g. /c/chase-life/login — same login.html, the
+    // slug is read client-side from the URL path.
+    const clientLogin = clean.match(/^\/c\/([^/]+)\/login$/);
+    if (clientLogin && env.ASSETS) {
+      const u = new URL(request.url);
+      u.pathname = "/login.html";
+      return env.ASSETS.fetch(new Request(u.toString(), request));
+    }
     if (FRIENDLY[clean] && env.ASSETS) {
       const u = new URL(request.url);
       u.pathname = FRIENDLY[clean];
@@ -389,11 +400,17 @@ async function api(request, env, url) {
     const email = (b.email || "").toLowerCase().trim();
     if (!email || !b.password) return json({ error: "email and password required" }, 400, AC);
     const user = await env.DB.prepare(
-      "SELECT id,email,name,role,password_hash,salt FROM user_account WHERE email=? AND role!='inactive'"
+      "SELECT id,email,name,role,org_id,password_hash,salt FROM user_account WHERE email=? AND role!='inactive'"
     ).bind(email).first().catch(() => null);
     if (!user || !user.password_hash) return json({ error: "invalid credentials" }, 401, AC);
     const computed = await hashPassword(b.password, user.salt);
     if (computed !== user.password_hash) return json({ error: "invalid credentials" }, 401, AC);
+    // If the login page was client-scoped (/c/<slug>/login), the account
+    // must actually belong to that client — a correct password elsewhere
+    // isn't enough.
+    if (b.client && user.org_id !== b.client) {
+      return json({ error: "this account isn't part of this client" }, 403, AC);
+    }
     const token = await createSession(env, user.id, request.headers.get("cf-connecting-ip") || "");
     env.DB.prepare("UPDATE user_account SET last_login_at=? WHERE id=?").bind(new Date().toISOString(), user.id).run().catch(() => {});
     return json({ ok: true, token, user: { id: user.id, email: user.email, name: user.name, role: user.role } }, 200, AC);
@@ -441,7 +458,9 @@ async function api(request, env, url) {
     if (!A) return json({ error: "authentication required" }, 401, AC);
     if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
-    const orgFilter = A.master ? null : A.appId;
+    // Master/admin can optionally scope the list to one client, e.g. while
+    // previewing a client's Team tab from the sandbox's client picker.
+    const orgFilter = A.master ? (url.searchParams.get("org") || null) : A.appId;
     const roleFilter = url.searchParams.get("role");
     const conditions = [], binds = [];
     if (orgFilter) { conditions.push("org_id=?"); binds.push(orgFilter); }
@@ -468,9 +487,14 @@ async function api(request, env, url) {
     const tokenHash = await sha256hex(rawToken);
     const inviteExpires = Date.now() + 7 * 24 * 3600 * 1000;
     const orgId2 = A.master ? (b.orgId || (env.ORG_ID || "chase-life")) : (A.appId || (env.ORG_ID || "chase-life"));
+    // Operators may only create guide/front_desk accounts — never operator/admin.
+    let inviteRole = b.role || "guide";
+    if (!A.master && A.role === "operator" && inviteRole !== "guide" && inviteRole !== "front_desk") {
+      inviteRole = "guide";
+    }
     await env.DB.prepare(
       "INSERT INTO user_account (id,email,name,org_id,role,invite_token,invite_expires,created_at) VALUES (?,?,?,?,?,?,?,?)"
-    ).bind(id, email, b.name || "", orgId2, b.role || "guide", tokenHash, inviteExpires, new Date().toISOString()).run();
+    ).bind(id, email, b.name || "", orgId2, inviteRole, tokenHash, inviteExpires, new Date().toISOString()).run();
     const inviteUrl = appUrl(env, "/invite?token=" + rawToken, request);
     await sendEmail(env, {
       to: email, subject: "You've been invited to Chase Life",
@@ -489,8 +513,13 @@ async function api(request, env, url) {
     const uid = decodeURIComponent(muser[1]);
     if (method === "PUT") {
       const b = await request.json().catch(() => ({}));
+      let newRole = b.role || null;
+      // Operators may only set guide/front_desk — never promote to operator/admin.
+      if (newRole && !A.master && A.role === "operator" && newRole !== "guide" && newRole !== "front_desk") {
+        newRole = null;
+      }
       await env.DB.prepare("UPDATE user_account SET name=COALESCE(?,name), role=COALESCE(?,role) WHERE id=?")
-        .bind(b.name || null, b.role || null, uid).run();
+        .bind(b.name || null, newRole, uid).run();
       return json({ ok: true }, 200, AC);
     }
     if (method === "DELETE") {
@@ -585,14 +614,64 @@ async function api(request, env, url) {
   }
   if (!env.DB) return json({ error: "D1 not bound — add the DB binding in wrangler.jsonc" }, 500);
 
+  // --- clients: public name lookup by slug, used by the client-scoped login page ---
+  const mcl = path.match(/^\/api\/clients\/([^/]+)$/);
+  if (mcl && method === "GET") {
+    const slug = decodeURIComponent(mcl[1]);
+    const client = await env.DB.prepare("SELECT id,name FROM client WHERE slug=?").bind(slug).first();
+    if (!client) return json({ error: "client not found" }, 404, AC);
+    return json({ id: client.id, name: client.name }, 200, AC);
+  }
+
+  // --- clients: admin-only list + create (the sandbox's client picker) ---
+  if (path === "/api/clients" && method === "GET") {
+    const A = await auth(request, env);
+    if (!A || !A.master) return json({ error: "admin access required" }, 403, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT c.id,c.name,c.slug,c.created_at, " +
+      "(SELECT COUNT(*) FROM project p WHERE p.orgId=c.id) AS projectCount, " +
+      "(SELECT COUNT(*) FROM user_account u WHERE u.org_id=c.id AND u.role!='inactive') AS userCount " +
+      "FROM client c ORDER BY c.created_at DESC"
+    ).all();
+    return json({ clients: results || [] }, 200, AC);
+  }
+  if (path === "/api/clients" && method === "POST") {
+    const A = await auth(request, env);
+    if (!A || !A.master) return json({ error: "admin access required" }, 403, AC);
+    const b = await request.json().catch(() => ({}));
+    const name = (b.name || "").trim();
+    if (!name) return json({ error: "need a name" }, 400, AC);
+    const slug = (b.slug || name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "client";
+    const id = b.id || slug;
+    const existing = await env.DB.prepare("SELECT id FROM client WHERE id=? OR slug=?").bind(id, slug).first();
+    if (existing) return json({ error: "a client with that id or slug already exists" }, 409, AC);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO client (id,name,slug,created_at) VALUES (?,?,?,?)"
+    ).bind(id, name, slug, now).run();
+    // Matching default workspace — id intentionally equals the client id, the
+    // same convention the single-tenant fallback already relied on (see
+    // resolvedAppId = orgId in the bundle-publish auto-create path below).
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO app (id,orgId,name,slug,description,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)"
+    ).bind(id, id, name, slug, "", now, now).run();
+    await logAudit(env, request, A, "client.create", id);
+    return json({ ok: true, id, slug }, 200, AC);
+  }
+
   // --- apps (workspaces): list with project counts ---
   if (path === "/api/apps" && method === "GET") {
-    const { results } = await env.DB.prepare(
-      "SELECT a.id,a.name,a.slug,a.description,a.updatedAt, " +
+    const A = await auth(request, env);
+    // Unscoped before multi-client support existed — now requires a session,
+    // and non-master callers only ever see their own client's workspace(s).
+    if (!A) return json({ apps: [] }, 200, AC);
+    const scopedOrg = A.master ? null : A.appId;
+    const sql = "SELECT a.id,a.name,a.slug,a.description,a.updatedAt, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
-      "FROM app a ORDER BY a.updatedAt DESC"
-    ).all();
-    return json({ apps: results || [] });
+      "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
+    const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
+    const { results } = await stmt.all();
+    return json({ apps: results || [] }, 200, AC);
   }
 
   // --- create an app (admin) ---
@@ -656,7 +735,12 @@ async function api(request, env, url) {
 
   // --- bots: org-scoped reusable bot library ---
   if (path === "/api/bots" && method === "GET") {
-    const appId = url.searchParams.get("appId");
+    const A = await auth(request, env);
+    if (!A) return json({ bots: [] }, 200, AC);
+    // Non-master callers are pinned to their own client's app id, ignoring
+    // whatever ?appId= was requested — this was unscoped before multi-client
+    // support existed.
+    const appId = A.master ? url.searchParams.get("appId") : A.appId;
     const sql = appId
       ? "SELECT * FROM bot WHERE app_id=? ORDER BY name"
       : "SELECT * FROM bot ORDER BY name";
@@ -714,12 +798,17 @@ async function api(request, env, url) {
   }
 
   if (path === "/api/projects" && method === "GET") {
+    const A = await auth(request, env);
+    // Unscoped before multi-client support existed — non-master callers are
+    // now pinned to their own client's rows regardless of other filters.
+    if (!A) return json({ projects: [] }, 200, AC);
     const conditions = [], binds = [];
     const appFilter = url.searchParams.get("app");
     const dateFilter = url.searchParams.get("date");
     const guideFilter = url.searchParams.get("guide");
     const templateFilter = url.searchParams.get("template");
     const archivedFilter = url.searchParams.get("archived");
+    if (!A.master) { conditions.push("orgId=?"); binds.push(A.appId); }
     if (appFilter) { conditions.push("appId=?"); binds.push(appFilter); }
     if (dateFilter) { conditions.push("scheduled_date=?"); binds.push(dateFilter); }
     if (guideFilter) { conditions.push("(guide_id=? OR id IN (SELECT project_id FROM project_guide WHERE guide_id=?))"); binds.push(guideFilter, guideFilter); }
@@ -727,7 +816,7 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,guide_id,is_template,tour_type,archived FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
@@ -764,21 +853,23 @@ async function api(request, env, url) {
   const mcp = path.match(/^\/api\/projects\/([^/]+)\/copy$/);
   if (mcp && method === "POST") {
     const A = await auth(request, env);
-    if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
+    if (!A || !(A.master || A.role === "operator" || A.role === "front_desk"))
+      return json({ error: "operator or front_desk access required" }, 403, AC);
     const srcId = decodeURIComponent(mcp[1]);
     const b = await request.json().catch(() => ({}));
     if (!b.name) return json({ error: "name required" }, 400, AC);
     const src = await env.DB.prepare("SELECT id,orgId,appId,mode,tour_type FROM project WHERE id=?").bind(srcId).first();
     if (!src) return json({ error: "source project not found" }, 404, AC);
+    if (!A.master && src.orgId !== A.appId) return json({ error: "template belongs to a different client" }, 403, AC);
     const srcBundle = await env.DB.prepare(
       "SELECT json FROM published_bundle WHERE projectId=? ORDER BY version DESC LIMIT 1"
     ).bind(srcId).first();
     const newId = "proj_" + Date.now().toString(36) + "_" + randomHex(4);
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,scheduled_date,guide_id,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,scheduled_date,scheduled_time,guide_id,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     ).bind(newId, src.orgId || orgId, src.appId, b.name, newId, src.mode || "walking-tour", "draft", 0, now, now,
-           b.scheduledDate || null, b.guideId || null, 0, b.tourType || src.tour_type || null).run();
+           b.scheduledDate || null, b.scheduledTime || null, b.guideId || null, 0, b.tourType || src.tour_type || null).run();
     if (srcBundle) {
       let bundleJson = srcBundle.json;
       try { const p = JSON.parse(bundleJson); p.name = b.name; bundleJson = JSON.stringify(p); } catch(e) {}
@@ -812,8 +903,12 @@ async function api(request, env, url) {
     const pid = decodeURIComponent(mlnk[1]);
     if (method === "POST") {
       const A = await auth(request, env);
-      if (!A) return json({ error: "authentication required" }, 401, AC);
-      if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
+      if (!A || !(A.master || A.role === "operator" || A.role === "front_desk"))
+        return json({ error: "operator or front_desk access required" }, 403, AC);
+      if (!A.master) {
+        const proj = await env.DB.prepare("SELECT orgId FROM project WHERE id=?").bind(pid).first();
+        if (!proj || proj.orgId !== A.appId) return json({ error: "project belongs to a different client" }, 403, AC);
+      }
       const b = await request.json().catch(() => ({}));
       const token = randomHex(24);
       const id = crypto.randomUUID();
@@ -871,7 +966,12 @@ async function api(request, env, url) {
     const pid = decodeURIComponent(mpg[1]);
     const gid = mpg[2] ? decodeURIComponent(mpg[2]) : null;
     const A = await auth(request, env);
-    if (!A || !(A.master || A.role === "operator")) return json({ error: "admin or operator required" }, 401, AC);
+    if (!A || !(A.master || A.role === "operator" || A.role === "front_desk"))
+      return json({ error: "admin, operator, or front_desk required" }, 401, AC);
+    if (!A.master) {
+      const proj = await env.DB.prepare("SELECT orgId FROM project WHERE id=?").bind(pid).first();
+      if (!proj || proj.orgId !== A.appId) return json({ error: "project belongs to a different client" }, 403, AC);
+    }
     if (method === "GET") {
       const { results } = await env.DB.prepare(
         "SELECT u.id,u.name,u.email,u.role,pg.assigned_at FROM project_guide pg JOIN user_account u ON u.id=pg.guide_id WHERE pg.project_id=? ORDER BY pg.assigned_at"

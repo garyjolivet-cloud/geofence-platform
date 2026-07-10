@@ -4,16 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Geofence Platform — Dashboard</title>
-<script>
-(function(){
-  var s=localStorage.getItem('gp.session');
-  if(!s){location.replace('/login?next=/dashboard');return;}
-  fetch('/api/auth/me',{headers:{authorization:'Bearer '+s}}).then(function(r){return r.ok?r.json():null;}).then(function(me){
-    if(!me){localStorage.removeItem('gp.session');location.replace('/login?next=/dashboard');return;}
-    if(me.role==='guide'){location.replace('/field');return;}
-  }).catch(function(){});
-})();
-</script>
+<script src="role-gate.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
@@ -72,6 +63,7 @@
   .role-badge{font-family:"Barlow Condensed";font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:.3px}
   .role-admin{color:#ffc24d;background:rgba(255,194,77,.1);border:1px solid rgba(255,194,77,.3)}
   .role-operator{color:var(--coral);background:rgba(255,106,61,.1);border:1px solid rgba(255,106,61,.3)}
+  .role-front_desk{color:var(--amber);background:rgba(255,194,77,.1);border:1px solid rgba(255,194,77,.3)}
   .role-guide{color:var(--ice);background:rgba(143,182,212,.1);border:1px solid rgba(143,182,212,.25)}
   .role-inactive{color:var(--fog);background:rgba(91,112,136,.1);border:1px solid rgba(91,112,136,.3)}
   button.sm{font-family:"Barlow Condensed";font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:4px 10px;border-radius:7px;cursor:pointer;border:1px solid var(--rim);background:var(--slate2);color:var(--ice)}
@@ -86,9 +78,10 @@
       <div><h1>Dashboard</h1><p>Geofence Platform · Back office</p></div>
     </div>
     <nav>
-      <button class="nav" id="tabAnalytics" onclick="showTab('analytics')">Analytics</button>
-      <button class="nav" id="tabTeam" onclick="showTab('team')" style="color:var(--go);border-color:rgba(56,224,166,.35)">Team</button>
-      <button class="nav" id="tabLinks" onclick="showTab('links')" style="color:var(--amber);border-color:rgba(255,194,77,.35)">Walk Links</button>
+      <button class="nav" id="tabAnalytics" data-roles="admin,operator" onclick="showTab('analytics')">Analytics</button>
+      <button class="nav" id="tabTeam" data-roles="admin,operator" onclick="showTab('team')" style="color:var(--go);border-color:rgba(56,224,166,.35)">Team</button>
+      <button class="nav" id="tabLinks" data-roles="admin,operator,front_desk" onclick="showTab('links')" style="color:var(--amber);border-color:rgba(255,194,77,.35)">Walk Links</button>
+      <button class="nav" id="tabSchedule" data-roles="admin,operator,front_desk" onclick="showTab('schedule')" style="color:var(--ice);border-color:rgba(143,182,212,.35)">Schedule</button>
       <select id="projSel" style="display:none"><option value="">— project —</option></select>
       <input class="tokenin" id="tok" type="password" placeholder="admin token" style="width:140px">
       <button class="go" id="load" style="display:none">Load</button>
@@ -96,6 +89,10 @@
       <button class="nav" onclick="signOut()" style="color:var(--fog)">Sign out</button>
     </nav>
   </header>
+
+  <div id="previewBanner" style="display:none;margin:-8px 0 20px;padding:10px 14px;background:rgba(255,194,77,.08);border:1px solid rgba(255,194,77,.3);border-radius:10px;font-family:'Barlow Condensed';font-size:13px;color:var(--amber)">
+    Previewing: <b id="previewName"></b> — <a href="/clients" style="color:var(--amber);text-decoration:underline">back to clients</a>
+  </div>
 
   <!-- Walk Links panel -->
   <div id="panelLinks" style="display:none">
@@ -148,6 +145,27 @@
     </section>
   </div>
 
+  <!-- Schedule panel -->
+  <div id="panelSchedule" style="display:none">
+    <section>
+      <h2>Schedule a tour</h2>
+      <p class="hint">Pick a template, set the date and time, assign a guide, then generate the visitor link — all in one place.</p>
+      <div class="panel">
+        <div class="form-row trio" style="margin-bottom:10px">
+          <div class="form-col"><label>Template</label><select id="schedTemplate"><option value="">— select template —</option></select></div>
+          <div class="form-col"><label>Tour name</label><input id="schedName" placeholder="e.g. Village Walk — Sat 2pm"></div>
+          <div class="form-col"><label>Guide</label><select id="schedGuide" data-empty-label="— unassigned —"><option value="">— unassigned —</option></select></div>
+        </div>
+        <div class="form-row trio" style="align-items:end">
+          <div class="form-col"><label>Date</label><input id="schedDate" type="date"></div>
+          <div class="form-col"><label>Time</label><input id="schedTime" type="time"></div>
+          <button class="go" id="scheduleBtn" style="height:38px">Schedule tour</button>
+        </div>
+        <p class="note" id="scheduleMsg"></p>
+      </div>
+    </section>
+  </div>
+
   <!-- Analytics panel -->
   <div id="panelAnalytics" style="display:none">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap">
@@ -182,6 +200,7 @@
           <div class="form-col"><label>Role</label>
             <select id="invRole">
               <option value="guide">Guide</option>
+              <option value="front_desk">Front Desk</option>
               <option value="operator">Operator</option>
               <option value="admin">Admin</option>
             </select>
@@ -223,22 +242,45 @@ function showTab(t) {
   $("panelAnalytics").style.display = t==="analytics" ? "" : "none";
   $("panelTeam").style.display = t==="team" ? "" : "none";
   $("panelLinks").style.display = t==="links" ? "" : "none";
-  [["tabAnalytics","analytics",""],["tabTeam","team","var(--go)","rgba(56,224,166,.35)"],["tabLinks","links","var(--amber)","rgba(255,194,77,.35)"]].forEach(([id,name,inactiveColor,inactiveBorder])=>{
+  $("panelSchedule").style.display = t==="schedule" ? "" : "none";
+  [["tabAnalytics","analytics",""],["tabTeam","team","var(--go)","rgba(56,224,166,.35)"],
+   ["tabLinks","links","var(--amber)","rgba(255,194,77,.35)"],
+   ["tabSchedule","schedule","var(--ice)","rgba(143,182,212,.35)"]].forEach(([id,name,inactiveColor,inactiveBorder])=>{
     const el=$(id); if(!el) return;
     const active=t===name;
     el.style.color = active ? "var(--snow)" : (inactiveColor||"");
     el.style.borderColor = active ? "var(--coral)" : (inactiveBorder||"");
   });
 }
-showTab("team");
+// asClient: admin-only preview of one client's data (see clients.html "Run").
+// Ignored entirely for non-admin roles — their own session already pins them
+// to their own client server-side regardless of what's in the URL.
+const asClient = new URLSearchParams(location.search).get("asClient") || null;
+let ME = null;
+function orgParam(){ return (ME && ME.role==="admin" && asClient) ? asClient : null; }
 
 let _allProjects=[];
 async function loadProjects(){
-  try{ const r=await fetch("/api/projects"); const j=await r.json();
+  try{
+    const org=orgParam();
+    const url="/api/projects"+(org?"?app="+encodeURIComponent(org):"");
+    const r=await fetch(url,{headers:{authorization:"Bearer "+tok()}}); const j=await r.json();
     _allProjects=j.projects||[];
     [$("projSel2")].forEach(sel=>{ if(!sel) return; _allProjects.forEach(p=>{ const o=document.createElement("option");
       o.value=p.id; o.textContent=p.name+(p.scheduled_date?" · "+p.scheduled_date:""); sel.appendChild(o); }); });
     populateLinkProjects();
+  }catch(e){}
+}
+
+async function loadTemplates(){
+  try{
+    const org=orgParam();
+    const qs=["template=1"]; if(org) qs.push("app="+encodeURIComponent(org));
+    const r=await fetch("/api/projects?"+qs.join("&"),{headers:{authorization:"Bearer "+tok()}});
+    const templates=(await r.json()).projects||[];
+    const sel=$("schedTemplate"); if(!sel) return;
+    sel.innerHTML='<option value="">— select template —</option>'+
+      templates.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||p.id)+'</option>').join('');
   }catch(e){}
 }
 function populateLinkProjects(){
@@ -260,12 +302,15 @@ let _guidesList=[];
 async function loadGuidesList(){
   try{
     const useTok=tok(); if(!useTok) return;
-    const r=await fetch("/api/users?role=guide",{headers:{authorization:"Bearer "+useTok}});
+    const org=orgParam();
+    const url="/api/users?role=guide"+(org?"&org="+encodeURIComponent(org):"");
+    const r=await fetch(url,{headers:{authorization:"Bearer "+useTok}});
     if(!r.ok) return;
     _guidesList=(await r.json()).users||[];
-    [$("lnkGuide"),$("lnkListGuide")].forEach(sel=>{
+    [$("lnkGuide"),$("lnkListGuide"),$("schedGuide")].forEach(sel=>{
       if(!sel) return;
-      sel.innerHTML='<option value="">— all guides —</option>'+
+      const emptyLabel=sel.dataset.emptyLabel||"— all guides —";
+      sel.innerHTML='<option value="">'+emptyLabel+'</option>'+
         _guidesList.map(g=>'<option value="'+esc(g.id)+'">'+(esc(g.name||g.email))+'</option>').join('');
     });
   }catch(e){}
@@ -391,7 +436,9 @@ async function loadTeam() {
   const t=$("tok").value; if(t) sessionStorage.setItem("gp.admin",t);
   $("teamMsg").textContent="Loading…"; $("teamMsg").style.display="block";
   try {
-    const r=await fetch("/api/users",{headers:{authorization:"Bearer "+useTok}});
+    const org=orgParam();
+    const url="/api/users"+(org?"?org="+encodeURIComponent(org):"");
+    const r=await fetch(url,{headers:{authorization:"Bearer "+useTok}});
     if(r.status===401){ $("teamMsg").textContent="Unauthorized — check admin token."; return; }
     const j=await r.json();
     const users=j.users||[];
@@ -459,7 +506,8 @@ async function openAssign(uid, uname){
   $("assignModal").style.display="flex";
   const useTok=tok();
   try{
-    const rAll=await fetch("/api/projects");
+    const org=orgParam();
+    const rAll=await fetch("/api/projects"+(org?"?app="+encodeURIComponent(org):""),{headers:{authorization:"Bearer "+useTok}});
     const allProjs=(await rAll.json()).projects||[];
     if(!allProjs.length){ $("assignList").innerHTML='<div class="hint">No projects yet.</div>'; return; }
     // check which projects this guide is assigned to via project_guide table
@@ -517,6 +565,31 @@ $("genLinkBtn").onclick = async function(){
   finally{$("genLinkBtn").disabled=false;$("genLinkBtn").textContent="Generate link";}
 };
 
+// ---- Schedule a tour (front_desk's whole job: template -> instance -> guide -> link) ----
+$("scheduleBtn").onclick = async function(){
+  const srcId=$("schedTemplate").value; if(!srcId){$("scheduleMsg").textContent="Pick a template first.";return;}
+  const name=$("schedName").value.trim(); if(!name){$("scheduleMsg").textContent="Tour name required.";return;}
+  const useTok=tok(); if(!useTok){$("scheduleMsg").textContent="Sign in first.";return;}
+  const guideId=$("schedGuide").value||null;
+  $("scheduleBtn").disabled=true; $("scheduleBtn").textContent="Scheduling…"; $("scheduleMsg").textContent="";
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(srcId)+"/copy",{method:"POST",
+      headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
+      body:JSON.stringify({name, scheduledDate:$("schedDate").value||null, scheduledTime:$("schedTime").value||null, guideId})});
+    const j=await r.json();
+    if(!r.ok){ $("scheduleMsg").textContent="✕ "+(j.error||r.status); return; }
+    $("scheduleMsg").textContent="✓ Scheduled — generating visitor link…";
+    await loadProjects();
+    await loadTemplates();
+    $("schedName").value=""; $("schedDate").value=""; $("schedTime").value=""; $("schedGuide").value="";
+    showTab("links");
+    $("lnkProj").value=j.id;
+    $("lnkGuide").value=guideId||"";
+    $("genLinkBtn").click();
+  }catch(e){ $("scheduleMsg").textContent="✕ network error"; }
+  finally{ $("scheduleBtn").disabled=false; $("scheduleBtn").textContent="Schedule tour"; }
+};
+
 async function loadLinks(){
   const pid=$("lnkListProj").value; if(!pid){$("linkMsg").textContent="Select a project first.";return;}
   const useTok=tok(); if(!useTok){$("linkMsg").textContent="Sign in or enter token.";return;}
@@ -560,15 +633,41 @@ async function signOut(){
   localStorage.removeItem("gp.session"); localStorage.removeItem("gp.user");
   location.href="/login";
 }
-loadProjects();
-if(sessionStorage.getItem("gp.admin")) $("tok").placeholder="admin token (saved)";
-// Auto-load team if already signed in via session
-if(localStorage.getItem("gp.session")){
-  const u=localStorage.getItem("gp.user"); try{ const uj=JSON.parse(u||"{}");
-    if(uj.name) $("tok").placeholder="signed in as "+uj.name; }catch(e){}
-  loadTeam();
-  loadGuidesList();
+function applyRoleVisibility(role){
+  document.querySelectorAll("[data-roles]").forEach(el=>{
+    const roles=el.getAttribute("data-roles").split(",");
+    el.style.display = roles.includes(role) ? "" : "none";
+  });
 }
+function applyInviteRoleOptions(role){
+  const sel=$("invRole"); if(!sel) return;
+  if(role==="operator"){
+    [...sel.options].forEach(o=>{ if(o.value==="admin"||o.value==="operator") o.remove(); });
+  }
+}
+function applyPreviewBanner(role){
+  if(role!=="admin"||!asClient) return;
+  fetch("/api/clients",{headers:{authorization:"Bearer "+tok()}}).then(r=>r.ok?r.json():null).then(j=>{
+    const c=((j&&j.clients)||[]).find(c=>c.id===asClient);
+    $("previewName").textContent=c?c.name:asClient;
+    $("previewBanner").style.display="block";
+  }).catch(()=>{});
+}
+function defaultTabForRole(role){ return role==="front_desk" ? "schedule" : "team"; }
+
+if(sessionStorage.getItem("gp.admin")) $("tok").placeholder="admin token (saved)";
+RoleGate.require(["admin","operator","front_desk"]).then(me=>{
+  ME=me;
+  $("tok").placeholder="signed in as "+(me.name||me.email);
+  applyRoleVisibility(me.role);
+  applyInviteRoleOptions(me.role);
+  applyPreviewBanner(me.role);
+  showTab(defaultTabForRole(me.role));
+  loadProjects();
+  loadTemplates();
+  loadGuidesList();
+  if(me.role!=="front_desk") loadTeam();
+});
 </script>
 </body>
 </html>

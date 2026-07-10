@@ -4,16 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chase Life — Fence Editor</title>
-<script>
-(function(){
-  var s=localStorage.getItem('gp.session');
-  if(!s){location.replace('/login?next='+encodeURIComponent(location.pathname+location.search));return;}
-  fetch('/api/auth/me',{headers:{authorization:'Bearer '+s}}).then(function(r){return r.ok?r.json():null;}).then(function(me){
-    if(!me){localStorage.removeItem('gp.session');location.replace('/login?next='+encodeURIComponent(location.pathname+location.search));return;}
-    if(me.role==='guide'){location.replace('/field');return;}
-  }).catch(function(){});
-})();
-</script>
+<script src="role-gate.js"></script>
+<script>RoleGate.require(['admin']);</script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -1501,7 +1493,7 @@ function openProjSlider(type){
 
 // app picker — organize projects into apps so they don't blend
 async function loadApps(sel){
-  try{ const r=await fetch("/api/apps"); const apps=(await r.json()).apps||[];
+  try{ const r=await fetch("/api/apps",{headers:{authorization:"Bearer "+getToken()}}); const apps=(await r.json()).apps||[];
     const as=document.getElementById("appSel"); const keep=sel||as.value;
     as.innerHTML='<option value="">— unsorted —</option>'+
       apps.map(a=>'<option value="'+a.id+'">'+(a.name||a.id)+'</option>').join("");
@@ -2844,7 +2836,7 @@ async function fetchAndMergeBots(){
   const appId=document.getElementById("appSel").value;
   try{
     const url="/api/bots"+(appId?"?appId="+encodeURIComponent(appId):"");
-    const r=await fetch(url);
+    const r=await fetch(url,{headers:{authorization:"Bearer "+getToken()}});
     if(r.ok){
       const {bots}=await r.json();
       (bots||[]).forEach(sb=>{

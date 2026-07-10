@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Field</title>
+<script src="role-gate.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <style>
@@ -198,23 +199,19 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
 const _qs    = new URLSearchParams(location.search);
 const projId = _qs.get("project") || "";
 
-// Auth gate: require login; all roles land on sessions screen to pick their project
+// Auth gate: full (persistent-recording) access is admin-only. Guides get a
+// live-only carve-out since running live tours is their actual job.
+// operator/front_desk have no reason to be here — RoleGate sends them to
+// /dashboard instead.
 let _me = null;
-(function(){
-  const _sess = localStorage.getItem("gp.session");
-  if (!_sess) { location.replace("/login?next=" + encodeURIComponent(location.pathname + location.search)); return; }
-  fetch("/api/auth/me", { headers: { authorization: "Bearer " + _sess } })
-    .then(r => r.ok ? r.json() : null)
-    .then(me => {
-      if (!me) { localStorage.removeItem("gp.session"); location.replace("/login"); return; }
-      _me = me;
-      if (me.role === 'guide') {
-        document.querySelector('.ss-hdr h1').textContent = 'My Bookings';
-        const homeLink = document.querySelector('.ss-hdr a[href="/"]');
-        if (homeLink) homeLink.style.display = 'none';
-      }
-    }).catch(() => {});
-})();
+RoleGate.require(['admin', 'guide']).then(me => {
+  _me = me;
+  if (me.role === 'guide') {
+    document.querySelector('.ss-hdr h1').textContent = 'My Bookings';
+    const homeLink = document.querySelector('.ss-hdr a[href="/"]');
+    if (homeLink) homeLink.style.display = 'none';
+  }
+});
 const MIME   = ["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
                  .find(t => MediaRecorder.isTypeSupported(t)) || "";
 let liveTtlMs = 300000;                            // default 5 min; overwritten from bundle on init
@@ -248,6 +245,11 @@ function circularMean(degs){
 }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;"); }
+function fmtTime12h(t){
+  const m=/^(\d{1,2}):(\d{2})/.exec(t||""); if(!m) return "";
+  let h=Number(m[1]); const ap=h>=12?"PM":"AM"; h=h%12||12;
+  return h+":"+m[2]+" "+ap;
+}
 function getToken(){ return localStorage.getItem("gp.session")||localStorage.getItem("gp.token")||""; }
 
 /* ── IndexedDB ─────────────────────────────────────── */
@@ -307,7 +309,7 @@ async function renderSessionsList(){
   // Fetch projects from server
   let serverProjects = [];
   try{
-    const r = await fetch("/api/projects" + _guideQ);
+    const r = await fetch("/api/projects" + _guideQ, { headers: { authorization: "Bearer " + getToken() } });
     if(r.ok){ serverProjects = (await r.json()).projects || []; }
   }catch(e){}
 
@@ -325,6 +327,7 @@ async function renderSessionsList(){
       }catch(_){}
       const dateStr = p.scheduled_date
         ? new Date(p.scheduled_date+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",year:"numeric",month:"long",day:"numeric"})
+          +(p.scheduled_time?" · "+fmtTime12h(p.scheduled_time):"")
         : "No date set";
       const visitorsHtml = links.length
         ? links.map(lk=>`
@@ -1025,7 +1028,7 @@ document.getElementById("btnPub").onclick = () => {
 async function doPublish(pid, pname, token){
   // Guard: project must already exist on server — guide cannot create projects
   try{
-    const chk = await fetch("/api/projects",{cache:"no-store"});
+    const chk = await fetch("/api/projects",{cache:"no-store",headers:{authorization:"Bearer "+token}});
     if(chk.ok){
       const data = await chk.json();
       if(!(data.projects||[]).find(p=>p.id===pid)){
@@ -1132,7 +1135,7 @@ async function init(){
   // Verify project exists on server and get its name
   let projectName = null;
   try{
-    const r = await fetch("/api/projects",{cache:"no-store"});
+    const r = await fetch("/api/projects",{cache:"no-store",headers:{authorization:"Bearer "+getToken()}});
     if(r.ok){
       const data = await r.json();
       const proj = (data.projects||[]).find(p=>p.id===projId);
