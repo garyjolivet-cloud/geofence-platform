@@ -2139,61 +2139,75 @@ document.getElementById("trimOk").onclick=async()=>{
   if(!_tBuf) return;
   const key=document.getElementById("trimKey").value.trim();
   const btn=document.getElementById("trimOk"); btn.textContent="encoding…"; btn.disabled=true;
-  // Create AudioContext NOW while we're in the click handler (gesture context).
-  // If created inside _reenc (after an await), Chrome suspends it and renders no audio.
-  const encCtx=new AudioContext({sampleRate:_tBuf.sampleRate});
   try{
-    const blob=await _reenc(_tBuf,_tFrac.start,_tFrac.end,encCtx);
-    encCtx.close().catch(()=>{});
+    const blob=await _reenc(_tBuf,_tFrac.start,_tFrac.end);
     if(!blob.size){ throw new Error("encoded clip is empty — try again"); }
     const fn=_tOnOk; closeTrimmer(); if(fn) await fn(blob,key);
-  }catch(e){ encCtx.close().catch(()=>{}); btn.textContent="✓ Trim & Upload"; btn.disabled=false; alert("encode failed: "+e.message); }
+  }catch(e){ btn.textContent="✓ Trim & Upload"; btn.disabled=false; alert("encode failed: "+e.message); }
 };
 document.getElementById("trimCancel").onclick=()=>closeTrimmer();
 document.getElementById("trimOverlay").onclick=ev=>{
   if(ev.target===document.getElementById("trimOverlay")) closeTrimmer();
 };
-async function _reenc(buf,f0,f1,ctx){
+async function _reenc(buf,f0,f1){
   const sr=buf.sampleRate, nch=buf.numberOfChannels;
   const s=f0*buf.duration, dur=(f1-f0)*buf.duration;
   const frameCount=Math.round(dur*sr);
 
-  // Step 1: render trimmed slice offline — no timing drift, exact frame count
+  // Render the trimmed slice offline with a short fade-in/out (kills the
+  // click when a hard cut lands mid-waveform), then encode to MP3. No live
+  // playback + MediaRecorder capture here on purpose — that path re-records
+  // the clip in real time and is prone to dropped-frame crackle plus
+  // whatever low bitrate the browser defaults to when none is set. Guides
+  // trim only here on the laptop editor (never in the field app), and the
+  // trimmed file still needs to upload fast and later stream to visitors
+  // on-trail, so the output must stay compressed — not raw WAV.
   const offline=new OfflineAudioContext(nch,frameCount,sr);
   const offSrc=offline.createBufferSource();
-  offSrc.buffer=buf; offSrc.connect(offline.destination);
+  const gain=offline.createGain();
+  offSrc.buffer=buf; offSrc.connect(gain); gain.connect(offline.destination);
+  const fade=Math.min(0.01,dur/4);
+  gain.gain.setValueAtTime(0,0);
+  gain.gain.linearRampToValueAtTime(1,fade);
+  gain.gain.setValueAtTime(1,dur-fade);
+  gain.gain.linearRampToValueAtTime(0,dur);
   offSrc.start(0,s,dur);
   const trimmed=await offline.startRendering();
-
-  // Step 2: encode trimmed buffer to compressed audio via MediaRecorder
-  const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
-    .find(t=>MediaRecorder.isTypeSupported(t))||"";
-  const ownCtx=!ctx;
-  if(!ctx) ctx=new AudioContext({sampleRate:sr});
-  try{ await ctx.resume(); }catch(_){}
-  const dest=ctx.createMediaStreamDestination();
-  return new Promise((res,rej)=>{
-    const chunks=[];
-    let rec;
-    try{ rec=new MediaRecorder(dest.stream,mime?{mimeType:mime}:{}); }
-    catch(e){ if(ownCtx) ctx.close().catch(()=>{}); rej(e); return; }
-    rec.ondataavailable=ev=>{ if(ev.data.size>0) chunks.push(ev.data); };
-    rec.onstop=()=>{ if(ownCtx) ctx.close().catch(()=>{}); res(new Blob(chunks,{type:rec.mimeType||mime||"audio/webm"})); };
-    try{ rec.start(100); }catch(e){ if(ownCtx) ctx.close().catch(()=>{}); rej(e); return; }
-    const src=ctx.createBufferSource();
-    src.buffer=trimmed; src.connect(dest);
-    // schedule slightly in future so recorder is ready before audio starts
-    src.start(ctx.currentTime+0.05);
-    src.onended=()=>{ try{ if(rec.state!=="inactive") rec.stop(); }catch(e){ rej(e); } };
-    setTimeout(()=>{ try{ if(rec.state!=="inactive") rec.stop(); }catch(_){} },(dur+3)*1000);
-  });
+  return _encodeMp3(trimmed);
+}
+let _lame=null;
+async function _loadLame(){
+  if(_lame) return _lame;
+  try{ const mod=await import('https://esm.sh/@breezystack/lamejs@1.2.7'); _lame=mod.Mp3Encoder; return _lame; }
+  catch(e){ return null; }
+}
+function _pcm16(f){
+  const out=new Int16Array(f.length);
+  for(let i=0;i<f.length;i++){ const v=Math.max(-1,Math.min(1,f[i])); out[i]=v<0?v*0x8000:v*0x7fff; }
+  return out;
+}
+async function _encodeMp3(buf){
+  const Mp3Encoder=await _loadLame();
+  if(!Mp3Encoder) throw new Error("mp3 encoder failed to load — check your connection and try again");
+  const nch=buf.numberOfChannels>1?2:1, sr=buf.sampleRate;
+  const left=_pcm16(buf.getChannelData(0));
+  const right=nch>1?_pcm16(buf.getChannelData(1)):null;
+  const enc=new Mp3Encoder(nch,sr,128);
+  const chunks=[], block=1152;
+  for(let i=0;i<left.length;i+=block){
+    const out=right?enc.encodeBuffer(left.subarray(i,i+block),right.subarray(i,i+block))
+                   :enc.encodeBuffer(left.subarray(i,i+block));
+    if(out.length) chunks.push(out);
+  }
+  const tail=enc.flush(); if(tail.length) chunks.push(tail);
+  return new Blob(chunks,{type:"audio/mpeg"});
 }
 async function _decodeUrl(url){
   const r=await fetch(url); const ab=await r.arrayBuffer();
   const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab);
   await tmp.close(); return buf;
 }
-function _mimeExt(mime){ return mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
+function _mimeExt(mime){ return mime.includes("mpeg")||mime.includes("mp3")?"mp3":mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
 
 /* ── shared XHR uploader ── */
 function doXhrUpload(blob, key, mimeType, label){
