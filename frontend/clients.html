@@ -117,6 +117,7 @@ async function loadClients(){
           '<button class="sm" onclick="runAs(\''+esc(c.id)+"','dashboard')\">Run · Dashboard</button>"+
           '<button class="sm" onclick="runAs(\''+esc(c.id)+"','field')\">Run · Field</button>"+
           '<button class="sm" onclick="copyLogin(\''+esc(c.slug)+"')\">Login link</button>"+
+          '<button class="sm" style="color:var(--coral);border-color:rgba(255,106,61,.4)" onclick="deleteClient(\''+esc(c.id)+"','"+esc(c.name)+"',"+(c.projectCount||0)+","+(c.userCount||0)+")\">Delete</button>"+
         "</td>";
       table.appendChild(tr);
     });
@@ -128,6 +129,22 @@ function runAs(id,where){
 function copyLogin(slug){
   const url=location.origin+"/c/"+encodeURIComponent(slug)+"/login";
   navigator.clipboard.writeText(url).then(()=>{ $("clientMsg").textContent="Copied: "+url; });
+}
+async function deleteClient(id,name,projectCount,userCount){
+  if(!confirm('Delete client "'+name+'"? This cannot be undone.')) return;
+  const msg=$("clientMsg");
+  const r=await fetch("/api/clients/"+encodeURIComponent(id),{method:"DELETE",headers:{authorization:"Bearer "+token()}});
+  if(r.ok){ msg.textContent="✓ Deleted "+name; loadClients(); return; }
+  const j=await r.json().catch(()=>({}));
+  if(r.status===409){
+    if(!confirm('"'+name+'" still has '+projectCount+' project(s) and '+userCount+' staff account(s). '+
+                'Delete it AND all of them permanently? This cannot be undone.')) { msg.textContent="Cancelled."; return; }
+    const r2=await fetch("/api/clients/"+encodeURIComponent(id)+"?cascade=true",{method:"DELETE",headers:{authorization:"Bearer "+token()}});
+    if(r2.ok){ msg.textContent="✓ Deleted "+name+" and everything under it"; loadClients(); }
+    else{ const j2=await r2.json().catch(()=>({})); msg.textContent="✕ "+(j2.error||"delete failed"); }
+    return;
+  }
+  msg.textContent="✕ "+(j.error||"delete failed");
 }
 
 $("createBtn").onclick=async()=>{

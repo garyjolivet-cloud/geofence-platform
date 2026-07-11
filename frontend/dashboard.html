@@ -455,7 +455,7 @@ async function loadTeam() {
           <td><span class="role-badge ${roleClass}">${esc(u.role)}</span></td>
           <td style="color:var(--fog);font-size:13px">${lastLogin}</td>
           <td style="text-align:right;white-space:nowrap">
-            ${u.role==='guide'?`<button class="sm" onclick="openAssign('${esc(u.id)}','${esc(u.name||u.email)}')" style="margin-right:6px">Assign projects</button>`:''}
+            ${(u.role==='guide'||u.role==='front_desk')?`<button class="sm" onclick="openAssign('${esc(u.id)}','${esc(u.name||u.email)}','${esc(u.role)}')" style="margin-right:6px">Assign projects</button>`:''}
             <button class="sm" onclick="resendInvite('${esc(u.id)}','${esc(u.email)}')" title="Resend invite">Resend invite</button>
           </td>
         </tr>`
@@ -497,10 +497,17 @@ $("inviteBtn").onclick=async function(){
   finally{$("inviteBtn").disabled=false; $("inviteBtn").textContent="Create & get invite link";}
 };
 
-// ---- Guide project assignment ----
-let _assignGuideId='', _assignGuideName='';
-async function openAssign(uid, uname){
-  _assignGuideId=uid; _assignGuideName=uname;
+// ---- Guide / front_desk project assignment ----
+let _assignGuideId='', _assignGuideName='', _assignRole='guide';
+function _assignEndpoint(){ return _assignRole==='front_desk' ? 'frontdesk' : 'guides'; }
+function _assignIdField(){ return _assignRole==='front_desk' ? 'frontdeskId' : 'guideId'; }
+function _assignedLookupUrl(uid){
+  return _assignRole==='front_desk'
+    ? "/api/frontdesk/"+encodeURIComponent(uid)+"/assigned"
+    : "/api/projects/"+encodeURIComponent(uid)+"/assigned";
+}
+async function openAssign(uid, uname, role){
+  _assignGuideId=uid; _assignGuideName=uname; _assignRole=role||'guide';
   $("assignTitle").textContent="Projects — "+uname;
   $("assignList").innerHTML='<div class="hint">Loading…</div>';
   $("assignModal").style.display="flex";
@@ -510,10 +517,10 @@ async function openAssign(uid, uname){
     const rAll=await fetch("/api/projects"+(org?"?app="+encodeURIComponent(org):""),{headers:{authorization:"Bearer "+useTok}});
     const allProjs=(await rAll.json()).projects||[];
     if(!allProjs.length){ $("assignList").innerHTML='<div class="hint">No projects yet.</div>'; return; }
-    // check which projects this guide is assigned to via project_guide table
+    // check which projects this user is already assigned to
     let assignedIds=new Set();
     try{
-      const rg=await fetch("/api/projects/"+encodeURIComponent(uid)+"/assigned");
+      const rg=await fetch(_assignedLookupUrl(uid),{headers:{authorization:"Bearer "+useTok}});
       if(rg.ok){ const ids=await rg.json(); assignedIds=new Set(ids||[]); }
     }catch(_){}
     $("assignList").innerHTML=allProjs.map(p=>{
@@ -529,12 +536,12 @@ function closeAssign(){ $("assignModal").style.display="none"; }
 async function toggleAssign(cb, pid){
   const useTok=tok();
   if(cb.checked){
-    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/guides",{method:"POST",
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/"+_assignEndpoint(),{method:"POST",
       headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
-      body:JSON.stringify({guideId:_assignGuideId})});
+      body:JSON.stringify({[_assignIdField()]:_assignGuideId})});
     if(!r.ok){ cb.checked=false; alert("Failed to assign: "+((await r.json().catch(()=>({}))).error||r.status)); }
   } else {
-    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/guides/"+encodeURIComponent(_assignGuideId),
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/"+_assignEndpoint()+"/"+encodeURIComponent(_assignGuideId),
       {method:"DELETE",headers:{authorization:"Bearer "+useTok}});
     if(!r.ok){ cb.checked=true; alert("Failed to remove: "+((await r.json().catch(()=>({}))).error||r.status)); }
   }

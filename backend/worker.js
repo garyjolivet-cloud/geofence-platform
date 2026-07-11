@@ -658,6 +658,33 @@ async function api(request, env, url) {
     await logAudit(env, request, A, "client.create", id);
     return json({ ok: true, id, slug }, 200, AC);
   }
+  // --- delete a client (master only; ?cascade=true also wipes its projects/apps/staff) ---
+  const mdc = path.match(/^\/api\/clients\/([^/]+)$/);
+  if (mdc && method === "DELETE") {
+    const A = await auth(request, env);
+    if (!A || !A.master) return json({ error: "admin access required" }, 403, AC);
+    const cid = decodeURIComponent(mdc[1]);
+    const cascade = url.searchParams.get("cascade") === "true";
+    if (!cascade) {
+      const proj = await env.DB.prepare("SELECT id FROM project WHERE orgId=? LIMIT 1").bind(cid).first();
+      const usr = await env.DB.prepare("SELECT id FROM user_account WHERE org_id=? LIMIT 1").bind(cid).first();
+      if (proj || usr) return json({ error: "remove or reassign this client's projects/staff first, or use cascade=true" }, 409, AC);
+    } else {
+      const { results: projs } = await env.DB.prepare("SELECT id FROM project WHERE orgId=?").bind(cid).all();
+      for (const p of (projs || [])) {
+        await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(p.id).run();
+        await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(p.id).run();
+        await env.DB.prepare("DELETE FROM project WHERE id=?").bind(p.id).run();
+      }
+      await env.DB.prepare("DELETE FROM api_key WHERE appId IN (SELECT id FROM app WHERE orgId=?)").bind(cid).run();
+      await env.DB.prepare("DELETE FROM app WHERE orgId=?").bind(cid).run();
+      await env.DB.prepare("DELETE FROM user_session WHERE user_id IN (SELECT id FROM user_account WHERE org_id=?)").bind(cid).run();
+      await env.DB.prepare("DELETE FROM user_account WHERE org_id=?").bind(cid).run();
+    }
+    await env.DB.prepare("DELETE FROM client WHERE id=?").bind(cid).run();
+    await logAudit(env, request, A, "client.delete", cid);
+    return json({ ok: true, deleted: cid }, 200, AC);
+  }
 
   // --- apps (workspaces): list with project counts ---
   if (path === "/api/apps" && method === "GET") {
@@ -797,6 +824,18 @@ async function api(request, env, url) {
     return json({ ok: true, project: pid, appId: b.appId || null }, 200, AC);
   }
 
+  // --- move a project to a different client (developer/admin only) ---
+  const mvo = path.match(/^\/api\/projects\/([^/]+)\/org$/);
+  if (mvo && method === "PUT") {
+    if (!authed(request, env)) return json({ error: "unauthorized" }, 401, AC);
+    const pid = decodeURIComponent(mvo[1]);
+    const b = await request.json();
+    if (!b.orgId) return json({ error: "need orgId" }, 400, AC);
+    await env.DB.prepare("UPDATE project SET orgId=?, updatedAt=? WHERE id=?")
+      .bind(b.orgId, new Date().toISOString(), pid).run();
+    return json({ ok: true, project: pid, orgId: b.orgId }, 200, AC);
+  }
+
   if (path === "/api/projects" && method === "GET") {
     const A = await auth(request, env);
     // Unscoped before multi-client support existed — non-master callers are
@@ -809,6 +848,10 @@ async function api(request, env, url) {
     const templateFilter = url.searchParams.get("template");
     const archivedFilter = url.searchParams.get("archived");
     if (!A.master) { conditions.push("orgId=?"); binds.push(A.appId); }
+    if (!A.master && A.role === "front_desk") {
+      conditions.push("id IN (SELECT project_id FROM project_frontdesk WHERE frontdesk_id=?)");
+      binds.push(A.userId);
+    }
     if (appFilter) { conditions.push("appId=?"); binds.push(appFilter); }
     if (dateFilter) { conditions.push("scheduled_date=?"); binds.push(dateFilter); }
     if (guideFilter) { conditions.push("(guide_id=? OR id IN (SELECT project_id FROM project_guide WHERE guide_id=?))"); binds.push(guideFilter, guideFilter); }
@@ -993,6 +1036,49 @@ async function api(request, env, url) {
     }
   }
 
+  // --- get project IDs assigned to a front_desk user (public — only returns IDs) ---
+  const mfa = path.match(/^\/api\/frontdesk\/([^/]+)\/assigned$/);
+  if (mfa && method === "GET") {
+    const fdId = decodeURIComponent(mfa[1]);
+    const { results } = await env.DB.prepare(
+      "SELECT project_id FROM project_frontdesk WHERE frontdesk_id=?"
+    ).bind(fdId).all();
+    return json((results || []).map(r => r.project_id), 200, AC);
+  }
+
+  // --- project front_desk assignments (M:M) — operator/admin only; front_desk cannot self-assign ---
+  const mpf = path.match(/^\/api\/projects\/([^/]+)\/frontdesk(?:\/([^/]+))?$/);
+  if (mpf) {
+    const pid = decodeURIComponent(mpf[1]);
+    const fdId = mpf[2] ? decodeURIComponent(mpf[2]) : null;
+    const A = await auth(request, env);
+    if (!A || !(A.master || A.role === "operator"))
+      return json({ error: "admin or operator required" }, 401, AC);
+    if (!A.master) {
+      const proj = await env.DB.prepare("SELECT orgId FROM project WHERE id=?").bind(pid).first();
+      if (!proj || proj.orgId !== A.appId) return json({ error: "project belongs to a different client" }, 403, AC);
+    }
+    if (method === "GET") {
+      const { results } = await env.DB.prepare(
+        "SELECT u.id,u.name,u.email,u.role,pf.assigned_at FROM project_frontdesk pf JOIN user_account u ON u.id=pf.frontdesk_id WHERE pf.project_id=? ORDER BY pf.assigned_at"
+      ).bind(pid).all();
+      return json({ frontdesk: results || [] }, 200, AC);
+    }
+    if (method === "POST") {
+      const b = await request.json();
+      if (!b.frontdeskId) return json({ error: "need frontdeskId" }, 400);
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO project_frontdesk (project_id,frontdesk_id,assigned_at) VALUES (?,?,?)"
+      ).bind(pid, b.frontdeskId, now).run();
+      return json({ ok: true }, 200, AC);
+    }
+    if (method === "DELETE" && fdId) {
+      await env.DB.prepare("DELETE FROM project_frontdesk WHERE project_id=? AND frontdesk_id=?").bind(pid, fdId).run();
+      return json({ ok: true }, 200, AC);
+    }
+  }
+
   // --- a project's bundle: GET latest (public) / PUT new version (scoped) ---
   const mb = path.match(/^\/api\/projects\/([^/]+)\/bundle$/);
   if (mb) {
@@ -1007,6 +1093,10 @@ async function api(request, env, url) {
       try { bundle = JSON.parse(row.json); }
       catch (e) { return json({ error: "stored bundle is corrupt" }, 500); }
       bundle.bundleVersion = row.version;
+      // Reflect the live owner — a project may have moved clients since this
+      // bundle was published, and the stored JSON would otherwise be stale.
+      const ownerRow = await env.DB.prepare("SELECT orgId FROM project WHERE id=?").bind(pid).first();
+      if (ownerRow) bundle.orgId = ownerRow.orgId;
       // Merge active live zones — filtered by guide when visitor arrived via a guide's walk link
       const liveGuide = url.searchParams.get("guide");
       const liveRows = liveGuide
@@ -1036,17 +1126,20 @@ async function api(request, env, url) {
       if (!scopeOk(A, "publish", targetApp)) return json({ error: "not authorized to publish to this app" }, 401, AC);
       if (A && A.role === "guide") return json({ error: "guides cannot publish persistent stops — use live mode" }, 403, AC);
       const now = new Date().toISOString();
+      // Only master/admin may steer which client a new project lands under;
+      // everyone else falls back to the default org, matching prior behavior.
+      const chosenOrgId = (A && A.master && bundle.orgId) ? bundle.orgId : orgId;
       // Resolve appId — auto-assign so project always surfaces on home screen
       let resolvedAppId = existingAppId || bundle.appId || null;
       if (!resolvedAppId) {
-        const existingApp = await env.DB.prepare("SELECT id FROM app WHERE orgId=? LIMIT 1").bind(orgId).first();
+        const existingApp = await env.DB.prepare("SELECT id FROM app WHERE orgId=? LIMIT 1").bind(chosenOrgId).first();
         if (existingApp) {
           resolvedAppId = existingApp.id;
         } else {
-          resolvedAppId = orgId;
+          resolvedAppId = chosenOrgId;
           await env.DB.prepare(
             "INSERT OR IGNORE INTO app (id,orgId,name,slug,description,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)"
-          ).bind(resolvedAppId, orgId, bundle.name || "Default Workspace", resolvedAppId, null, now, now).run();
+          ).bind(resolvedAppId, chosenOrgId, bundle.name || "Default Workspace", resolvedAppId, null, now, now).run();
         }
       }
       const proj = await env.DB.prepare("SELECT bundleVersion FROM project WHERE id=?").bind(pid).first();
@@ -1058,7 +1151,7 @@ async function api(request, env, url) {
       } else if (bundle.createIfMissing) {
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, orgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
+        ).bind(pid, chosenOrgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
       } else {
         return json({ error: "project not found — create it from the main screen first" }, 404, AC);
       }
