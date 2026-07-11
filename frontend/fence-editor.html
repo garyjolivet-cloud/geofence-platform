@@ -411,10 +411,9 @@
       <button id="tokTest" class="ghost" style="flex:0 0 auto">Test</button>
     </div>
     <div class="hint" id="platStatus" style="margin:0 0 4px">token required for Load, Publish</div>
-    <!-- customer picker — which client this project belongs to -->
+    <!-- customer picker — which client this project belongs to; Publish applies it -->
     <div class="row" style="margin:0 0 4px;gap:6px">
-      <select id="clientSel" style="flex:1"><option value="">— unassigned —</option></select>
-      <button id="clientMoveBtn" class="ghost" style="flex:0 0 auto;font-size:11px" title="Move this project to the selected customer">Move</button>
+      <select id="clientSel" style="flex:1" title="Publish will assign this project to whichever customer is selected"><option value="">— unassigned —</option></select>
     </div>
     <!-- publish -->
     <div class="row" style="margin:0">
@@ -1935,7 +1934,7 @@ async function loadFromPlatform(id){
     document.getElementById("projCrumb").textContent=b.name||id;
     if(b.appId){ document.getElementById("appSel").value=b.appId; updateClientCrumb(); }
     document.getElementById("clientSel").value=b.orgId||"";
-    ps().textContent="loaded v"+(b.bundleVersion||"?")+" — edit, then Publish to save";
+    ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
     fetchAndMergeBots();
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
@@ -1956,25 +1955,6 @@ async function publishToPlatform(){
   }catch(e){ ps().textContent="publish failed: "+e.message; }
 }
 document.getElementById("publishBtn").onclick=publishToPlatform;
-
-// move an already-published project to a different customer
-document.getElementById("clientMoveBtn").onclick=async()=>{
-  const id=_currentProjectId;
-  if(!id){ ps().textContent="publish this project first, then it can be moved"; return; }
-  const orgId=document.getElementById("clientSel").value;
-  if(!orgId){ ps().textContent="pick a customer first"; return; }
-  const token=getToken(); if(!token){ ps().textContent="need admin token to move"; return; }
-  ps().textContent="moving "+id+"…";
-  try{
-    const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/org",{
-      method:"PUT", headers:{"content-type":"application/json","authorization":"Bearer "+token},
-      body:JSON.stringify({orgId}) });
-    const j=await r.json().catch(()=>({}));
-    if(r.ok) ps().innerHTML="moved to customer ✓";
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
-    else ps().textContent="move failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="move failed: "+e.message; }
-};
 
 // delete project
 document.getElementById("projDel").onclick=async()=>{

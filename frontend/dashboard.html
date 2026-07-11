@@ -71,6 +71,10 @@
 </style>
 </head>
 <body>
+<div id="previewBanner" style="display:none;position:sticky;top:0;z-index:50;background:var(--amber);color:#1a0d07;
+     padding:10px 20px;text-align:center;font-family:'Barlow Condensed';font-weight:700;font-size:14px;letter-spacing:.4px;text-transform:uppercase">
+  🏢 Viewing as <b id="previewName"></b> — <a href="/clients" style="color:#1a0d07;text-decoration:underline">back to clients</a>
+</div>
 <div class="wrap">
   <header>
     <div class="brand">
@@ -89,10 +93,6 @@
       <button class="nav" onclick="signOut()" style="color:var(--fog)">Sign out</button>
     </nav>
   </header>
-
-  <div id="previewBanner" style="display:none;margin:-8px 0 20px;padding:10px 14px;background:rgba(255,194,77,.08);border:1px solid rgba(255,194,77,.3);border-radius:10px;font-family:'Barlow Condensed';font-size:13px;color:var(--amber)">
-    Previewing: <b id="previewName"></b> — <a href="/clients" style="color:var(--amber);text-decoration:underline">back to clients</a>
-  </div>
 
   <!-- Walk Links panel -->
   <div id="panelLinks" style="display:none">
@@ -156,6 +156,9 @@
           <div class="form-col"><label>Tour name</label><input id="schedName" placeholder="e.g. Village Walk — Sat 2pm"></div>
           <div class="form-col"><label>Guide</label><select id="schedGuide" data-empty-label="— unassigned —"><option value="">— unassigned —</option></select></div>
         </div>
+        <div class="form-row" style="grid-template-columns:1fr;margin-bottom:10px">
+          <div class="form-col"><label>Visitor / group name</label><input id="schedVisitor" placeholder="e.g. Smith Family, or Corp Retreat Group B"></div>
+        </div>
         <div class="form-row trio" style="align-items:end">
           <div class="form-col"><label>Date</label><input id="schedDate" type="date"></div>
           <div class="form-col"><label>Time</label><input id="schedTime" type="time"></div>
@@ -218,14 +221,14 @@
 </div>
 
 <!-- Guide project assignment modal -->
-<div id="assignModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:flex-end;justify-content:center">
-  <div style="width:100%;max-width:500px;background:#141d2b;border:1px solid #26344a;border-radius:18px 18px 0 0;padding:20px;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
-    <div style="display:flex;align-items:center;justify-content:space-between">
+<div id="assignModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:center;justify-content:center;padding:20px">
+  <div style="width:100%;max-width:500px;max-height:90vh;background:#141d2b;border:1px solid #26344a;border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex:0 0 auto">
       <h2 id="assignTitle" style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:.5px"></h2>
       <button onclick="closeAssign()" style="background:none;border:none;color:#5b7088;font-size:20px;cursor:pointer">✕</button>
     </div>
-    <p class="hint">Check a project to give this guide field-recorder access to it. Uncheck to remove access.</p>
-    <div id="assignList" style="display:flex;flex-direction:column;gap:8px"></div>
+    <p class="hint" style="flex:0 0 auto">Check a project to give this guide field-recorder access to it. Uncheck to remove access.</p>
+    <div id="assignList" style="display:flex;flex-direction:column;gap:8px;overflow-y:auto;flex:1 1 auto;min-height:0"></div>
   </div>
 </div>
 
@@ -263,11 +266,11 @@ let _allProjects=[];
 async function loadProjects(){
   try{
     const org=orgParam();
-    const url="/api/projects"+(org?"?app="+encodeURIComponent(org):"");
+    const url="/api/projects"+(org?"?org="+encodeURIComponent(org):"");
     const r=await fetch(url,{headers:{authorization:"Bearer "+tok()}}); const j=await r.json();
     _allProjects=j.projects||[];
     [$("projSel2")].forEach(sel=>{ if(!sel) return; _allProjects.forEach(p=>{ const o=document.createElement("option");
-      o.value=p.id; o.textContent=p.name+(p.scheduled_date?" · "+p.scheduled_date:""); sel.appendChild(o); }); });
+      o.value=p.id; o.textContent=(p.visitor_name?p.visitor_name+" — ":"")+p.name+(p.scheduled_date?" · "+p.scheduled_date:""); sel.appendChild(o); }); });
     populateLinkProjects();
   }catch(e){}
 }
@@ -275,7 +278,7 @@ async function loadProjects(){
 async function loadTemplates(){
   try{
     const org=orgParam();
-    const qs=["template=1"]; if(org) qs.push("app="+encodeURIComponent(org));
+    const qs=["template=1"]; if(org) qs.push("org="+encodeURIComponent(org));
     const r=await fetch("/api/projects?"+qs.join("&"),{headers:{authorization:"Bearer "+tok()}});
     const templates=(await r.json()).projects||[];
     const sel=$("schedTemplate"); if(!sel) return;
@@ -290,7 +293,7 @@ function populateLinkProjects(){
     sel.innerHTML='<option value="">— select project —</option>';
     _allProjects.forEach(p=>{
       const o=document.createElement("option");
-      o.value=p.id; o.textContent=p.name+(p.scheduled_date?" · "+p.scheduled_date:"");
+      o.value=p.id; o.textContent=(p.visitor_name?p.visitor_name+" — ":"")+p.name+(p.scheduled_date?" · "+p.scheduled_date:"");
       sel.appendChild(o);
     });
     if(cur) sel.value=cur;
@@ -484,9 +487,10 @@ $("inviteBtn").onclick=async function(){
   $("inviteBtn").disabled=true; $("inviteBtn").textContent="Creating…";
   $("inviteBox").style.display="none";
   try{
+    const org=orgParam();
     const r=await fetch("/api/users",{method:"POST",
       headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
-      body:JSON.stringify({email,name:$("invName").value.trim(),role:$("invRole").value})});
+      body:JSON.stringify({email,name:$("invName").value.trim(),role:$("invRole").value, orgId: org||undefined})});
     const j=await r.json();
     if(!r.ok){alert("Error: "+(j.error||r.status));return;}
     $("inviteUrl").textContent=j.inviteUrl;
@@ -514,7 +518,7 @@ async function openAssign(uid, uname, role){
   const useTok=tok();
   try{
     const org=orgParam();
-    const rAll=await fetch("/api/projects"+(org?"?app="+encodeURIComponent(org):""),{headers:{authorization:"Bearer "+useTok}});
+    const rAll=await fetch("/api/projects"+(org?"?org="+encodeURIComponent(org):""),{headers:{authorization:"Bearer "+useTok}});
     const allProjs=(await rAll.json()).projects||[];
     if(!allProjs.length){ $("assignList").innerHTML='<div class="hint">No projects yet.</div>'; return; }
     // check which projects this user is already assigned to
@@ -578,17 +582,18 @@ $("scheduleBtn").onclick = async function(){
   const name=$("schedName").value.trim(); if(!name){$("scheduleMsg").textContent="Tour name required.";return;}
   const useTok=tok(); if(!useTok){$("scheduleMsg").textContent="Sign in first.";return;}
   const guideId=$("schedGuide").value||null;
+  const visitorName=$("schedVisitor").value.trim()||null;
   $("scheduleBtn").disabled=true; $("scheduleBtn").textContent="Scheduling…"; $("scheduleMsg").textContent="";
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(srcId)+"/copy",{method:"POST",
       headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
-      body:JSON.stringify({name, scheduledDate:$("schedDate").value||null, scheduledTime:$("schedTime").value||null, guideId})});
+      body:JSON.stringify({name, scheduledDate:$("schedDate").value||null, scheduledTime:$("schedTime").value||null, guideId, visitorName})});
     const j=await r.json();
     if(!r.ok){ $("scheduleMsg").textContent="✕ "+(j.error||r.status); return; }
     $("scheduleMsg").textContent="✓ Scheduled — generating visitor link…";
     await loadProjects();
     await loadTemplates();
-    $("schedName").value=""; $("schedDate").value=""; $("schedTime").value=""; $("schedGuide").value="";
+    $("schedName").value=""; $("schedDate").value=""; $("schedTime").value=""; $("schedGuide").value=""; $("schedVisitor").value="";
     showTab("links");
     $("lnkProj").value=j.id;
     $("lnkGuide").value=guideId||"";

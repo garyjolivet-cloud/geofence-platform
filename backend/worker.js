@@ -460,7 +460,10 @@ async function api(request, env, url) {
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
     // Master/admin can optionally scope the list to one client, e.g. while
     // previewing a client's Team tab from the sandbox's client picker.
-    const orgFilter = A.master ? (url.searchParams.get("org") || null) : A.appId;
+    // An admin's own session still belongs to a home client (A.appId) — default
+    // to that instead of every client's staff; only the raw ADMIN_TOKEN (no
+    // home appId) or an explicit ?org= override see across clients.
+    const orgFilter = A.master ? (url.searchParams.get("org") || A.appId || null) : A.appId;
     const roleFilter = url.searchParams.get("role");
     const conditions = [], binds = [];
     if (orgFilter) { conditions.push("org_id=?"); binds.push(orgFilter); }
@@ -486,7 +489,10 @@ async function api(request, env, url) {
     const rawToken = randomHex(32);
     const tokenHash = await sha256hex(rawToken);
     const inviteExpires = Date.now() + 7 * 24 * 3600 * 1000;
-    const orgId2 = A.master ? (b.orgId || (env.ORG_ID || "chase-life")) : (A.appId || (env.ORG_ID || "chase-life"));
+    // Master falls back to its own home client (A.appId) before the global
+    // default — otherwise inviting while previewing another client silently
+    // created the account under chase-life instead of the client being viewed.
+    const orgId2 = A.master ? (b.orgId || A.appId || (env.ORG_ID || "chase-life")) : (A.appId || (env.ORG_ID || "chase-life"));
     // Operators may only create guide/front_desk accounts — never operator/admin.
     let inviteRole = b.role || "guide";
     if (!A.master && A.role === "operator" && inviteRole !== "guide" && inviteRole !== "front_desk") {
@@ -847,7 +853,12 @@ async function api(request, env, url) {
     const guideFilter = url.searchParams.get("guide");
     const templateFilter = url.searchParams.get("template");
     const archivedFilter = url.searchParams.get("archived");
-    if (!A.master) { conditions.push("orgId=?"); binds.push(A.appId); }
+    // orgFilter scopes by client — distinct from appFilter (workspace). An
+    // admin's own session still belongs to a home client (A.appId) — default
+    // to that instead of every client's projects; only the raw ADMIN_TOKEN
+    // (no home appId) or an explicit ?org= override see across clients.
+    const orgFilter = A.master ? (url.searchParams.get("org") || A.appId || null) : A.appId;
+    if (orgFilter) { conditions.push("orgId=?"); binds.push(orgFilter); }
     if (!A.master && A.role === "front_desk") {
       conditions.push("id IN (SELECT project_id FROM project_frontdesk WHERE frontdesk_id=?)");
       binds.push(A.userId);
@@ -859,7 +870,7 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
@@ -910,15 +921,15 @@ async function api(request, env, url) {
     const newId = "proj_" + Date.now().toString(36) + "_" + randomHex(4);
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,scheduled_date,scheduled_time,guide_id,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,scheduled_date,scheduled_time,guide_id,is_template,tour_type,visitor_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     ).bind(newId, src.orgId || orgId, src.appId, b.name, newId, src.mode || "walking-tour", "draft", 0, now, now,
-           b.scheduledDate || null, b.scheduledTime || null, b.guideId || null, 0, b.tourType || src.tour_type || null).run();
+           b.scheduledDate || null, b.scheduledTime || null, b.guideId || null, 0, b.tourType || src.tour_type || null, b.visitorName || null).run();
     if (srcBundle) {
       let bundleJson = srcBundle.json;
       try { const p = JSON.parse(bundleJson); p.name = b.name; bundleJson = JSON.stringify(p); } catch(e) {}
       await env.DB.prepare(
-        "INSERT INTO published_bundle (id,projectId,version,json,publishedAt) VALUES (?,?,?,?,?)"
-      ).bind(crypto.randomUUID(), newId, 1, bundleJson, now).run();
+        "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
+      ).bind(newId, 1, bundleJson, now).run();
       await env.DB.prepare("UPDATE project SET bundleVersion=1, status='live' WHERE id=?").bind(newId).run();
     }
     await logAudit(env, request, A, "project.copy", newId);
@@ -1129,6 +1140,9 @@ async function api(request, env, url) {
       // Only master/admin may steer which client a new project lands under;
       // everyone else falls back to the default org, matching prior behavior.
       const chosenOrgId = (A && A.master && bundle.orgId) ? bundle.orgId : orgId;
+      // For an already-published project, only touch orgId if master explicitly
+      // picked one — otherwise republishing must never silently move a project.
+      const orgOverride = (A && A.master && bundle.orgId) ? bundle.orgId : null;
       // Resolve appId — auto-assign so project always surfaces on home screen
       let resolvedAppId = existingAppId || bundle.appId || null;
       if (!resolvedAppId) {
@@ -1139,15 +1153,15 @@ async function api(request, env, url) {
           resolvedAppId = chosenOrgId;
           await env.DB.prepare(
             "INSERT OR IGNORE INTO app (id,orgId,name,slug,description,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)"
-          ).bind(resolvedAppId, chosenOrgId, bundle.name || "Default Workspace", resolvedAppId, null, now, now).run();
+          ).bind(resolvedAppId, chosenOrgId, bundle.name || "Default Workspace", resolvedAppId, "", now, now).run();
         }
       }
       const proj = await env.DB.prepare("SELECT bundleVersion FROM project WHERE id=?").bind(pid).first();
       const ver = ((proj && proj.bundleVersion) || 0) + 1;
       // Only auto-create the project row if the editor explicitly opts in
       if (proj) {
-        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id) WHERE id=?")
-          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, pid).run();
+        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId) WHERE id=?")
+          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, pid).run();
       } else if (bundle.createIfMissing) {
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"

@@ -141,6 +141,11 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
 </head>
 <body>
 
+<div id="previewBanner" style="display:none;position:sticky;top:0;z-index:50;background:#ffc24d;color:#1a0d07;
+     padding:10px 20px;text-align:center;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:14px;letter-spacing:.4px;text-transform:uppercase">
+  🏢 Viewing as <b id="previewName"></b> — <a href="/clients" style="color:#1a0d07;text-decoration:underline">back to clients</a>
+</div>
+
 <!-- ── sessions screen (no ?project param) ── -->
 <div id="screenSessions">
   <div class="ss-hdr">
@@ -198,6 +203,23 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
 /* ── constants ─────────────────────────────────────── */
 const _qs    = new URLSearchParams(location.search);
 const projId = _qs.get("project") || "";
+const asClient = _qs.get("asClient") || null;
+
+function orgQueryParam(){
+  return (_me && _me.role === 'admin' && asClient) ? 'org=' + encodeURIComponent(asClient) : '';
+}
+function applyPreviewBanner(){
+  if (!_me || _me.role !== 'admin' || !asClient) return;
+  fetch('/api/clients', { headers: { authorization: 'Bearer ' + getToken() } })
+    .then(r => r.ok ? r.json() : null)
+    .then(j => {
+      const c = ((j && j.clients) || []).find(c => c.id === asClient);
+      const el = document.getElementById('previewBanner');
+      if (!el) return;
+      document.getElementById('previewName').textContent = c ? c.name : asClient;
+      el.style.display = 'block';
+    }).catch(() => {});
+}
 
 // Auth gate: full (persistent-recording) access is admin-only. Guides get a
 // live-only carve-out since running live tours is their actual job.
@@ -206,6 +228,7 @@ const projId = _qs.get("project") || "";
 let _me = null;
 RoleGate.require(['admin', 'guide']).then(me => {
   _me = me;
+  applyPreviewBanner();
   if (me.role === 'guide') {
     document.querySelector('.ss-hdr h1').textContent = 'My Bookings';
     const homeLink = document.querySelector('.ss-hdr a[href="/"]');
@@ -304,7 +327,10 @@ async function renderSessionsList(){
   const list = document.getElementById("sessList");
 
   const isGuide = _me && _me.role === 'guide';
-  const _guideQ = isGuide ? '?guide=' + encodeURIComponent(_me.id) : '';
+  const _qsParts = [];
+  if (isGuide) _qsParts.push('guide=' + encodeURIComponent(_me.id));
+  if (orgQueryParam()) _qsParts.push(orgQueryParam());
+  const _guideQ = _qsParts.length ? '?' + _qsParts.join('&') : '';
 
   // Fetch projects from server
   let serverProjects = [];
@@ -337,7 +363,7 @@ async function renderSessionsList(){
             </div>`).join("")
         : `<div style="font-family:'Barlow Condensed';font-size:13px;color:var(--fog);padding:4px 0">No visitors assigned — ask your admin to add walk links</div>`;
       return `<div class="sess-card">
-        <div class="sc-name">${esc(p.name||p.id)}</div>
+        <div class="sc-name">${p.visitor_name?esc(p.visitor_name)+' <span style="color:var(--fog);font-weight:400">— '+esc(p.name||p.id)+'</span>':esc(p.name||p.id)}</div>
         <div style="font-family:'Barlow Condensed';font-size:13px;color:var(--coral);margin-bottom:10px">${dateStr}</div>
         <div style="font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--fog);margin-bottom:6px">Visitors${links.length?" ("+links.length+")":""}</div>
         <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">${visitorsHtml}</div>
@@ -1028,7 +1054,7 @@ document.getElementById("btnPub").onclick = () => {
 async function doPublish(pid, pname, token){
   // Guard: project must already exist on server — guide cannot create projects
   try{
-    const chk = await fetch("/api/projects",{cache:"no-store",headers:{authorization:"Bearer "+token}});
+    const chk = await fetch("/api/projects"+(orgQueryParam()?"?"+orgQueryParam():""),{cache:"no-store",headers:{authorization:"Bearer "+token}});
     if(chk.ok){
       const data = await chk.json();
       if(!(data.projects||[]).find(p=>p.id===pid)){
@@ -1135,7 +1161,7 @@ async function init(){
   // Verify project exists on server and get its name
   let projectName = null;
   try{
-    const r = await fetch("/api/projects",{cache:"no-store",headers:{authorization:"Bearer "+getToken()}});
+    const r = await fetch("/api/projects"+(orgQueryParam()?"?"+orgQueryParam():""),{cache:"no-store",headers:{authorization:"Bearer "+getToken()}});
     if(r.ok){
       const data = await r.json();
       const proj = (data.projects||[]).find(p=>p.id===projId);
