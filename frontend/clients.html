@@ -146,17 +146,20 @@ function copyLogin(slug){
 async function deleteClient(id,name,projectCount,userCount){
   if(!confirm('Delete client "'+name+'"? This cannot be undone.')) return;
   const msg=$("clientMsg");
-  const r=await fetch("/api/clients/"+encodeURIComponent(id),{method:"DELETE",headers:{authorization:"Bearer "+token()}});
+  const useTok=token();
+  if(!useTok){ alert("Not signed in — sign in again and retry."); return; }
+  const r=await fetch("/api/clients/"+encodeURIComponent(id),{method:"DELETE",headers:{authorization:"Bearer "+useTok}});
   if(r.ok){ msg.textContent="✓ Deleted "+name; loadClients(); return; }
   const j=await r.json().catch(()=>({}));
   if(r.status===409){
     if(!confirm('"'+name+'" still has '+projectCount+' project(s) and '+userCount+' staff account(s). '+
-                'Delete it AND all of them permanently? This cannot be undone.')) { msg.textContent="Cancelled."; return; }
-    const r2=await fetch("/api/clients/"+encodeURIComponent(id)+"?cascade=true",{method:"DELETE",headers:{authorization:"Bearer "+token()}});
+                'Delete it AND all of them permanently? This cannot be undone.')) { msg.textContent="Cancelled — nothing deleted."; return; }
+    const r2=await fetch("/api/clients/"+encodeURIComponent(id)+"?cascade=true",{method:"DELETE",headers:{authorization:"Bearer "+useTok}});
     if(r2.ok){ msg.textContent="✓ Deleted "+name+" and everything under it"; loadClients(); }
-    else{ const j2=await r2.json().catch(()=>({})); msg.textContent="✕ "+(j2.error||"delete failed"); }
+    else{ const j2=await r2.json().catch(()=>({})); alert("Delete failed: "+(j2.error||"HTTP "+r2.status)); msg.textContent="✕ "+(j2.error||"delete failed"); }
     return;
   }
+  alert("Delete failed: "+(j.error||"HTTP "+r.status)+(r.status===401?" — sign in again and retry.":""));
   msg.textContent="✕ "+(j.error||"delete failed");
 }
 

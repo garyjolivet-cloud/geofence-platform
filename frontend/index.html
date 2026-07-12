@@ -238,10 +238,15 @@ async function load(){
     if(orphans.length) html+=clientBlock({id:null,name:'Unsorted'},orphans);
 
     if(!apps.length&&!projects.length){
-      html=`<div class="state">No workspaces yet.<br><br>
-        New customer/company? Go to <a href="/clients" style="color:var(--coral)">Clients</a> instead — that's where you add a company.<br>
-        A <b>workspace</b> here is just a project folder <i>inside</i> a customer you've already created — e.g. <i>Winter Programs</i>, <i>Summer Trails</i>.<br><br>
-        <a onclick="newClient()" style="cursor:pointer;color:var(--coral);font-weight:600">+ Create a workspace →</a></div>`;
+      html=org
+        ? `<div class="state">This customer has no workspaces yet.<br><br>
+             Click "+ New workspace" below to add its first project folder — e.g. <i>Winter Programs</i>, <i>Summer Trails</i>.<br>
+             (Other customers may already have workspaces — this is scoped to just the one selected above.)<br><br>
+             <a onclick="newClient()" style="cursor:pointer;color:var(--coral);font-weight:600">+ Create a workspace →</a></div>`
+        : `<div class="state">No workspaces yet.<br><br>
+             New customer/company? Go to <a href="/clients" style="color:var(--coral)">Clients</a> instead — that's where you add a company.<br>
+             A <b>workspace</b> here is just a project folder <i>inside</i> a customer you've already created — e.g. <i>Winter Programs</i>, <i>Summer Trails</i>.<br><br>
+             <a onclick="newClient()" style="cursor:pointer;color:var(--coral);font-weight:600">+ Create a workspace →</a></div>`;
     }
 
     mainEl.innerHTML=html;
@@ -277,6 +282,8 @@ async function newClient(){
       return;
     }
     sel.innerHTML=clients.map(c=>'<option value="'+c.id+'">'+(c.name||c.id)+'</option>').join('');
+    const active=window.ClientPicker?ClientPicker.resolve():"";
+    if(active&&clients.some(c=>c.id===active)) sel.value=active;
   }catch(e){ document.getElementById("wsMsg").textContent="Couldn't load customers: "+e.message; }
 }
 function closeWsModal(){ document.getElementById("wsModal").style.display="none"; }
