@@ -1166,8 +1166,8 @@ async function api(request, env, url) {
       const ver = ((proj && proj.bundleVersion) || 0) + 1;
       // Only auto-create the project row if the editor explicitly opts in
       if (proj) {
-        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId) WHERE id=?")
-          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, pid).run();
+        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId), is_template=? WHERE id=?")
+          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, bundle.isTemplate ? 1 : 0, pid).run();
       } else if (bundle.createIfMissing) {
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"

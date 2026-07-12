@@ -416,6 +416,9 @@
     <div class="row" style="margin:0 0 4px;gap:6px">
       <select id="clientSel" style="flex:1" title="Publish will assign this project to whichever customer is selected"><option value="">— unassigned —</option></select>
     </div>
+    <label class="chk" style="margin:0 0 4px" title="A template is a reusable master copy — front desk picks it to stamp out dated, guide-assigned tours from it. It is never run directly.">
+      <input type="checkbox" id="isTemplateChk"> this is a template (not a specific dated tour)
+    </label>
     <!-- publish -->
     <div class="row" style="margin:0">
       <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
@@ -1832,6 +1835,7 @@ function exportBundle(){
               spatialTuning:AudioLab.getTuning(),
               appId:document.getElementById("appSel").value||null,
               orgId:document.getElementById("clientSel").value||null,
+              isTemplate:document.getElementById("isTemplateChk").checked,
               bots:editorBots,
               visitorBotId:document.getElementById("visitorBotSel").value||null,
               guideId:null,
@@ -1935,6 +1939,7 @@ async function loadFromPlatform(id){
     document.getElementById("projCrumb").textContent=b.name||id;
     if(b.appId){ document.getElementById("appSel").value=b.appId; updateClientCrumb(); }
     document.getElementById("clientSel").value=b.orgId||"";
+    document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
     fetchAndMergeBots();
   }catch(e){ ps().textContent="load failed: "+e.message; }
