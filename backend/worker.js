@@ -664,7 +664,13 @@ async function api(request, env, url) {
     await logAudit(env, request, A, "client.create", id);
     return json({ ok: true, id, slug }, 200, AC);
   }
-  // --- delete a client (master only; ?cascade=true also wipes its projects/apps/staff) ---
+  // --- delete a client (master only; ?cascade=true also wipes its projects/staff) ---
+  // Deliberately never touches the `app` table: a project's orgId (client) and
+  // its appId (workspace) can drift apart (a project can be reassigned to a
+  // different client without its workspace following), so deleting workspaces
+  // here risked sweeping up a workspace that still legitimately belongs to,
+  // or is shared with, a different client. Workspace deletion stays its own
+  // separate, explicit action (DELETE /api/apps/:id) with its own safety check.
   const mdc = path.match(/^\/api\/clients\/([^/]+)$/);
   if (mdc && method === "DELETE") {
     const A = await auth(request, env);
@@ -682,8 +688,6 @@ async function api(request, env, url) {
         await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(p.id).run();
         await env.DB.prepare("DELETE FROM project WHERE id=?").bind(p.id).run();
       }
-      await env.DB.prepare("DELETE FROM api_key WHERE appId IN (SELECT id FROM app WHERE orgId=?)").bind(cid).run();
-      await env.DB.prepare("DELETE FROM app WHERE orgId=?").bind(cid).run();
       await env.DB.prepare("DELETE FROM user_session WHERE user_id IN (SELECT id FROM user_account WHERE org_id=?)").bind(cid).run();
       await env.DB.prepare("DELETE FROM user_account WHERE org_id=?").bind(cid).run();
     }
