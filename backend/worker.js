@@ -430,7 +430,10 @@ async function api(request, env, url) {
   if (path === "/api/auth/me" && method === "GET") {
     const A = await auth(request, env);
     if (!A || !A.userId) return json({ error: "not authenticated" }, 401, AC);
-    return json({ id: A.userId, email: A.email, name: A.name, role: A.role, orgId: A.appId }, 200, AC);
+    const client = A.appId
+      ? await env.DB.prepare("SELECT name FROM client WHERE id=?").bind(A.appId).first()
+      : null;
+    return json({ id: A.userId, email: A.email, name: A.name, role: A.role, orgId: A.appId, orgName: client ? client.name : A.appId }, 200, AC);
   }
 
   // --- auth: accept invite + set password ---

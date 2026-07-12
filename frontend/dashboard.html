@@ -79,7 +79,7 @@
   <header>
     <div class="brand">
       <div class="glyph"></div>
-      <div><h1>Dashboard</h1><p>Geofence Platform · Back office</p></div>
+      <div><h1>Dashboard</h1><p>Geofence Platform · Back office · <span id="clientNameBadge" style="color:var(--amber)">—</span></p></div>
     </div>
     <nav>
       <button class="nav" id="tabAnalytics" data-roles="admin,operator" onclick="showTab('analytics')">Analytics</button>
@@ -664,8 +664,10 @@ function applyPreviewBanner(role){
   if(role!=="admin"||!asClient) return;
   fetch("/api/clients",{headers:{authorization:"Bearer "+tok()}}).then(r=>r.ok?r.json():null).then(j=>{
     const c=((j&&j.clients)||[]).find(c=>c.id===asClient);
-    $("previewName").textContent=c?c.name:asClient;
+    const name=c?c.name:asClient;
+    $("previewName").textContent=name;
     $("previewBanner").style.display="block";
+    $("clientNameBadge").textContent=name;
   }).catch(()=>{});
 }
 function defaultTabForRole(role){ return role==="front_desk" ? "schedule" : "team"; }
@@ -674,6 +676,7 @@ if(sessionStorage.getItem("gp.admin")) $("tok").placeholder="admin token (saved)
 RoleGate.require(["admin","operator","front_desk"]).then(me=>{
   ME=me;
   $("tok").placeholder="signed in as "+(me.name||me.email);
+  $("clientNameBadge").textContent=me.orgName||me.orgId||"—";
   applyRoleVisibility(me.role);
   applyInviteRoleOptions(me.role);
   applyPreviewBanner(me.role);
