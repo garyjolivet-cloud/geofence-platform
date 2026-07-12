@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chase Life — Geofence Platform</title>
 <script src="role-gate.js"></script>
+<script src="client-picker.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -117,7 +118,7 @@
         <p>Location-aware tour platform</p>
       </div>
     </div>
-    <nav>
+    <nav id="topNav">
       <a href="/clients" class="primary">Clients</a>
       <a href="/field">Guide</a>
       <a href="/editor">Editor</a>
@@ -218,7 +219,9 @@ function sessionAuthHeader(){
 async function load(){
   try{
     const h={headers:sessionAuthHeader()};
-    const [ra,rp]=await Promise.all([fetch("/api/apps",h),fetch("/api/projects",h)]);
+    const org=window.ClientPicker?ClientPicker.resolve():"";
+    const q=org?"?org="+encodeURIComponent(org):"";
+    const [ra,rp]=await Promise.all([fetch("/api/apps"+q,h),fetch("/api/projects"+q,h)]);
     const apps=(await ra.json()).apps||[];
     const projects=(await rp.json()).projects||[];
     setApi(true, apps.length+" workspace"+(apps.length===1?"":"s")+" · "+projects.length+" tour"+(projects.length===1?"":"s"));
@@ -325,6 +328,7 @@ function setApi(ok,text){
   document.getElementById("apidot").className="dot "+(ok?"ok":"bad");
   document.getElementById("apitext").textContent=text;
 }
+ClientPicker.init({navEl:document.getElementById("topNav"), allowAll:true, onChange:load});
 load();
 </script>
 </body>

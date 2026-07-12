@@ -704,8 +704,11 @@ async function api(request, env, url) {
     const A = await auth(request, env);
     // Unscoped before multi-client support existed — now requires a session,
     // and non-master callers only ever see their own client's workspace(s).
+    // Master sees everything unless an explicit ?org= is given (matches
+    // /api/projects and /api/users), so the homepage's client picker can
+    // actually filter the workspace list.
     if (!A) return json({ apps: [] }, 200, AC);
-    const scopedOrg = A.master ? null : A.appId;
+    const scopedOrg = A.master ? (url.searchParams.get("org") || null) : A.appId;
     const sql = "SELECT a.id,a.name,a.slug,a.description,a.updatedAt, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
