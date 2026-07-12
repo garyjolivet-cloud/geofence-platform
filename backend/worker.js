@@ -458,12 +458,12 @@ async function api(request, env, url) {
     if (!A) return json({ error: "authentication required" }, 401, AC);
     if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
-    // Master/admin can optionally scope the list to one client, e.g. while
-    // previewing a client's Team tab from the sandbox's client picker.
-    // An admin's own session still belongs to a home client (A.appId) — default
-    // to that instead of every client's staff; only the raw ADMIN_TOKEN (no
-    // home appId) or an explicit ?org= override see across clients.
-    const orgFilter = A.master ? (url.searchParams.get("org") || A.appId || null) : A.appId;
+    // Master/admin sees every client's staff by default (matches /api/apps) —
+    // callers that want one client's staff (dashboard's own Team tab) must
+    // explicitly pass ?org=, rather than the backend silently guessing which
+    // client an admin session "belongs to" (that broke the cross-client
+    // developer homepage, which intentionally has no single home client).
+    const orgFilter = A.master ? (url.searchParams.get("org") || null) : A.appId;
     const roleFilter = url.searchParams.get("role");
     const conditions = [], binds = [];
     if (orgFilter) { conditions.push("org_id=?"); binds.push(orgFilter); }
@@ -857,11 +857,13 @@ async function api(request, env, url) {
     const guideFilter = url.searchParams.get("guide");
     const templateFilter = url.searchParams.get("template");
     const archivedFilter = url.searchParams.get("archived");
-    // orgFilter scopes by client — distinct from appFilter (workspace). An
-    // admin's own session still belongs to a home client (A.appId) — default
-    // to that instead of every client's projects; only the raw ADMIN_TOKEN
-    // (no home appId) or an explicit ?org= override see across clients.
-    const orgFilter = A.master ? (url.searchParams.get("org") || A.appId || null) : A.appId;
+    // orgFilter scopes by client — distinct from appFilter (workspace). Master
+    // sees every client's projects by default (matches /api/apps) — callers
+    // that want one client's projects (dashboard's own tabs) must explicitly
+    // pass ?org=, rather than the backend silently guessing which client an
+    // admin session "belongs to" (that broke the cross-client developer
+    // homepage, which intentionally has no single home client).
+    const orgFilter = A.master ? (url.searchParams.get("org") || null) : A.appId;
     if (orgFilter) { conditions.push("orgId=?"); binds.push(orgFilter); }
     if (!A.master && A.role === "front_desk") {
       conditions.push("id IN (SELECT project_id FROM project_frontdesk WHERE frontdesk_id=?)");

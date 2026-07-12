@@ -260,7 +260,10 @@ function showTab(t) {
 // to their own client server-side regardless of what's in the URL.
 const asClient = new URLSearchParams(location.search).get("asClient") || null;
 let ME = null;
-function orgParam(){ return (ME && ME.role==="admin" && asClient) ? asClient : null; }
+function orgParam(){
+  if (!ME || ME.role!=="admin") return null; // non-admin: backend already scopes by their own session
+  return asClient || ME.orgId || null; // previewing another client, else this admin's own home client
+}
 
 let _allProjects=[];
 async function loadProjects(){
