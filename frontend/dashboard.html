@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Geofence Platform — Dashboard</title>
 <script src="role-gate.js"></script>
+<script src="client-picker.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
@@ -81,7 +82,7 @@
       <div class="glyph"></div>
       <div><h1>Dashboard</h1><p>Geofence Platform · Back office · <span id="clientNameBadge" style="color:var(--amber)">—</span></p></div>
     </div>
-    <nav>
+    <nav id="topNav">
       <button class="nav" id="tabAnalytics" data-roles="admin,operator" onclick="showTab('analytics')">Analytics</button>
       <button class="nav" id="tabTeam" data-roles="admin,operator" onclick="showTab('team')" style="color:var(--go);border-color:rgba(56,224,166,.35)">Team</button>
       <button class="nav" id="tabLinks" data-roles="admin,operator,front_desk" onclick="showTab('links')" style="color:var(--amber);border-color:rgba(255,194,77,.35)">Walk Links</button>
@@ -105,7 +106,7 @@
           <div class="form-col"><label>Visitor name / label</label><input id="lnkLabel" type="text" placeholder="e.g. John Smith" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px;width:100%"></div>
         </div>
         <div class="form-row trio" style="align-items:end">
-          <div class="form-col"><label>Project</label><select id="lnkProj"><option value="">— select project —</option></select></div>
+          <div class="form-col"><label>Project</label><input id="lnkProj" list="lnkProj__list" placeholder="type to search…" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px;width:100%"><datalist id="lnkProj__list"></datalist></div>
           <div class="form-col"><label>Link valid for</label>
             <select id="lnkDur">
               <option value="2">2 hours</option>
@@ -133,7 +134,7 @@
       <p class="hint">Select a project to see its active walk links. Revoke a link to immediately invalidate it.</p>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
         <select id="lnkListGuide" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px"><option value="">— all guides —</option></select>
-        <select id="lnkListProj" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px"><option value="">— select project —</option></select>
+        <input id="lnkListProj" list="lnkListProj__list" placeholder="type to search project…" style="background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px"><datalist id="lnkListProj__list"></datalist>
         <button class="go" id="loadLinksBtn">Load</button>
       </div>
       <div class="panel">
@@ -152,7 +153,7 @@
       <p class="hint">Pick a template, set the date and time, assign a guide, then generate the visitor link — all in one place.</p>
       <div class="panel">
         <div class="form-row trio" style="margin-bottom:10px">
-          <div class="form-col"><label>Template</label><select id="schedTemplate"><option value="">— select template —</option></select></div>
+          <div class="form-col"><label>Template</label><input id="schedTemplate" list="schedTemplate__list" placeholder="type to search…"><datalist id="schedTemplate__list"></datalist></div>
           <div class="form-col"><label>Tour name</label><input id="schedName" placeholder="e.g. Village Walk — Sat 2pm"></div>
           <div class="form-col"><label>Guide</label><select id="schedGuide" data-empty-label="— unassigned —"><option value="">— unassigned —</option></select></div>
         </div>
@@ -255,15 +256,45 @@ function showTab(t) {
     el.style.borderColor = active ? "var(--coral)" : (inactiveBorder||"");
   });
 }
-// asClient: admin-only preview of one client's data (see clients.html "Run").
-// Ignored entirely for non-admin roles — their own session already pins them
-// to their own client server-side regardless of what's in the URL.
-const asClient = new URLSearchParams(location.search).get("asClient") || null;
+// Persistent active-client selection (admin-only preview of one client's
+// data — see clients.html "Run" and the nav picker). Ignored entirely for
+// non-admin roles — their own session already pins them to their own
+// client server-side regardless of what's stored or in the URL.
 let ME = null;
 function orgParam(){
   if (!ME || ME.role!=="admin") return null; // non-admin: backend already scopes by their own session
-  return asClient || ME.orgId || null; // previewing another client, else this admin's own home client
+  return ClientPicker.resolve() || ME.orgId || null; // previewing another client, else this admin's own home client
 }
+
+// Searchable text-input+datalist backing for project pickers — a plain
+// <select> stops being usable once a client has 50+ projects, since there's
+// no real search, just scroll/type-to-jump. Mimics just enough of a
+// <select>'s API (set options, get/set the chosen id) that call sites don't
+// need much rework.
+function searchableSelect(inputId){
+  const input=$(inputId);
+  const dl=document.getElementById(inputId+"__list");
+  let map={}, rmap={};
+  return {
+    setOptions(items, valueFn, labelFn){
+      const cur=this.value();
+      map={}; rmap={};
+      dl.innerHTML=items.map(it=>{
+        const label=labelFn(it), id=valueFn(it);
+        map[label]=id; rmap[id]=label;
+        return '<option value="'+esc(label)+'">';
+      }).join('');
+      if(cur) this.setValue(cur);
+    },
+    value(){ const v=input.value.trim(); return map[v]!==undefined?map[v]:(rmap[v]!==undefined?v:""); },
+    setValue(id){ input.value=rmap[id]||""; },
+    clear(){ input.value=""; }
+  };
+}
+function projectLabel(p){ return (p.visitor_name?p.visitor_name+" — ":"")+(p.name||p.id)+(p.scheduled_date?" · "+p.scheduled_date:""); }
+const schedTemplateSel=searchableSelect("schedTemplate");
+const lnkProjSel=searchableSelect("lnkProj");
+const lnkListProjSel=searchableSelect("lnkListProj");
 
 let _allProjects=[];
 async function loadProjects(){
@@ -273,7 +304,7 @@ async function loadProjects(){
     const r=await fetch(url,{headers:{authorization:"Bearer "+tok()}}); const j=await r.json();
     _allProjects=j.projects||[];
     [$("projSel2")].forEach(sel=>{ if(!sel) return; _allProjects.forEach(p=>{ const o=document.createElement("option");
-      o.value=p.id; o.textContent=(p.visitor_name?p.visitor_name+" — ":"")+p.name+(p.scheduled_date?" · "+p.scheduled_date:""); sel.appendChild(o); }); });
+      o.value=p.id; o.textContent=projectLabel(p); sel.appendChild(o); }); });
     populateLinkProjects();
   }catch(e){}
 }
@@ -284,25 +315,12 @@ async function loadTemplates(){
     const qs=["template=1"]; if(org) qs.push("org="+encodeURIComponent(org));
     const r=await fetch("/api/projects?"+qs.join("&"),{headers:{authorization:"Bearer "+tok()}});
     const templates=(await r.json()).projects||[];
-    const sel=$("schedTemplate"); if(!sel) return;
-    sel.innerHTML='<option value="">— select template —</option>'+
-      templates.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||p.id)+'</option>').join('');
+    schedTemplateSel.setOptions(templates, p=>p.id, p=>p.name||p.id);
   }catch(e){}
 }
 function populateLinkProjects(){
-  const fill=(sel)=>{
-    if(!sel) return;
-    const cur=sel.value;
-    sel.innerHTML='<option value="">— select project —</option>';
-    _allProjects.forEach(p=>{
-      const o=document.createElement("option");
-      o.value=p.id; o.textContent=(p.visitor_name?p.visitor_name+" — ":"")+p.name+(p.scheduled_date?" · "+p.scheduled_date:"");
-      sel.appendChild(o);
-    });
-    if(cur) sel.value=cur;
-  };
-  fill($("lnkProj"));
-  fill($("lnkListProj"));
+  lnkProjSel.setOptions(_allProjects, p=>p.id, projectLabel);
+  lnkListProjSel.setOptions(_allProjects, p=>p.id, projectLabel);
 }
 let _guidesList=[];
 async function loadGuidesList(){
@@ -557,7 +575,7 @@ $("assignModal").addEventListener("click",e=>{ if(e.target===$("assignModal")) c
 
 // ---- Walk links ----
 $("genLinkBtn").onclick = async function(){
-  const pid=$("lnkProj").value; if(!pid){alert("Select a project first.");return;}
+  const pid=lnkProjSel.value(); if(!pid){alert("Select a project first.");return;}
   const useTok=tok(); if(!useTok){alert("Enter your admin token or sign in first.");return;}
   const dur=$("lnkDur").value;
   $("genLinkBtn").disabled=true; $("genLinkBtn").textContent="Generating…";
@@ -581,7 +599,7 @@ $("genLinkBtn").onclick = async function(){
 
 // ---- Schedule a tour (front_desk's whole job: template -> instance -> guide -> link) ----
 $("scheduleBtn").onclick = async function(){
-  const srcId=$("schedTemplate").value; if(!srcId){$("scheduleMsg").textContent="Pick a template first.";return;}
+  const srcId=schedTemplateSel.value(); if(!srcId){$("scheduleMsg").textContent="Pick a template first.";return;}
   const name=$("schedName").value.trim(); if(!name){$("scheduleMsg").textContent="Tour name required.";return;}
   const useTok=tok(); if(!useTok){$("scheduleMsg").textContent="Sign in first.";return;}
   const guideId=$("schedGuide").value||null;
@@ -598,7 +616,7 @@ $("scheduleBtn").onclick = async function(){
     await loadTemplates();
     $("schedName").value=""; $("schedDate").value=""; $("schedTime").value=""; $("schedGuide").value=""; $("schedVisitor").value="";
     showTab("links");
-    $("lnkProj").value=j.id;
+    lnkProjSel.setValue(j.id);
     $("lnkGuide").value=guideId||"";
     $("genLinkBtn").click();
   }catch(e){ $("scheduleMsg").textContent="✕ network error"; }
@@ -606,7 +624,7 @@ $("scheduleBtn").onclick = async function(){
 };
 
 async function loadLinks(){
-  const pid=$("lnkListProj").value; if(!pid){$("linkMsg").textContent="Select a project first.";return;}
+  const pid=lnkListProjSel.value(); if(!pid){$("linkMsg").textContent="Select a project first.";return;}
   const useTok=tok(); if(!useTok){$("linkMsg").textContent="Sign in or enter token.";return;}
   $("linkMsg").textContent="Loading…"; $("linkMsg").style.display="block";
   try{
@@ -660,17 +678,25 @@ function applyInviteRoleOptions(role){
     [...sel.options].forEach(o=>{ if(o.value==="admin"||o.value==="operator") o.remove(); });
   }
 }
-function applyPreviewBanner(role){
-  if(role!=="admin"||!asClient) return;
+function applyPreviewBanner(){
+  const active=ME.role==="admin"?(ClientPicker.resolve()||ME.orgId):null;
+  if(!active||active===ME.orgId){ $("previewBanner").style.display="none"; $("clientNameBadge").textContent=ME.orgName||ME.orgId||"—"; return; }
   fetch("/api/clients",{headers:{authorization:"Bearer "+tok()}}).then(r=>r.ok?r.json():null).then(j=>{
-    const c=((j&&j.clients)||[]).find(c=>c.id===asClient);
-    const name=c?c.name:asClient;
+    const c=((j&&j.clients)||[]).find(c=>c.id===active);
+    const name=c?c.name:active;
     $("previewName").textContent=name;
     $("previewBanner").style.display="block";
     $("clientNameBadge").textContent=name;
   }).catch(()=>{});
 }
 function defaultTabForRole(role){ return role==="front_desk" ? "schedule" : "team"; }
+function refreshForClient(){
+  applyPreviewBanner();
+  loadProjects();
+  loadTemplates();
+  loadGuidesList();
+  if(ME.role!=="front_desk") loadTeam();
+}
 
 if(sessionStorage.getItem("gp.admin")) $("tok").placeholder="admin token (saved)";
 RoleGate.require(["admin","operator","front_desk"]).then(me=>{
@@ -679,12 +705,11 @@ RoleGate.require(["admin","operator","front_desk"]).then(me=>{
   $("clientNameBadge").textContent=me.orgName||me.orgId||"—";
   applyRoleVisibility(me.role);
   applyInviteRoleOptions(me.role);
-  applyPreviewBanner(me.role);
   showTab(defaultTabForRole(me.role));
-  loadProjects();
-  loadTemplates();
-  loadGuidesList();
-  if(me.role!=="front_desk") loadTeam();
+  if(me.role==="admin"){
+    ClientPicker.init({navEl:document.getElementById("topNav"), allowAll:false, defaultId:me.orgId, onChange:refreshForClient});
+  }
+  refreshForClient();
 });
 </script>
 </body>

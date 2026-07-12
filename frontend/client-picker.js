@@ -62,7 +62,7 @@
       clients.forEach(c => { byLabel[labelFor(c)] = c.id; });
     } catch (e) { clients = []; }
 
-    render(resolve());
+    render(resolve() || opts.defaultId || "");
 
     input.addEventListener("change", () => {
       const val = input.value.trim();

@@ -62,6 +62,7 @@
     <h2>All clients</h2>
     <p class="hint">Pick a client and hit Run to preview it as their Management/Front-desk/Guide staff would see it — you stay signed in as yourself the whole time.</p>
     <div class="panel">
+      <input id="clientFilter" placeholder="Search clients…" style="width:100%;margin-bottom:10px;background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:'Barlow Condensed';font-size:13px">
       <table id="clientTable">
         <tr><th>Name</th><th>Slug</th><th>Projects</th><th>Staff</th><th>Created</th><th></th></tr>
       </table>
@@ -95,34 +96,46 @@ function signOut(){
   location.href="/login";
 }
 
+let _allClients=[];
+function renderClientRows(clients){
+  const msg=$("clientMsg");
+  const table=$("clientTable");
+  table.querySelectorAll("tr:not(:first-child)").forEach(n=>n.remove());
+  if(!_allClients.length){ msg.textContent="No clients yet — create one below."; return; }
+  if(!clients.length){ msg.textContent="No clients match your search."; return; }
+  msg.textContent="";
+  clients.forEach(c=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=
+      "<td>"+esc(c.name)+"</td>"+
+      "<td>"+esc(c.slug)+"</td>"+
+      "<td>"+(c.projectCount||0)+"</td>"+
+      "<td>"+(c.userCount||0)+"</td>"+
+      "<td>"+esc((c.created_at||"").slice(0,10))+"</td>"+
+      "<td>"+
+        '<button class="sm" onclick="runAs(\''+esc(c.id)+"','dashboard')\">Run · Dashboard</button>"+
+        '<button class="sm" onclick="runAs(\''+esc(c.id)+"','field')\">Run · Field</button>"+
+        '<button class="sm" onclick="copyLogin(\''+esc(c.slug)+"')\">Login link</button>"+
+        '<button class="sm" style="color:var(--coral);border-color:rgba(255,106,61,.4)" onclick="deleteClient(\''+esc(c.id)+"','"+esc(c.name)+"',"+(c.projectCount||0)+","+(c.userCount||0)+")\">Delete</button>"+
+      "</td>";
+    table.appendChild(tr);
+  });
+}
+function filterClients(){
+  const q=$("clientFilter").value.trim().toLowerCase();
+  const filtered=q?_allClients.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.slug||"").toLowerCase().includes(q)):_allClients;
+  renderClientRows(filtered);
+}
 async function loadClients(){
   const msg=$("clientMsg");
   try{
     const r=await fetch("/api/clients",{headers:{authorization:"Bearer "+token()}});
     if(!r.ok){ msg.textContent="Couldn't load clients (HTTP "+r.status+")."; return; }
-    const clients=(await r.json()).clients||[];
-    const table=$("clientTable");
-    table.querySelectorAll("tr:not(:first-child)").forEach(n=>n.remove());
-    if(!clients.length){ msg.textContent="No clients yet — create one below."; return; }
-    msg.textContent="";
-    clients.forEach(c=>{
-      const tr=document.createElement("tr");
-      tr.innerHTML=
-        "<td>"+esc(c.name)+"</td>"+
-        "<td>"+esc(c.slug)+"</td>"+
-        "<td>"+(c.projectCount||0)+"</td>"+
-        "<td>"+(c.userCount||0)+"</td>"+
-        "<td>"+esc((c.created_at||"").slice(0,10))+"</td>"+
-        "<td>"+
-          '<button class="sm" onclick="runAs(\''+esc(c.id)+"','dashboard')\">Run · Dashboard</button>"+
-          '<button class="sm" onclick="runAs(\''+esc(c.id)+"','field')\">Run · Field</button>"+
-          '<button class="sm" onclick="copyLogin(\''+esc(c.slug)+"')\">Login link</button>"+
-          '<button class="sm" style="color:var(--coral);border-color:rgba(255,106,61,.4)" onclick="deleteClient(\''+esc(c.id)+"','"+esc(c.name)+"',"+(c.projectCount||0)+","+(c.userCount||0)+")\">Delete</button>"+
-        "</td>";
-      table.appendChild(tr);
-    });
+    _allClients=(await r.json()).clients||[];
+    filterClients();
   }catch(e){ msg.textContent="Couldn't reach the platform."; }
 }
+$("clientFilter").addEventListener("input", filterClients);
 function runAs(id,where){
   location.href="/"+(where==="field"?"field":"dashboard")+"?asClient="+encodeURIComponent(id);
 }
