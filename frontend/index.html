@@ -215,9 +215,9 @@ async function load(){
 
     if(!apps.length&&!projects.length){
       html=`<div class="state">No workspaces yet.<br><br>
-        Start by creating a <b>workspace</b> — e.g. <i>Kicking Horse Resort</i> or <i>Town of Golden</i>.<br>
-        Then add tours inside it — e.g. <i>Village Walk</i>, <i>Ski Patrol Route</i>.<br><br>
-        <a onclick="newClient()" style="cursor:pointer;color:var(--coral);font-weight:600">+ Create your first workspace →</a></div>`;
+        New customer/company? Go to <a href="/clients" style="color:var(--coral)">Clients</a> instead — that's where you add a company.<br>
+        A <b>workspace</b> here is just a project folder <i>inside</i> a customer you've already created — e.g. <i>Winter Programs</i>, <i>Summer Trails</i>.<br><br>
+        <a onclick="newClient()" style="cursor:pointer;color:var(--coral);font-weight:600">+ Create a workspace →</a></div>`;
     }
 
     mainEl.innerHTML=html;
@@ -238,7 +238,8 @@ async function askToken(){ let t=getToken(); if(t)return t;
   if(t){try{localStorage.setItem("gp.admin",t);}catch(e){}} return t; }
 
 async function newClient(){
-  const name=(prompt("Workspace name\n\nExamples: Kicking Horse Resort, Town of Golden, Golden Nordic")||"").trim();
+  if(!confirm("This creates a WORKSPACE — a project folder inside an existing customer, not a new customer/company.\n\nAdding a new customer? Cancel this and use /clients instead.\n\nContinue creating a workspace?")) return;
+  const name=(prompt("Workspace name (a project grouping, e.g. \"Winter Programs\" or \"Summer Trails\")")||"").trim();
   if(!name)return;
   const token=await askToken(); if(!token)return;
   try{
