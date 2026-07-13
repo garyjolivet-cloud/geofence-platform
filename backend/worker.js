@@ -214,9 +214,17 @@ function buildChatPrompt(regionBot, clientBot, state, weather, snowHistory) {
   return p;
 }
 
-function authed(request, env) {
+function rawAdminToken(request, env) {
   const h = request.headers.get("authorization") || "";
   return !!env.ADMIN_TOKEN && h === "Bearer " + env.ADMIN_TOKEN;
+}
+// Accepts either the raw ADMIN_TOKEN secret (scripts/curl) or a logged-in
+// admin session — auth() already treats role==="admin" as master, so this
+// just closes the gap for endpoints that predate the session system.
+async function authed(request, env) {
+  if (rawAdminToken(request, env)) return true;
+  const A = await auth(request, env);
+  return !!(A && A.master);
 }
 function bearer(request) { const h = request.headers.get("authorization") || ""; return h.startsWith("Bearer ") ? h.slice(7) : ""; }
 async function sha256hex(s) {
@@ -377,7 +385,8 @@ async function api(request, env, url) {
 
   // --- auth: seed first admin (master token required; errors if admin already exists) ---
   if (path === "/api/auth/seed-admin" && method === "POST") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    // Raw token only — no admin session can exist yet at bootstrap time.
+    if (!rawAdminToken(request, env)) return json({ error: "master token required" }, 401, AC);
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
     const b = await request.json().catch(() => ({}));
     if (!b.email || !b.password) return json({ error: "email and password required" }, 400, AC);
@@ -561,7 +570,7 @@ async function api(request, env, url) {
 
   // --- nuke all data (master only) — wipes every row, keeps schema ---
   if (path === "/api/nuke" && method === "DELETE") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const tables = ["event","consent","device","audit_log","published_bundle","api_key","project","app","bot"];
     const wiped = [], skipped = [];
     for (const t of tables) {
@@ -588,7 +597,7 @@ async function api(request, env, url) {
 
   // --- API keys: create / list / revoke (master only) ---
   if (path === "/api/keys" && method === "POST") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const b = await request.json();
     const scopes = Array.isArray(b.scopes) ? b.scopes.join(",") : (b.scopes || "*");
     const secret = "gpk_" + crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
@@ -601,7 +610,7 @@ async function api(request, env, url) {
     return json({ ok: true, id, key: secret, appId: b.appId || null, scopes, note: "Copy this key now — it is not shown again." }, 200, AC);
   }
   if (path === "/api/keys" && method === "GET") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const { results } = await env.DB.prepare(
       "SELECT id,appId,label,scopes,createdAt,lastUsedAt,revokedAt FROM api_key ORDER BY createdAt DESC"
     ).all();
@@ -609,13 +618,13 @@ async function api(request, env, url) {
   }
   const mk = path.match(/^\/api\/keys\/([^/]+)$/);
   if (mk && method === "DELETE") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     await env.DB.prepare("UPDATE api_key SET revokedAt=? WHERE id=?").bind(new Date().toISOString(), mk[1]).run();
     await logAudit(env, request, { keyId: "master" }, "key.revoke", mk[1]);
     return json({ ok: true, revoked: mk[1] }, 200, AC);
   }
   if (path === "/api/audit" && method === "GET") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const { results } = await env.DB.prepare(
       "SELECT ts,keyId,action,target,ip FROM audit_log ORDER BY ts DESC LIMIT 200"
     ).all();
@@ -719,7 +728,7 @@ async function api(request, env, url) {
 
   // --- create an app (admin) ---
   if (path === "/api/apps" && method === "POST") {
-    if (!authed(request, env)) return json({ error: "unauthorized" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json();
     const name = (b.name || "").trim();
     if (!name) return json({ error: "need a name" }, 400);
@@ -742,7 +751,7 @@ async function api(request, env, url) {
   // --- rename an app (master only) ---
   const mda = path.match(/^\/api\/apps\/([^/]+)$/);
   if (mda && method === "PUT") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const aid = decodeURIComponent(mda[1]);
     const b = await request.json();
     const name = (b.name || "").trim();
@@ -756,7 +765,7 @@ async function api(request, env, url) {
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
   if (mda && method === "DELETE") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const aid = decodeURIComponent(mda[1]);
     const cascade = url.searchParams.get("cascade") === "true";
     if (cascade) {
@@ -823,7 +832,7 @@ async function api(request, env, url) {
   }
 
   if (mbot && method === "DELETE") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const bid = decodeURIComponent(mbot[1]);
     await env.DB.prepare("DELETE FROM bot WHERE id=?").bind(bid).run();
     return json({ ok: true, deleted: bid }, 200, AC);
@@ -832,7 +841,7 @@ async function api(request, env, url) {
   // --- move a project into an app (admin) ---
   const mvm = path.match(/^\/api\/projects\/([^/]+)\/app$/);
   if (mvm && method === "PUT") {
-    if (!authed(request, env)) return json({ error: "unauthorized" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "unauthorized" }, 401, AC);
     const pid = decodeURIComponent(mvm[1]);
     const b = await request.json();
     await env.DB.prepare("UPDATE project SET appId=?, updatedAt=? WHERE id=?")
@@ -843,7 +852,7 @@ async function api(request, env, url) {
   // --- move a project to a different client (developer/admin only) ---
   const mvo = path.match(/^\/api\/projects\/([^/]+)\/org$/);
   if (mvo && method === "PUT") {
-    if (!authed(request, env)) return json({ error: "unauthorized" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "unauthorized" }, 401, AC);
     const pid = decodeURIComponent(mvo[1]);
     const b = await request.json();
     if (!b.orgId) return json({ error: "need orgId" }, 400, AC);
@@ -891,7 +900,7 @@ async function api(request, env, url) {
 
   // --- create a project (admin) ---
   if (path === "/api/projects" && method === "POST") {
-    if (!authed(request, env)) return json({ error: "unauthorized" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json();
     const id = b.id || b.slug;
     if (!id || !b.name) return json({ error: "need id and name" }, 400);
@@ -906,7 +915,7 @@ async function api(request, env, url) {
   // --- delete a project (master only; cascades bundles + events) ---
   const mdp = path.match(/^\/api\/projects\/([^/]+)$/);
   if (mdp && method === "DELETE") {
-    if (!authed(request, env)) return json({ error: "master token required" }, 401, AC);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const pid = decodeURIComponent(mdp[1]);
     await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(pid).run();
     await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(pid).run();
@@ -1184,9 +1193,22 @@ async function api(request, env, url) {
         await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId), is_template=? WHERE id=?")
           .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, bundle.isTemplate ? 1 : 0, pid).run();
       } else if (bundle.createIfMissing) {
+        // A new project landing in an existing workspace must inherit THAT
+        // workspace's real client — otherwise, whenever the editor's client
+        // dropdown is left untouched, chosenOrgId silently falls back to the
+        // server's global default org, orphaning the project under the wrong
+        // client (invisible in any client-scoped view) despite its workspace
+        // unambiguously belonging to someone else. Only applies when master
+        // didn't explicitly pick a client (orgOverride null) — an explicit
+        // choice always wins.
+        let insertOrgId = chosenOrgId;
+        if (!orgOverride && resolvedAppId) {
+          const ownerApp = await env.DB.prepare("SELECT orgId FROM app WHERE id=?").bind(resolvedAppId).first();
+          if (ownerApp && ownerApp.orgId) insertOrgId = ownerApp.orgId;
+        }
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, chosenOrgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
+        ).bind(pid, insertOrgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
       } else {
         return json({ error: "project not found — create it from the main screen first" }, 404, AC);
       }
@@ -1469,7 +1491,7 @@ async function api(request, env, url) {
       const row = await env.DB.prepare('SELECT * FROM weather_cache ORDER BY id DESC LIMIT 1').first();
       return json(row || { error: "no data yet" }, row ? 200 : 404, CORS_PUBLIC);
     }
-    if (method === "POST" && authed(request, env)) {
+    if (method === "POST" && (await authed(request, env))) {
       try {
         const result = await scrapeWeather(env);
         return json({ ok: true, ...result }, 200, CORS_PUBLIC);
@@ -1488,7 +1510,7 @@ async function api(request, env, url) {
       ).all();
       return json(rows.results || [], 200, CORS_PUBLIC);
     }
-    if (method === "POST" && authed(request, env)) {
+    if (method === "POST" && (await authed(request, env))) {
       try {
         const result = await saveSnowSnapshot(env);
         return json({ ok: true, ...result }, 200, CORS_PUBLIC);

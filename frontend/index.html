@@ -261,7 +261,7 @@ async function load(){
   }
 }
 
-function getToken(){ try{ return localStorage.getItem("gp.admin")||""; }catch(e){ return ""; } }
+function getToken(){ try{ return localStorage.getItem("gp.session")||localStorage.getItem("gp.admin")||""; }catch(e){ return ""; } }
 async function askToken(){ let t=getToken(); if(t)return t;
   t=(prompt("Admin token:")||"").trim();
   if(t){try{localStorage.setItem("gp.admin",t);}catch(e){}} return t; }

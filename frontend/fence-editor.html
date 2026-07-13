@@ -53,6 +53,14 @@
              color:var(--ice);border:1px solid var(--rim);border-radius:6px;padding:1px 6px}
   .zone .del{flex:0 0 auto;background:none;border:none;color:var(--fog);font-size:16px;padding:0 4px;cursor:pointer}
   .hint{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin:4px 0}
+  .gp-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:9999;
+             font-family:"Barlow Condensed";font-size:14px;font-weight:600;color:var(--night);
+             padding:10px 18px;border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.35);
+             opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;max-width:min(90vw,480px);text-align:center}
+  .gp-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .gp-toast-ok{background:var(--go)}
+  .gp-toast-warn{background:var(--amber)}
+  .gp-toast-err{background:var(--hazard);color:var(--snow)}
   hr{border:none;border-top:1px solid var(--rim);margin:10px 0}
   .props{border:1px solid var(--coral);border-radius:12px;padding:10px;margin:8px 0;background:rgba(255,106,61,.05)}
   .props h2{font-family:"Barlow Condensed";font-size:13px;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px;color:var(--coral)}
@@ -882,6 +890,7 @@ function autoRestore(){
     document.getElementById("projCrumb").textContent=snap.name||snap.id||"draft";
     render(); refreshProps();
     ps().innerHTML="draft restored (<b>"+snap.zones.length+" zone"+(snap.zones.length===1?"":"s")+"</b>) — Publish to save to D1 &nbsp;<button onclick=\"localStorage.removeItem('"+DRAFT_KEY+"');zones=[];sel=-1;render();refreshProps();ps().textContent='draft cleared';\" style=\"font-size:11px;padding:2px 7px;border-radius:5px;background:transparent;border:1px solid var(--rim);color:var(--fog);cursor:pointer;font-family:'Barlow Condensed'\">discard</button>";
+    toast("Restored an unsaved local draft (\""+(snap.name||snap.id||"untitled")+"\") — not the platform's copy. Check this is the project you meant to edit.","warn");
     return true;
   }catch(e){ return false; }
 }
@@ -1441,10 +1450,13 @@ document.getElementById("pActOn").addEventListener("change",()=>{ if(sel<0)retur
 let verifiedToken="";
 function getToken(){
   if(verifiedToken) return verifiedToken;
+  // Prefer the logged-in session — ties actions to the actual operator and
+  // their org scoping, instead of a leftover raw admin token from a
+  // different browsing session silently taking priority.
+  try{ const s=localStorage.getItem("gp.session"); if(s){ verifiedToken=s; return s; } }catch(e){}
   const el=document.getElementById("adminTok");
   let t=(el && el.value.trim()) || "";
   if(!t){ try{ t=sessionStorage.getItem("gp.admin")||""; }catch(e){} }
-  if(!t){ try{ t=localStorage.getItem("gp.session")||""; }catch(e){} }
   if(!t){ t=(prompt("Admin token:")||"").trim(); }
   if(t){ verifiedToken=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} }
   return t;
@@ -1921,6 +1933,17 @@ document.getElementById("loadPois").onclick=async()=>{
 
 /* ---- platform (D1): publish + load, tie the tools together ---- */
 const ps=()=>document.getElementById("platStatus");
+// Visible even when the side panel is minimized — ps() alone can be
+// scrolled/collapsed out of view, which made publish failures and
+// draft-restore silently invisible.
+function toast(msg,kind){
+  const t=document.createElement("div");
+  t.className="gp-toast gp-toast-"+(kind||"ok");
+  t.textContent=msg;
+  document.body.appendChild(t);
+  requestAnimationFrame(()=>t.classList.add("show"));
+  setTimeout(()=>{ t.classList.remove("show"); setTimeout(()=>t.remove(),300); },4000);
+}
 function updateClientCrumb(){
   const as=document.getElementById("appSel");
   const opt=as.options[as.selectedIndex];
@@ -1946,19 +1969,19 @@ async function loadFromPlatform(id){
 }
 async function publishToPlatform(){
   const b=exportBundle(); const id=b.project;
-  if(!b.zones.length){ ps().textContent="no stops to publish — draw at least one"; return; }
+  if(!b.zones.length){ ps().textContent="no stops to publish — draw at least one"; toast("No stops to publish — draw at least one on the map first.","warn"); return; }
   const token=getToken();
-  if(!token){ ps().textContent="publish cancelled"; return; }
+  if(!token){ ps().textContent="publish cancelled"; toast("Publish cancelled — no login/token available.","err"); return; }
   ps().textContent="publishing "+id+"…";
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle",{
       method:"PUT", headers:{"content-type":"application/json","authorization":"Bearer "+token},
       body:JSON.stringify({...b, createIfMissing:true}) });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=id; document.getElementById("projCrumb").textContent=b.name||id; ps().innerHTML="published v"+j.version+" ✓"; }
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared, try again"; }
-    else ps().textContent="publish failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="publish failed: "+e.message; }
+    if(r.ok){ _currentProjectId=id; document.getElementById("projCrumb").textContent=b.name||id; ps().innerHTML="published v"+j.version+" ✓"; toast("Published \""+(b.name||id)+"\" v"+j.version+" ✓","ok"); }
+    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared, try again"; toast("Unauthorized — log in again and retry.","err"); }
+    else { ps().textContent="publish failed: "+(j.error||("HTTP "+r.status)); toast("Publish failed: "+(j.error||("HTTP "+r.status)),"err"); }
+  }catch(e){ ps().textContent="publish failed: "+e.message; toast("Publish failed: "+e.message,"err"); }
 }
 document.getElementById("publishBtn").onclick=publishToPlatform;
 
