@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Geofence Platform — Share</title>
+<script src="role-gate.js"></script>
+<script src="client-picker.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6; }
@@ -36,7 +38,7 @@
 <div class="wrap">
   <header>
     <div class="brand"><div class="glyph"></div><div><h1>Share a tour</h1><p>Geofence Platform</p></div></div>
-    <nav><a href="/">Home</a></nav>
+    <nav id="topNav"><a href="/">Home</a></nav>
   </header>
 
   <div class="row">
@@ -54,10 +56,23 @@ const ORIGIN=location.origin;
 const sel=document.getElementById("projSel");
 const out=document.getElementById("out");
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function getToken(){ try{ return localStorage.getItem("gp.session")||localStorage.getItem("gp.admin")||""; }catch(e){ return ""; } }
 
 async function loadProjects(){
-  try{ const r=await fetch("/api/projects"); const j=await r.json();
-    (j.projects||[]).forEach(p=>{ const o=document.createElement("option"); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
+  sel.innerHTML='<option value="">— pick a tour —</option>';
+  out.className="state"; out.textContent="Pick a tour to get its link and QR code.";
+  try{
+    // Scoped to one client — admins previewing another client via the
+    // picker, or an operator/front_desk session, which the backend already
+    // pins to their own client regardless of this param. Without scoping,
+    // this dropdown would mix every client's tours into one list.
+    const org=window.ClientPicker?ClientPicker.resolve():"";
+    const q=org?"?org="+encodeURIComponent(org):"";
+    const r=await fetch("/api/projects"+q,{headers:{authorization:"Bearer "+getToken()}});
+    const j=await r.json();
+    const projects=j.projects||[];
+    if(!projects.length){ out.textContent="No published tours yet for this client."; return; }
+    projects.forEach(p=>{ const o=document.createElement("option"); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
   }catch(e){ out.textContent="Couldn't reach the platform."; }
 }
 function show(id,name){
@@ -75,7 +90,13 @@ function show(id,name){
     const b=document.getElementById("copy"); b.textContent="Copied ✓"; setTimeout(()=>b.textContent="Copy link",1500); }); };
 }
 sel.onchange=()=>{ if(sel.value) show(sel.value, sel.options[sel.selectedIndex].textContent); else { out.className="state"; out.textContent="Pick a tour to get its link and QR code."; } };
-loadProjects();
+
+RoleGate.require(['admin','operator','front_desk']).then(me=>{
+  if(me.role==="admin"){
+    ClientPicker.init({navEl:document.getElementById("topNav"), allowAll:false, defaultId:me.orgId, onChange:loadProjects});
+  }
+  loadProjects();
+});
 </script>
 </body>
 </html>

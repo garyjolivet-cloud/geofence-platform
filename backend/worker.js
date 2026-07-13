@@ -718,7 +718,7 @@ async function api(request, env, url) {
     // actually filter the workspace list.
     if (!A) return json({ apps: [] }, 200, AC);
     const scopedOrg = A.master ? (url.searchParams.get("org") || null) : A.appId;
-    const sql = "SELECT a.id,a.name,a.slug,a.description,a.updatedAt, " +
+    const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);

@@ -51,10 +51,10 @@
   .client-name{font-family:"Barlow Condensed";font-size:20px;font-weight:700;color:var(--snow);flex:1}
   .client-meta{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);letter-spacing:.4px}
   .client-actions{display:flex;gap:8px}
-  .client-actions button{background:none;border:1px solid var(--rim);border-radius:8px;
+  .client-actions button,.client-actions a{background:none;border:1px solid var(--rim);border-radius:8px;
                          color:var(--fog);font-family:"Barlow Condensed";font-size:12px;
                          padding:5px 10px;cursor:pointer;transition:.12s}
-  .client-actions button:hover{border-color:var(--ice);color:var(--ice)}
+  .client-actions button:hover,.client-actions a:hover{border-color:var(--ice);color:var(--ice)}
 
   /* tours grid */
   .tours{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:14px}
@@ -204,6 +204,7 @@ function clientBlock(app, tours){
         ${app.description?`<div class="client-meta">${esc(app.description)}</div>`:`<div class="client-meta">${count}</div>`}
       </div>
       <div class="client-actions">
+        <a href="/share?asClient=${esc(app.orgId||app.id)}" style="display:inline-block;text-decoration:none">Share</a>
         <button onclick="renameClient('${esc(app.id)}','${esc(app.name)}')">Rename</button>
         <button onclick="deleteClient('${esc(app.id)}','${esc(app.name)}')" style="color:rgba(255,47,78,.5);border-color:rgba(255,47,78,.2)">✕</button>
       </div>
