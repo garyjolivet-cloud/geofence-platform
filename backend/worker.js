@@ -1143,7 +1143,8 @@ async function api(request, env, url) {
       catch (e) { return json({ error: "invalid JSON" }, 400); }
       if (!bundle || !Array.isArray(bundle.zones))
         return json({ error: "body must be a bundle with a zones array" }, 400);
-      const existingAppId = await projectAppId(env, pid);
+      const existingProj = await env.DB.prepare("SELECT orgId, appId FROM project WHERE id=?").bind(pid).first();
+      const existingAppId = existingProj ? existingProj.appId : null;
       const targetApp = existingAppId || bundle.appId || null;
       const A = await auth(request, env);
       if (!scopeOk(A, "publish", targetApp)) return json({ error: "not authorized to publish to this app" }, 401, AC);
@@ -1155,8 +1156,16 @@ async function api(request, env, url) {
       // For an already-published project, only touch orgId if master explicitly
       // picked one — otherwise republishing must never silently move a project.
       const orgOverride = (A && A.master && bundle.orgId) ? bundle.orgId : null;
+      // If master is actually moving this project to a different client, its
+      // workspace must follow — otherwise the project stays pinned to a
+      // workspace under the OLD client (the orgId/appId drift that caused an
+      // earlier data-loss incident when a client got deleted). Ignoring the
+      // stale existingAppId here forces the block below to resolve/auto-create
+      // a workspace under the new client instead, unless bundle.appId was
+      // explicitly given.
+      const movingClients = orgOverride && existingProj && existingProj.orgId !== orgOverride;
       // Resolve appId — auto-assign so project always surfaces on home screen
-      let resolvedAppId = existingAppId || bundle.appId || null;
+      let resolvedAppId = (movingClients ? null : existingAppId) || bundle.appId || null;
       if (!resolvedAppId) {
         const existingApp = await env.DB.prepare("SELECT id FROM app WHERE orgId=? LIMIT 1").bind(chosenOrgId).first();
         if (existingApp) {
