@@ -226,7 +226,12 @@ function applyPreviewBanner(){
 // operator/front_desk have no reason to be here — RoleGate sends them to
 // /dashboard instead.
 let _me = null;
-RoleGate.require(['admin', 'guide']).then(me => {
+// Awaited by init() before the sessions list renders — otherwise init()'s
+// local IndexedDB setup routinely beats this network round-trip, so _me is
+// still null when renderSessionsList() checks isGuide, and a guide falls
+// through to the unscoped admin view (every project in their org, not just
+// their assignments).
+const _meReady = RoleGate.require(['admin', 'guide']).then(me => {
   _me = me;
   applyPreviewBanner();
   if (me.role === 'guide') {
@@ -234,6 +239,7 @@ RoleGate.require(['admin', 'guide']).then(me => {
     const homeLink = document.querySelector('.ss-hdr a[href="/"]');
     if (homeLink) homeLink.style.display = 'none';
   }
+  return me;
 });
 const MIME   = ["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
                  .find(t => MediaRecorder.isTypeSupported(t)) || "";
@@ -1151,6 +1157,7 @@ async function clearCurrentSession(){
 /* ── init ───────────────────────────────────────────── */
 async function init(){
   await openDb();
+  await _meReady;
 
   if(!projId){
     document.getElementById("screenSessions").style.display = "flex";
