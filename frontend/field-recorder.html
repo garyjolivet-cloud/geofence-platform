@@ -1185,9 +1185,10 @@ async function init(){
   }catch(e){}
 
   // Read project settings (liveTtlMs) from published bundle
+  let _bundleRef = null;
   try{
     const br = await fetch("/api/projects/"+encodeURIComponent(projId)+"/bundle",{cache:"no-store"});
-    if(br.ok){ const b=await br.json(); if(b.liveTtlMs>=30000) liveTtlMs=b.liveTtlMs; }
+    if(br.ok){ const b=await br.json(); if(b.liveTtlMs>=30000) liveTtlMs=b.liveTtlMs; if(Array.isArray(b.ref)) _bundleRef=b.ref; }
   }catch(e){ /* offline — keep default */ }
 
   document.getElementById("screenSessions").style.display = "none";
@@ -1220,7 +1221,13 @@ async function init(){
   updateQueueBadge();
   initConnectivity();
   initMap();
-  map.on("load", () => { map.resize(); refreshMap(); renderStopList(); });
+  map.on("load", () => {
+    map.resize(); refreshMap(); renderStopList();
+    // Center on the tour's own location immediately — don't leave the map
+    // sitting at the [0,0] world-view default while waiting on a GPS fix,
+    // which may be slow, denied, or never arrive at all.
+    if(_bundleRef) map.jumpTo({center:[_bundleRef[1],_bundleRef[0]], zoom:16});
+  });
   startPresencePoll(projId);
   await initPermissions();
 }
