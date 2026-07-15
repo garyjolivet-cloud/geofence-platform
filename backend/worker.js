@@ -62,6 +62,21 @@ async function cleanupLiveZones(env) {
   await env.DB.prepare("DELETE FROM presence WHERE updated_at < ?").bind(Date.now() - 60000).run().catch(() => {});
 }
 
+// Every table with a project_id/projectId column, kept in one place so the
+// single-project DELETE and the app-cascade DELETE loop can't drift apart
+// again — they used to only clean event/published_bundle, silently leaving
+// orphaned rows in the other five tables every time a project was deleted.
+async function deleteProjectRows(env, pid) {
+  await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM live_zone WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM presence WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM project_link WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM project_guide WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM project_frontdesk WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
+}
+
 async function scrapeWeather(env) {
   const resp = await fetch('https://kickinghorseresort.com/conditions/advanced-weather-data/', {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GeofencePlatform/1.0)' },
@@ -783,14 +798,16 @@ async function api(request, env, url) {
     if (cascade) {
       const { results: projs } = await env.DB.prepare("SELECT id FROM project WHERE appId=?").bind(aid).all();
       for (const p of (projs || [])) {
-        await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(p.id).run();
-        await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(p.id).run();
-        await env.DB.prepare("DELETE FROM project WHERE id=?").bind(p.id).run();
+        await deleteProjectRows(env, p.id);
       }
     } else {
       const chk = await env.DB.prepare("SELECT id FROM project WHERE appId=? LIMIT 1").bind(aid).first();
       if (chk) return json({ error: "remove or reassign this app's projects first, or use cascade=true" }, 409, AC);
     }
+    // Bots live under the app (app_id), not under any one project, so the
+    // per-project cleanup above never touches them — an app cascade-delete
+    // must remove them explicitly or they're left behind as orphans.
+    await env.DB.prepare("DELETE FROM bot WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
@@ -959,14 +976,12 @@ async function api(request, env, url) {
     return json({ ok: true, id }, 200, AC);
   }
 
-  // --- delete a project (master only; cascades bundles + events) ---
+  // --- delete a project (master only; cascades every project-scoped table) ---
   const mdp = path.match(/^\/api\/projects\/([^/]+)$/);
   if (mdp && method === "DELETE") {
     if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
     const pid = decodeURIComponent(mdp[1]);
-    await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(pid).run();
-    await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(pid).run();
-    await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
+    await deleteProjectRows(env, pid);
     await logAudit(env, request, { keyId: "master" }, "project.delete", pid);
     return json({ ok: true, deleted: pid }, 200, AC);
   }
