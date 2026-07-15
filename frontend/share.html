@@ -70,7 +70,11 @@ async function loadProjects(){
     const q=org?"?org="+encodeURIComponent(org):"";
     const r=await fetch("/api/projects"+q,{headers:{authorization:"Bearer "+getToken()}});
     const j=await r.json();
-    const projects=j.projects||[];
+    // Exclude scheduled walk instances (cloned from a template with a
+    // guide/visitor/date attached) — those are private bookings, not
+    // walk-up self-guided tours. Templates and standalone published tours
+    // (no scheduled_date) are the only things safe to hand out here.
+    const projects=(j.projects||[]).filter(p=>!p.scheduled_date);
     if(!projects.length){ out.textContent="No published tours yet for this client."; return; }
     projects.forEach(p=>{ const o=document.createElement("option"); o.value=p.id; o.textContent=p.name; sel.appendChild(o); });
   }catch(e){ out.textContent="Couldn't reach the platform."; }
