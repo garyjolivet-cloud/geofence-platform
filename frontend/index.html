@@ -214,7 +214,8 @@ function tourCard(p, appId){
   const meta=[("v"+(p.bundleVersion||1)), when(p.updatedAt)].filter(Boolean).join(" · ");
   return `<div class="tour">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-      <div class="tour-name">${esc(p.name||p.id)}</div>${badge}
+      <div class="tour-name">${esc(p.name||p.id)}</div>
+      <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto">${badge}<button onclick="deleteProject('${id}','${esc(p.name||p.id)}')" title="Delete this project" style="background:none;border:none;color:rgba(255,47,78,.5);font-size:14px;cursor:pointer;padding:0 2px;line-height:1">✕</button></div>
     </div>
     <div class="tour-meta">${meta}</div>
     <div class="tour-btns">
@@ -373,6 +374,16 @@ async function deleteClient(id,name){
   const token=await askToken(); if(!token)return;
   try{
     const r=await fetch("/api/apps/"+encodeURIComponent(id)+"?cascade=true",{method:"DELETE",headers:{"authorization":"Bearer "+token}});
+    if(r.ok) load();
+    else{ const j=await r.json().catch(()=>({})); alert("Delete failed: "+(j.error||r.status)); }
+  }catch(e){ alert("Failed: "+e.message); }
+}
+
+async function deleteProject(id,name){
+  if(!confirm('Delete project "'+name+'"? This also removes its walk links, guide/front-desk assignments, and bundle history. Cannot be undone.'))return;
+  const token=await askToken(); if(!token)return;
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(id),{method:"DELETE",headers:{"authorization":"Bearer "+token}});
     if(r.ok) load();
     else{ const j=await r.json().catch(()=>({})); alert("Delete failed: "+(j.error||r.status)); }
   }catch(e){ alert("Failed: "+e.message); }
