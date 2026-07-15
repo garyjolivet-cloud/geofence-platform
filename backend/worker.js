@@ -468,7 +468,12 @@ async function api(request, env, url) {
   if (path === "/api/users" && method === "GET") {
     const A = await auth(request, env);
     if (!A) return json({ error: "authentication required" }, 401, AC);
-    if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
+    // front_desk gets a narrow carve-out: read-only guide-name lookups only
+    // (e.g. Walk Links / Calendar tabs need to show a guide's name, not their
+    // raw id) — never a full staff roster.
+    const frontDeskGuideLookup = A.role === "front_desk" && url.searchParams.get("role") === "guide";
+    if (!A.master && A.role !== "operator" && A.role !== "admin" && !frontDeskGuideLookup)
+      return json({ error: "operator access required" }, 403, AC);
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
     // Master/admin sees every client's staff by default (matches /api/apps) —
     // callers that want one client's staff (dashboard's own Team tab) must
@@ -869,6 +874,8 @@ async function api(request, env, url) {
     const conditions = [], binds = [];
     const appFilter = url.searchParams.get("app");
     const dateFilter = url.searchParams.get("date");
+    const dateFromFilter = url.searchParams.get("dateFrom");
+    const dateToFilter = url.searchParams.get("dateTo");
     const guideFilter = url.searchParams.get("guide");
     const templateFilter = url.searchParams.get("template");
     const archivedFilter = url.searchParams.get("archived");
@@ -886,6 +893,8 @@ async function api(request, env, url) {
     }
     if (appFilter) { conditions.push("appId=?"); binds.push(appFilter); }
     if (dateFilter) { conditions.push("scheduled_date=?"); binds.push(dateFilter); }
+    if (dateFromFilter) { conditions.push("scheduled_date>=?"); binds.push(dateFromFilter); }
+    if (dateToFilter) { conditions.push("scheduled_date<=?"); binds.push(dateToFilter); }
     if (guideFilter) { conditions.push("(guide_id=? OR id IN (SELECT project_id FROM project_guide WHERE guide_id=?))"); binds.push(guideFilter, guideFilter); }
     if (templateFilter !== null) { conditions.push("is_template=?"); binds.push(Number(templateFilter)); }
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
@@ -922,6 +931,68 @@ async function api(request, env, url) {
     await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
     await logAudit(env, request, { keyId: "master" }, "project.delete", pid);
     return json({ ok: true, deleted: pid }, 200, AC);
+  }
+
+  // --- edit a scheduled tour's booking details (name/time/guide/visitor);
+  // does not touch scheduled_date — a booking's date is set by which
+  // calendar day it was created under, not editable here; operator/front_desk/master ---
+  if (mdp && method === "PUT") {
+    const A = await auth(request, env);
+    if (!A || !(A.master || A.role === "operator" || A.role === "front_desk"))
+      return json({ error: "operator or front_desk access required" }, 403, AC);
+    const pid = decodeURIComponent(mdp[1]);
+    const proj = await env.DB.prepare("SELECT orgId FROM project WHERE id=?").bind(pid).first();
+    if (!proj) return json({ error: "project not found" }, 404, AC);
+    if (!A.master && proj.orgId !== A.appId) return json({ error: "project belongs to a different client" }, 403, AC);
+    if (!A.master && A.role === "front_desk") {
+      const assigned = await env.DB.prepare(
+        "SELECT 1 FROM project_frontdesk WHERE project_id=? AND frontdesk_id=?"
+      ).bind(pid, A.userId).first();
+      if (!assigned) return json({ error: "not assigned to this project" }, 403, AC);
+    }
+    const b = await request.json().catch(() => ({}));
+    if (!b.name) return json({ error: "name required" }, 400, AC);
+    await env.DB.prepare(
+      "UPDATE project SET name=?, scheduled_time=?, guide_id=?, visitor_name=?, updatedAt=? WHERE id=?"
+    ).bind(b.name, b.scheduledTime || null, b.guideId || null, b.visitorName || null, new Date().toISOString(), pid).run();
+    await logAudit(env, request, A, "project.update", pid);
+    return json({ ok: true, id: pid }, 200, AC);
+  }
+
+  // --- archive/cancel a scheduled tour (soft/reversible for the project itself,
+  // but also hard-revokes its walk links; operator/front_desk/master) ---
+  const arp = path.match(/^\/api\/projects\/([^/]+)\/archive$/);
+  if (arp && method === "PUT") {
+    const A = await auth(request, env);
+    if (!A || !(A.master || A.role === "operator" || A.role === "front_desk"))
+      return json({ error: "operator or front_desk access required" }, 403, AC);
+    const pid = decodeURIComponent(arp[1]);
+    const proj = await env.DB.prepare("SELECT orgId FROM project WHERE id=?").bind(pid).first();
+    if (!proj) return json({ error: "project not found" }, 404, AC);
+    if (!A.master && proj.orgId !== A.appId) return json({ error: "project belongs to a different client" }, 403, AC);
+    if (!A.master && A.role === "front_desk") {
+      const assigned = await env.DB.prepare(
+        "SELECT 1 FROM project_frontdesk WHERE project_id=? AND frontdesk_id=?"
+      ).bind(pid, A.userId).first();
+      if (!assigned) return json({ error: "not assigned to this project" }, 403, AC);
+    }
+    const b = await request.json().catch(() => ({}));
+    const val = b.archived === 0 ? 0 : 1;
+    await env.DB.prepare("UPDATE project SET archived=?, updatedAt=? WHERE id=?")
+      .bind(val, new Date().toISOString(), pid).run();
+    let linksRevoked = 0;
+    if (val) {
+      // Cancelling a booking also revokes any walk links already generated for
+      // it — otherwise a visitor holding an old link could still open a tour
+      // that's been called off. Links have no soft-revoke column (see the
+      // DELETE /api/links/:token handler), so this is a hard delete; restoring
+      // the booking later does not bring the links back — staff would
+      // generate a fresh one via the Links tab if still needed.
+      const delResult = await env.DB.prepare("DELETE FROM project_link WHERE project_id=?").bind(pid).run();
+      linksRevoked = delResult.meta?.changes || 0;
+    }
+    await logAudit(env, request, A, val ? "project.archive" : "project.unarchive", pid);
+    return json({ ok: true, id: pid, archived: val, linksRevoked }, 200, AC);
   }
 
   // --- copy a project from template ---

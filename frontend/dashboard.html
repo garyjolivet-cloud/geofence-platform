@@ -6,6 +6,7 @@
 <title>Geofence Platform — Dashboard</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="wheel-picker.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;--coral:#ff6a3d;
@@ -69,6 +70,15 @@
   .role-inactive{color:var(--fog);background:rgba(91,112,136,.1);border:1px solid rgba(91,112,136,.3)}
   button.sm{font-family:"Barlow Condensed";font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:4px 10px;border-radius:7px;cursor:pointer;border:1px solid var(--rim);background:var(--slate2);color:var(--ice)}
   button.sm:hover{border-color:var(--coral);color:var(--snow)}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .cal-dow{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);text-align:center;padding:4px 0}
+  .cal-day{min-height:78px;border:1px solid var(--rim);border-radius:9px;padding:5px 6px;background:var(--slate2);cursor:pointer;display:flex;flex-direction:column;gap:2px}
+  .cal-day:hover{border-color:var(--coral)}
+  .cal-day.empty{background:none;border:none;cursor:default}
+  .cal-day.today{border-color:var(--ice)}
+  .cal-day .cd-num{font-family:"Barlow Condensed";font-weight:700;font-size:12px;color:var(--fog)}
+  .cal-entry{font-size:11px;border-radius:5px;padding:2px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#0a1018;font-weight:600}
+  .cal-more{font-size:10px;color:var(--fog)}
 </style>
 </head>
 <body>
@@ -86,7 +96,8 @@
       <button class="nav" id="tabAnalytics" data-roles="admin,operator" onclick="showTab('analytics')">Analytics</button>
       <button class="nav" id="tabTeam" data-roles="admin,operator" onclick="showTab('team')" style="color:var(--go);border-color:rgba(56,224,166,.35)">Team</button>
       <button class="nav" id="tabLinks" data-roles="admin,operator,front_desk" onclick="showTab('links')" style="color:var(--amber);border-color:rgba(255,194,77,.35)">Walk Links</button>
-      <button class="nav" id="tabSchedule" data-roles="admin,operator,front_desk" onclick="showTab('schedule')" style="color:var(--ice);border-color:rgba(143,182,212,.35)">Schedule</button>
+      <button class="nav" id="tabCalendar" data-roles="admin,operator,front_desk" onclick="showTab('calendar')" style="color:var(--ice);border-color:rgba(143,182,212,.35)">Calendar</button>
+      <a id="tabShare" data-roles="admin,operator,front_desk" href="/share">Self-Guided</a>
       <select id="projSel" style="display:none"><option value="">— project —</option></select>
       <input class="tokenin" id="tok" type="password" placeholder="admin token" style="width:140px">
       <button class="go" id="load" style="display:none">Load</button>
@@ -146,23 +157,39 @@
     </section>
   </div>
 
-  <!-- Schedule panel -->
-  <div id="panelSchedule" style="display:none">
+  <!-- Calendar panel -->
+  <div id="panelCalendar" style="display:none">
     <section>
-      <h2>Schedule a tour</h2>
-      <p class="hint">Pick a template, set the date and time, assign a guide, then generate the visitor link — all in one place.</p>
+      <h2>Calendar</h2>
+      <p class="hint">Scheduled tours for the month, color-coded by guide. Click a day to see who's booked, cancel a booking, or add a new one.</p>
       <div class="panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <button class="sm" id="calPrev">‹ Prev</button>
+          <div id="calMonthLabel" style="font-family:'Barlow Condensed';font-weight:700;font-size:16px;text-transform:uppercase;letter-spacing:.5px"></div>
+          <button class="sm" id="calNext">Next ›</button>
+        </div>
+        <div id="calGrid" class="cal-grid"></div>
+        <p class="note" id="calMsg"></p>
+      </div>
+    </section>
+    <section id="calDaySection" style="display:none">
+      <h2 id="calDayTitle">Day</h2>
+      <div class="panel" id="calDayPanel"></div>
+      <div class="panel" id="calDayForm">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div id="calDayFormTitle" style="font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog)">Add a booking</div>
+          <button class="sm" id="cancelEditBtn" style="display:none" onclick="resetSchedForm()">Cancel edit</button>
+        </div>
         <div class="form-row trio" style="margin-bottom:10px">
-          <div class="form-col"><label>Template</label><input id="schedTemplate" list="schedTemplate__list" placeholder="type to search…"><datalist id="schedTemplate__list"></datalist></div>
+          <div class="form-col" id="schedTemplateCol"><label>Template</label><input id="schedTemplate" list="schedTemplate__list" placeholder="type to search…"><datalist id="schedTemplate__list"></datalist></div>
           <div class="form-col"><label>Tour name</label><input id="schedName" placeholder="e.g. Village Walk — Sat 2pm"></div>
           <div class="form-col"><label>Guide</label><select id="schedGuide" data-empty-label="— unassigned —"><option value="">— unassigned —</option></select></div>
         </div>
         <div class="form-row" style="grid-template-columns:1fr;margin-bottom:10px">
           <div class="form-col"><label>Visitor / group name</label><input id="schedVisitor" placeholder="e.g. Smith Family, or Corp Retreat Group B"></div>
         </div>
-        <div class="form-row trio" style="align-items:end">
-          <div class="form-col"><label>Date</label><input id="schedDate" type="date"></div>
-          <div class="form-col"><label>Time</label><input id="schedTime" type="time"></div>
+        <div class="form-row" style="grid-template-columns:1fr auto;align-items:end">
+          <div class="form-col"><label>Time</label><input id="schedTime" type="text" readonly placeholder="Select time…"></div>
           <button class="go" id="scheduleBtn" style="height:38px">Schedule tour</button>
         </div>
         <p class="note" id="scheduleMsg"></p>
@@ -246,15 +273,16 @@ function showTab(t) {
   $("panelAnalytics").style.display = t==="analytics" ? "" : "none";
   $("panelTeam").style.display = t==="team" ? "" : "none";
   $("panelLinks").style.display = t==="links" ? "" : "none";
-  $("panelSchedule").style.display = t==="schedule" ? "" : "none";
+  $("panelCalendar").style.display = t==="calendar" ? "" : "none";
   [["tabAnalytics","analytics",""],["tabTeam","team","var(--go)","rgba(56,224,166,.35)"],
    ["tabLinks","links","var(--amber)","rgba(255,194,77,.35)"],
-   ["tabSchedule","schedule","var(--ice)","rgba(143,182,212,.35)"]].forEach(([id,name,inactiveColor,inactiveBorder])=>{
+   ["tabCalendar","calendar","var(--ice)","rgba(143,182,212,.35)"]].forEach(([id,name,inactiveColor,inactiveBorder])=>{
     const el=$(id); if(!el) return;
     const active=t===name;
     el.style.color = active ? "var(--snow)" : (inactiveColor||"");
     el.style.borderColor = active ? "var(--coral)" : (inactiveBorder||"");
   });
+  if (t === "calendar") loadCalendarMonth();
 }
 // Persistent active-client selection (admin-only preview of one client's
 // data — see clients.html "Run" and the nav picker). Ignored entirely for
@@ -266,24 +294,92 @@ function orgParam(){
   return ClientPicker.resolve() || ME.orgId || null; // previewing another client, else this admin's own home client
 }
 
-// Searchable text-input+datalist backing for project pickers — a plain
-// <select> stops being usable once a client has 50+ projects, since there's
-// no real search, just scroll/type-to-jump. Mimics just enough of a
-// <select>'s API (set options, get/set the chosen id) that call sites don't
-// need much rework.
+// Searchable text-input backing for project pickers — a plain <select>
+// stops being usable once a client has 50+ projects, since there's no real
+// search, just scroll/type-to-jump. Mimics just enough of a <select>'s API
+// (set options, get/set the chosen id) that call sites don't need much rework.
+//
+// Built as a fully custom dropdown rather than native <input list>+<datalist>:
+// browsers filter a datalist's suggestions against whatever text is already
+// in the field, so once a project is picked, focusing the field again only
+// shows entries matching that leftover label (often just the one already
+// picked) — not the full list. Native datalist popups also aren't
+// controllable from script in any reliable cross-browser way (Chrome only
+// shows/refreshes them heuristically, and they render outside the page's own
+// layer so they can't even be inspected/verified via a screenshot). A
+// hand-rolled menu sidesteps all of that: focus always shows every option,
+// typing filters, clicking a row selects it.
 function searchableSelect(inputId){
   const input=$(inputId);
-  const dl=document.getElementById(inputId+"__list");
-  let map={}, rmap={};
+  input.removeAttribute("list"); // fully custom now — don't let a native datalist popup compete
+  let items=[], labelFn=null, map={}, rmap={};
+  let menu=null, highlighted=-1;
+
+  function closeMenu(){
+    if(!menu) return;
+    menu.remove(); menu=null; highlighted=-1;
+    document.removeEventListener("mousedown", onDocMouseDown, true);
+  }
+  function onDocMouseDown(e){ if(menu && !menu.contains(e.target) && e.target!==input) closeMenu(); }
+  function setHighlight(i){
+    if(!menu) return;
+    const rows=[...menu.children];
+    rows.forEach((r,idx)=>{ r.style.background = idx===i ? "rgba(255,106,61,.18)" : ""; });
+    highlighted=i;
+  }
+  function openMenu(filterText){
+    closeMenu();
+    const q=(filterText||"").trim().toLowerCase();
+    const matches=items.filter(it=>!q || labelFn(it).toLowerCase().includes(q)).slice(0,200);
+    if(!matches.length) return;
+    menu=document.createElement("div");
+    const r=input.getBoundingClientRect();
+    menu.style.cssText="position:fixed;z-index:500;background:var(--slate2,#1b2738);"
+      +"border:1px solid var(--rim,#26344a);border-radius:9px;max-height:240px;overflow-y:auto;"
+      +"box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:'Barlow Condensed';font-size:13px;"
+      +"top:"+(r.bottom+4)+"px;left:"+r.left+"px;width:"+r.width+"px";
+    matches.forEach(it=>{
+      const row=document.createElement("div");
+      row.textContent=labelFn(it);
+      row.style.cssText="padding:8px 10px;cursor:pointer;color:var(--snow,#eef4fb)";
+      row.addEventListener("mouseenter", ()=>{ row.style.background="rgba(255,106,61,.18)"; });
+      row.addEventListener("mouseleave", ()=>{ if(menu) row.style.background=""; });
+      // mousedown (not click) + preventDefault so the input never loses focus
+      // first — a plain click would blur the input before this handler runs.
+      row.addEventListener("mousedown", (e)=>{
+        e.preventDefault();
+        input.value=labelFn(it);
+        closeMenu();
+      });
+      menu.appendChild(row);
+    });
+    document.body.appendChild(menu);
+    document.addEventListener("mousedown", onDocMouseDown, true);
+  }
+  // "focus" alone isn't enough: it only fires the first time a field gains
+  // focus, so re-clicking a field that's already focused (e.g. right after
+  // picking an option, since selecting one deliberately keeps focus on the
+  // input) would never reopen the menu — you'd have to type something to
+  // trigger the "input" handler instead, which is exactly the "one result,
+  // have to backspace to empty" symptom this was built to avoid. "click"
+  // fires every time regardless of prior focus state, so pair both.
+  input.addEventListener("focus", ()=> openMenu(""));
+  input.addEventListener("click", ()=> openMenu(""));
+  input.addEventListener("input", ()=> openMenu(input.value));
+  input.addEventListener("keydown", (e)=>{
+    if(!menu) return;
+    const rows=[...menu.children];
+    if(e.key==="ArrowDown"){ e.preventDefault(); setHighlight(Math.min(rows.length-1, highlighted+1)); rows[highlighted]?.scrollIntoView({block:"nearest"}); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); setHighlight(Math.max(0, highlighted-1)); rows[highlighted]?.scrollIntoView({block:"nearest"}); }
+    else if(e.key==="Enter"){ if(highlighted>=0){ e.preventDefault(); rows[highlighted].dispatchEvent(new Event("mousedown")); } }
+    else if(e.key==="Escape"){ closeMenu(); }
+  });
   return {
-    setOptions(items, valueFn, labelFn){
+    setOptions(newItems, valueFn, lFn){
       const cur=this.value();
+      items=newItems; labelFn=lFn;
       map={}; rmap={};
-      dl.innerHTML=items.map(it=>{
-        const label=labelFn(it), id=valueFn(it);
-        map[label]=id; rmap[id]=label;
-        return '<option value="'+esc(label)+'">';
-      }).join('');
+      items.forEach(it=>{ const label=lFn(it), id=valueFn(it); map[label]=id; rmap[id]=label; });
       if(cur) this.setValue(cur);
     },
     value(){ const v=input.value.trim(); return map[v]!==undefined?map[v]:(rmap[v]!==undefined?v:""); },
@@ -291,10 +387,23 @@ function searchableSelect(inputId){
     clear(){ input.value=""; }
   };
 }
-function projectLabel(p){ return (p.visitor_name?p.visitor_name+" — ":"")+(p.name||p.id)+(p.scheduled_date?" · "+p.scheduled_date:""); }
+// Templates and their scheduled instances often share very similar names
+// (e.g. template "Beaver Loop" vs instance "Beaver Loop walk") — relying on
+// the mere absence of a visitor/date prefix to signal "this is the template"
+// is an easy-to-miss cue, so templates get an explicit tag instead.
+function projectLabel(p){
+  if(p.is_template) return (p.name||p.id)+" (template)";
+  return (p.visitor_name?p.visitor_name+" — ":"")+(p.name||p.id)+(p.scheduled_date?" · "+p.scheduled_date:"");
+}
 const schedTemplateSel=searchableSelect("schedTemplate");
 const lnkProjSel=searchableSelect("lnkProj");
 const lnkListProjSel=searchableSelect("lnkListProj");
+WheelPicker.attachTime($("schedTime"), { minuteStep: 15 });
+function fmtTime12h(t){
+  const m=/^(\d{1,2}):(\d{2})/.exec(t||""); if(!m) return "";
+  let h=Number(m[1]); const ap=h>=12?"PM":"AM"; h=h%12||12;
+  return h+":"+m[2]+" "+ap;
+}
 
 let _allProjects=[];
 async function loadProjects(){
@@ -598,30 +707,211 @@ $("genLinkBtn").onclick = async function(){
 };
 
 // ---- Schedule a tour (front_desk's whole job: template -> instance -> guide -> link) ----
+// Doubles as the "edit booking" form: when _calEditingId is set (a booking
+// row in the day panel was clicked), this PUTs changes to that existing
+// project instead of POSTing a new copy from a template.
 $("scheduleBtn").onclick = async function(){
-  const srcId=schedTemplateSel.value(); if(!srcId){$("scheduleMsg").textContent="Pick a template first.";return;}
+  if(!_calOpenDay){$("scheduleMsg").textContent="Pick a day on the calendar first.";return;}
+  const editingId=_calEditingId;
+  let srcId=null;
+  if(!editingId){
+    srcId=schedTemplateSel.value(); if(!srcId){$("scheduleMsg").textContent="Pick a template first.";return;}
+  }
   const name=$("schedName").value.trim(); if(!name){$("scheduleMsg").textContent="Tour name required.";return;}
   const useTok=tok(); if(!useTok){$("scheduleMsg").textContent="Sign in first.";return;}
   const guideId=$("schedGuide").value||null;
   const visitorName=$("schedVisitor").value.trim()||null;
-  $("scheduleBtn").disabled=true; $("scheduleBtn").textContent="Scheduling…"; $("scheduleMsg").textContent="";
+  const reopenDay=_calOpenDay; // loadCalendarMonth() below resets _calOpenDay
+  $("scheduleBtn").disabled=true; $("scheduleBtn").textContent=editingId?"Saving…":"Scheduling…"; $("scheduleMsg").textContent="";
   try{
-    const r=await fetch("/api/projects/"+encodeURIComponent(srcId)+"/copy",{method:"POST",
-      headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
-      body:JSON.stringify({name, scheduledDate:$("schedDate").value||null, scheduledTime:$("schedTime").value||null, guideId, visitorName})});
-    const j=await r.json();
-    if(!r.ok){ $("scheduleMsg").textContent="✕ "+(j.error||r.status); return; }
-    $("scheduleMsg").textContent="✓ Scheduled — generating visitor link…";
-    await loadProjects();
-    await loadTemplates();
-    $("schedName").value=""; $("schedDate").value=""; $("schedTime").value=""; $("schedGuide").value=""; $("schedVisitor").value="";
-    showTab("links");
-    lnkProjSel.setValue(j.id);
-    $("lnkGuide").value=guideId||"";
-    $("genLinkBtn").click();
+    if(editingId){
+      const r=await fetch("/api/projects/"+encodeURIComponent(editingId),{method:"PUT",
+        headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
+        body:JSON.stringify({name, scheduledTime:$("schedTime").value||null, guideId, visitorName})});
+      const j=await r.json();
+      if(!r.ok){ $("scheduleMsg").textContent="✕ "+(j.error||r.status); return; }
+      await loadProjects();
+      await loadCalendarMonth();
+      if(reopenDay) openCalDay(reopenDay);
+    } else {
+      const r=await fetch("/api/projects/"+encodeURIComponent(srcId)+"/copy",{method:"POST",
+        headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},
+        body:JSON.stringify({name, scheduledDate:reopenDay, scheduledTime:$("schedTime").value||null, guideId, visitorName})});
+      const j=await r.json();
+      if(!r.ok){ $("scheduleMsg").textContent="✕ "+(j.error||r.status); return; }
+      $("scheduleMsg").textContent="✓ Scheduled — generating visitor link…";
+      await loadProjects();
+      await loadTemplates();
+      await loadCalendarMonth();
+      if(reopenDay) openCalDay(reopenDay);
+      showTab("links");
+      lnkProjSel.setValue(j.id);
+      $("lnkGuide").value=guideId||"";
+      $("genLinkBtn").click();
+    }
   }catch(e){ $("scheduleMsg").textContent="✕ network error"; }
-  finally{ $("scheduleBtn").disabled=false; $("scheduleBtn").textContent="Schedule tour"; }
+  finally{ $("scheduleBtn").disabled=false; $("scheduleBtn").textContent=_calEditingId?"Save changes":"Schedule tour"; }
 };
+
+// ---- Calendar tab: month view of scheduled tours, cancel = soft-archive ----
+// Hex, not var(--x) — entries below append alpha-suffix hex digits (e.g.
+// "22"/"88"), which only works on a literal hex string, not a CSS var().
+const CAL_PALETTE=["#ff6a3d","#8fb6d4","#ffc24d","#38e0a6","#ff2f4e","#5b7088"];
+function colorForGuide(gid){
+  if(!gid) return "#5b7088"; // matches --fog, but hex so alpha-suffix concatenation stays valid CSS
+  let h=0; for(const c of gid) h=(h*31+c.charCodeAt(0))>>>0;
+  return CAL_PALETTE[h%CAL_PALETTE.length];
+}
+function pad2(n){ return String(n).padStart(2,"0"); }
+let calYear=null, calMonth=null; // calMonth is 0-based
+let _calByDay={};
+let _calArchivedByDay={};
+function initCalIfNeeded(){ if(calYear==null){ const n=new Date(); calYear=n.getFullYear(); calMonth=n.getMonth(); } }
+function calRangeQs(extra){
+  const org=orgParam();
+  const dateFrom=calYear+"-"+pad2(calMonth+1)+"-01";
+  const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
+  const dateTo=calYear+"-"+pad2(calMonth+1)+"-"+pad2(daysInMonth);
+  const qs=["template=0","dateFrom="+dateFrom,"dateTo="+dateTo].concat(extra||[]);
+  if(org) qs.push("org="+encodeURIComponent(org));
+  return qs.join("&");
+}
+function groupByDay(projects){
+  const byDay={};
+  projects.forEach(p=>{ if(!p.scheduled_date) return; (byDay[p.scheduled_date]=byDay[p.scheduled_date]||[]).push(p); });
+  return byDay;
+}
+async function loadCalendarMonth(){
+  initCalIfNeeded();
+  // The previously-open day (if any) belongs to whatever month/client was
+  // showing before this reload — hide it rather than leaving stale entries
+  // (including any "Cancelled" ones) sitting at the bottom of the screen
+  // after switching month or active client. Callers that want to keep a
+  // specific day open (cancel/restore, refreshing in place) re-open it
+  // themselves afterward via their own locally-captured day, not this flag.
+  _calOpenDay=null;
+  $("calDaySection").style.display="none";
+  $("calMsg").textContent="Loading…";
+  try{
+    const [activeR,archivedR]=await Promise.all([
+      fetch("/api/projects?"+calRangeQs(),{headers:{authorization:"Bearer "+tok()}}),
+      fetch("/api/projects?"+calRangeQs(["archived=1"]),{headers:{authorization:"Bearer "+tok()}})
+    ]);
+    const activeProjects=(await activeR.json()).projects||[];
+    const archivedProjects=(await archivedR.json()).projects||[];
+    _calArchivedByDay=groupByDay(archivedProjects);
+    renderCalGrid(activeProjects);
+    $("calMsg").textContent="";
+  }catch(e){ $("calMsg").textContent="Load failed: "+e.message; }
+}
+function renderCalGrid(projects){
+  $("calMonthLabel").textContent=new Date(calYear,calMonth,1).toLocaleDateString(undefined,{month:"long",year:"numeric"});
+  const byDay=groupByDay(projects);
+  _calByDay=byDay;
+  const firstDow=new Date(calYear,calMonth,1).getDay();
+  const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
+  const todayStr=new Date().getFullYear()+"-"+pad2(new Date().getMonth()+1)+"-"+pad2(new Date().getDate());
+  let html=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=>'<div class="cal-dow">'+d+'</div>').join("");
+  for(let i=0;i<firstDow;i++) html+='<div class="cal-day empty"></div>';
+  for(let d=1;d<=daysInMonth;d++){
+    const ds=calYear+"-"+pad2(calMonth+1)+"-"+pad2(d);
+    const entries=(byDay[ds]||[]).slice().sort((a,b)=>(a.scheduled_time||"").localeCompare(b.scheduled_time||""));
+    const shown=entries.slice(0,3);
+    html+='<div class="cal-day'+(ds===todayStr?' today':'')+'" onclick="openCalDay(\''+ds+'\')">'
+      +'<div class="cd-num">'+d+'</div>'
+      +shown.map(p=>'<div class="cal-entry" style="background:'+colorForGuide(p.guide_id)+'">'+(p.scheduled_time?esc(fmtTime12h(p.scheduled_time))+' ':'')+esc(p.visitor_name||p.name||p.id)+'</div>').join('')
+      +(entries.length>3?'<div class="cal-more">+'+(entries.length-3)+' more</div>':'')
+      +'</div>';
+  }
+  $("calGrid").innerHTML=html;
+}
+function guideName(gid){
+  if(!gid) return "Unassigned";
+  const g=_guidesList.find(g=>g.id===gid);
+  return g ? (g.name||g.email) : gid;
+}
+let _calOpenDay=null;
+function openCalDay(ds){
+  _calOpenDay=ds;
+  const entries=_calByDay[ds]||[];
+  const cancelled=_calArchivedByDay[ds]||[];
+  $("calDayTitle").textContent=new Date(ds+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"});
+  const activeHtml = entries.length ? entries.map(p=>
+    '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #1a2433;cursor:pointer" onclick="editBooking(\''+esc(p.id)+'\')" title="Click to edit">'
+    +'<span class="tag" style="background:'+colorForGuide(p.guide_id)+'22;border:1px solid '+colorForGuide(p.guide_id)+'88;color:'+colorForGuide(p.guide_id)+'">'+esc(guideName(p.guide_id))+'</span>'
+    +'<div style="flex:1">'
+    +'<div style="font-weight:600">'+esc(p.visitor_name||p.name||p.id)+'</div>'
+    +'<div style="color:var(--fog);font-size:12px">'+(p.scheduled_time?fmtTime12h(p.scheduled_time):"No time set")+'</div>'
+    +'</div>'
+    +'<button class="sm" style="color:var(--hazard);border-color:rgba(255,47,78,.3)" onclick="event.stopPropagation();cancelBooking(\''+esc(p.id)+'\')">Cancel</button>'
+    +'</div>'
+  ).join("") : '<div class="state">No tours scheduled this day.</div>';
+  const cancelledHtml = cancelled.length ? (
+    '<div style="font-family:\'Barlow Condensed\';font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:14px 0 6px">Cancelled</div>'
+    + cancelled.map(p=>
+      '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #1a2433;opacity:.65">'
+      +'<span class="tag" style="background:'+colorForGuide(p.guide_id)+'22;border:1px solid '+colorForGuide(p.guide_id)+'88;color:'+colorForGuide(p.guide_id)+'">'+esc(guideName(p.guide_id))+'</span>'
+      +'<div style="flex:1">'
+      +'<div style="font-weight:600;text-decoration:line-through">'+esc(p.visitor_name||p.name||p.id)+'</div>'
+      +'<div style="color:var(--fog);font-size:12px">'+(p.scheduled_time?fmtTime12h(p.scheduled_time):"No time set")+'</div>'
+      +'</div>'
+      +'<button class="sm" style="color:var(--go);border-color:rgba(56,224,166,.3)" onclick="restoreBooking(\''+esc(p.id)+'\')">Restore</button>'
+      +'</div>'
+    ).join("")
+  ) : "";
+  $("calDayPanel").innerHTML = activeHtml + cancelledHtml;
+  $("calDaySection").style.display="block";
+  resetSchedForm();
+}
+let _calEditingId=null;
+function resetSchedForm(){
+  _calEditingId=null;
+  schedTemplateSel.clear();
+  $("schedTemplateCol").style.display="";
+  $("schedName").value=""; $("schedGuide").value=""; $("schedVisitor").value=""; $("schedTime").value="";
+  $("scheduleMsg").textContent="";
+  $("calDayFormTitle").textContent="Add a booking";
+  $("scheduleBtn").textContent="Schedule tour";
+  $("cancelEditBtn").style.display="none";
+}
+function editBooking(pid){
+  const p=(_calByDay[_calOpenDay]||[]).find(x=>x.id===pid);
+  if(!p) return;
+  _calEditingId=pid;
+  schedTemplateSel.clear();
+  $("schedTemplateCol").style.display="none";
+  $("schedName").value=p.name||"";
+  $("schedGuide").value=p.guide_id||"";
+  $("schedVisitor").value=p.visitor_name||"";
+  $("schedTime").value=p.scheduled_time||"";
+  $("scheduleMsg").textContent="";
+  $("calDayFormTitle").textContent="Edit booking";
+  $("scheduleBtn").textContent="Save changes";
+  $("cancelEditBtn").style.display="inline-block";
+}
+async function cancelBooking(pid){
+  if(!confirm("Cancel this booking? It'll be hidden from the calendar, and any walk link already shared with the visitor for it will stop working. This can be undone (Restore) but the walk link cannot.")) return;
+  const useTok=tok();
+  const reopenDay=_calOpenDay; // loadCalendarMonth() below resets _calOpenDay
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/archive",{method:"PUT",headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},body:JSON.stringify({archived:1})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); alert("Cancel failed: "+(j.error||r.status)); return; }
+    await loadCalendarMonth();
+    if(reopenDay) openCalDay(reopenDay);
+  }catch(e){ alert("Network error: "+e.message); }
+}
+async function restoreBooking(pid){
+  const useTok=tok();
+  const reopenDay=_calOpenDay; // loadCalendarMonth() below resets _calOpenDay
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/archive",{method:"PUT",headers:{authorization:"Bearer "+useTok,"content-type":"application/json"},body:JSON.stringify({archived:0})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); alert("Restore failed: "+(j.error||r.status)); return; }
+    await loadCalendarMonth();
+    if(reopenDay) openCalDay(reopenDay);
+  }catch(e){ alert("Network error: "+e.message); }
+}
+$("calPrev").onclick=()=>{ initCalIfNeeded(); calMonth--; if(calMonth<0){calMonth=11;calYear--;} loadCalendarMonth(); };
+$("calNext").onclick=()=>{ initCalIfNeeded(); calMonth++; if(calMonth>11){calMonth=0;calYear++;} loadCalendarMonth(); };
 
 async function loadLinks(){
   const pid=lnkListProjSel.value(); if(!pid){$("linkMsg").textContent="Select a project first.";return;}
@@ -689,13 +979,19 @@ function applyPreviewBanner(){
     $("clientNameBadge").textContent=name;
   }).catch(()=>{});
 }
-function defaultTabForRole(role){ return role==="front_desk" ? "schedule" : "team"; }
+function defaultTabForRole(role){ return role==="front_desk" ? "calendar" : "team"; }
+function updateShareLink(){
+  const org=ME.role==="admin"?(ClientPicker.resolve()||ME.orgId):ME.orgId;
+  $("tabShare").href="/share?asClient="+encodeURIComponent(org);
+}
 function refreshForClient(){
   applyPreviewBanner();
+  updateShareLink();
   loadProjects();
   loadTemplates();
   loadGuidesList();
   if(ME.role!=="front_desk") loadTeam();
+  if(activeTab==="calendar") loadCalendarMonth();
 }
 
 if(sessionStorage.getItem("gp.admin")) $("tok").placeholder="admin token (saved)";
