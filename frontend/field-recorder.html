@@ -33,6 +33,16 @@ html,body{height:100%;background:var(--night);color:var(--snow);
 .sc-open{background:none;border:1px solid var(--ice);color:var(--ice);flex:1}
 .sc-pub{background:var(--coral);border:none;color:#1a0d07;flex:1}
 .empty-hint{color:var(--fog);font-size:14px;text-align:center;padding:40px 20px}
+.fr-sm{font-family:"Barlow Condensed";font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:4px 10px;border-radius:7px;cursor:pointer;border:1px solid var(--rim);background:var(--slate2);color:var(--ice)}
+.fr-sm.sel{border-color:var(--coral);color:var(--snow)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal-dow{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);text-align:center;padding:4px 0}
+.cal-day{min-height:66px;border:1px solid var(--rim);border-radius:9px;padding:5px 6px;background:var(--slate2);cursor:pointer;display:flex;flex-direction:column;gap:2px}
+.cal-day.empty{background:none;border:none;cursor:default}
+.cal-day.today{border-color:var(--ice)}
+.cal-day .cd-num{font-family:"Barlow Condensed";font-weight:700;font-size:12px;color:var(--fog)}
+.cal-entry{font-size:11px;border-radius:5px;padding:2px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--coral);color:#0a1018;font-weight:600}
+.cal-day-detail{background:var(--slate);border:1px solid var(--rim);border-radius:12px;padding:12px;margin-top:12px}
 
 /* ── field screen ── */
 #screenField{height:100%;display:none;flex-direction:column}
@@ -150,12 +160,17 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
 <div id="screenSessions">
   <div class="ss-hdr">
     <h1>Field Sessions</h1>
+    <div id="ssViewToggle" style="display:none;gap:4px">
+      <button class="fr-sm sel" id="btnViewList" onclick="setBookingsView('list')">List</button>
+      <button class="fr-sm" id="btnViewCal" onclick="setBookingsView('calendar')">Calendar</button>
+    </div>
     <div style="display:flex;gap:10px;align-items:center">
       <a href="/">⌂ Home</a>
       <a href="#" onclick="frSignOut(event)" style="color:var(--fog);font-size:13px">Sign out</a>
     </div>
   </div>
   <div id="sessList"><div class="empty-hint">No field sessions yet.<br>Open a project and tap Field to start.</div></div>
+  <div id="calList" style="display:none;flex:1;overflow-y:auto;padding:14px"></div>
 </div>
 
 <!-- ── field screen (?project param) ── -->
@@ -238,9 +253,62 @@ const _meReady = RoleGate.require(['admin', 'guide']).then(me => {
     document.querySelector('.ss-hdr h1').textContent = 'My Bookings';
     const homeLink = document.querySelector('.ss-hdr a[href="/"]');
     if (homeLink) homeLink.style.display = 'none';
+    document.getElementById('ssViewToggle').style.display = 'flex';
   }
   return me;
 });
+
+/* ── guide calendar (read-only) ─────────────────────── */
+let _bookingsView = 'list';
+function setBookingsView(v){
+  _bookingsView = v;
+  document.getElementById('sessList').style.display = v==='list' ? '' : 'none';
+  document.getElementById('calList').style.display = v==='calendar' ? '' : 'none';
+  document.getElementById('btnViewList').classList.toggle('sel', v==='list');
+  document.getElementById('btnViewCal').classList.toggle('sel', v==='calendar');
+  if (v==='calendar') renderBookingsCalendar();
+}
+function pad2fr(n){ return String(n).padStart(2,"0"); }
+async function renderBookingsCalendar(){
+  await _meReady;
+  const projects = await fetchGuideProjects();
+  const byDay = {};
+  projects.forEach(p=>{ if(!p.scheduled_date) return; (byDay[p.scheduled_date]=byDay[p.scheduled_date]||[]).push(p); });
+  const now = new Date();
+  const year = now.getFullYear(), month = now.getMonth();
+  const firstDow = new Date(year,month,1).getDay();
+  const daysInMonth = new Date(year,month+1,0).getDate();
+  const todayStr = year+"-"+pad2fr(month+1)+"-"+pad2fr(now.getDate());
+  let html = '<div style="font-family:\'Barlow Condensed\';font-weight:700;font-size:16px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">'
+    + new Date(year,month,1).toLocaleDateString(undefined,{month:"long",year:"numeric"}) + '</div>';
+  html += '<div class="cal-grid">';
+  html += ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=>'<div class="cal-dow">'+d+'</div>').join("");
+  for(let i=0;i<firstDow;i++) html += '<div class="cal-day empty"></div>';
+  for(let d=1;d<=daysInMonth;d++){
+    const ds = year+"-"+pad2fr(month+1)+"-"+pad2fr(d);
+    const entries = byDay[ds]||[];
+    html += '<div class="cal-day'+(ds===todayStr?' today':'')+'" onclick="openGuideCalDay(\''+ds+'\')">'
+      + '<div class="cd-num">'+d+'</div>'
+      + entries.slice(0,2).map(p=>'<div class="cal-entry">'+esc(p.visitor_name||p.name||p.id)+'</div>').join('')
+      + (entries.length>2?'<div style="font-size:10px;color:var(--fog)">+'+(entries.length-2)+' more</div>':'')
+      + '</div>';
+  }
+  html += '</div><div id="calDayDetail"></div>';
+  document.getElementById('calList').innerHTML = html;
+  window._guideCalByDay = byDay;
+}
+function openGuideCalDay(ds){
+  const entries = (window._guideCalByDay||{})[ds]||[];
+  const title = new Date(ds+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"});
+  const body = entries.length ? entries.map(p=>`
+    <div style="padding:8px 0;border-bottom:1px solid #1a2433">
+      <div style="font-weight:700">${esc(p.visitor_name||p.name||p.id)}</div>
+      <div style="color:var(--fog);font-size:12px">${p.scheduled_time?fmtTime12h(p.scheduled_time):"No time set"}</div>
+      <a class="sc-open" href="/field?project=${esc(p.id)}" style="display:inline-block;margin-top:6px;padding:8px 14px;border-radius:9px;text-decoration:none;font-family:'Barlow Condensed';font-size:13px;font-weight:600">▶ Field Recording</a>
+    </div>`).join("") : '<div class="empty-hint">No tours scheduled this day.</div>';
+  document.getElementById('calDayDetail').innerHTML =
+    '<div class="cal-day-detail"><div style="font-weight:700;margin-bottom:6px">'+esc(title)+'</div>'+body+'</div>';
+}
 const MIME   = ["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"]
                  .find(t => MediaRecorder.isTypeSupported(t)) || "";
 let liveTtlMs = 300000;                            // default 5 min; overwritten from bundle on init
@@ -326,6 +394,21 @@ function dbDelete(store, key){
 }
 
 /* ── sessions list screen ──────────────────────────── */
+// Shared by both the list view and the guide's calendar view — keeps the
+// ?guide=<id> scoping in exactly one place (a guide's project list must
+// never fall through to the unscoped admin view; see the _meReady note above).
+async function fetchGuideProjects(){
+  const isGuide = _me && _me.role === 'guide';
+  const _qsParts = [];
+  if (isGuide) _qsParts.push('guide=' + encodeURIComponent(_me.id));
+  if (orgQueryParam()) _qsParts.push(orgQueryParam());
+  const _guideQ = _qsParts.length ? '?' + _qsParts.join('&') : '';
+  try{
+    const r = await fetch("/api/projects" + _guideQ, { headers: { authorization: "Bearer " + getToken() } });
+    return r.ok ? ((await r.json()).projects || []) : [];
+  }catch(e){ return []; }
+}
+
 async function renderSessionsList(){
   let sessions = await dbGetAll("sessions");
   const allStops = await dbGetAll("stops");
@@ -333,17 +416,7 @@ async function renderSessionsList(){
   const list = document.getElementById("sessList");
 
   const isGuide = _me && _me.role === 'guide';
-  const _qsParts = [];
-  if (isGuide) _qsParts.push('guide=' + encodeURIComponent(_me.id));
-  if (orgQueryParam()) _qsParts.push(orgQueryParam());
-  const _guideQ = _qsParts.length ? '?' + _qsParts.join('&') : '';
-
-  // Fetch projects from server
-  let serverProjects = [];
-  try{
-    const r = await fetch("/api/projects" + _guideQ, { headers: { authorization: "Bearer " + getToken() } });
-    if(r.ok){ serverProjects = (await r.json()).projects || []; }
-  }catch(e){}
+  const serverProjects = await fetchGuideProjects();
 
   // Guide view: simple project + walk link cards, no session management
   if(isGuide){
