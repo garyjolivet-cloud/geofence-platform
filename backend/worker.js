@@ -546,8 +546,15 @@ async function api(request, env, url) {
       return json({ ok: true }, 200, AC);
     }
     if (method === "DELETE") {
-      await env.DB.prepare("UPDATE user_account SET role='inactive' WHERE id=?").bind(uid).run();
+      // Hard delete, not a soft-deactivate: strip every project assignment
+      // first (project_guide/front_desk tables, plus the guide_id on any
+      // scheduled booking), then kill sessions, then remove the account row
+      // itself so the login lookup (which matches on email) finds nothing.
+      await env.DB.prepare("DELETE FROM project_guide WHERE guide_id=?").bind(uid).run();
+      await env.DB.prepare("DELETE FROM project_frontdesk WHERE frontdesk_id=?").bind(uid).run();
+      await env.DB.prepare("UPDATE project SET guide_id=NULL WHERE guide_id=?").bind(uid).run();
       await env.DB.prepare("DELETE FROM user_session WHERE user_id=?").bind(uid).run().catch(() => {});
+      await env.DB.prepare("DELETE FROM user_account WHERE id=?").bind(uid).run();
       return json({ ok: true }, 200, AC);
     }
   }
@@ -790,6 +797,37 @@ async function api(request, env, url) {
     return json({ ok: true, deleted: aid }, 200, AC);
   }
 
+  // --- merge one workspace's projects (and bots) into another (master only) ---
+  // Non-destructive: the source app row itself is left behind, empty, so
+  // there's nothing to roll back if this fails partway — same reasoning as
+  // /api/projects/combine. v1 restricts this to two apps under the same
+  // client (orgId never changes on any moved row), to avoid reopening the
+  // orgId/appId drift bug class this codebase has hit before.
+  const mmg = path.match(/^\/api\/apps\/([^/]+)\/merge$/);
+  if (mmg && method === "POST") {
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
+    const targetId = decodeURIComponent(mmg[1]);
+    const b = await request.json().catch(() => ({}));
+    const sourceAppId = b.sourceAppId;
+    if (!sourceAppId) return json({ error: "sourceAppId required" }, 400, AC);
+    if (sourceAppId === targetId) return json({ error: "source and target must be different workspaces" }, 400, AC);
+    const target = await env.DB.prepare("SELECT id,orgId FROM app WHERE id=?").bind(targetId).first();
+    const source = await env.DB.prepare("SELECT id,orgId FROM app WHERE id=?").bind(sourceAppId).first();
+    if (!target || !source) return json({ error: "workspace not found" }, 404, AC);
+    if (target.orgId !== source.orgId) return json({ error: "both workspaces must belong to the same client" }, 400, AC);
+    const now = new Date().toISOString();
+    const projMove = await env.DB.prepare("UPDATE project SET appId=?, updatedAt=? WHERE appId=?")
+      .bind(targetId, now, sourceAppId).run();
+    const botMove = await env.DB.prepare("UPDATE bot SET app_id=?, updated_at=? WHERE app_id=?")
+      .bind(targetId, now, sourceAppId).run();
+    await logAudit(env, request, { keyId: "master" }, "app.merge", targetId);
+    return json({
+      ok: true,
+      movedProjects: projMove.meta?.changes || 0,
+      movedBots: botMove.meta?.changes || 0
+    }, 200, AC);
+  }
+
   // --- bots: org-scoped reusable bot library ---
   if (path === "/api/bots" && method === "GET") {
     const A = await auth(request, env);
@@ -1025,6 +1063,86 @@ async function api(request, env, url) {
       await env.DB.prepare("UPDATE project SET bundleVersion=1, status='live' WHERE id=?").bind(newId).run();
     }
     await logAudit(env, request, A, "project.copy", newId);
+    return json({ ok: true, id: newId }, 200, AC);
+  }
+
+  // --- combine 2+ unassigned projects into one new project (admin only) ---
+  // Non-destructive: sources are only read, never written to. Zone ids are
+  // re-prefixed per source project before concatenating, since fence-editor
+  // derives a zone id from its slugified name with no project scoping —
+  // two sources each having a "Stop 1" zone would otherwise collide and
+  // corrupt geofence-engine's id-keyed live-patch/guidance lookups.
+  if (path === "/api/projects/combine" && method === "POST") {
+    if (!(await authed(request, env))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const name = (b.name || "").trim();
+    const sourceIds = Array.isArray(b.sourceIds) ? [...new Set(b.sourceIds)] : [];
+    if (!name) return json({ error: "name required" }, 400, AC);
+    if (sourceIds.length < 2) return json({ error: "need at least 2 source projects" }, 400, AC);
+    const sources = [];
+    for (const sid of sourceIds) {
+      const src = await env.DB.prepare("SELECT id,orgId,appId,mode,tour_type FROM project WHERE id=?").bind(sid).first();
+      if (!src) return json({ error: "source project not found: " + sid }, 404, AC);
+      sources.push(src);
+    }
+    // v1 restriction: same workspace only, so bot references (scoped by
+    // app_id) stay valid without any re-scoping work.
+    const appId = sources[0].appId;
+    if (sources.some(s => s.appId !== appId)) {
+      return json({ error: "all source projects must be in the same workspace" }, 400, AC);
+    }
+    const orgId = sources[0].orgId;
+    let mergedZones = [], mergedBots = new Set(), visitorBotId = null;
+    for (const src of sources) {
+      const row = await env.DB.prepare(
+        "SELECT json FROM published_bundle WHERE projectId=? ORDER BY version DESC LIMIT 1"
+      ).bind(src.id).first();
+      if (!row) continue;
+      let bundle;
+      try { bundle = JSON.parse(row.json); } catch (e) { continue; }
+      const zones = Array.isArray(bundle.zones) ? bundle.zones : [];
+      for (const z of zones) {
+        mergedZones.push({ ...z, id: src.id + "__" + z.id });
+      }
+      (bundle.bots || []).forEach(bid => mergedBots.add(bid));
+      if (!visitorBotId && bundle.visitorBotId) visitorBotId = bundle.visitorBotId;
+    }
+    if (!mergedZones.length) return json({ error: "no published zones found in the selected projects" }, 400, AC);
+    // ref = centroid of every combined zone's center, mirrors fence-editor's
+    // own client-side centroid calc in exportBundle(), just run server-side
+    // over the merged set.
+    let sumLat = 0, sumLon = 0, n = 0;
+    for (const z of mergedZones) {
+      const c = z.center || (z.shape && z.shape.coords && z.shape.coords[0]);
+      if (Array.isArray(c) && c.length === 2) { sumLat += c[0]; sumLon += c[1]; n++; }
+    }
+    const ref = n ? [sumLat / n, sumLon / n] : [0, 0];
+    const firstSrcBundleRow = await env.DB.prepare(
+      "SELECT json FROM published_bundle WHERE projectId=? ORDER BY version DESC LIMIT 1"
+    ).bind(sources[0].id).first();
+    let scalars = {};
+    try {
+      const fb = firstSrcBundleRow ? JSON.parse(firstSrcBundleRow.json) : {};
+      scalars = {
+        spatialRangeM: fb.spatialRangeM, spatialClearM: fb.spatialClearM,
+        spatialTuning: fb.spatialTuning, liveTtlMs: fb.liveTtlMs
+      };
+    } catch (e) {}
+    const newId = "proj_" + Date.now().toString(36) + "_" + randomHex(4);
+    const now = new Date().toISOString();
+    const isTemplate = b.isTemplate === false ? 0 : 1;
+    await env.DB.prepare(
+      "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+    ).bind(newId, orgId, appId, name, newId, sources[0].mode || "walking-tour", "live", 1, now, now, isTemplate, sources[0].tour_type || null).run();
+    const mergedBundle = {
+      project: newId, name, ref, ...scalars,
+      appId, orgId, isTemplate: !!isTemplate,
+      bots: [...mergedBots], visitorBotId, zones: mergedZones
+    };
+    await env.DB.prepare(
+      "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
+    ).bind(newId, 1, JSON.stringify(mergedBundle), now).run();
+    await logAudit(env, request, { keyId: "master" }, "project.combine", newId);
     return json({ ok: true, id: newId }, 200, AC);
   }
 

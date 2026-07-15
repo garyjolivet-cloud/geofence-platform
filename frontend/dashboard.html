@@ -589,7 +589,8 @@ async function loadTeam() {
           <td style="color:var(--fog);font-size:13px">${lastLogin}</td>
           <td style="text-align:right;white-space:nowrap">
             ${(u.role==='guide'||u.role==='front_desk')?`<button class="sm" onclick="openAssign('${esc(u.id)}','${esc(u.name||u.email)}','${esc(u.role)}')" style="margin-right:6px">Assign projects</button>`:''}
-            <button class="sm" onclick="resendInvite('${esc(u.id)}','${esc(u.email)}')" title="Resend invite">Resend invite</button>
+            <button class="sm" onclick="resendInvite('${esc(u.id)}','${esc(u.email)}')" title="Resend invite" style="margin-right:6px">Resend invite</button>
+            <button class="sm" style="color:var(--hazard);border-color:rgba(255,47,78,.3)" onclick="removeUser('${esc(u.id)}','${esc(u.name||u.email)}')" title="Remove">Remove</button>
           </td>
         </tr>`
       );
@@ -597,6 +598,14 @@ async function loadTeam() {
   } catch(e){ $("teamMsg").textContent="Load failed: "+e.message; }
 }
 $("loadTeam").onclick=loadTeam;
+
+async function removeUser(uid, label) {
+  if(!confirm("Remove "+label+"? This unassigns them from every project, signs them out immediately, and permanently deletes their account — they will not be able to log back in. This cannot be undone.")) return;
+  const useTok=tok(); if(!useTok){ alert("Enter your admin token first."); return; }
+  const r=await fetch("/api/users/"+encodeURIComponent(uid),{method:"DELETE",headers:{authorization:"Bearer "+useTok}});
+  if(!r.ok){ const j=await r.json().catch(()=>({})); alert("Remove failed: "+(j.error||r.status)); return; }
+  loadTeam();
+}
 
 async function resendInvite(uid, email) {
   const useTok=tok(); if(!useTok){ alert("Enter your admin token first."); return; }
@@ -702,6 +711,14 @@ $("genLinkBtn").onclick = async function(){
       ? "Expires: "+new Date(j.expiresAt).toLocaleString()
       : "No expiry";
     $("linkBox").style.display="block";
+    // Keep the Active Links list (a separate project field below, only
+    // populated on its own "Load" click) in sync with whatever link was
+    // just generated here — otherwise a freshly-created link is invisible
+    // in that list until someone happens to re-select the project and hit
+    // Load, which reads as "links aren't working" even though it worked.
+    lnkListProjSel.setValue(pid);
+    $("lnkListGuide").value=guideId||"";
+    loadLinks();
   }catch(e){alert("Network error: "+e.message);}
   finally{$("genLinkBtn").disabled=false;$("genLinkBtn").textContent="Generate link";}
 };

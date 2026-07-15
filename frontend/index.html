@@ -156,6 +156,44 @@
   </div>
 </div>
 
+<!-- Combine projects modal -->
+<div id="combineModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:center;justify-content:center;padding:20px">
+  <div style="width:100%;max-width:480px;max-height:85vh;overflow-y:auto;background:#141d2b;border:1px solid #2e3f58;border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h2 style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:0">Combine projects</h2>
+      <button onclick="closeCombineModal()" style="background:none;border:none;color:#8aa5bf;font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <p style="font-family:'Barlow Condensed';font-size:13px;color:#8aa5bf;margin:0">Pick 2 or more unassigned projects in <b id="combineWsName" style="color:#eef4fb"></b> to merge their zones into one new project. The originals are left untouched.</p>
+    <div id="combineList" style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto"></div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8aa5bf">New project name</label>
+      <input id="combineName" placeholder="e.g. Bear Refuge + Plaza Walk" style="background:#1b2738;border:1px solid #2e3f58;color:#fff;border-radius:8px;padding:9px 10px;font-family:'Barlow Condensed';font-size:14px">
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-family:'Barlow Condensed';font-size:13px;color:#c8dff2;cursor:pointer">
+      <input type="checkbox" id="combineIsTemplate" checked style="width:16px;height:16px;accent-color:var(--coral)"> Mark as template
+    </label>
+    <button onclick="submitCombine()" style="background:var(--coral);border:none;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase;padding:10px;border-radius:9px;cursor:pointer;margin-top:4px">Combine</button>
+    <p class="hint" id="combineMsg" style="font-family:'Barlow Condensed';font-size:12px;color:#8aa5bf;margin:0"></p>
+  </div>
+</div>
+
+<!-- Merge workspace modal -->
+<div id="mergeModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:center;justify-content:center;padding:20px">
+  <div style="width:100%;max-width:420px;background:#141d2b;border:1px solid #2e3f58;border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h2 style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:0">Merge workspace</h2>
+      <button onclick="closeMergeModal()" style="background:none;border:none;color:#8aa5bf;font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <p style="font-family:'Barlow Condensed';font-size:13px;color:#8aa5bf;margin:0">Move every project (and its bots) from <b id="mergeSrcName" style="color:#eef4fb"></b> into another workspace under the same customer. It's left empty afterward — nothing in the target is affected, and you can delete the empty workspace yourself later if you want.</p>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8aa5bf">Merge into</label>
+      <select id="mergeTargetSel" style="background:#1b2738;border:1px solid #2e3f58;color:#fff;border-radius:8px;padding:9px 10px;font-family:'Barlow Condensed';font-size:14px"></select>
+    </div>
+    <button onclick="submitMerge()" style="background:var(--coral);border:none;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase;padding:10px;border-radius:9px;cursor:pointer;margin-top:4px">Merge</button>
+    <p class="hint" id="mergeMsg" style="font-family:'Barlow Condensed';font-size:12px;color:#8aa5bf;margin:0"></p>
+  </div>
+</div>
+
 <script>
 "use strict";
 const mainEl=document.getElementById("main");
@@ -196,6 +234,10 @@ function clientBlock(app, tours){
   const icon=clientIcon(app.name);
   const count=tours.length+(tours.length===1?" tour":" tours");
   const toursHtml=tours.map(p=>tourCard(p,app.id)).join("")+addTourTile(app.id);
+  // Combine/Merge only make sense for a real workspace, not the synthetic
+  // "Unsorted" bucket (app.id===null) used as a safety net above.
+  const combineBtn=app.id?`<button onclick="openCombine('${esc(app.id)}','${esc(app.name)}')">Combine</button>`:'';
+  const mergeBtn=app.id?`<button onclick="openMergeWorkspace('${esc(app.id)}','${esc(app.name)}')">Merge</button>`:'';
   return `<div class="client">
     <div class="client-head">
       <div class="client-icon">${icon}</div>
@@ -205,6 +247,8 @@ function clientBlock(app, tours){
       </div>
       <div class="client-actions">
         <a href="/share?asClient=${esc(app.orgId||app.id)}" style="display:inline-block;text-decoration:none">Share</a>
+        ${combineBtn}
+        ${mergeBtn}
         <button onclick="renameClient('${esc(app.id)}','${esc(app.name)}')">Rename</button>
         <button onclick="deleteClient('${esc(app.id)}','${esc(app.name)}')" style="color:rgba(255,47,78,.5);border-color:rgba(255,47,78,.2)">✕</button>
       </div>
@@ -217,6 +261,7 @@ function sessionAuthHeader(){
   const t=localStorage.getItem("gp.session");
   return t?{authorization:"Bearer "+t}:{};
 }
+let _apps=[], _projects=[];
 async function load(){
   try{
     const h={headers:sessionAuthHeader()};
@@ -225,6 +270,7 @@ async function load(){
     const [ra,rp]=await Promise.all([fetch("/api/apps"+q,h),fetch("/api/projects"+q,h)]);
     const apps=(await ra.json()).apps||[];
     const projects=(await rp.json()).projects||[];
+    _apps=apps; _projects=projects;
     setApi(true, apps.length+" workspace"+(apps.length===1?"":"s")+" · "+projects.length+" tour"+(projects.length===1?"":"s"));
 
     let html='<div class="clients">';
@@ -331,6 +377,87 @@ async function deleteClient(id,name){
     else{ const j=await r.json().catch(()=>({})); alert("Delete failed: "+(j.error||r.status)); }
   }catch(e){ alert("Failed: "+e.message); }
 }
+
+// ---- Combine projects: merge 2+ unassigned projects' zones into one new project ----
+let _combineAppId=null;
+function openCombine(appId, appName){
+  _combineAppId=appId;
+  document.getElementById("combineWsName").textContent=appName;
+  document.getElementById("combineName").value="";
+  document.getElementById("combineIsTemplate").checked=true;
+  document.getElementById("combineMsg").textContent="";
+  // Eligible = not yet assigned to a guide (templates, or anything nobody's
+  // been scheduled against) and not a cancelled booking — matches the
+  // "developing a platform" use case, not merging live visitor walks.
+  const eligible=_projects.filter(p=>p.appId===appId && !p.archived && (p.is_template || !p.guide_id));
+  const list=document.getElementById("combineList");
+  if(!eligible.length){
+    list.innerHTML='<div style="font-family:\'Barlow Condensed\';font-size:13px;color:#8aa5bf">No unassigned projects in this workspace yet — combine only works on templates or projects nobody has been scheduled against.</div>';
+  } else {
+    list.innerHTML=eligible.map(p=>`<label style="display:flex;align-items:center;gap:10px;background:#1b2738;border:1px solid #26344a;border-radius:9px;padding:10px 14px;cursor:pointer">
+      <input type="checkbox" value="${esc(p.id)}" style="width:16px;height:16px;accent-color:var(--coral)">
+      <span style="flex:1;font-family:'Barlow Condensed';font-size:14px;font-weight:600">${esc(p.name||p.id)}</span>
+    </label>`).join('');
+  }
+  document.getElementById("combineModal").style.display="flex";
+}
+function closeCombineModal(){ document.getElementById("combineModal").style.display="none"; }
+async function submitCombine(){
+  const msg=document.getElementById("combineMsg");
+  const checked=[...document.querySelectorAll('#combineList input[type=checkbox]:checked')].map(cb=>cb.value);
+  if(checked.length<2){ msg.textContent="Pick at least 2 projects."; return; }
+  const name=document.getElementById("combineName").value.trim();
+  if(!name){ msg.textContent="New project name required."; return; }
+  const isTemplate=document.getElementById("combineIsTemplate").checked;
+  const token=await askToken(); if(!token)return;
+  msg.textContent="Combining…";
+  try{
+    const r=await fetch("/api/projects/combine",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+token},
+      body:JSON.stringify({name, sourceIds:checked, isTemplate})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ msg.textContent="Combine failed: "+(j.error||r.status); return; }
+    closeCombineModal();
+    await load();
+    alert('Combined into "'+name+'". Open it in the editor to review.');
+  }catch(e){ msg.textContent="Failed: "+e.message; }
+}
+document.getElementById("combineModal").addEventListener("click",e=>{ if(e.target===document.getElementById("combineModal")) closeCombineModal(); });
+
+// ---- Merge workspace: move every project (and its bots) from one workspace into another ----
+let _mergeSrcAppId=null;
+function openMergeWorkspace(appId, appName){
+  _mergeSrcAppId=appId;
+  document.getElementById("mergeSrcName").textContent=appName;
+  document.getElementById("mergeMsg").textContent="";
+  const srcApp=_apps.find(a=>a.id===appId);
+  const others=_apps.filter(a=>a.id!==appId && srcApp && a.orgId===srcApp.orgId);
+  const sel=document.getElementById("mergeTargetSel");
+  sel.innerHTML=others.length
+    ? others.map(a=>'<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>').join('')
+    : '<option value="">no other workspaces under this customer</option>';
+  document.getElementById("mergeModal").style.display="flex";
+}
+function closeMergeModal(){ document.getElementById("mergeModal").style.display="none"; }
+async function submitMerge(){
+  const msg=document.getElementById("mergeMsg");
+  const sel=document.getElementById("mergeTargetSel");
+  const targetId=sel.value;
+  if(!targetId){ msg.textContent="Pick a workspace to merge into."; return; }
+  const targetName=sel.selectedOptions[0].textContent;
+  const srcName=document.getElementById("mergeSrcName").textContent;
+  if(!confirm('Move every project (and its bots) from "'+srcName+'" into "'+targetName+'"? The source workspace is left empty afterward — nothing in the target is affected.'))return;
+  const token=await askToken(); if(!token)return;
+  msg.textContent="Merging…";
+  try{
+    const r=await fetch("/api/apps/"+encodeURIComponent(targetId)+"/merge",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+token},
+      body:JSON.stringify({sourceAppId:_mergeSrcAppId})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ msg.textContent="Merge failed: "+(j.error||r.status); return; }
+    closeMergeModal();
+    load();
+  }catch(e){ msg.textContent="Failed: "+e.message; }
+}
+document.getElementById("mergeModal").addEventListener("click",e=>{ if(e.target===document.getElementById("mergeModal")) closeMergeModal(); });
 
 function setApi(ok,text){
   document.getElementById("apidot").className="dot "+(ok?"ok":"bad");
