@@ -168,6 +168,39 @@ const Audio = {
             speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){} }
 };
 
+/* ambient (path stop) clip playback — the rest of this file's Audio module
+   is synthetic tones/TTS only, so a path stop's real ambientAudioUrl clip
+   needs its own tiny player. Distance-based volume only (no pan/lowpass —
+   this is for confirming a clip is assigned and audible, not previewing the
+   real engine's full spatial mix). */
+const AmbientClip = {
+  el:null, zoneId:null,
+  spatialRange(zone){ return zone.spatialRangeM || BUNDLE.spatialRangeM || 64; },
+  spatialClear(zone){ return zone.spatialClearM || BUNDLE.spatialClearM || 8; },
+  update(visitorPos, nowMs){
+    if(!Audio.on || !visitorPos) { this.stop(); return; }
+    let nearest=null, nearestD=Infinity;
+    BUNDLE.zones.forEach(z=>{
+      if(!z.path || !z.ambientAudioUrl) return;
+      const c=ambientCenterNow(z, nowMs);
+      const d=Geo.hav([visitorPos.lat,visitorPos.lon], c);
+      if(d<nearestD){ nearestD=d; nearest=z; }
+    });
+    if(!nearest || nearestD>=this.spatialRange(nearest)){ this.stop(); return; }
+    if(this.zoneId!==nearest.id){
+      this.stop();
+      this.el=new Audio_(nearest.ambientAudioUrl); this.el.loop=true;
+      this.el.play().catch(()=>{});
+      this.zoneId=nearest.id;
+    }
+    const range=this.spatialRange(nearest), clear=this.spatialClear(nearest);
+    const f=Math.max(0,Math.min(1,(nearestD-clear)/Math.max(1,(range-clear))));
+    if(this.el) this.el.volume=Math.max(0.05,1-f);
+  },
+  stop(){ if(this.el){ try{this.el.pause();}catch(e){} this.el=null; } this.zoneId=null; }
+};
+const Audio_=window.Audio; // native <audio> constructor — shadowed by the Audio module above
+
 /* ========================= ENGINE CORE (mirror) ========================= */
 const TUNING = {
   EXIT_BUFFER_M: 20,     // hysteresis: exit only past R + this
@@ -564,6 +597,7 @@ function feed(lat,lon,acc,t){
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
   const active=Geofencer.update(p,prevP,t);
   prevP=p; fixCount++;
+  AmbientClip.update(p, t);
   let pick=null,best=Infinity;
   active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
   if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center||z.path) return;
@@ -606,6 +640,7 @@ function loadBundle(b,srcLabel){
   BUNDLE = b;
   if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
   Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+  AmbientClip.stop();
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);
   refreshZones(); fitToData();
   log("ev-sys","loaded "+(b.name||"bundle")+" — "+BUNDLE.zones.length+" zones ("+(srcLabel||"")+")");
@@ -633,7 +668,11 @@ fitToData(); // safe no-op until bundle loads
 // of whether the simulated visitor is playing/paused — without this, the
 // ambient marker would only animate while "Play" is running (refreshZones()
 // is otherwise only called from feed(), which only fires during playback).
-setInterval(()=>{ if(BUNDLE.zones.some(z=>z.path)) refreshZones(); }, 1000);
+setInterval(()=>{
+  if(!BUNDLE.zones.some(z=>z.path)) return;
+  refreshZones();
+  if(!playing) AmbientClip.update(prevP, Date.now()); // feed() already covers this while playing
+}, 1000);
 
 /* =============================== PATH =============================== */
 function drawPath(){ const feats=[];
