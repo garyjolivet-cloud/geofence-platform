@@ -336,6 +336,43 @@ const Geo = {
             return { crossed, side: d2<0 ? "L":"R" }; }
 };
 
+/* ==================== MOVING (PATH) ZONE POSITION ==================
+   A path zone's center isn't fixed — it travels along zone.path at
+   zone.speedKmh, folded through zone.loopMode. Timing is always the
+   shared real-world clock (nowMs, i.e. fix.t — never a per-visitor
+   session clock), so two visitors near the route at the same real-world
+   moment see it in the same place. centerNow() is a pure function: for
+   any zone without a path (every zone published before this feature, and
+   every non-path zone since) it returns zone.center completely unchanged
+   — that single guard is what makes every call site below safe to switch
+   over without touching behavior for existing tours. ==================== */
+function pathCumLens(pathLatLon){
+  const cum=[0];
+  for(let i=1;i<pathLatLon.length;i++) cum.push(cum[i-1]+Geo.hav(pathLatLon[i-1],pathLatLon[i]));
+  return cum; // cum[last] === total path length L
+}
+function pointAtDistance(pathLatLon, cum, distM){
+  const L=cum[cum.length-1];
+  if (L<=0) return pathLatLon[0]; // degenerate: coincident points
+  const d=Math.max(0, Math.min(L, distM));
+  let i=0; while (i<cum.length-2 && cum[i+1]<d) i++;
+  const segLen=cum[i+1]-cum[i], t = segLen>0 ? (d-cum[i])/segLen : 0;
+  const A=pathLatLon[i], B=pathLatLon[i+1];
+  return [A[0]+t*(B[0]-A[0]), A[1]+t*(B[1]-A[1])];
+}
+function centerNow(zone, nowMs){
+  if (!zone.path || zone.path.length<2) return zone.center;
+  if (!zone._cumLens) zone._cumLens=pathCumLens(zone.path); // lazy fallback if bundle-load memo was missed
+  const cum=zone._cumLens, L=cum[cum.length-1];
+  const speedMps=(zone.speedKmh||0)/3.6;
+  const elapsedM=speedMps*(nowMs/1000);
+  let d;
+  if (zone.loopMode==="once") d=Math.min(elapsedM, L);
+  else if (zone.loopMode==="pingpong"){ const C=2*L, r=C<=0?0:elapsedM%C; d=L<=0?0:(r<=L?r:C-r); }
+  else d = L<=0 ? 0 : elapsedM % L; // "loop" (default)
+  return pointAtDistance(zone.path, cum, d);
+}
+
 /* ======================== POSITION SMOOTHER ====================== */
 const Smoother = {
   s:null, prev:null, spd:0, t0:null,
@@ -382,6 +419,7 @@ const Geofencer = {
   update(p, prev, now){
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{
+      if(zone.path) return; // path (moving ambient) stops are always pure ambient — no enter/exit/dwell/needle, no layers to evaluate
       zone.layers.forEach((layer,i)=>{
         const k=this.key(zone,layer,i);
         const st=this.state[k] || (this.state[k]={phase:"out",delivered:{},move:0});
@@ -795,6 +833,140 @@ const SpatialVoice = {
   }
 };
 
+/* ===================== AmbientVoice =====================
+   Plays a path (moving ambient) stop's ambientAudioUrl spatially, exactly
+   like SpatialVoice — but with its own independent audio chain and state,
+   so a moving ambient bed can play concurrently with (not steal playback
+   from) a nearby static stop's spoken audioUrl/TTS line. Structurally a
+   clone of SpatialVoice; the only real difference is tick(), which drives
+   itself off centerNow() instead of a fixed zone.center. */
+const AmbientVoice = {
+  ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
+  spatialRange(zone){ return (zone && zone.spatialRangeM) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },
+  ensure(){
+    if(this.ctx) return true;
+    if(!Clarity.ready) Clarity.init();
+    const c=this.ctx=Clarity.ctx;
+    const mono=c.createGain();
+    mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
+    const lowpass=c.createBiquadFilter(); lowpass.type='lowpass'; lowpass.frequency.value=this.tuning.hiHz; lowpass.Q.value=0.7;
+    const stereo=c.createStereoPanner();
+    const fade=c.createGain(); fade.gain.value=0;
+    const vol=c.createGain();  vol.gain.value=0.05;
+    const dry=c.createGain();  dry.gain.value=1;
+    const conv=c.createConvolver(); conv.buffer=this._ir(1.6,2.6);
+    const wet=c.createGain();  wet.gain.value=0;
+    mono.connect(lowpass); lowpass.connect(stereo); stereo.connect(fade); fade.connect(vol);
+    vol.connect(dry); dry.connect(c.destination);
+    vol.connect(conv); conv.connect(wet); wet.connect(c.destination);
+    this.nodes={mono,lowpass,stereo,fade,vol,dry,conv,wet};
+    return true;
+  },
+  _ir(sec,decay){ const r=this.ctx.sampleRate,n=Math.floor(r*sec),b=this.ctx.createBuffer(2,n,r);
+    for(let ch=0;ch<2;ch++){const d=b.getChannelData(ch);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,decay);}return b; },
+  async load(url){
+    if(this.buffers[url]) return this.buffers[url];
+    const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+    const ct=(r.headers.get('content-type')||'audio/mpeg').split(';')[0].trim();
+    const ab=await r.arrayBuffer();
+    try{
+      const raw=await this.ctx.decodeAudioData(ab.slice(0));
+      const buf=this._toMono(raw); this.buffers[url]=buf; return buf;
+    }catch(e){}
+    const blob=new Blob([ab],{type:ct});
+    const objUrl=URL.createObjectURL(blob);
+    const sentinel={_isElement:true,_objUrl:objUrl};
+    this.buffers[url]=sentinel; return sentinel;
+  },
+  _toMono(buf){
+    if(buf.numberOfChannels<=1) return buf;
+    const len=buf.length, out=this.ctx.createBuffer(1,len,buf.sampleRate), o=out.getChannelData(0);
+    for(let ch=0; ch<buf.numberOfChannels; ch++){ const d=buf.getChannelData(ch); for(let i=0;i<len;i++) o[i]+=d[i]; }
+    let peak=0; for(let i=0;i<len;i++){ const a=Math.abs(o[i]); if(a>peak) peak=a; }
+    if(peak>1){ for(let i=0;i<len;i++) o[i]/=peak; }
+    return out;
+  },
+  async playZone(zone){
+    if(!zone || !zone.ambientAudioUrl) return;
+    const url=zone.ambientAudioUrl;
+    if(this.currentUrl===url && this.playing) return;
+    if(this.loadingUrl===url) return;
+    this.ensure();
+    const range=this.spatialRange(zone);
+    this.tuning.farM=range;
+    this.tuning.clearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
+    this.loadingUrl=url;
+    let loaded; try{ loaded=await this.load(url); }
+    catch(e){ this.loadingUrl=null; HUD.log('ev-warn','ambient audio load failed ('+zone.name+'): '+e.message); return; }
+    this.loadingUrl=null;
+    const c=this.ctx;
+    if(this.src){
+      if(this.src._el){ this.src._el.pause(); this.src._el.src=''; try{this.src.disconnect();}catch(e){} }
+      else{ try{ this.src.stop(); }catch(e){} }
+    }
+    let src;
+    if(loaded._isElement){
+      const el=new Audio(loaded._objUrl); el.loop=true;   // ambient beds loop, unlike one-shot dialogue clips
+      src=c.createMediaElementSource(el);
+      src._el=el; src.connect(this.nodes.mono);
+      el.play().catch(()=>{});
+    } else {
+      src=c.createBufferSource(); src.buffer=loaded; src.loop=true;
+      src.connect(this.nodes.mono); src.start();
+    }
+    this.src=src; this.currentUrl=url; this.playing=true;
+    const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
+    g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);
+    HUD.log('ev-sys','▶ ambient — '+zone.name);
+  },
+  update(az, distM, headingOk){
+    if(!this.nodes || !this.playing) return;
+    const c=this.ctx, t=this.tuning, tau=t.tau;
+    const f=Math.max(0, Math.min(1, (distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
+    const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz, f);
+    const gain=t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2);
+    const wet=t.reverbMax*Math.pow(f, 0.6);
+    const pan=headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
+    this.nodes.lowpass.frequency.setTargetAtTime(cutoff, c.currentTime, tau);
+    this.nodes.vol.gain.setTargetAtTime(gain, c.currentTime, tau);
+    this.nodes.wet.gain.setTargetAtTime(wet, c.currentTime, tau);
+    this.nodes.stereo.pan.setTargetAtTime(pan, c.currentTime, tau);
+  },
+  fadeOut(){
+    if(!this.playing) return;
+    const c=this.ctx, g=this.nodes.fade.gain;
+    g.cancelScheduledValues(c.currentTime); g.setValueAtTime(g.value, c.currentTime);
+    g.linearRampToValueAtTime(0, c.currentTime+0.6);
+    const s=this.src;
+    setTimeout(()=>{
+      if(s&&s._el){ s._el.pause(); s._el.src=''; try{s.disconnect();}catch(e){} }
+      else{ try{ s.stop(); }catch(e){} }
+    }, 650);
+    this.playing=false; this.currentUrl=null; this.src=null;
+  },
+  // Called once per GPS fix. Picks the single nearest in-range path stop
+  // (only one ambient bed plays at a time, same one-clip-at-a-time
+  // simplicity as SpatialVoice) and drives play/update/fadeOut off its
+  // live, moving position.
+  tick(zones, p, nowMs){
+    let nearest=null, nearestD=Infinity;
+    zones.forEach(z=>{
+      if(!z.path || !z.ambientAudioUrl) return;
+      const c=centerNow(z, nowMs);
+      const d=Geo.hav([p.lat,p.lon], c);
+      if(d<nearestD){ nearestD=d; nearest={zone:z, center:c, d}; }
+    });
+    if(nearest && nearestD<this.spatialRange(nearest.zone)){
+      this.playZone(nearest.zone);
+      const brg=Geo.bearing([p.lat,p.lon], nearest.center);
+      const headingOk=(typeof Compass!=='undefined' && Compass.heading!=null && Compass.confidence>=2);
+      const az=((brg-((typeof Compass!=='undefined'&&Compass.heading)||0))*Math.PI/180);
+      this.update(az, nearestD, headingOk);
+    } else if(this.playing){ this.fadeOut(); }
+  }
+};
+
 /* ============================== HUD ============================== */
 const HUD = {
   pos:null, prev:null, fixes:0, needleZone:null, needleTarget:null,
@@ -819,14 +991,18 @@ const HUD = {
     let pick=null,best=Infinity;
     active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
     if(!pick){ // nothing active: aim at nearest zone center for "next stop"
-      BUNDLE.zones.forEach(z=>{ if(!z.center) return;
+      // path (moving ambient) stops have no discrete "arrival" — never aim the needle at one
+      BUNDLE.zones.forEach(z=>{ if(!z.center||z.path) return;
         const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} });
     }
 
-    // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it)
+    // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it).
+    // Path stops are excluded — they get their own AmbientVoice channel below,
+    // independent of this pick-driven system, so their bed can layer under a
+    // nearby spoken stop instead of stealing the shared Clarity/SpatialVoice cue.
     if(Clarity.on){
       let aD=Infinity, aIn=false;
-      BUNDLE.zones.forEach(z=>{ if(!z.center||z.audio===false||z.audioUrl) return;
+      BUNDLE.zones.forEach(z=>{ if(!z.center||z.path||z.audio===false||z.audioUrl) return;
         const d=Geo.hav([p.lat,p.lon],z.center), range=z.audibleFromM||60;
         if(d<range && d<aD){ aD=d; aIn=true; } });
       Clarity.update(aD, aIn);
@@ -834,15 +1010,21 @@ const HUD = {
 
     // spatial recorded voice: nearest stop with an audioUrl, over its wide approach range
     if(pick && pick.zone && pick.zone.audioUrl){
-      const dv=Geo.hav([p.lat,p.lon],pick.zone.center), range=SpatialVoice.spatialRange(pick.zone);
+      const pc=centerNow(pick.zone, fix.t);
+      const dv=Geo.hav([p.lat,p.lon],pc), range=SpatialVoice.spatialRange(pick.zone);
       if(dv<range){
         SpatialVoice.playZone(pick.zone);
-        const brg=Geo.bearing([p.lat,p.lon],pick.zone.center);
+        const brg=Geo.bearing([p.lat,p.lon],pc);
         const headingOk=(Compass.heading!=null && Compass.confidence>=2);   // poor/uncalibrated → centred, not wrong-way
         const az=((brg-(Compass.heading||0))*Math.PI/180);
         SpatialVoice.update(az, dv, headingOk);
       } else SpatialVoice.fadeOut();
     } else if(SpatialVoice.playing){ SpatialVoice.fadeOut(); }
+
+    // ambient (path/moving) audio: independent of the pick system above, so
+    // it can play concurrently with a nearby spoken stop instead of fighting
+    // it for the one shared SpatialVoice channel.
+    AmbientVoice.tick(BUNDLE.zones, p, fix.t);
 
     // ---- render ----
     this.el('vAcc').innerHTML = fix.acc.toFixed(0)+' <small>m</small>';
@@ -860,11 +1042,11 @@ const HUD = {
     const hc=Compass.confidence;
     this.el('vHC').innerHTML = hc?('<span class="conf-'+hc+'">'+['','low','med','high'][hc]+'</span>'):'—';
 
-    // needle + state
+    // needle + state (pick.zone can never be a path stop — excluded above)
     if(pick){
-      const tgt=pick.center || pick.zone.center;
+      const tgt=pick.center || centerNow(pick.zone, fix.t);
       this.el('targetName').textContent=pick.zone.name;
-      const dist=Math.max(0, (pick.layer? Geo.hav([p.lat,p.lon],pick.zone.center): pick.d));
+      const dist=Math.max(0, (pick.layer? Geo.hav([p.lat,p.lon],centerNow(pick.zone,fix.t)): pick.d));
       const inside = pick.layer && pick.d<0;
       this.el('targetSub').textContent = inside? 'inside' : (dist.toFixed(0)+' m away');
       const sl=this.el('stateLine');

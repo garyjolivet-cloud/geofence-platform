@@ -556,6 +556,7 @@
     <button data-tool="circle">● Circle</button>
     <button data-tool="polygon">⬡ Polygon</button>
     <button data-tool="tripline">／ Tripline</button>
+    <button data-tool="path">〜 Path</button>
   </div>
   <div class="row" id="circleRow" style="display:none">
     <label class="k" style="flex:0 0 auto;align-self:center;margin:0">reveal radius m</label>
@@ -572,13 +573,41 @@
     <h2 id="pTitle">Stop</h2>
     <label class="k">name</label>
     <input id="pName" placeholder="Mountain Flower Garden">
-    <label class="chk" style="margin:4px 0 6px">
+    <label class="chk" id="pHazardRow" style="margin:4px 0 6px">
       <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
     </label>
 
-    <!-- ── Voices & Audio ── -->
-    <div class="va-section">
-      <div class="va-label">Voices &amp; Audio</div>
+    <!-- ── Path movement (path stops only — always pure ambient, no triggers) ── -->
+    <div class="va-section" id="pPathSection" style="display:none">
+      <div class="va-label">Movement</div>
+      <label class="k">movement mode</label>
+      <select id="pMoveMode">
+        <option value="walk">Walk</option>
+        <option value="bike">Bike</option>
+        <option value="ski">Ski</option>
+        <option value="drive">Drive</option>
+        <option value="fly">Fly</option>
+      </select>
+      <label class="k" style="margin-top:6px">speed (km/h)</label>
+      <input id="pSpeed" type="number" min="0" step="1">
+      <label class="k" style="margin-top:6px">when it reaches the end of the path</label>
+      <select id="pLoopMode">
+        <option value="loop">Loop — jump back to start and repeat</option>
+        <option value="pingpong">Ping-pong — reverse and travel back</option>
+        <option value="once">Once — play through, then stay at the end</option>
+      </select>
+      <div class="hint" style="margin:4px 0 0">Position is always on a shared real-world clock — visitors near the route at the same moment hear it in the same place.</div>
+      <hr>
+      <div class="va-label">Hearing range — overrides this project's defaults for this stop</div>
+      <label class="k">voice range (m) — leave blank to use the project default</label>
+      <input id="pRangeVoice" type="number" min="0" placeholder="project default">
+      <label class="k" style="margin-top:6px">full volume within (m) — leave blank to use the project default</label>
+      <input id="pRangeClear" type="number" min="0" placeholder="project default">
+    </div>
+
+    <!-- ── Voices & Audio ── (also reused by path stops for their ambient clip) -->
+    <div class="va-section" id="pAudioSection">
+      <div class="va-label" id="pAudioSectionLabel">Voices &amp; Audio</div>
 
       <!-- audio clip (moved out of Advanced) -->
       <div class="va-audio-row">
@@ -642,14 +671,16 @@
       <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
     </div>
 
-    <label class="k" style="margin-top:8px">speak when</label>
-    <select id="pFires">
-      <option value="enter">Visitor arrives</option>
-      <option value="dwell">Visitor lingers</option>
-    </select>
-    <div class="row" id="dwellRow" style="display:none">
-      <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
-      <input id="pDwell" type="number" value="20" min="2" style="flex:1">
+    <div id="pFiresRow">
+      <label class="k" style="margin-top:8px">speak when</label>
+      <select id="pFires">
+        <option value="enter">Visitor arrives</option>
+        <option value="dwell">Visitor lingers</option>
+      </select>
+      <div class="row" id="dwellRow" style="display:none">
+        <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
+        <input id="pDwell" type="number" value="20" min="2" style="flex:1">
+      </div>
     </div>
 
     <!-- Advanced collapsible -->
@@ -845,6 +876,11 @@
 
 const REF=[-117.0547,51.3027];           // [lon,lat] near the village — initial view
 const DEFAULTS={ approachM:30, audioM:40, revealRadiusM:12, dwellS:20, needle:true, fires:"enter" };
+// Path (moving ambient) stops: default speed km/h per movement mode, and
+// loop-mode/timing are the only other stop-specific settings — timing is
+// always the shared real-world clock (not a per-stop choice), so there's no
+// "session" field here at all.
+const MOVE_SPEEDS={ walk:5, bike:18, ski:30, drive:40, fly:80 };
 const BASES={
   sat:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],attr:"Esri, Maxar"},
   topo:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],attr:"Esri"},
@@ -933,9 +969,17 @@ const slug=s=>(s||"stop").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-
 const LL=p=>[+p[1].toFixed(6),+p[0].toFixed(6)];     // [lon,lat] -> [lat,lon]
 const LonLat=p=>[p[1],p[0]];                          // [lat,lon] -> [lon,lat]
 
+// Path stops keep their audio clip in a separate field (ambientAudioUrl) from
+// every other stop's audioUrl, since the engine treats audioUrl as "this
+// zone's one spoken line, replacing TTS" — reusing it for a moving ambient
+// bed would fight with that and with the shared single-clip audio channel.
+// The upload/trim/browse UI is otherwise identical, so this one helper is
+// all that's needed to point it at the right field.
+function zoneAudioField(z){ return (z&&z.shape&&z.shape.type==="path")?"ambientAudioUrl":"audioUrl"; }
 function zoneCenterLonLat(z){ const s=z.shape;
   if(s.type==="circle") return s.center;
   if(s.type==="tripline") return [(s.from[0]+s.to[0])/2,(s.from[1]+s.to[1])/2];
+  if(s.type==="path") return s.coords[0];
   return centroidLonLat(s.coords);
 }
 function zoneGenR(z){ const s=z.shape;
@@ -947,6 +991,13 @@ function zoneGenR(z){ const s=z.shape;
 
 /* ---- create a stop with defaults ---- */
 function makeZone(name,shape){
+  if(shape.type==="path"){
+    // Path stops are always pure ambient — no fires/dwell/needle/approach/
+    // bearing/hazard fields apply, since they never use the trigger system.
+    return { id:slug(name), name, shape,
+             movementMode:"walk", speedKmh:MOVE_SPEEDS.walk, loopMode:"loop",
+             spatialRangeM:null, spatialClearM:null, ambientAudioUrl:null };
+  }
   return { id:slug(name), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS, needle:DEFAULTS.needle,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM,
@@ -960,13 +1011,16 @@ function renderSources(){
   const feats=[];
   zones.forEach((z,i)=>{
     const s=z.shape, selected=(i===sel);
+    const isPath=s.type==="path";
     const c=zoneCenterLonLat(z), gr=zoneGenR(z);
-    // approach ring
-    feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
-      geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
-    // audio fade-in ring
-    if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
-      geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
+    // approach ring + audio fade ring — trigger-system concepts, not shown for
+    // path stops (always pure ambient, tuned via their own range fields instead)
+    if(!isPath){
+      feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
+        geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
+      if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
+        geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
+    }
     // tracker broadcast ring (circles with trackerId only)
     if(s.type==="circle"&&z.trackerId&&(z.broadcastRadiusM||0)>0)
       feats.push({type:"Feature",properties:{kind:"broadcast",sel:selected},
@@ -979,6 +1033,8 @@ function renderSources(){
         geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
     else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name},
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
+    else if(s.type==="path") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:true},
+        geometry:{type:"LineString",coordinates:s.coords}});
     // label + bot avatar(s)
     const _bslots=Array.isArray(z.bots)?z.bots:(z.botId?[{botId:z.botId}]:[]);
     const _botAv=_bslots.slice(0,3).map(sl=>{const b=editorBots.find(x=>x.id===sl.botId);return b?(b.avatar||"🤖"):"";}).filter(Boolean).join("");
@@ -1013,9 +1069,10 @@ function renderSources(){
     map.getSource("project-rings").setData(fc(pf));
   }
 
-  // bearing arrows — every zone gets one (default 90° east)
+  // bearing arrows — every zone gets one (default 90° east), except path
+  // stops, which have no "face this direction" concept (pure ambient, no triggers)
   if(map.getSource("bearing-arrows")){
-    const arrowFeats=zones.map(z=>{
+    const arrowFeats=zones.filter(z=>z.shape.type!=="path").map(z=>{
       const ctr=zoneCenterLonLat(z), bd=z.bearingDeg??90;
       const tip=destPoint(ctr,20,bd);
       return {type:"Feature",properties:{},geometry:{type:"LineString",coordinates:[ctr,tip]}};
@@ -1025,7 +1082,7 @@ function renderSources(){
 
   // draft
   const d=[];
-  if((tool==="polygon"||tool==="tripline")&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
+  if((tool==="polygon"||tool==="tripline"||tool==="path")&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
   if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
         geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
@@ -1049,7 +1106,8 @@ map.on("load",()=>{
   map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==","kind","fill"],
      paint:{"line-color":["case",["get","sel"],"#38e0a6",["get","isHazard"],"#ff2f4e","#ff6a3d"],"line-width":2}});
   map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==","kind","line"],
-     paint:{"line-color":["case",["get","sel"],"#38e0a6","#ff6a3d"],"line-width":3.2,"line-dasharray":[2,1.2]}});
+     paint:{"line-color":["case",["get","sel"],"#38e0a6",["get","isPath"],"#8fd6ff","#ff6a3d"],"line-width":3.2,
+            "line-dasharray":["case",["get","isPath"],["literal",[3,1.5]],["literal",[2,1.2]]]}});
   map.addLayer({id:"fence-lbl",type:"symbol",source:"fences",filter:["==","kind","label"],
      layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.4}});
@@ -1123,7 +1181,7 @@ function _zoneMousedown(e){
   // snapshot geometry for delta offset
   let snap;
   if(z.shape.type==="circle")    snap={center:[...z.shape.center]};
-  else if(z.shape.type==="polygon") snap={coords:z.shape.coords.map(c=>[...c])};
+  else if(z.shape.type==="polygon"||z.shape.type==="path") snap={coords:z.shape.coords.map(c=>[...c])};
   else                           snap={from:[...z.shape.from],to:[...z.shape.to]};
   _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false};
   map.getCanvas().style.cursor="grabbing";
@@ -1139,7 +1197,7 @@ map.on("mousemove",e=>{
   _zoneDrag.moved=true;
   const z=zones[_zoneDrag.zIdx], s=_zoneDrag.snap;
   if(z.shape.type==="circle")    z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
-  else if(z.shape.type==="polygon") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
+  else if(z.shape.type==="polygon"||z.shape.type==="path") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
   else { z.shape.from=[s.from[0]+dLng,s.from[1]+dLat]; z.shape.to=[s.to[0]+dLng,s.to[1]+dLat]; }
   // select this zone if not already selected
   if(sel!==_zoneDrag.zIdx){ sel=_zoneDrag.zIdx; refreshProps(); }
@@ -1180,6 +1238,7 @@ map.on("click",e=>{
     if(tool==="circle"){ draft=[p]; finishShape(); }
     else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
     else if(tool==="polygon"){ draft.push(p); render(); }
+    else if(tool==="path"){ draft.push(p); render(); }
     return;
   }
   // deselect when clicking empty map (zone mousedown handles zone clicks)
@@ -1191,14 +1250,19 @@ map.on("click",e=>{
 function setTool(t){ tool=t; draft=[];
   document.querySelectorAll("[data-tool]").forEach(x=>x.classList.toggle("on",x.dataset.tool===t));
   document.getElementById("circleRow").style.display = t==="circle"?"flex":"none";
+  document.getElementById("finishBtn").textContent = t==="path"?"Finish path":"Finish polygon";
   document.getElementById("drawHint").textContent={
     circle:"click the center on the map (reveal radius set above)",
     polygon:"click each corner; press Finish to close it",
-    tripline:"click the two ends of the crossing line"}[t]||"pick a shape to start drawing";
+    tripline:"click the two ends of the crossing line",
+    path:"click each point along the route; press Finish when done (2+ points)"}[t]||"pick a shape to start drawing";
   render();
 }
 document.querySelectorAll("[data-tool]").forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
-document.getElementById("finishBtn").onclick=()=>{ if(tool==="polygon"&&draft.length>=3) finishShape(); };
+document.getElementById("finishBtn").onclick=()=>{
+  if(tool==="polygon"&&draft.length>=3) finishShape();
+  else if(tool==="path"&&draft.length>=2) finishShape();
+};
 document.getElementById("cancelBtn").onclick=()=>{ draft=[]; tool=null;
   document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
   document.getElementById("circleRow").style.display="none"; render(); };
@@ -1209,6 +1273,7 @@ function finishShape(){
   if(tool==="circle") shape={type:"circle",center:draft[0],radiusM:+document.getElementById("newRadius").value||12};
   else if(tool==="polygon") shape={type:"polygon",coords:draft.slice()};
   else if(tool==="tripline") shape={type:"tripline",from:draft[0],to:draft[1]};
+  else if(tool==="path") shape={type:"path",coords:draft.slice()};
   const z=makeZone(name,shape);
   zones.push(z); draft=[]; tool=null;
   document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
@@ -1234,6 +1299,22 @@ function refreshHandles(z){
   clearHandles();
   if(!z||sel<0) return;
   const c=zoneCenterLonLat(z); // [lon,lat]
+
+  // Path stops are pure ambient — no bearing/approach/audio-ring handles
+  // (those are all trigger-system or fixed-hearing-distance concepts; a path
+  // stop's range is tuned via its own spatialRangeM/spatialClearM fields
+  // in the properties panel instead). Only the vertex handles (#6) apply.
+  if(z.shape.type==="path"){
+    z.shape.coords.forEach((coord,i)=>{
+      const el=_mkHandle("mh-vertex","point "+(i+1));
+      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(coord).addTo(map);
+      mk.on("dragstart",()=>el.classList.add("mh-active"));
+      mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
+      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
+      _vertexHandles.push(mk);
+    });
+    return;
+  }
 
   // ---- 1: bearing tip handle (amber) — always shown, defaults to 90° ----
   if(z.bearingDeg==null) z.bearingDeg=90;
@@ -1343,6 +1424,36 @@ function refreshProps(){
   const z=zones[sel]; box.style.display="block";
   document.getElementById("pTitle").textContent=z.shape.type.toUpperCase()+" stop";
   document.getElementById("pName").value=z.name;
+  const isPath=z.shape.type==="path";
+
+  // Path stops are always pure ambient — no hazard flag, no bots/chat, no
+  // "speak when"/dwell, no Advanced (needle/approach/tracker/webhook/bearing).
+  // Everything below this block that's trigger-related is simply hidden.
+  document.getElementById("pHazardRow").style.display=isPath?"none":"flex";
+  document.getElementById("pFiresRow").style.display=isPath?"none":"block";
+  document.getElementById("botToggle").style.display=isPath?"none":"block";
+  document.getElementById("botBody").style.display=isPath?"none":"";
+  document.getElementById("advToggle").style.display=isPath?"none":"block";
+  document.getElementById("advBody").style.display=isPath?"none":"";
+  document.getElementById("pPathSection").style.display=isPath?"block":"none";
+  document.getElementById("pAudioSectionLabel").textContent=isPath?"Ambient sound":"Voices & Audio";
+
+  if(isPath){
+    document.getElementById("pMoveMode").value=z.movementMode||"walk";
+    document.getElementById("pSpeed").value=z.speedKmh??MOVE_SPEEDS[z.movementMode||"walk"];
+    document.getElementById("pLoopMode").value=z.loopMode||"loop";
+    document.getElementById("pRangeVoice").value=z.spatialRangeM??"";
+    document.getElementById("pRangeClear").value=z.spatialClearM??"";
+    document.getElementById("vaSummary").style.display="none";
+    document.getElementById("pVoiceRow").style.display="none";
+    const aLbl=document.getElementById("pAudioLabel");
+    if(aLbl){ const clip=z.ambientAudioUrl; aLbl.textContent=clip?(clip.split("/").pop()||"clip"):"no clip";
+      aLbl.className="va-audio-label"+(clip?" has-clip":""); }
+    return;
+  }
+  document.getElementById("vaSummary").style.display="block";
+  document.getElementById("pVoiceRow").style.display="block";
+
   document.getElementById("pSay").value=z.say||"";
   const isTrip=z.shape.type==="tripline";
   const fires=document.getElementById("pFires");
@@ -1424,6 +1535,17 @@ bindProp("pTrackerId",z=>{ z.trackerId=document.getElementById("pTrackerId").val
 bindProp("pBroadcast",z=>{ z.broadcastRadiusM=+document.getElementById("pBroadcast").value||20; });
 bindProp("pSubject",z=>{ z.triggerSubject=document.getElementById("pSubject").value; });
 bindProp("pChatGreeting",z=>{ z.chatGreeting=document.getElementById("pChatGreeting").value; });
+document.getElementById("pMoveMode").addEventListener("input",()=>{
+  if(sel<0) return; const z=zones[sel];
+  z.movementMode=document.getElementById("pMoveMode").value;
+  z.speedKmh=MOVE_SPEEDS[z.movementMode]??5;
+  document.getElementById("pSpeed").value=z.speedKmh;
+  render();
+});
+bindProp("pSpeed",z=>{ z.speedKmh=Math.max(0,+document.getElementById("pSpeed").value||0); });
+bindProp("pLoopMode",z=>{ z.loopMode=document.getElementById("pLoopMode").value; });
+bindProp("pRangeVoice",z=>{ const v=document.getElementById("pRangeVoice").value; z.spatialRangeM=v===""?null:Math.max(0,+v||0); });
+bindProp("pRangeClear",z=>{ const v=document.getElementById("pRangeClear").value; z.spatialClearM=v===""?null:Math.max(0,+v||0); });
 document.getElementById("pBotDelay").addEventListener("input",()=>{
   if(sel<0) return;
   const v=+document.getElementById("pBotDelay").value;
@@ -1589,21 +1711,21 @@ let _preview=null;
 document.getElementById("pAudioPlay").onclick=()=>{
   const btn=document.getElementById("pAudioPlay");
   if(_preview){ try{ _preview.pause(); }catch(e){} _preview=null; btn.textContent="▶"; aStat().textContent="stopped"; return; }
-  if(sel<0) return; const u=zones[sel].audioUrl; if(!u){ aStat().textContent="no clip to preview"; return; }
+  if(sel<0) return; const u=zones[sel][zoneAudioField(zones[sel])]; if(!u){ aStat().textContent="no clip to preview"; return; }
   try{ _preview=new Audio(u); _preview.play(); btn.textContent="■";
     _preview.onended=()=>{ _preview=null; btn.textContent="▶"; };
     aStat().textContent="previewing (flat — spatial happens in the engine)"; }
   catch(e){ aStat().textContent="preview failed"; _preview=null; btn.textContent="▶"; } };
 document.getElementById("pAudioClear").onclick=async()=>{
-  if(sel<0) return; const z=zones[sel]; if(!z.audioUrl){ return; }
-  const url=z.audioUrl; const key=url.replace("/api/audio/",""); const token=getToken();
+  if(sel<0) return; const z=zones[sel]; const fld=zoneAudioField(z); if(!z[fld]){ return; }
+  const url=z[fld]; const key=url.replace("/api/audio/",""); const token=getToken();
   if(token){
     try{
       const dr=await fetch("/api/audio/"+key,{method:"DELETE",headers:{authorization:"Bearer "+token}});
       if(dr.ok && "caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(url)))); }catch(e){}
     }catch(e){}
   }
-  delete z.audioUrl; hideBar(); aStat().textContent="clip removed";
+  delete z[fld]; hideBar(); aStat().textContent="clip removed";
   const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent="no clip";aLbl.className="va-audio-label";}
   updateVaSummary(z); };
 
@@ -1710,7 +1832,7 @@ async function doBrowseR2(){
         // Extension may change (e.g. mp3→webm); key extension is cosmetic — R2 uses content-type.
         const trimDefaultKey=key;
         openTrimmer(buf, trimDefaultKey,
-          _key=>{ if(z) z.audioUrl=url; if(sel>=0) aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
+          _key=>{ if(z) z[zoneAudioField(z)]=url; if(sel>=0) aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
           async(blob,userKey)=>{
             const ext=_mimeExt(blob.type);
             const resolvedKey=(userKey||key).replace(/\.[^.]+$/,"."+ext);
@@ -1739,7 +1861,7 @@ async function doBrowseR2(){
       useBtn.textContent="Use";
       useBtn.addEventListener("click",()=>{
         if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
-        zones[sel].audioUrl=o.url;
+        zones[sel][zoneAudioField(zones[sel])]=o.url;
         const _aLbl=document.getElementById("pAudioLabel"); if(_aLbl){_aLbl.textContent=o.key.split("/").pop();_aLbl.className="va-audio-label has-clip";}
         updateVaSummary(zones[sel]);
         aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
@@ -1787,7 +1909,7 @@ function drawList(){
   document.getElementById("zcount").textContent=zones.length;
   zones.forEach((z,i)=>{
     const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
-    const cue=z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive");
+    const cue=z.shape.type==="path"?"ambient":(z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive"));
     const hzBadge=z.isHazard?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
     d.innerHTML='<div class="t"><b class="cond">'+z.name+hzBadge+'</b>'
       +'<span class="tag">'+z.shape.type+' · '+cue+'</span>'
@@ -1802,7 +1924,19 @@ function drawList(){
 
 /* ---- export to the engine's rich BUNDLE ([lat,lon]) ---- */
 function zoneToEngine(z){
-  const s=z.shape, zo={ id:z.id, name:z.name, audibleFromM:z.audioM };
+  const s=z.shape;
+  // Path (moving ambient) stops never use the trigger system — no layers,
+  // no triggers, none of the dialogue/bot fields. Just a path + movement +
+  // its own optional hearing-range overrides + its own ambient clip.
+  if(s.type==="path"){
+    const zo={ id:z.id, name:z.name, center:LL(s.coords[0]), path:s.coords.map(LL),
+               movementMode:z.movementMode||"walk", speedKmh:z.speedKmh||0, loopMode:z.loopMode||"loop" };
+    if(z.spatialRangeM!=null) zo.spatialRangeM=z.spatialRangeM;
+    if(z.spatialClearM!=null) zo.spatialClearM=z.spatialClearM;
+    if(z.ambientAudioUrl) zo.ambientAudioUrl=z.ambientAudioUrl;
+    return zo;
+  }
+  const zo={ id:z.id, name:z.name, audibleFromM:z.audioM };
   zo.center=LL(zoneCenterLonLat(z));
   const genR=zoneGenR(z);
   if(s.type==="circle")        zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM}];
@@ -1863,6 +1997,17 @@ document.getElementById("copyBtn").onclick=()=>{ exportBundle();
 
 /* ---- import an existing bundle to edit (reverse of export) ---- */
 function engineToZone(zo){
+  if(Array.isArray(zo.path)&&zo.path.length>=2){
+    const shape={type:"path",coords:zo.path.map(LonLat)};
+    const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
+    z.movementMode=zo.movementMode||"walk";
+    z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
+    z.loopMode=zo.loopMode||"loop";
+    z.spatialRangeM=zo.spatialRangeM??null;
+    z.spatialClearM=zo.spatialClearM??null;
+    z.ambientAudioUrl=zo.ambientAudioUrl||null;
+    return z;
+  }
   const tgt=(zo.layers||[]).find(l=>l.kind==="target")||(zo.layers||[]).find(l=>l.radiusM!=null||l.geometry)||{};
   const gen=(zo.layers||[]).find(l=>l.kind==="general");
   let shape;
@@ -2264,7 +2409,7 @@ function doXhrUpload(blob, key, mimeType, label){
     if(xhr.status>=200&&xhr.status<300){
       const audioUrl=j.url||("/api/audio/"+key);
       if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(audioUrl)))); }catch(_){}
-      if(sel>=0){ zones[sel].audioUrl=audioUrl;
+      if(sel>=0){ zones[sel][zoneAudioField(zones[sel])]=audioUrl;
         const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
         updateVaSummary(zones[sel]); }
       showBar(100);
@@ -2487,6 +2632,10 @@ function editorToSimBundle(){
     if(s.type==="circle") center=[s.center[1],s.center[0]];
     else if(s.type==="polygon"){const c=centroidLonLat(s.coords);center=[c[1],c[0]];}
     else if(s.type==="tripline") center=[(s.from[1]+s.to[1])/2,(s.from[0]+s.to[0])/2];
+    // Path (moving ambient) stops: Test Mode's mini sim doesn't simulate
+    // movement/ambient audio — treat it as an inert static point at the
+    // path's start so it doesn't crash on a missing center, that's all.
+    else if(s.type==="path") center=[s.coords[0][1],s.coords[0][0]];
     const generalLayer={kind:"general",radiusM:z.approachM||30};
     let targetLayer;
     if(s.type==="circle") targetLayer={kind:"target",radiusM:s.radiusM||12};
