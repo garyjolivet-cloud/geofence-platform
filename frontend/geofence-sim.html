@@ -221,6 +221,36 @@ const Geo = {
             return { crossed, side: d2<0 ? "L":"R" }; }
 };
 
+/* Path (moving ambient) stop position — mirrors geofence-engine.html's
+   centerNow() exactly (same shared-real-world-clock model), so what you see
+   animate here matches what a real visitor's engine session would compute. */
+function pathCumLens(pathLatLon){
+  const cum=[0];
+  for(let i=1;i<pathLatLon.length;i++) cum.push(cum[i-1]+Geo.hav(pathLatLon[i-1],pathLatLon[i]));
+  return cum;
+}
+function pathPointAtDist(pathLatLon, cum, distM){
+  const L=cum[cum.length-1];
+  if (L<=0) return pathLatLon[0];
+  const d=Math.max(0, Math.min(L, distM));
+  let i=0; while (i<cum.length-2 && cum[i+1]<d) i++;
+  const segLen=cum[i+1]-cum[i], t = segLen>0 ? (d-cum[i])/segLen : 0;
+  const A=pathLatLon[i], B=pathLatLon[i+1];
+  return [A[0]+t*(B[0]-A[0]), A[1]+t*(B[1]-A[1])];
+}
+function ambientCenterNow(zone, nowMs){
+  if (!zone.path || zone.path.length<2) return zone.center;
+  if (!zone._cumLens) zone._cumLens=pathCumLens(zone.path);
+  const cum=zone._cumLens, L=cum[cum.length-1];
+  const speedMps=(zone.speedKmh||0)/3.6;
+  const elapsedM=speedMps*(nowMs/1000);
+  let d;
+  if (zone.loopMode==="once") d=Math.min(elapsedM, L);
+  else if (zone.loopMode==="pingpong"){ const C=2*L, r=C<=0?0:elapsedM%C; d=L<=0?0:(r<=L?r:C-r); }
+  else d = L<=0 ? 0 : elapsedM % L;
+  return pathPointAtDist(zone.path, cum, d);
+}
+
 const Smoother = {
   s:null, prev:null, spd:0, t0:null,
   push(fix){
@@ -265,6 +295,7 @@ const Geofencer = {
   update(p, prev, now){
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{
+      if(zone.path||!zone.layers) return; // path (moving ambient) stops have no layers/triggers — this simulator doesn't animate them
       zone.layers.forEach((layer,i)=>{
         const k=this.key(zone,layer,i);
         const st=this.state[k] || (this.state[k]={phase:"out",delivered:{},move:0});
@@ -427,6 +458,16 @@ map.on("load",()=>{
   map.addLayer({id:"ghost",type:"circle",source:"ghost",
     paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
 
+  // live marker for path (moving ambient) stops — their current computed
+  // position, redrawn on a timer independent of the simulated visitor so it
+  // animates even while the visitor stands still (shared real-world clock)
+  map.addSource("ambient",{type:"geojson",data:fc([])});
+  map.addLayer({id:"ambient-pts",type:"circle",source:"ambient",
+    paint:{"circle-radius":6,"circle-color":"#8fd6ff","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
+  map.addLayer({id:"ambient-lbl",type:"symbol",source:"ambient",
+    layout:{"text-field":["get","name"],"text-size":10,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
+    paint:{"text-color":"#8fd6ff","text-halo-color":"#0a1018","text-halo-width":1.2}});
+
   const pid=new URLSearchParams(location.search).get("project");
   if(pid){ loadBundle(SAMPLE,"sample walk"); loadProjectFromPlatform(pid); }
   else loadBundle(SAMPLE,"sample walk");
@@ -464,6 +505,15 @@ function phaseOf(zone,layer,i){ const st=Geofencer.state[zone.id+":"+layer.kind+
 function zonesGeoJSON(){
   const feats=[];
   BUNDLE.zones.forEach(z=>{
+    // Path (moving ambient) stops have no layers/triggers — just render the
+    // route itself so it's visible; this simulator doesn't animate its
+    // live position or simulate its ambient audio.
+    if(z.path){
+      feats.push({type:"Feature",properties:{zone:z.id,kind:"path",state:"out"},
+        geometry:{type:"LineString",coordinates:z.path.map(c=>[c[1],c[0]])}});
+      return;
+    }
+    if(!z.layers) return;
     z.layers.forEach((L,i)=>{
       const state=phaseOf(z,L,i), props={zone:z.id,kind:L.kind,state};
       if(L.radiusM!=null && z.center){
@@ -484,11 +534,20 @@ function zonesGeoJSON(){
 
 function refreshZones(){
   if(map.getSource("fences")) map.getSource("fences").setData(zonesGeoJSON());
+  if(map.getSource("ambient")){
+    const now=Date.now();
+    const feats=BUNDLE.zones.filter(z=>z.path).map(z=>{
+      const c=ambientCenterNow(z, now);
+      return {type:"Feature",properties:{name:z.name},geometry:{type:"Point",coordinates:[c[1],c[0]]}};
+    });
+    map.getSource("ambient").setData(fc(feats));
+  }
   // live phase on the label chips + markers
   const chips=document.getElementById("chips"); chips.innerHTML="";
   BUNDLE.zones.forEach(z=>{
     let ph="out";
-    z.layers.forEach((L,i)=>{ const p=phaseOf(z,L,i); if(p==="in")ph="in"; else if(p==="pending"&&ph!=="in")ph="pending"; else if(p==="cooldown"&&ph==="out")ph="cooldown"; });
+    if(z.path) ph="ambient";
+    else (z.layers||[]).forEach((L,i)=>{ const p=phaseOf(z,L,i); if(p==="in")ph="in"; else if(p==="pending"&&ph!=="in")ph="pending"; else if(p==="cooldown"&&ph==="out")ph="cooldown"; });
     const c=document.createElement("div"); c.className="chip";
     c.innerHTML='<b>'+z.name+'</b><span class="tag '+ph+'">'+ph+'</span>';
     chips.appendChild(c);
@@ -507,7 +566,7 @@ function feed(lat,lon,acc,t){
   prevP=p; fixCount++;
   let pick=null,best=Infinity;
   active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
-  if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center) return;
+  if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center||z.path) return;
       const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} }); }
   // ghost = where the engine thinks you are (smoothed)
   if(map.getSource("ghost")) map.getSource("ghost").setData(fc([{type:"Feature",properties:{},geometry:{type:"Point",coordinates:[p.lon,p.lat]}}]));
@@ -554,7 +613,9 @@ function loadBundle(b,srcLabel){
 
 function fitToData(){
   const pts=[];
-  BUNDLE.zones.forEach(z=>{ z.layers.forEach(L=>{
+  BUNDLE.zones.forEach(z=>{
+    if(z.path){ z.path.forEach(c=>pts.push([c[1],c[0]])); return; }
+    (z.layers||[]).forEach(L=>{
     if(L.radiusM!=null && z.center){ circleRing(z.center,L.radiusM)[0].forEach(c=>pts.push(c)); }
     else if(L.geometry){ const g=L.geometry;
       if(g.type==="polygon") g.coords.forEach(c=>pts.push([c[1],c[0]]));
@@ -567,6 +628,12 @@ function fitToData(){
   const c=b.getCenter(); avatar.setLngLat(c);
 }
 fitToData(); // safe no-op until bundle loads
+
+// Path (moving ambient) stops move on the shared real-world clock, independent
+// of whether the simulated visitor is playing/paused — without this, the
+// ambient marker would only animate while "Play" is running (refreshZones()
+// is otherwise only called from feed(), which only fires during playback).
+setInterval(()=>{ if(BUNDLE.zones.some(z=>z.path)) refreshZones(); }, 1000);
 
 /* =============================== PATH =============================== */
 function drawPath(){ const feats=[];
@@ -587,6 +654,7 @@ function jitterPoint(lat,lon,rM){ if(rM<=0) return [lat,lon];
 
 /* a point that reliably sits INSIDE a zone's target (for the auto-walk route) */
 function innerPoint(z){
+  if(z.path) return z.center; // path (moving ambient) stops have no target layer — visit their start point
   const tgt=z.layers.find(l=>l.kind==="target")||z.layers[0];
   if(tgt.radiusM!=null) return z.center;                 // circle: center is inside
   const g=tgt.geometry;
