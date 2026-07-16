@@ -1548,10 +1548,17 @@ document.querySelectorAll('.sim .pad [data-dir]').forEach(b=>{
     tickSim(); };
 });
 function buildSimZones(){ const wrap=document.getElementById('simZones'); wrap.innerHTML='';
-  BUNDLE.zones.forEach(z=>{ const c=z.center||z.layers[0].geometry?.from; if(!c) return;
+  BUNDLE.zones.forEach(z=>{ const c0=z.center||z.layers[0].geometry?.from; if(!c0) return;
     const b=document.createElement('button'); b.textContent=z.name.split(' ')[0];
-    b.onclick=()=>{ simPos=[c[0]-0.0004,c[1]]; Smoother.reset(); HUD.prev=null; tickSim();
-                    HUD.log('ev-sys','teleported near '+z.name); };
+    b.onclick=()=>{
+      // Path (moving ambient) stops have no triggers, so there's no
+      // reproducibility concern in centering on their CURRENT position —
+      // unlike a trigger zone, always jumping to a fixed start point would
+      // often land well outside hearing range of a long looping route.
+      const c = z.path ? centerNow(z, Date.now()) : c0;
+      simPos=[c[0]-0.0004,c[1]]; Smoother.reset(); HUD.prev=null; tickSim();
+      HUD.log('ev-sys','teleported near '+z.name);
+    };
     wrap.appendChild(b); }); }
 document.getElementById('simHere').onclick=()=>{ simPos=BUNDLE.ref.slice(); tickSim(); };
 
