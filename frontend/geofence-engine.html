@@ -402,9 +402,12 @@ const Geofencer = {
   key(z,l,i){ return z.id+":"+(l.kind)+":"+i; },
 
   // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
-  sd(p, prev, zone, layer){
+  sd(p, prev, zone, layer, now){
     const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
-    if(layer.radiusM!=null) return Geo.sdCircle(PT, zone.center, layer.radiusM);
+    // path (moving) zones fire triggers against their *current* live
+    // position on the route, not the fixed start point.
+    const zc=zone.path ? centerNow(zone, now) : zone.center;
+    if(layer.radiusM!=null) return Geo.sdCircle(PT, zc, layer.radiusM);
     const g=layer.geometry;
     if(g && g.type==="polygon") return Geo.sdPolygon(PT, g.coords, BUNDLE.ref);
     if(g && g.type==="corridor") {
@@ -419,7 +422,7 @@ const Geofencer = {
   update(p, prev, now){
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{
-      if(zone.path) return; // path (moving ambient) stops are always pure ambient — no enter/exit/dwell/needle, no layers to evaluate
+      if(!zone.layers) return; // path (moving) zones with no triggers configured yet still have no layers to evaluate
       zone.layers.forEach((layer,i)=>{
         const k=this.key(zone,layer,i);
         const st=this.state[k] || (this.state[k]={phase:"out",delivered:{},move:0});
@@ -438,7 +441,7 @@ const Geofencer = {
         }
 
         // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
-        const d=this.sd(p,prev,zone,layer);
+        const d=this.sd(p,prev,zone,layer,now);
         if(d==null) return;
         // accuracy gate (warn content is exempt — handled at fire time)
         const holding = p.acc>TUNING.ACCURACY_CAP_M;
@@ -990,20 +993,21 @@ const HUD = {
     // pick nearest active target ring for the needle (or nearest zone center)
     let pick=null,best=Infinity;
     active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
-    if(!pick){ // nothing active: aim at nearest zone center for "next stop"
-      // path (moving ambient) stops have no discrete "arrival" — never aim the needle at one
-      BUNDLE.zones.forEach(z=>{ if(!z.center||z.path) return;
-        const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} });
+    if(!pick){ // nothing active: aim at nearest zone's current position for "next stop"
+      BUNDLE.zones.forEach(z=>{ if(!z.center) return;
+        const zc=z.path?centerNow(z,fix.t):z.center;
+        const d=Geo.hav([p.lat,p.lon],zc); if(d<best){best=d;pick={zone:z,d,center:zc};} });
     }
 
     // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it).
-    // Path stops are excluded — they get their own AmbientVoice channel below,
-    // independent of this pick-driven system, so their bed can layer under a
-    // nearby spoken stop instead of stealing the shared Clarity/SpatialVoice cue.
+    // Path stops participate too now (using their current live position) so a
+    // path stop that speaks via TTS instead of a recorded clip still gets the
+    // same approach cue as any other zone.
     if(Clarity.on){
       let aD=Infinity, aIn=false;
-      BUNDLE.zones.forEach(z=>{ if(!z.center||z.path||z.audio===false||z.audioUrl) return;
-        const d=Geo.hav([p.lat,p.lon],z.center), range=z.audibleFromM||60;
+      BUNDLE.zones.forEach(z=>{ if(!z.center||z.audio===false||z.audioUrl) return;
+        const zc=z.path?centerNow(z,fix.t):z.center;
+        const d=Geo.hav([p.lat,p.lon],zc), range=z.audibleFromM||60;
         if(d<range && d<aD){ aD=d; aIn=true; } });
       Clarity.update(aD, aIn);
     }
@@ -1042,7 +1046,7 @@ const HUD = {
     const hc=Compass.confidence;
     this.el('vHC').innerHTML = hc?('<span class="conf-'+hc+'">'+['','low','med','high'][hc]+'</span>'):'—';
 
-    // needle + state (pick.zone can never be a path stop — excluded above)
+    // needle + state (pick.zone may be a path stop — centerNow() resolves its live position)
     if(pick){
       const tgt=pick.center || centerNow(pick.zone, fix.t);
       this.el('targetName').textContent=pick.zone.name;
@@ -1551,10 +1555,9 @@ function buildSimZones(){ const wrap=document.getElementById('simZones'); wrap.i
   BUNDLE.zones.forEach(z=>{ const c0=z.center||z.layers[0].geometry?.from; if(!c0) return;
     const b=document.createElement('button'); b.textContent=z.name.split(' ')[0];
     b.onclick=()=>{
-      // Path (moving ambient) stops have no triggers, so there's no
-      // reproducibility concern in centering on their CURRENT position —
-      // unlike a trigger zone, always jumping to a fixed start point would
-      // often land well outside hearing range of a long looping route.
+      // Path (moving) stops: jump to their CURRENT live position, not the
+      // fixed start point — for a long looping route the start point is
+      // often well outside hearing/trigger range of wherever it actually is.
       const c = z.path ? centerNow(z, Date.now()) : c0;
       simPos=[c[0]-0.0004,c[1]]; Smoother.reset(); HUD.prev=null; tickSim();
       HUD.log('ev-sys','teleported near '+z.name);

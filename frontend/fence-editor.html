@@ -577,7 +577,9 @@
       <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
     </label>
 
-    <!-- ── Path movement (path stops only — always pure ambient, no triggers) ── -->
+    <!-- ── Path movement (path stops only) — plus the full trigger system below,
+         same as every other stop: hazard flag, Voices & Audio, Bots & Chat,
+         speak-when/dwell, and Advanced (needle/approach/tracker/webhook/bearing) ── -->
     <div class="va-section" id="pPathSection" style="display:none">
       <div class="va-label">Movement</div>
       <label class="k">movement mode</label>
@@ -991,17 +993,17 @@ function zoneGenR(z){ const s=z.shape;
 
 /* ---- create a stop with defaults ---- */
 function makeZone(name,shape){
-  if(shape.type==="path"){
-    // Path stops are always pure ambient — no fires/dwell/needle/approach/
-    // bearing/hazard fields apply, since they never use the trigger system.
-    return { id:slug(name), name, shape,
-             movementMode:"walk", speedKmh:MOVE_SPEEDS.walk, loopMode:"loop",
-             spatialRangeM:null, spatialClearM:null, ambientAudioUrl:null };
-  }
-  return { id:slug(name), name, shape, say:"",
+  // Path stops get every field a normal stop has (they fire the full trigger
+  // system too) plus their own movement + independent ambient-bed fields.
+  const base={ id:slug(name), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS, needle:DEFAULTS.needle,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM,
            bearingDeg:90, isHazard:false };
+  if(shape.type==="path"){
+    base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
+    base.spatialRangeM=null; base.spatialClearM=null; base.ambientAudioUrl=null;
+  }
+  return base;
 }
 
 /* ---- render committed fences (target + approach ring) + draft ---- */
@@ -1013,13 +1015,24 @@ function renderSources(){
     const s=z.shape, selected=(i===sel);
     const isPath=s.type==="path";
     const c=zoneCenterLonLat(z), gr=zoneGenR(z);
-    // approach ring + audio fade ring — trigger-system concepts, not shown for
-    // path stops (always pure ambient, tuned via their own range fields instead)
-    if(!isPath){
-      feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
-        geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
-      if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
-        geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
+    // approach ring + audio fade ring — trigger-system rings, shown for every
+    // zone type including path stops (path stops fire triggers too now, at
+    // whatever point along the route they currently occupy at runtime)
+    feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
+      geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
+    if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
+      geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
+    if(isPath){
+      // path stop's own hearing-range rings (for its independent ambient bed) —
+      // falls back to the project defaults (same fields the "voice range"/
+      // "full vol" dot-badges edit) whenever no per-zone override is set,
+      // exactly like the engine does.
+      const rM=z.spatialRangeM||(+document.getElementById("audioRange").value)||64;
+      const cM=z.spatialClearM||(+document.getElementById("audioClear").value)||8;
+      feats.push({type:"Feature",properties:{kind:"prange",sel:selected},
+        geometry:{type:"Polygon",coordinates:[circleRing(c,rM,48)]}});
+      feats.push({type:"Feature",properties:{kind:"pclear",sel:selected},
+        geometry:{type:"Polygon",coordinates:[circleRing(c,cM,48)]}});
     }
     // tracker broadcast ring (circles with trackerId only)
     if(s.type==="circle"&&z.trackerId&&(z.broadcastRadiusM||0)>0)
@@ -1069,10 +1082,10 @@ function renderSources(){
     map.getSource("project-rings").setData(fc(pf));
   }
 
-  // bearing arrows — every zone gets one (default 90° east), except path
-  // stops, which have no "face this direction" concept (pure ambient, no triggers)
+  // bearing arrows — every zone gets one (default 90° east), including path
+  // stops now that they fire the same guidance/trigger system as any other stop
   if(map.getSource("bearing-arrows")){
-    const arrowFeats=zones.filter(z=>z.shape.type!=="path").map(z=>{
+    const arrowFeats=zones.map(z=>{
       const ctr=zoneCenterLonLat(z), bd=z.bearingDeg??90;
       const tip=destPoint(ctr,20,bd);
       return {type:"Feature",properties:{},geometry:{type:"LineString",coordinates:[ctr,tip]}};
@@ -1143,6 +1156,12 @@ map.on("load",()=>{
   // tracker broadcast ring (orange dotted)
   map.addLayer({id:"broadcast-ring",type:"line",source:"fences",filter:["==","kind","broadcast"],
      paint:{"line-color":"#ff9900","line-width":1.5,"line-dasharray":[1,2],"line-opacity":0.8}});
+  // path (moving ambient) stop's own hearing-range rings — same colors as
+  // the project-level voice-range/full-vol dot-badge rings, just per-zone
+  map.addLayer({id:"path-range-ring",type:"line",source:"fences",filter:["==","kind","prange"],
+     paint:{"line-color":"#b96fff","line-width":1.2,"line-dasharray":[4,3],"line-opacity":0.6}});
+  map.addLayer({id:"path-clear-ring",type:"line",source:"fences",filter:["==","kind","pclear"],
+     paint:{"line-color":"#9b3fd4","line-width":1.5,"line-opacity":0.55}});
   // project-level rings (voice range, full volume, visitor)
   map.addSource("project-rings",{type:"geojson",data:fc([])});
   map.addLayer({id:"proj-range-ring",type:"line",source:"project-rings",filter:["==","pkind","range"],
@@ -1300,21 +1319,11 @@ function refreshHandles(z){
   if(!z||sel<0) return;
   const c=zoneCenterLonLat(z); // [lon,lat]
 
-  // Path stops are pure ambient — no bearing/approach/audio-ring handles
-  // (those are all trigger-system or fixed-hearing-distance concepts; a path
-  // stop's range is tuned via its own spatialRangeM/spatialClearM fields
-  // in the properties panel instead). Only the vertex handles (#6) apply.
-  if(z.shape.type==="path"){
-    z.shape.coords.forEach((coord,i)=>{
-      const el=_mkHandle("mh-vertex","point "+(i+1));
-      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(coord).addTo(map);
-      mk.on("dragstart",()=>el.classList.add("mh-active"));
-      mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
-      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-      _vertexHandles.push(mk);
-    });
-    return;
-  }
+  // Path stops get everything a normal stop gets (bearing/approach/audio-fade
+  // handles below, steps 1/2/4) plus their own pair of hearing-range handles
+  // for the ambient bed (voice range / full vol) and per-point vertex handles
+  // instead of the polygon/tripline handles in steps 6/7.
+  const isPathZone=z.shape.type==="path";
 
   // ---- 1: bearing tip handle (amber) — always shown, defaults to 90° ----
   if(z.bearingDeg==null) z.bearingDeg=90;
@@ -1412,6 +1421,44 @@ function refreshHandles(z){
     });
   }
 
+  // ---- 8: path stop's own ambient hearing-range handles + vertex handles ----
+  if(isPathZone){
+    const rM=z.spatialRangeM||(+document.getElementById("audioRange").value)||64;
+    const cM=z.spatialClearM||(+document.getElementById("audioClear").value)||8;
+    {
+      const el=_mkHandle("mh-projrange","voice range: "+rM+" m");
+      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,rM,90)).addTo(map);
+      mk.on("dragstart",()=>el.classList.add("mh-active"));
+      mk.on("drag",()=>{
+        const ll=mk.getLngLat(); z.spatialRangeM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
+        document.getElementById("pRangeVoice").value=z.spatialRangeM;
+        _setLbl(el,"voice range: "+z.spatialRangeM+" m"); renderSources();
+      });
+      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
+      _handles.push(mk);
+    }
+    {
+      const el=_mkHandle("mh-projclear","full vol: "+cM+" m");
+      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,cM,180)).addTo(map);
+      mk.on("dragstart",()=>el.classList.add("mh-active"));
+      mk.on("drag",()=>{
+        const ll=mk.getLngLat(); z.spatialClearM=Math.max(1,Math.round(haversineM(c,[ll.lng,ll.lat])));
+        document.getElementById("pRangeClear").value=z.spatialClearM;
+        _setLbl(el,"full vol: "+z.spatialClearM+" m"); renderSources();
+      });
+      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
+      _handles.push(mk);
+    }
+    z.shape.coords.forEach((coord,i)=>{
+      const el=_mkHandle("mh-vertex","point "+(i+1));
+      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(coord).addTo(map);
+      mk.on("dragstart",()=>el.classList.add("mh-active"));
+      mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
+      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
+      _vertexHandles.push(mk);
+    });
+  }
+
 }
 // _activeProjSetting: which dot is open ('voice'|'clear'|'visitor'|null)
 let _activeProjSetting=null;
@@ -1426,15 +1473,15 @@ function refreshProps(){
   document.getElementById("pName").value=z.name;
   const isPath=z.shape.type==="path";
 
-  // Path stops are always pure ambient — no hazard flag, no bots/chat, no
-  // "speak when"/dwell, no Advanced (needle/approach/tracker/webhook/bearing).
-  // Everything below this block that's trigger-related is simply hidden.
-  document.getElementById("pHazardRow").style.display=isPath?"none":"flex";
-  document.getElementById("pFiresRow").style.display=isPath?"none":"block";
-  document.getElementById("botToggle").style.display=isPath?"none":"block";
-  document.getElementById("botBody").style.display=isPath?"none":"";
-  document.getElementById("advToggle").style.display=isPath?"none":"block";
-  document.getElementById("advBody").style.display=isPath?"none":"";
+  // Path stops fire the full trigger system too (hazard flag, bots/chat,
+  // "speak when"/dwell, Advanced needle/approach/tracker/webhook/bearing) —
+  // exactly like every other stop — plus their own Movement/ambient section.
+  document.getElementById("pHazardRow").style.display="flex";
+  document.getElementById("pFiresRow").style.display="block";
+  document.getElementById("botToggle").style.display="block";
+  document.getElementById("botBody").style.display="";
+  document.getElementById("advToggle").style.display="block";
+  document.getElementById("advBody").style.display="";
   document.getElementById("pPathSection").style.display=isPath?"block":"none";
   document.getElementById("pAudioSectionLabel").textContent=isPath?"Ambient sound":"Voices & Audio";
 
@@ -1444,12 +1491,7 @@ function refreshProps(){
     document.getElementById("pLoopMode").value=z.loopMode||"loop";
     document.getElementById("pRangeVoice").value=z.spatialRangeM??"";
     document.getElementById("pRangeClear").value=z.spatialClearM??"";
-    document.getElementById("vaSummary").style.display="none";
-    document.getElementById("pVoiceRow").style.display="block";
-    const aLbl=document.getElementById("pAudioLabel");
-    if(aLbl){ const clip=z.ambientAudioUrl; aLbl.textContent=clip?(clip.split("/").pop()||"clip"):"no clip";
-      aLbl.className="va-audio-label"+(clip?" has-clip":""); }
-    return;
+    // fall through — path zones also populate the normal trigger fields below
   }
   document.getElementById("vaSummary").style.display="block";
   document.getElementById("pVoiceRow").style.display="block";
@@ -1481,9 +1523,9 @@ function refreshProps(){
   document.getElementById("clientBotRow").style.display=z.trackerId?"block":"none";
   const advClientSel=document.getElementById("pClientBotIdAdv");
   if(advClientSel) advClientSel.value=z.clientBotId||"";
-  // audio label (top of props)
+  // audio label (top of props) — path zones show their ambient clip, not audioUrl
   const aLbl=document.getElementById("pAudioLabel");
-  if(aLbl){ const clip=z.audioUrl; aLbl.textContent=clip?(clip.split("/").pop()||"clip"):"no clip";
+  if(aLbl){ const clip=z[zoneAudioField(z)]; aLbl.textContent=clip?(clip.split("/").pop()||"clip"):"no clip";
     aLbl.className="va-audio-label"+(clip?" has-clip":""); }
   document.getElementById("pBotDelay").value=z.botGreetingDelayS||0;
   document.getElementById("pBotDelayV").textContent=(z.botGreetingDelayS||0)+" s";
@@ -1502,7 +1544,7 @@ function refreshProps(){
 function updateVaSummary(zone){
   const el=document.getElementById("vaSummary"); if(!el) return;
   const timingEl=document.getElementById("vaTiming");
-  const hasClip=!!zone.audioUrl;
+  const hasClip=!!zone[zoneAudioField(zone)];
   const firstSlot=(zone.bots||[])[0];
   const firstBot=firstSlot?editorBots.find(b=>b.id===firstSlot.botId):null;
   const hasSay=!!(zone.say||"").trim();
@@ -1925,23 +1967,19 @@ function drawList(){
 /* ---- export to the engine's rich BUNDLE ([lat,lon]) ---- */
 function zoneToEngine(z){
   const s=z.shape;
-  // Path (moving ambient) stops never use the trigger system — no layers,
-  // no triggers, none of the dialogue/bot fields. Just a path + movement +
-  // its own optional hearing-range overrides + its own ambient clip.
-  if(s.type==="path"){
-    const zo={ id:z.id, name:z.name, center:LL(s.coords[0]), path:s.coords.map(LL),
-               movementMode:z.movementMode||"walk", speedKmh:z.speedKmh||0, loopMode:z.loopMode||"loop" };
-    if(z.spatialRangeM!=null) zo.spatialRangeM=z.spatialRangeM;
-    if(z.spatialClearM!=null) zo.spatialClearM=z.spatialClearM;
-    if(z.ambientAudioUrl) zo.ambientAudioUrl=z.ambientAudioUrl;
-    return zo;
-  }
+  const isPath=s.type==="path";
   const zo={ id:z.id, name:z.name, audibleFromM:z.audioM };
   zo.center=LL(zoneCenterLonLat(z));
+  // Path stops fire the same trigger system as every other stop, evaluated
+  // at runtime against wherever the stop currently is on its route (the
+  // engine resolves this via centerNow()) — a path has no natural drawn
+  // shape of its own, so both the general (needle-arrival) and target
+  // (say/dwell) layers reuse the approach radius as a plain circle.
   const genR=zoneGenR(z);
   if(s.type==="circle")        zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM}];
   else if(s.type==="polygon")  zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"polygon",coords:s.coords.map(LL)}}];
   else if(s.type==="tripline") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}];
+  else if(isPath)              zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:genR}];
   const trig=[];
   if(z.needle) trig.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true});
   const rev={ oncePerVisit:true, layer:"target" };
@@ -1966,6 +2004,15 @@ function zoneToEngine(z){
   if(z.botGreetingDelayS) zo.botGreetingDelayS=z.botGreetingDelayS;
   if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
   if(z.isHazard) zo.isHazard=true;
+  if(isPath){
+    zo.path=s.coords.map(LL);
+    zo.movementMode=z.movementMode||"walk";
+    zo.speedKmh=z.speedKmh||0;
+    zo.loopMode=z.loopMode||"loop";
+    if(z.spatialRangeM!=null) zo.spatialRangeM=z.spatialRangeM;
+    if(z.spatialClearM!=null) zo.spatialClearM=z.spatialClearM;
+    if(z.ambientAudioUrl) zo.ambientAudioUrl=z.ambientAudioUrl;
+  }
   return zo;
 }
 function projName(){ return (document.getElementById("projCrumb").textContent||"").trim(); }
@@ -1997,26 +2044,20 @@ document.getElementById("copyBtn").onclick=()=>{ exportBundle();
 
 /* ---- import an existing bundle to edit (reverse of export) ---- */
 function engineToZone(zo){
-  if(Array.isArray(zo.path)&&zo.path.length>=2){
-    const shape={type:"path",coords:zo.path.map(LonLat)};
-    const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
-    z.movementMode=zo.movementMode||"walk";
-    z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
-    z.loopMode=zo.loopMode||"loop";
-    z.spatialRangeM=zo.spatialRangeM??null;
-    z.spatialClearM=zo.spatialClearM??null;
-    z.ambientAudioUrl=zo.ambientAudioUrl||null;
-    return z;
-  }
-  const tgt=(zo.layers||[]).find(l=>l.kind==="target")||(zo.layers||[]).find(l=>l.radiusM!=null||l.geometry)||{};
-  const gen=(zo.layers||[]).find(l=>l.kind==="general");
+  const isPath=Array.isArray(zo.path)&&zo.path.length>=2;
   let shape;
-  if(tgt.radiusM!=null) shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:tgt.radiusM};
-  else if(tgt.geometry&&tgt.geometry.type==="polygon") shape={type:"polygon",coords:tgt.geometry.coords.map(LonLat)};
-  else if(tgt.geometry&&tgt.geometry.type==="tripline") shape={type:"tripline",from:LonLat(tgt.geometry.from),to:LonLat(tgt.geometry.to)};
-  else shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:12};
+  if(isPath){
+    shape={type:"path",coords:zo.path.map(LonLat)};
+  } else {
+    const tgt=(zo.layers||[]).find(l=>l.kind==="target")||(zo.layers||[]).find(l=>l.radiusM!=null||l.geometry)||{};
+    if(tgt.radiusM!=null) shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:tgt.radiusM};
+    else if(tgt.geometry&&tgt.geometry.type==="polygon") shape={type:"polygon",coords:tgt.geometry.coords.map(LonLat)};
+    else if(tgt.geometry&&tgt.geometry.type==="tripline") shape={type:"tripline",from:LonLat(tgt.geometry.from),to:LonLat(tgt.geometry.to)};
+    else shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:12};
+  }
   const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
   z.audioM = zo.audibleFromM!=null?zo.audibleFromM:DEFAULTS.audioM;
+  const gen=(zo.layers||[]).find(l=>l.kind==="general");
   if(gen&&gen.radiusM!=null) z.approachM=gen.radiusM;
   (zo.triggers||[]).forEach(t=>{
     if(t.needle) z.needle=true;
@@ -2038,6 +2079,14 @@ function engineToZone(zo){
   if(zo.clientBotId) z.clientBotId=zo.clientBotId;
   const firstSubjTrig=(zo.triggers||[]).find(t=>t.subject&&t.subject!=="any");
   if(firstSubjTrig) z.triggerSubject=firstSubjTrig.subject;
+  if(isPath){
+    z.movementMode=zo.movementMode||"walk";
+    z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
+    z.loopMode=zo.loopMode||"loop";
+    z.spatialRangeM=zo.spatialRangeM??null;
+    z.spatialClearM=zo.spatialClearM??null;
+    z.ambientAudioUrl=zo.ambientAudioUrl||null;
+  }
   return z;
 }
 document.getElementById("importBtn").onclick=()=>{
@@ -2494,13 +2543,17 @@ function trackerSmoother(id){return _trackerSmoothers[id]||(_trackerSmoothers[id
 function resetTrackerSmoothers(){Object.keys(_trackerSmoothers).forEach(k=>_trackerSmoothers[k].reset());}
 const SimFencer={state:{},onEvent:null,
   key(z,l,i){return z.id+":"+l.kind+":"+i;},
-  sd(PT,zone,layer){
-    if(layer.radiusM!=null)return SimGeo.sdCircle(PT,zone.center,layer.radiusM);
+  sd(PT,zone,layer,now){
+    // path (moving) zones fire triggers against their *current* live
+    // position on the route, not the fixed start point.
+    const zc=zone.path?simAmbientCenterNow(zone,now||Date.now()):zone.center;
+    if(layer.radiusM!=null)return SimGeo.sdCircle(PT,zc,layer.radiusM);
     const g=layer.geometry;if(!g)return null;
     if(g.type==="polygon")return SimGeo.sdPolygon(PT,g.coords,simBundle.ref);
     return null;},
-  sdCircleVsLayer(srcCenter,srcR,zone,layer){
-    if(layer.radiusM!=null)return SimGeo.hav(srcCenter,zone.center)-(srcR+layer.radiusM);
+  sdCircleVsLayer(srcCenter,srcR,zone,layer,now){
+    const zc=zone.path?simAmbientCenterNow(zone,now||Date.now()):zone.center;
+    if(layer.radiusM!=null)return SimGeo.hav(srcCenter,zc)-(srcR+layer.radiusM);
     const g=layer.geometry;if(!g)return null;
     if(g.type==="polygon")return SimGeo.sdPolygon(srcCenter,g.coords,simBundle.ref)-srcR;
     if(g.type==="tripline"){const P=SimGeo.toXY(srcCenter,simBundle.ref);
@@ -2526,7 +2579,7 @@ const SimFencer={state:{},onEvent:null,
         if(prev){const c=SimGeo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],layer.geometry.from,layer.geometry.to,simBundle.ref);
           if(c.crossed&&st.phase!=="cooldown"){st.phase="cooldown";setTimeout(()=>{st.phase="out";},4000);
             this._fire(zone,layer,"enter",{side:c.side},"visitor");}} return;}
-      const sd=this.sd([p.lat,p.lon],zone,layer);if(sd==null)return;
+      const sd=this.sd([p.lat,p.lon],zone,layer,now);if(sd==null)return;
       if(sd<0&&st.phase==="in")active.push({zone,layer,sd});
       this._step(zone,layer,i,sd,now,"visitor","visitor");
     });});
@@ -2538,7 +2591,7 @@ const SimFencer={state:{},onEvent:null,
         if(si===ti)return;
         tgtZ.layers.forEach((layer,i)=>{
           if(layer.geometry&&layer.geometry.type==="tripline")return;
-          const sd=this.sdCircleVsLayer(srcZ.center,srcR,tgtZ,layer);if(sd==null)return;
+          const sd=this.sdCircleVsLayer(srcZ.center,srcR,tgtZ,layer,now);if(sd==null)return;
           this._step(tgtZ,layer,i,sd,now,srcZ.trackerId,srcZ.trackerId);
         });
       });
@@ -2746,20 +2799,22 @@ function editorToSimBundle(){
     // load-time fallback (e.g. for the ref-point average).
     else if(s.type==="path") center=[s.coords[0][1],s.coords[0][0]];
     const isPath=s.type==="path";
-    // Path stops are always pure ambient — no trigger layers at all,
-    // matching geofence-engine.html/geofence-sim.html.
-    const generalLayer=isPath?null:{kind:"general",radiusM:z.approachM||30};
+    // Path stops fire triggers too now, against a circle centered on their
+    // *current* live position (resolved at eval-time in SimFencer.sd via
+    // simAmbientCenterNow) — same approachM ring used for both general
+    // (needle) and target (say/dwell) layers since a path has no natural
+    // drawn radius of its own.
+    const generalLayer={kind:"general",radiusM:z.approachM||30};
     let targetLayer;
     if(s.type==="circle") targetLayer={kind:"target",radiusM:s.radiusM||12};
     else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
     else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
+    else if(isPath) targetLayer={kind:"target",radiusM:z.approachM||30};
     const subj=z.triggerSubject||"any";
     const triggers=[];
-    if(!isPath){
-      if(z.needle) triggers.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true,subject:subj});
-      if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
-        else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
-    }
+    if(z.needle) triggers.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true,subject:subj});
+    if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
+      else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
     const out={id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
       audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,
       spatialRangeM:z.spatialRangeM||farM,spatialClearM:z.spatialClearM||clearM,

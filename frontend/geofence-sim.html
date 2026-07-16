@@ -347,9 +347,10 @@ const Geofencer = {
   key(z,l,i){ return z.id+":"+(l.kind)+":"+i; },
 
   // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
-  sd(p, prev, zone, layer){
+  sd(p, prev, zone, layer, now){
     const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
-    if(layer.radiusM!=null) return Geo.sdCircle(PT, zone.center, layer.radiusM);
+    const zc=zone.path ? ambientCenterNow(zone, now) : zone.center;
+    if(layer.radiusM!=null) return Geo.sdCircle(PT, zc, layer.radiusM);
     const g=layer.geometry;
     if(g && g.type==="polygon") return Geo.sdPolygon(PT, g.coords, BUNDLE.ref);
     if(g && g.type==="corridor") {
@@ -364,7 +365,7 @@ const Geofencer = {
   update(p, prev, now){
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{
-      if(zone.path||!zone.layers) return; // path (moving ambient) stops have no layers/triggers — this simulator doesn't animate them
+      if(!zone.layers) return;
       zone.layers.forEach((layer,i)=>{
         const k=this.key(zone,layer,i);
         const st=this.state[k] || (this.state[k]={phase:"out",delivered:{},move:0});
@@ -383,7 +384,7 @@ const Geofencer = {
         }
 
         // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
-        const d=this.sd(p,prev,zone,layer);
+        const d=this.sd(p,prev,zone,layer,now);
         if(d==null) return;
         // accuracy gate (warn content is exempt — handled at fire time)
         const holding = p.acc>TUNING.ACCURACY_CAP_M;
@@ -638,8 +639,9 @@ function feed(lat,lon,acc,t){
   AmbientClip.update(p, t);
   let pick=null,best=Infinity;
   active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
-  if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center||z.path) return;
-      const d=Geo.hav([p.lat,p.lon],z.center); if(d<best){best=d;pick={zone:z,d,center:z.center};} }); }
+  if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center) return;
+      const zc=z.path?ambientCenterNow(z,t):z.center;
+      const d=Geo.hav([p.lat,p.lon],zc); if(d<best){best=d;pick={zone:z,d,center:zc};} }); }
   // ghost = where the engine thinks you are (smoothed)
   if(map.getSource("ghost")) map.getSource("ghost").setData(fc([{type:"Feature",properties:{},geometry:{type:"Point",coordinates:[p.lon,p.lat]}}]));
   // HUD
