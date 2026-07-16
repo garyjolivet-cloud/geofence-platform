@@ -228,7 +228,8 @@ const AmbientClip = {
     }
     const range=this.spatialRange(nearest), clear=this.spatialClear(nearest);
     const f=Math.max(0,Math.min(1,(nearestD-clear)/Math.max(1,(range-clear))));
-    if(this.gain) this.gain.gain.setTargetAtTime(Math.max(0.05,1-f), this.ctx.currentTime, 0.15);
+    const vol=nearest.volume!=null?nearest.volume:1;
+    if(this.gain) this.gain.gain.setTargetAtTime(Math.max(0.05,1-f)*vol, this.ctx.currentTime, 0.15);
   },
   stop(){
     if(this.src){ try{this.src.stop();}catch(e){} this.src=null; }

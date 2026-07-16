@@ -804,6 +804,7 @@ const SpatialVoice = {
       src.connect(this.nodes.mono); src.start();
     }
     this.src=src; this.currentUrl=url; this.playing=true;
+    this.currentVolume=zone.volume!=null?zone.volume:1;
     // fade in
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
     g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);
@@ -814,7 +815,7 @@ const SpatialVoice = {
     const c=this.ctx, t=this.tuning, tau=t.tau;
     const f=Math.max(0, Math.min(1, (distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
     const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz, f);
-    const gain=t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2);   // steep: loud near, drops fast
+    const gain=(t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2))*(this.currentVolume!=null?this.currentVolume:1);   // steep: loud near, drops fast
     const wet=t.reverbMax*Math.pow(f, 0.6);                            // reverb blooms a touch sooner
     const pan=headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
     this.nodes.lowpass.frequency.setTargetAtTime(cutoff, c.currentTime, tau);
@@ -919,6 +920,7 @@ const AmbientVoice = {
       src.connect(this.nodes.mono); src.start();
     }
     this.src=src; this.currentUrl=url; this.playing=true;
+    this.currentVolume=zone.volume!=null?zone.volume:1;
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
     g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);
     HUD.log('ev-sys','▶ ambient — '+zone.name);
@@ -928,7 +930,7 @@ const AmbientVoice = {
     const c=this.ctx, t=this.tuning, tau=t.tau;
     const f=Math.max(0, Math.min(1, (distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
     const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz, f);
-    const gain=t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2);
+    const gain=(t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2))*(this.currentVolume!=null?this.currentVolume:1);
     const wet=t.reverbMax*Math.pow(f, 0.6);
     const pan=headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
     this.nodes.lowpass.frequency.setTargetAtTime(cutoff, c.currentTime, tau);

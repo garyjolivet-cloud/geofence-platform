@@ -624,6 +624,11 @@
           <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)">✕</button>
         </div>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0 2px">
+        <label class="k" style="flex:0 0 auto;margin:0">volume</label>
+        <input type="range" id="pVolume" min="0" max="150" step="5" value="100" style="flex:1;accent-color:var(--coral)">
+        <span id="pVolumeV" style="font-family:'Barlow Condensed';font-size:13px;color:var(--ice);flex:0 0 40px">100%</span>
+      </div>
       <div id="pAudioBar" style="display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:2px 0 2px">
         <div id="pAudioFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
       </div>
@@ -997,7 +1002,7 @@ function makeZone(name,shape){
   // system too) plus their own movement + independent ambient-bed fields.
   const base={ id:slug(name), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS, needle:DEFAULTS.needle,
-           approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM,
+           approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1,
            bearingDeg:90, isHazard:false };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
@@ -1495,6 +1500,9 @@ function refreshProps(){
   }
   document.getElementById("vaSummary").style.display="block";
   document.getElementById("pVoiceRow").style.display="block";
+  { const vPct=Math.round((z.volume??1)*100);
+    document.getElementById("pVolume").value=vPct;
+    document.getElementById("pVolumeV").textContent=vPct+"%"; }
 
   document.getElementById("pSay").value=z.say||"";
   const isTrip=z.shape.type==="tripline";
@@ -1593,6 +1601,13 @@ document.getElementById("pBotDelay").addEventListener("input",()=>{
   const v=+document.getElementById("pBotDelay").value;
   zones[sel].botGreetingDelayS=v;
   document.getElementById("pBotDelayV").textContent=v+" s";
+  autoSave();
+});
+document.getElementById("pVolume").addEventListener("input",()=>{
+  if(sel<0) return;
+  const v=+document.getElementById("pVolume").value;
+  zones[sel].volume=v/100;
+  document.getElementById("pVolumeV").textContent=v+"%";
   autoSave();
 });
 bindProp("pBearing",z=>{ const v=document.getElementById("pBearing").value; z.bearingDeg=(v!==""&&v!==null)?(+v+360)%360:null; });
@@ -2001,6 +2016,7 @@ function zoneToEngine(z){
   if(z.clientBotId) zo.clientBotId=z.clientBotId;
   if(Array.isArray(z.actions) && z.actions.length) zo.actions=z.actions;
   if(z.audioUrl) zo.audioUrl=z.audioUrl;
+  if(z.volume!=null && Math.abs(z.volume-1)>0.001) zo.volume=z.volume;
   if(z.botGreetingDelayS) zo.botGreetingDelayS=z.botGreetingDelayS;
   if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
   if(z.isHazard) zo.isHazard=true;
@@ -2057,6 +2073,7 @@ function engineToZone(zo){
   }
   const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
   z.audioM = zo.audibleFromM!=null?zo.audibleFromM:DEFAULTS.audioM;
+  z.volume = zo.volume!=null?zo.volume:1;
   const gen=(zo.layers||[]).find(l=>l.kind==="general");
   if(gen&&gen.radiusM!=null) z.approachM=gen.radiusM;
   (zo.triggers||[]).forEach(t=>{
@@ -2673,6 +2690,7 @@ const SimVoice={
       src.connect(this.nodes.mono);src.start();
     }
     this.src=src;this.currentUrl=url;this.playing=true;
+    this.currentVolume=zone.volume!=null?zone.volume:1;
     const g=this.nodes.fade.gain;g.cancelScheduledValues(this.ctx.currentTime);
     g.setValueAtTime(g.value,this.ctx.currentTime);g.linearRampToValueAtTime(1,this.ctx.currentTime+0.8);
     simLogEv("sev-sys","▶ "+zone.name);},
@@ -2680,7 +2698,7 @@ const SimVoice={
     const t=this.tuning,c=this.ctx,tau=t.tau;
     const f=Math.max(0,Math.min(1,(distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
     const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz,f);
-    const gain=t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve);
+    const gain=(t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve))*(this.currentVolume!=null?this.currentVolume:1);
     const wet=t.reverbMax*Math.pow(f,0.6);
     // pan: use movement heading to get direction relative to zone
     const az=headingTravel!=null?((brg-headingTravel)*Math.PI/180):0;
@@ -2746,7 +2764,8 @@ const SimAmbient={
     if(!nearest || nearestD>=range){ this.stop(); return; }
     if(this.zoneId!==nearest.id){ this.zoneId=nearest.id; this.play(nearest); }
     const f=Math.max(0,Math.min(1,(nearestD-clear)/Math.max(1,(range-clear))));
-    if(this.gain) this.gain.gain.setTargetAtTime(Math.max(0.05,1-f), this.ctx.currentTime, 0.15);
+    const vol=nearest.volume!=null?nearest.volume:1;
+    if(this.gain) this.gain.gain.setTargetAtTime(Math.max(0.05,1-f)*vol, this.ctx.currentTime, 0.15);
   },
   stop(){
     if(this.src){ try{this.src.stop();}catch(e){} this.src=null; }
@@ -2816,7 +2835,7 @@ function editorToSimBundle(){
     if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
       else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
     const out={id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
-      audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,
+      audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,volume:z.volume!=null?z.volume:1,
       spatialRangeM:z.spatialRangeM||farM,spatialClearM:z.spatialClearM||clearM,
       layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       chatPersona:z.chatPersona||null,chatKnowledge:z.chatKnowledge||null,chatGreeting:z.chatGreeting||null,
