@@ -1445,7 +1445,7 @@ function refreshProps(){
     document.getElementById("pRangeVoice").value=z.spatialRangeM??"";
     document.getElementById("pRangeClear").value=z.spatialClearM??"";
     document.getElementById("vaSummary").style.display="none";
-    document.getElementById("pVoiceRow").style.display="none";
+    document.getElementById("pVoiceRow").style.display="block";
     const aLbl=document.getElementById("pAudioLabel");
     if(aLbl){ const clip=z.ambientAudioUrl; aLbl.textContent=clip?(clip.split("/").pop()||"clip"):"no clip";
       aLbl.className="va-audio-label"+(clip?" has-clip":""); }

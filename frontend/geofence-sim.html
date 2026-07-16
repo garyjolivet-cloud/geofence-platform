@@ -172,11 +172,46 @@ const Audio = {
    is synthetic tones/TTS only, so a path stop's real ambientAudioUrl clip
    needs its own tiny player. Distance-based volume only (no pan/lowpass —
    this is for confirming a clip is assigned and audible, not previewing the
-   real engine's full spatial mix). */
+   real engine's full spatial mix).
+   Deliberately NOT a plain `new Audio(url)` — /api/audio/:key serves R2
+   objects with no Accept-Ranges/206 support (worker.js's GET handler always
+   returns the full body as a plain 200), and an <audio> element's streaming
+   playback stalls forever at readyState 0 against a server like that in
+   Chrome. geofence-engine.html's SpatialVoice sidesteps this the same way:
+   fetch() the whole file (which works fine — it's a normal 200), decode it
+   with the Web Audio API, and play the decoded buffer directly. */
 const AmbientClip = {
-  el:null, zoneId:null,
+  ctx:null, gain:null, src:null, buffers:{}, zoneId:null, loadingUrl:null,
   spatialRange(zone){ return zone.spatialRangeM || BUNDLE.spatialRangeM || 64; },
   spatialClear(zone){ return zone.spatialClearM || BUNDLE.spatialClearM || 8; },
+  ensure(){
+    if(this.ctx) return;
+    this.ctx=new (window.AudioContext||window.webkitAudioContext)();
+    this.gain=this.ctx.createGain(); this.gain.gain.value=0;
+    this.gain.connect(this.ctx.destination);
+  },
+  async load(url){
+    if(this.buffers[url]) return this.buffers[url];
+    const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+    const ab=await r.arrayBuffer();
+    const buf=await this.ctx.decodeAudioData(ab.slice(0));
+    this.buffers[url]=buf; return buf;
+  },
+  async play(zone){
+    this.ensure();
+    if(this.ctx.state==='suspended') this.ctx.resume();
+    const url=zone.ambientAudioUrl;
+    if(this.loadingUrl===url) return;
+    this.loadingUrl=url;
+    let buf; try{ buf=await this.load(url); }
+    catch(e){ this.loadingUrl=null; log('ev-warn','ambient clip failed to load ('+zone.name+'): '+e.message); return; }
+    this.loadingUrl=null;
+    if(this.zoneId!==zone.id) return; // update() moved on to a different/no zone while this was loading
+    if(this.src){ try{this.src.stop();}catch(e){} }
+    this.src=this.ctx.createBufferSource(); this.src.buffer=buf; this.src.loop=true;
+    this.src.connect(this.gain); this.src.start();
+    log('ev-sys','▶ ambient — '+zone.name);
+  },
   update(visitorPos, nowMs){
     if(!Audio.on || !visitorPos) { this.stop(); return; }
     let nearest=null, nearestD=Infinity;
@@ -188,18 +223,19 @@ const AmbientClip = {
     });
     if(!nearest || nearestD>=this.spatialRange(nearest)){ this.stop(); return; }
     if(this.zoneId!==nearest.id){
-      this.stop();
-      this.el=new Audio_(nearest.ambientAudioUrl); this.el.loop=true;
-      this.el.play().catch(()=>{});
       this.zoneId=nearest.id;
+      this.play(nearest);
     }
     const range=this.spatialRange(nearest), clear=this.spatialClear(nearest);
     const f=Math.max(0,Math.min(1,(nearestD-clear)/Math.max(1,(range-clear))));
-    if(this.el) this.el.volume=Math.max(0.05,1-f);
+    if(this.gain) this.gain.gain.setTargetAtTime(Math.max(0.05,1-f), this.ctx.currentTime, 0.15);
   },
-  stop(){ if(this.el){ try{this.el.pause();}catch(e){} this.el=null; } this.zoneId=null; }
+  stop(){
+    if(this.src){ try{this.src.stop();}catch(e){} this.src=null; }
+    if(this.gain) this.gain.gain.value=0;
+    this.zoneId=null; this.loadingUrl=null;
+  }
 };
-const Audio_=window.Audio; // native <audio> constructor — shadowed by the Audio module above
 
 /* ========================= ENGINE CORE (mirror) ========================= */
 const TUNING = {
@@ -495,11 +531,13 @@ map.on("load",()=>{
   // position, redrawn on a timer independent of the simulated visitor so it
   // animates even while the visitor stands still (shared real-world clock)
   map.addSource("ambient",{type:"geojson",data:fc([])});
+  map.addLayer({id:"ambient-halo",type:"circle",source:"ambient",
+    paint:{"circle-radius":16,"circle-color":"#ffc24d","circle-opacity":0.25}});
   map.addLayer({id:"ambient-pts",type:"circle",source:"ambient",
-    paint:{"circle-radius":6,"circle-color":"#8fd6ff","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
+    paint:{"circle-radius":9,"circle-color":"#ffc24d","circle-stroke-color":"#ffffff","circle-stroke-width":2.5}});
   map.addLayer({id:"ambient-lbl",type:"symbol",source:"ambient",
-    layout:{"text-field":["get","name"],"text-size":10,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
-    paint:{"text-color":"#8fd6ff","text-halo-color":"#0a1018","text-halo-width":1.2}});
+    layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.4],"text-font":["Open Sans Regular"]},
+    paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.4}});
 
   const pid=new URLSearchParams(location.search).get("project");
   if(pid){ loadBundle(SAMPLE,"sample walk"); loadProjectFromPlatform(pid); }
@@ -795,11 +833,13 @@ function setBase(k){ map.setStyle(styleFor(k));
       map.addSource("ghost",{type:"geojson",data:fc([])});
       map.addLayer({id:"ghost",type:"circle",source:"ghost",paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
       map.addSource("ambient",{type:"geojson",data:fc([])});
+      map.addLayer({id:"ambient-halo",type:"circle",source:"ambient",
+        paint:{"circle-radius":16,"circle-color":"#ffc24d","circle-opacity":0.25}});
       map.addLayer({id:"ambient-pts",type:"circle",source:"ambient",
-        paint:{"circle-radius":6,"circle-color":"#8fd6ff","circle-stroke-color":"#0a1018","circle-stroke-width":2}});
+        paint:{"circle-radius":9,"circle-color":"#ffc24d","circle-stroke-color":"#ffffff","circle-stroke-width":2.5}});
       map.addLayer({id:"ambient-lbl",type:"symbol",source:"ambient",
-        layout:{"text-field":["get","name"],"text-size":10,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
-        paint:{"text-color":"#8fd6ff","text-halo-color":"#0a1018","text-halo-width":1.2}});
+        layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.4],"text-font":["Open Sans Regular"]},
+        paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.4}});
       refreshZones(); drawPath();
     }
   });
