@@ -2450,6 +2450,34 @@ const SimGeo={
     const d1=ccw(C,D,A),d2=ccw(C,D,B),d3=ccw(A,B,C),d4=ccw(A,B,D);
     return{crossed:((d1>0)!==(d2>0))&&((d3>0)!==(d4>0)),side:d2<0?"L":"R"};}
 };
+// Path (moving ambient) stop position in Test Mode — same shared-real-world-
+// clock model as centerNow() in geofence-engine.html/geofence-sim.html.
+function simPathCumLens(pathLatLon){
+  const cum=[0];
+  for(let i=1;i<pathLatLon.length;i++) cum.push(cum[i-1]+SimGeo.hav(pathLatLon[i-1],pathLatLon[i]));
+  return cum;
+}
+function simPointAtDistance(pathLatLon,cum,distM){
+  const L=cum[cum.length-1];
+  if(L<=0) return pathLatLon[0];
+  const d=Math.max(0,Math.min(L,distM));
+  let i=0; while(i<cum.length-2 && cum[i+1]<d) i++;
+  const segLen=cum[i+1]-cum[i], t=segLen>0?(d-cum[i])/segLen:0;
+  const A=pathLatLon[i], B=pathLatLon[i+1];
+  return [A[0]+t*(B[0]-A[0]), A[1]+t*(B[1]-A[1])];
+}
+function simAmbientCenterNow(zone,nowMs){
+  if(!zone.path||zone.path.length<2) return zone.center;
+  if(!zone._cumLens) zone._cumLens=simPathCumLens(zone.path);
+  const cum=zone._cumLens, L=cum[cum.length-1];
+  const speedMps=(zone.speedKmh||0)/3.6;
+  const elapsedM=speedMps*(nowMs/1000);
+  let d;
+  if(zone.loopMode==="once") d=Math.min(elapsedM,L);
+  else if(zone.loopMode==="pingpong"){ const C=2*L, r=C<=0?0:elapsedM%C; d=L<=0?0:(r<=L?r:C-r); }
+  else d=L<=0?0:elapsedM%L;
+  return simPointAtDistance(zone.path,cum,d);
+}
 function makeSimSmoother(){return{s:null,prev:null,spd:0,lastHeading:null,
   push(fix){if(!this.s){this.s={lat:fix.lat,lon:fix.lon};this.prev=null;this.spd=0;}
     const a=SIM_TUNING.LOWPASS;this.s={lat:this.s.lat+a*(fix.lat-this.s.lat),lon:this.s.lon+a*(fix.lon-this.s.lon)};
@@ -2618,10 +2646,91 @@ const SimVoice={
   stop(){this.fadeOut();this.buffers={};this._dead=new Set();this.loadingUrl=null;}
 };
 
+// Ambient (path stop) clip playback in Test Mode — separate channel from
+// SimVoice (dialogue) for the same reason as AmbientVoice in the real
+// engine: a path stop's audioUrl-equivalent is ambientAudioUrl, and it
+// should be able to layer under a nearby spoken stop instead of fighting
+// it for one shared audio graph. fetch()+decodeAudioData like SimVoice —
+// not a plain <audio> element — since /api/audio/:key has no Range/206
+// support and <audio> streaming stalls forever against a server like that.
+const SimAmbient={
+  ctx:null, gain:null, src:null, buffers:{}, zoneId:null, loadingUrl:null,
+  ensure(){ if(this.ctx) return;
+    this.ctx=new (window.AudioContext||window.webkitAudioContext)();
+    this.gain=this.ctx.createGain(); this.gain.gain.value=0;
+    this.gain.connect(this.ctx.destination); },
+  async load(url){
+    if(this.buffers[url]) return this.buffers[url];
+    const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(r.status+" — "+url);
+    const ab=await r.arrayBuffer();
+    const buf=await this.ctx.decodeAudioData(ab.slice(0));
+    this.buffers[url]=buf; return buf;
+  },
+  async play(zone){
+    this.ensure(); if(this.ctx.state==="suspended") this.ctx.resume();
+    const url=zone.ambientAudioUrl;
+    if(this.loadingUrl===url) return;
+    this.loadingUrl=url;
+    let buf; try{ buf=await this.load(url); }
+    catch(e){ this.loadingUrl=null; simLogEv("sev-warn","ambient clip failed to load: "+e.message); return; }
+    this.loadingUrl=null;
+    if(this.zoneId!==zone.id) return; // moved on while loading
+    if(this.src){ try{this.src.stop();}catch(e){} }
+    this.src=this.ctx.createBufferSource(); this.src.buffer=buf; this.src.loop=true;
+    this.src.connect(this.gain); this.src.start();
+    simLogEv("sev-sys","▶ ambient — "+zone.name);
+  },
+  update(visitorPos, nowMs, zones){
+    if(!simSoundOn || !visitorPos){ this.stop(); return; }
+    let nearest=null, nearestD=Infinity;
+    (zones||[]).forEach(z=>{
+      if(!z.path||!z.ambientAudioUrl) return;
+      const c=simAmbientCenterNow(z, nowMs);
+      const d=SimGeo.hav([visitorPos.lat,visitorPos.lon], c);
+      if(d<nearestD){ nearestD=d; nearest=z; }
+    });
+    const range=nearest?(nearest.spatialRangeM||64):0, clear=nearest?(nearest.spatialClearM||8):0;
+    if(!nearest || nearestD>=range){ this.stop(); return; }
+    if(this.zoneId!==nearest.id){ this.zoneId=nearest.id; this.play(nearest); }
+    const f=Math.max(0,Math.min(1,(nearestD-clear)/Math.max(1,(range-clear))));
+    if(this.gain) this.gain.gain.setTargetAtTime(Math.max(0.05,1-f), this.ctx.currentTime, 0.15);
+  },
+  stop(){
+    if(this.src){ try{this.src.stop();}catch(e){} this.src=null; }
+    if(this.gain) this.gain.gain.value=0;
+    this.zoneId=null; this.loadingUrl=null;
+  }
+};
+
 /* ---- sim state ---- */
 let simMode=false, simAvatar=null, simBundle=null, simPrev=null, simPrevRaw=null;
 let simPath=[], simPlaying=false, simDist=0, simTimer=null;
 let simTrackers=[], simOrigCenters={};
+let simAmbientMarkers={}, simAmbientTimer=null;
+
+// Live marker for each path (moving ambient) stop's current position —
+// redrawn on its own timer (below) independent of the visitor, since a path
+// stop moves on the shared real-world clock whether or not anyone is
+// testing right now.
+function refreshSimAmbientMarker(nowMs){
+  nowMs=nowMs||Date.now();
+  const liveIds=new Set();
+  (simBundle&&simBundle.zones?simBundle.zones:[]).forEach(z=>{
+    if(!z.path) return;
+    liveIds.add(z.id);
+    const c=simAmbientCenterNow(z, nowMs); // [lat,lon]
+    let mk=simAmbientMarkers[z.id];
+    if(!mk){
+      const el=document.createElement("div");
+      el.style.cssText="width:16px;height:16px;border-radius:50%;background:#ffc24d;border:2.5px solid #fff;box-shadow:0 0 0 6px rgba(255,194,77,.25)";
+      mk=new maplibregl.Marker({element:el}).setLngLat([c[1],c[0]]).addTo(map);
+      simAmbientMarkers[z.id]=mk;
+    } else mk.setLngLat([c[1],c[0]]);
+  });
+  Object.keys(simAmbientMarkers).forEach(id=>{
+    if(!liveIds.has(id)){ simAmbientMarkers[id].remove(); delete simAmbientMarkers[id]; }
+  });
+}
 
 function editorToSimBundle(){
   const farM=+(document.getElementById("audioRange").value)||64;
@@ -2632,26 +2741,40 @@ function editorToSimBundle(){
     if(s.type==="circle") center=[s.center[1],s.center[0]];
     else if(s.type==="polygon"){const c=centroidLonLat(s.coords);center=[c[1],c[0]];}
     else if(s.type==="tripline") center=[(s.from[1]+s.to[1])/2,(s.from[0]+s.to[0])/2];
-    // Path (moving ambient) stops: Test Mode's mini sim doesn't simulate
-    // movement/ambient audio — treat it as an inert static point at the
-    // path's start so it doesn't crash on a missing center, that's all.
+    // Path (moving ambient) stops: real live position is handled by
+    // SimAmbient/simAmbientCenterNow below; this `center` is only a
+    // load-time fallback (e.g. for the ref-point average).
     else if(s.type==="path") center=[s.coords[0][1],s.coords[0][0]];
-    const generalLayer={kind:"general",radiusM:z.approachM||30};
+    const isPath=s.type==="path";
+    // Path stops are always pure ambient — no trigger layers at all,
+    // matching geofence-engine.html/geofence-sim.html.
+    const generalLayer=isPath?null:{kind:"general",radiusM:z.approachM||30};
     let targetLayer;
     if(s.type==="circle") targetLayer={kind:"target",radiusM:s.radiusM||12};
     else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
     else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
     const subj=z.triggerSubject||"any";
     const triggers=[];
-    if(z.needle) triggers.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true,subject:subj});
-    if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
-      else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
-    return{id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
+    if(!isPath){
+      if(z.needle) triggers.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true,subject:subj});
+      if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
+        else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
+    }
+    const out={id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
       audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,
-      spatialRangeM:farM,spatialClearM:clearM,layers:[generalLayer,targetLayer].filter(Boolean),triggers,
+      spatialRangeM:z.spatialRangeM||farM,spatialClearM:z.spatialClearM||clearM,
+      layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       chatPersona:z.chatPersona||null,chatKnowledge:z.chatKnowledge||null,chatGreeting:z.chatGreeting||null,
       botId:z.botId||null,bots:z.bots||[],clientBotId:z.clientBotId||null,
       bearingDeg:z.bearingDeg!=null?z.bearingDeg:null,isHazard:!!z.isHazard};
+    if(s.type==="path"){
+      out.path=s.coords.map(c=>[c[1],c[0]]);
+      out.movementMode=z.movementMode||"walk";
+      out.speedKmh=z.speedKmh||0;
+      out.loopMode=z.loopMode||"loop";
+      out.ambientAudioUrl=z.ambientAudioUrl||null;
+    }
+    return out;
   });
   const cs=simZones.filter(z=>z.center);
   const ref=cs.length?[cs.reduce((s,z)=>s+z.center[0],0)/cs.length,cs.reduce((s,z)=>s+z.center[1],0)/cs.length]:[0,0];
@@ -2687,6 +2810,11 @@ function feedSim(lat,lon,acc,t){
       SimVoice.fadeOut();
     }
   }
+  // ambient (path/moving) audio — independent of the nearest-zone pick
+  // above, so it can layer under a nearby spoken stop instead of fighting
+  // it for the one SimVoice channel.
+  SimAmbient.update(p, t, simBundle.zones);
+  refreshSimAmbientMarker(t);
   refreshSimChips();
   // feed guidance module
   if(typeof GuidanceBot!=='undefined'&&GuidanceBot.active){
@@ -2890,6 +3018,16 @@ function enterTestMode(){
   // unlock AudioContext now while we're inside the button click gesture
   SimVoice.ensure();
   if(SimVoice.ctx.state==="suspended") SimVoice.ctx.resume();
+  SimAmbient.ensure();
+  if(SimAmbient.ctx.state==="suspended") SimAmbient.ctx.resume();
+  refreshSimAmbientMarker();
+  if(simAmbientTimer) clearInterval(simAmbientTimer);
+  simAmbientTimer=setInterval(()=>{
+    if(!simBundle||!simBundle.zones.some(z=>z.path)) return;
+    const now=Date.now();
+    refreshSimAmbientMarker(now);
+    if(simAvatar) SimAmbient.update({lat:simAvatar.getLngLat().lat,lon:simAvatar.getLngLat().lng}, now, simBundle.zones);
+  },1000);
   // build avatar — set lngLat before addTo or it lands at [0,0]
   const c=map.getCenter();
   if(!simAvatar){const el=document.createElement("div");el.className="av-dot";
@@ -2931,6 +3069,10 @@ function exitTestMode(){
   simMode=false;
   simPause();
   SimVoice.stop();
+  SimAmbient.stop();
+  if(simAmbientTimer){clearInterval(simAmbientTimer);simAmbientTimer=null;}
+  Object.values(simAmbientMarkers).forEach(mk=>mk.remove());
+  simAmbientMarkers={};
   closeSimChat();simVisited=[];
   if(simAvatar){simAvatar.remove();simAvatar=null;}
   // restore tracker markers and original zone centers
