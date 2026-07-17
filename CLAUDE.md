@@ -19,7 +19,8 @@ geofence-platform/
 │   ├── geofence-engine.html ← Tour player / engine (loads published bundles; Kokoro TTS)
 │   ├── guidance-bot.js      ← Guidance bot module (window.GuidanceBot)
 │   ├── geofence-sim.html    ← Geofence simulator (tests zones without live GPS)
-│   ├── audio-bench.html     ← Audio upload/playback sandbox
+│   ├── audio-bench.html     ← Audio upload/playback sandbox (local-only, never touches R2)
+│   ├── library.html         ← Shared audio Library (/library route) — folders, trim, move, combine/blend
 │   ├── bot-library.html     ← Bot library manager (/bots route)
 │   ├── share.html           ← Shareable project link page
 │   └── sw.js                ← Service worker (network-first offline, cache-first for audio)
@@ -77,9 +78,9 @@ This file is never committed. In production, secrets are set via `npx wrangler s
 ## Architecture
 
 - **Worker** (`worker.js`): handles `/api/*` routes, falls through to `env.ASSETS` for everything else. Also has a `scheduled()` handler for cron jobs.
-- **Friendly URLs**: the Worker maps `/editor` → `fence-editor.html`, `/sim` → `geofence-sim.html`, `/engine` → `geofence-engine.html`, `/dashboard` → `dashboard.html`, `/share` → `share.html`, `/audio` → `audio-bench.html`, `/bots` → `bot-library.html`.
+- **Friendly URLs**: the Worker maps `/editor` → `fence-editor.html`, `/sim` → `geofence-sim.html`, `/engine` → `geofence-engine.html`, `/dashboard` → `dashboard.html`, `/share` → `share.html`, `/audio` → `audio-bench.html`, `/library` → `library.html`, `/bots` → `bot-library.html`.
 - **D1** (`geofence-db`, binding `DB`): stores projects, published bundles, API keys, devices, consent records, events, bots, weather cache, snow history.
-- **R2** (`geofence-audio`, binding `AUDIO`): stores audio clips, served via `/api/audio/<key>`.
+- **R2** (`geofence-audio`, binding `AUDIO`): stores audio clips, served via `/api/audio/<key>`. See **Audio Storage** below for the key scheme.
 - **AI** (binding `AI`): Cloudflare Workers AI — used for Whisper STT (`/api/transcribe`) and TTS (`/api/tts`).
 - **Groq**: LLaMA 3.3 70B via `GROQ_API_KEY` secret — used for chat (`/api/chat`), streaming SSE.
 - **Auth**: master token via `ADMIN_TOKEN` secret. Scoped per-app API keys stored as SHA-256 hashes in D1.
@@ -100,6 +101,22 @@ This file is never committed. In production, secrets are set via `npx wrangler s
 | `bot` | Reusable AI personas (region bots + visitor/client bots) |
 | `weather_cache` | Rolling hourly weather readings from Kicking Horse Resort (last 48) |
 | `snow_history` | Daily 8am MST snow snapshots (last 14 days) |
+
+## Audio Storage
+
+All audio lives in the `geofence-audio` R2 bucket as a flat key-value store — there are no real directories, only key prefixes. Two scopes:
+
+- **Project-owned** (`<projectId>/<file>.<ext>`): populated only by a project's own per-stop Record/Upload buttons (`fence-editor.html`) and the Field Recorder (`field-recorder.html`). Only ever visible/listed while inside that owning project — never shown cross-project. Deleting a project (`DELETE /api/projects/:id` or an app cascade-delete) also deletes everything under its `<projectId>/` prefix (`deleteProjectRows` in `worker.js`), so nothing gets orphaned.
+- **Library** (`library/<file>.<ext>` at the root, or `library/<folder>/<file>.<ext>` — one flat level, no nesting): general-purpose uploads reusable across every project, managed from the standalone `/library` page or the Fence Editor's own "Audio Files" panel (Library tab). `library` is a reserved project id/slug — `POST /api/projects` rejects it.
+
+**`GET /api/audio-list`** takes exactly one of three query shapes (a bare call with no param 400s — it used to leak the whole bucket):
+- `?project=<id>` — that project's own clips, annotated with `expiresAt` for any clip still tied to a live, not-yet-expired `live_zone` row (Field Recorder's "live-stop" mode; cleaned up by the existing `cleanupLiveZones` cron, unchanged by any of this).
+- `?scope=library[&folder=<name>]` — Library root or one folder, plus the list of subfolders found there.
+- `?scope=all` — master-token only; full-bucket view, for reclaiming truly orphaned legacy keys.
+
+**`POST /api/audio/move`** (`{from, to}`) relocates a file between Library folders — implemented server-side as get→put→delete in one request rather than round-tripping the file through the browser. Library-only; project-owned clips aren't movable (they stay tied to whichever stop recorded them).
+
+The Fence Editor's "Audio Files" panel and the standalone `/library` page both let you select 2+ clips and **Combine** them: a Main sequence (played back to back) plus an optional Background lane (looped/blended underneath at its own volume) get rendered client-side through the same `OfflineAudioContext` → lamejs MP3 pipeline the single-clip Trim tool already uses (`_reenc`/`_reencBlend` in `fence-editor.html`), then uploaded as a new Library file.
 
 ## Bot System
 
@@ -215,8 +232,9 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | GET/POST | `/api/consent` | public |
 | POST | `/api/events` | public (requires stored `store-history` consent) |
 | GET | `/api/analytics` | scoped (`analytics`) |
-| GET | `/api/audio-list` | scoped (`audio` or `publish`) |
+| GET | `/api/audio-list` | requires `?project=`, `?scope=library`, or `?scope=all`; scoped (`audio`/`publish`), `?scope=all` is master-only |
 | GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped (`audio` or `publish`) |
+| POST | `/api/audio/move` | scoped (`audio` or `publish`); `library/` keys only |
 | POST | `/api/transcribe` | public (Workers AI Whisper STT) |
 | POST | `/api/tts` | public (Workers AI speecht5_tts → WAV) |
 | GET | `/api/weather` | public (latest cached reading) |

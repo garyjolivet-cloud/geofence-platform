@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chase Life — Audio Library</title>
+<script src="role-gate.js"></script>
+<script>RoleGate.require(['admin']);</script>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
+         --snow:#ffffff;--ice:#c8dff2;--fog:#8aa5bf;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow)}
+  .hdr{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--rim);background:rgba(10,16,24,.95);position:sticky;top:0;z-index:10}
+  .hdr h1{font-family:"Black Han Sans";font-size:18px;margin:0;flex:1}
+  .hdr a{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:6px 12px;white-space:nowrap}
+  .hdr a:hover{border-color:var(--ice)}
+  button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+         font-size:13px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:9px;
+         padding:8px 14px;cursor:pointer}
+  button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  .ghost{background:none}
+  input,select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
+         color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px 10px}
+  .hint{font-family:"Barlow";font-size:12px;color:var(--fog)}
+  .main{max-width:760px;margin:0 auto;padding:20px}
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .toolbar select{flex:1;min-width:160px}
+  .af-list{margin-top:10px}
+  .af-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:9px 0;border-top:1px solid #26344a}
+  .af-row .af-drag{cursor:grab;color:var(--fog);flex:0 0 auto;font-size:15px}
+  .af-row .af-info{flex:1 1 120px;min-width:0}
+  .af-row .af-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                    font-family:'Barlow Condensed';font-size:13px;color:#eef4fb}
+  .af-row .af-sz{font-family:'Barlow Condensed';font-size:11px;color:#5b7088}
+  .af-row .af-btns{display:flex;gap:5px;flex:0 0 auto;margin-left:auto}
+  .af-row button{background:none;border:1px solid #26344a;border-radius:6px;color:#8fb6d4;
+                  font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:4px 9px;cursor:pointer;flex:0 0 auto;
+                  text-transform:none;letter-spacing:0}
+  .af-row button.af-del{border-color:var(--hazard);color:var(--hazard)}
+  .af-row input[type=checkbox]{flex:0 0 auto;accent-color:var(--coral);width:16px;height:16px}
+  .af-empty{font-family:'Barlow Condensed';font-size:13px;color:var(--fog);text-align:center;padding:20px 0}
+  #combineBtn{display:none;margin-top:10px;width:100%}
+  #trimOverlay,#combineOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);
+               align-items:center;justify-content:center;padding:16px}
+  #trimBox,#combineBox{background:var(--slate);border:1px solid var(--rim);border-radius:16px;padding:18px;
+           width:100%;max-width:460px;display:flex;flex-direction:column;gap:12px;max-height:85vh;overflow-y:auto}
+  #trimBox h2,#combineBox h2{font-family:"Barlow Condensed";font-size:15px;font-weight:700;text-transform:uppercase;
+              letter-spacing:.5px;margin:0}
+  #trimCanvas{width:100%;height:80px;background:var(--slate-2);border:1px solid var(--rim);
+              border-radius:10px;cursor:ew-resize;touch-action:none;display:block}
+  #trimLabel{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);text-align:center}
+  .row{display:flex;gap:8px;margin:0}
+  .row button{flex:1}
+  .cmb-lane-label{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--fog);margin:4px 0 2px}
+  .cmb-seg{display:flex;align-items:center;gap:6px;background:var(--slate-2);border:1px solid var(--rim);
+            border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px}
+  .cmb-seg .cmb-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cmb-seg select{background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:6px;
+                   padding:3px 5px;font-family:'Barlow Condensed';font-size:11px}
+  .cmb-seg input[type=range]{width:60px;accent-color:var(--coral)}
+  .cmb-seg button{background:none;border:1px solid var(--rim);border-radius:6px;color:var(--fog);
+                   padding:2px 6px;cursor:pointer;font-size:12px;text-transform:none}
+  #barWrap{display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:8px 0}
+  #barFill{height:100%;width:0%;background:var(--coral);transition:width .08s linear}
+  #status{display:none;font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin-bottom:8px}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>📁 Audio Library</h1>
+  <a href="/">&larr; Home</a>
+</div>
+
+<div class="main">
+  <div class="hint" style="margin-bottom:10px">Shared audio — sound effects, studio voice takes, ambient beds — reusable across every project. Recorded/field clips tied to one project live in that project's own editor, not here.</div>
+
+  <div class="toolbar">
+    <span>📂</span>
+    <select id="folderSel"><option value="">Library (root)</option></select>
+    <button id="newFolderBtn" class="ghost">+ Folder</button>
+    <label class="ghost" style="border:1px solid var(--rim);border-radius:9px;padding:8px 14px;cursor:pointer;font-family:'Barlow Condensed';font-weight:600;text-transform:uppercase;font-size:13px;letter-spacing:.4px">
+      Upload<input type="file" id="uploadFile" accept="audio/*" style="display:none">
+    </label>
+    <button id="refreshBtn" class="ghost">&#8635;</button>
+  </div>
+
+  <div id="barWrap"><div id="barFill"></div></div>
+  <div id="status"></div>
+
+  <div class="af-list" id="afList"></div>
+  <button id="combineBtn" class="on">Combine (0)</button>
+  <div class="hint" style="margin-top:10px">Drag &#10241; a clip's handle to copy its URL, or use it directly from a project's own Editor panel.</div>
+</div>
+
+<div id="trimOverlay">
+  <div id="trimBox">
+    <h2>Trim clip — drag the handles</h2>
+    <canvas id="trimCanvas" height="80"></canvas>
+    <div id="trimLabel"></div>
+    <div style="margin:6px 0 2px">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save as</label>
+      <input id="trimKey" style="width:100%;margin-top:4px" placeholder="library/name.mp3">
+    </div>
+    <div class="row">
+      <button id="trimCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
+      <button id="trimPrev"   class="ghost" style="flex:0 0 auto">▶ Preview</button>
+      <button id="trimSkip"   class="ghost" style="flex:1">Upload as-is</button>
+      <button id="trimOk"     class="on"    style="flex:1">✓ Trim &amp; Upload</button>
+    </div>
+  </div>
+</div>
+
+<div id="combineOverlay">
+  <div id="combineBox">
+    <h2>Combine clips</h2>
+    <div class="hint">Main sequence plays clips one after another; an optional Background lane loops underneath the whole thing.</div>
+    <div class="cmb-lane-label">Main sequence</div>
+    <div id="cmbMain"></div>
+    <div class="cmb-lane-label">Background (optional, blended under the main sequence)</div>
+    <div id="cmbBg"></div>
+    <div style="margin:6px 0 2px">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save to</label>
+      <div class="row" style="margin:4px 0 0;gap:6px">
+        <select id="cmbFolderSel" style="flex:1"><option value="">Library (root)</option></select>
+        <input id="cmbName" style="flex:1" placeholder="combined-clip">
+      </div>
+    </div>
+    <div id="cmbTotal" class="hint"></div>
+    <div class="row">
+      <button id="cmbCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
+      <button id="cmbRender" class="on" style="flex:1">Render + Upload &#9658;</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+function getToken(){ return localStorage.getItem("gp.session")||""; }
+function clearToken(){ localStorage.removeItem("gp.session"); location.replace("/login?next="+encodeURIComponent(location.href)); }
+const statusEl=document.getElementById("status");
+function setStatus(html){ statusEl.style.display="block"; statusEl.innerHTML=html; }
+function showBar(p){ document.getElementById("barWrap").style.display="block"; document.getElementById("barFill").style.width=Math.round(p)+"%"; }
+function hideBar(){ document.getElementById("barWrap").style.display="none"; document.getElementById("barFill").style.width="0%"; }
+function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
+function audioExt(name,type){
+  const m=(name||"").match(/\.(mp3|m4a|aac|wav|ogg|webm)$/i); if(m) return m[1].toLowerCase();
+  if((type||"").includes("mp4")||(type||"").includes("m4a")) return "m4a";
+  if((type||"").includes("ogg")) return "ogg";
+  if((type||"").includes("wav")) return "wav";
+  return "webm";
+}
+function _mimeExt(mime){ return mime.includes("mpeg")||mime.includes("mp3")?"mp3":mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
+
+let folder="", selected=new Set(), objsByKey={};
+
+async function refresh(){
+  const list=document.getElementById("afList");
+  list.innerHTML='<div class="af-empty">loading…</div>';
+  try{
+    const qs="scope=library"+(folder?"&folder="+encodeURIComponent(folder):"");
+    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
+    if(r.status===401){ list.innerHTML='<div class="af-empty">token rejected</div>'; clearToken(); return; }
+    const j=r.ok?await r.json():{objects:[],folders:[]};
+    syncFolderOptions(j.folders||[]);
+    render(j.objects||[]);
+  }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
+}
+function syncFolderOptions(folders){
+  const opts='<option value="">Library (root)</option>'+folders.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
+  const fsel=document.getElementById("folderSel"); fsel.innerHTML=opts; fsel.value=folder; if(fsel.value!==folder) fsel.value="";
+  const cf=document.getElementById("cmbFolderSel"); const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value="";
+}
+function render(objects){
+  const list=document.getElementById("afList");
+  list.innerHTML=""; objsByKey={};
+  if(!objects.length){ list.innerHTML='<div class="af-empty">no audio files yet — Upload one above</div>'; return; }
+  objects.forEach(o=>{ objsByKey[o.key]=o; list.appendChild(buildRow(o)); });
+}
+function buildRow(o){
+  const kb=(o.size/1024).toFixed(0);
+  const row=document.createElement("div"); row.className="af-row";
+  row.draggable=true;
+  row.addEventListener("dragstart",e=>{ e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key); e.dataTransfer.effectAllowed="copy"; });
+  const drag=document.createElement("span"); drag.className="af-drag"; drag.textContent="⠿";
+  const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=selected.has(o.key);
+  cb.addEventListener("change",()=>{ if(cb.checked) selected.add(o.key); else selected.delete(o.key); updateCombineBtn(); });
+  const playBtn=document.createElement("button"); playBtn.textContent="▶";
+  playBtn.addEventListener("click",()=>togglePlay(o,playBtn));
+  const info=document.createElement("div"); info.className="af-info";
+  const nm=document.createElement("div"); nm.className="af-name"; nm.textContent=o.key.split("/").pop();
+  const sz=document.createElement("div"); sz.className="af-sz"; sz.textContent=kb+" KB";
+  info.appendChild(nm); info.appendChild(sz);
+  const btns=document.createElement("div"); btns.className="af-btns";
+  const trimBtn=document.createElement("button"); trimBtn.textContent="✂"; trimBtn.title="Trim";
+  trimBtn.addEventListener("click",()=>trimClip(o)); btns.appendChild(trimBtn);
+  const mvBtn=document.createElement("button"); mvBtn.textContent="⇄"; mvBtn.title="Move";
+  mvBtn.addEventListener("click",()=>moveClip(o)); btns.appendChild(mvBtn);
+  const delBtn=document.createElement("button"); delBtn.className="af-del"; delBtn.textContent="✕"; delBtn.title="Delete";
+  delBtn.addEventListener("click",()=>deleteClip(o,row)); btns.appendChild(delBtn);
+  const copyBtn=document.createElement("button"); copyBtn.textContent="Copy URL";
+  copyBtn.addEventListener("click",()=>{ navigator.clipboard.writeText(location.origin+o.url).then(()=>{ copyBtn.textContent="copied ✓"; setTimeout(()=>copyBtn.textContent="Copy URL",1200); }); });
+  btns.appendChild(copyBtn);
+  row.appendChild(drag); row.appendChild(cb); row.appendChild(playBtn); row.appendChild(info); row.appendChild(btns);
+  return row;
+}
+let _playing=null;
+function togglePlay(o,btn){
+  if(_playing&&_playing.url===o.url){ _playing.audio.pause(); _playing=null; btn.textContent="▶"; return; }
+  if(_playing){ _playing.audio.pause(); _playing.btn.textContent="▶"; }
+  const audio=new Audio(o.url); audio.play();
+  audio.onended=()=>{ btn.textContent="▶"; _playing=null; };
+  _playing={url:o.url,audio,btn}; btn.textContent="⏸";
+}
+function deleteClip(o,row){
+  if(!confirm("Delete "+o.key+" ?\nThis cannot be undone.")) return;
+  fetch("/api/audio/"+o.key,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}}).then(async r=>{
+    if(r.ok){ row.remove(); selected.delete(o.key); updateCombineBtn();
+      if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(o.url)))); }catch(e){} }
+    else alert("Delete failed: "+(await r.text()));
+  }).catch(e=>alert("Delete failed: "+e.message));
+}
+function moveClip(o){
+  const dest=(prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', folder||"")||"").trim();
+  if(dest===(folder||"")) return;
+  if(dest.includes("/")){ alert('Library folders are flat — no "/".'); return; }
+  const to="library/"+(dest?dest+"/":"")+o.key.split("/").pop();
+  fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})})
+    .then(async r=>{ if(r.ok) refresh(); else alert("Move failed: "+(await r.text())); })
+    .catch(e=>alert("Move failed: "+e.message));
+}
+function updateCombineBtn(){
+  const btn=document.getElementById("combineBtn");
+  btn.style.display=selected.size>=2?"block":"none";
+  btn.textContent="Combine ("+selected.size+")";
+}
+document.getElementById("folderSel").onchange=e=>{ folder=e.target.value; selected.clear(); updateCombineBtn(); refresh(); };
+document.getElementById("refreshBtn").onclick=refresh;
+document.getElementById("newFolderBtn").onclick=()=>{
+  const name=(prompt("New folder name:")||"").trim();
+  if(!name) return;
+  if(name.includes("/")){ alert('Library folders are flat — no "/" in the name.'); return; }
+  folder=name;
+  const fsel=document.getElementById("folderSel");
+  if(![...fsel.options].some(o=>o.value===name)){ const opt=document.createElement("option"); opt.value=name; opt.textContent=name; fsel.appendChild(opt); }
+  fsel.value=name; refresh();
+};
+document.getElementById("combineBtn").onclick=()=>openCombineModal([...selected].map(k=>objsByKey[k]).filter(Boolean));
+
+/* ---- trim + render pipeline (ported from the Fence Editor; no zone/stop concept here) ---- */
+let _tBuf=null,_tFrac={start:0,end:1},_tOnSkip=null,_tOnOk=null,_tPeaks=[],_tNeedle=null,_tRAF=null,_tDrag=null,_tACtx=null,_tPrevSrc=null,_tCtxT0=0;
+function openTrimmer(buf, defaultKey, onSkip, onOk){
+  _tBuf=buf; _tFrac={start:0,end:1}; _tOnSkip=onSkip; _tOnOk=onOk;
+  _tPeaks=_buildPeaks(buf); _tNeedle=null;
+  if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; }
+  _drawTrim(); _trimLabel();
+  document.getElementById("trimKey").value=defaultKey||"";
+  document.getElementById("trimOk").textContent="✓ Trim & Upload";
+  document.getElementById("trimOk").disabled=false;
+  document.getElementById("trimOverlay").style.display="flex";
+}
+function closeTrimmer(){
+  document.getElementById("trimOverlay").style.display="none";
+  if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; }
+  _tNeedle=null;
+  if(_tPrevSrc){ try{_tPrevSrc.stop();}catch(e){} _tPrevSrc=null; }
+  document.getElementById("trimPrev").textContent="▶ Preview";
+  _tBuf=null;
+}
+function _buildPeaks(buf){
+  const data=buf.getChannelData(0), N=220, step=Math.floor(data.length/N), out=[];
+  for(let i=0;i<N;i++){ let mx=0; for(let j=0;j<step;j++) mx=Math.max(mx,Math.abs(data[i*step+j]||0)); out.push(mx); }
+  return out;
+}
+function _drawTrim(){
+  const cv=document.getElementById("trimCanvas"), ctx=cv.getContext("2d"), dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth||380, H=80;
+  cv.width=W*dpr; cv.height=H*dpr; ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+  const mid=H/2, bw=W/_tPeaks.length;
+  const si=Math.floor(_tFrac.start*_tPeaks.length), ei=Math.ceil(_tFrac.end*_tPeaks.length);
+  _tPeaks.forEach((p,i)=>{
+    const x=i*bw, bh=Math.max(2,p*(H-8)/2);
+    ctx.fillStyle=(i>=si&&i<ei)?"#ff6a3d":"#26344a";
+    ctx.fillRect(x+1,mid-bh,Math.max(1,bw-1),bh*2);
+  });
+  [_tFrac.start,_tFrac.end].forEach((f,idx)=>{
+    const x=f*W;
+    ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(x,mid,9,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=idx===0?"#ff6a3d":"#38e0a6"; ctx.beginPath(); ctx.arc(x,mid,6,0,Math.PI*2); ctx.fill();
+  });
+  if(_tNeedle!==null){ const x=_tNeedle*W; ctx.strokeStyle="rgba(255,255,255,0.85)"; ctx.lineWidth=2; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+}
+function _trimLabel(){
+  if(!_tBuf) return;
+  const dur=_tBuf.duration, s=_tFrac.start*dur, e=_tFrac.end*dur;
+  const f=v=>Math.floor(v/60)+":"+(Math.floor(v%60)+"").padStart(2,"0");
+  document.getElementById("trimLabel").textContent="trim: "+f(s)+" → "+f(e)+"  ("+f(e-s)+" kept of "+f(dur)+" total)";
+}
+(function(){
+  const cv=document.getElementById("trimCanvas");
+  cv.addEventListener("pointerdown",ev=>{
+    if(!_tPeaks.length) return;
+    const r=cv.getBoundingClientRect(), x=(ev.clientX-r.left)/r.width;
+    _tDrag=Math.abs(x-_tFrac.start)<=Math.abs(x-_tFrac.end)?"start":"end";
+    cv.setPointerCapture(ev.pointerId);
+  });
+  cv.addEventListener("pointermove",ev=>{
+    if(!_tDrag) return;
+    const r=cv.getBoundingClientRect();
+    let x=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
+    if(_tDrag==="start") _tFrac.start=Math.min(x,_tFrac.end-0.04); else _tFrac.end=Math.max(x,_tFrac.start+0.04);
+    _drawTrim(); _trimLabel();
+  });
+  cv.addEventListener("pointerup",()=>{ _tDrag=null; });
+  cv.addEventListener("pointercancel",()=>{ _tDrag=null; });
+})();
+document.getElementById("trimPrev").onclick=()=>{
+  if(!_tBuf) return;
+  if(_tPrevSrc){ try{_tPrevSrc.stop();}catch(e){} _tPrevSrc=null;
+    if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; } _tNeedle=null; _drawTrim();
+    document.getElementById("trimPrev").textContent="▶ Preview"; return; }
+  if(!_tACtx||_tACtx.state==="closed") _tACtx=new AudioContext();
+  if(_tACtx.state==="suspended") _tACtx.resume();
+  const dur=_tBuf.duration, s=_tFrac.start*dur, len=(_tFrac.end-_tFrac.start)*dur;
+  const src=_tACtx.createBufferSource(); src.buffer=_tBuf; src.connect(_tACtx.destination);
+  _tCtxT0=_tACtx.currentTime; src.start(0,s,len);
+  _tPrevSrc=src; document.getElementById("trimPrev").textContent="■ Stop";
+  (function animNeedle(){
+    if(!_tPrevSrc||!_tACtx||!_tBuf){ _tNeedle=null; _drawTrim(); return; }
+    const elapsed=_tACtx.currentTime-_tCtxT0;
+    _tNeedle=Math.min(_tFrac.start+elapsed/dur, _tFrac.end); _drawTrim();
+    if(_tNeedle<_tFrac.end) _tRAF=requestAnimationFrame(animNeedle); else{ _tNeedle=null; _drawTrim(); }
+  })();
+  src.onended=()=>{ _tPrevSrc=null; if(_tRAF){ cancelAnimationFrame(_tRAF); _tRAF=null; } _tNeedle=null; _drawTrim();
+    document.getElementById("trimPrev").textContent="▶ Preview"; };
+};
+document.getElementById("trimSkip").onclick=async()=>{ const key=document.getElementById("trimKey").value.trim(); const fn=_tOnSkip; closeTrimmer(); if(fn) await fn(key); };
+document.getElementById("trimOk").onclick=async()=>{
+  if(!_tBuf) return;
+  const key=document.getElementById("trimKey").value.trim();
+  const btn=document.getElementById("trimOk"); btn.textContent="encoding…"; btn.disabled=true;
+  try{
+    const blob=await _reenc(_tBuf,_tFrac.start,_tFrac.end);
+    if(!blob.size){ throw new Error("encoded clip is empty — try again"); }
+    const fn=_tOnOk; closeTrimmer(); if(fn) await fn(blob,key);
+  }catch(e){ btn.textContent="✓ Trim & Upload"; btn.disabled=false; alert("encode failed: "+e.message); }
+};
+document.getElementById("trimCancel").onclick=()=>closeTrimmer();
+document.getElementById("trimOverlay").onclick=ev=>{ if(ev.target===document.getElementById("trimOverlay")) closeTrimmer(); };
+
+async function _reenc(buf,f0,f1){
+  const sr=buf.sampleRate, nch=buf.numberOfChannels;
+  const s=f0*buf.duration, dur=(f1-f0)*buf.duration, frameCount=Math.round(dur*sr);
+  const offline=new OfflineAudioContext(nch,frameCount,sr);
+  const offSrc=offline.createBufferSource(), gain=offline.createGain();
+  offSrc.buffer=buf; offSrc.connect(gain); gain.connect(offline.destination);
+  const fade=Math.min(0.01,dur/4);
+  gain.gain.setValueAtTime(0,0); gain.gain.linearRampToValueAtTime(1,fade);
+  gain.gain.setValueAtTime(1,dur-fade); gain.gain.linearRampToValueAtTime(0,dur);
+  offSrc.start(0,s,dur);
+  const trimmed=await offline.startRendering();
+  return _encodeMp3(trimmed);
+}
+async function _reencBlend(mainSegs,bgSegs){
+  if(!mainSegs.length) throw new Error("need at least one clip in the Main sequence");
+  const allBufs=mainSegs.map(s=>s.buf).concat(bgSegs.map(s=>s.buf));
+  const sr=Math.max(...allBufs.map(b=>b.sampleRate)), nch=Math.max(...allBufs.map(b=>b.numberOfChannels));
+  const durs=mainSegs.map(s=>(s.f1-s.f0)*s.buf.duration), total=durs.reduce((a,b)=>a+b,0);
+  if(total<=0) throw new Error("nothing to render");
+  const offline=new OfflineAudioContext(nch,Math.round(total*sr),sr);
+  let t=0;
+  mainSegs.forEach((s,i)=>{
+    const src=offline.createBufferSource(), g=offline.createGain();
+    src.buffer=s.buf; src.connect(g); g.connect(offline.destination);
+    const d=durs[i], fade=Math.min(0.01,d/4);
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(1,t+fade);
+    g.gain.setValueAtTime(1,t+d-fade); g.gain.linearRampToValueAtTime(0,t+d);
+    src.start(t, s.f0*s.buf.duration, d); t+=d;
+  });
+  if(bgSegs.length){
+    const bgBus=offline.createGain(), bgFade=Math.min(1,total/4);
+    bgBus.gain.setValueAtTime(0,0); bgBus.gain.linearRampToValueAtTime(1,bgFade);
+    bgBus.gain.setValueAtTime(1,Math.max(bgFade,total-bgFade)); bgBus.gain.linearRampToValueAtTime(0,total);
+    bgBus.connect(offline.destination);
+    bgSegs.forEach(s=>{
+      const segDur=(s.f1-s.f0)*s.buf.duration; if(segDur<=0) return;
+      const gVal=Math.max(0,Math.min(1,(s.volPct==null?60:s.volPct)/100));
+      let bt=0;
+      while(bt<total){
+        const playDur=Math.min(segDur,total-bt);
+        const src=offline.createBufferSource(), g=offline.createGain(); g.gain.value=gVal;
+        src.buffer=s.buf; src.connect(g); g.connect(bgBus);
+        src.start(bt, s.f0*s.buf.duration, playDur); bt+=segDur;
+      }
+    });
+  }
+  const rendered=await offline.startRendering();
+  return _encodeMp3(rendered);
+}
+let _lame=null;
+async function _loadLame(){
+  if(_lame) return _lame;
+  try{ const mod=await import('https://esm.sh/@breezystack/lamejs@1.2.7'); _lame=mod.Mp3Encoder; return _lame; }catch(e){ return null; }
+}
+function _pcm16(f){ const out=new Int16Array(f.length); for(let i=0;i<f.length;i++){ const v=Math.max(-1,Math.min(1,f[i])); out[i]=v<0?v*0x8000:v*0x7fff; } return out; }
+async function _encodeMp3(buf){
+  const Mp3Encoder=await _loadLame();
+  if(!Mp3Encoder) throw new Error("mp3 encoder failed to load — check your connection and try again");
+  const nch=buf.numberOfChannels>1?2:1, sr=buf.sampleRate;
+  const left=_pcm16(buf.getChannelData(0)), right=nch>1?_pcm16(buf.getChannelData(1)):null;
+  const enc=new Mp3Encoder(nch,sr,128); const chunks=[], block=1152;
+  for(let i=0;i<left.length;i+=block){
+    const out=right?enc.encodeBuffer(left.subarray(i,i+block),right.subarray(i,i+block)):enc.encodeBuffer(left.subarray(i,i+block));
+    if(out.length) chunks.push(out);
+  }
+  const tail=enc.flush(); if(tail.length) chunks.push(tail);
+  return new Blob(chunks,{type:"audio/mpeg"});
+}
+async function _decodeUrl(url){
+  const r=await fetch(url); const ab=await r.arrayBuffer();
+  const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab); await tmp.close(); return buf;
+}
+
+function doUpload(blob, key, mimeType, onDone){
+  const token=getToken(); if(!token){ setStatus("upload cancelled — no token"); return; }
+  const kb=blob.size/1024, sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
+  const t0=Date.now();
+  showBar(0); setStatus("uploading "+sizeStr+"…");
+  const xhr=new XMLHttpRequest();
+  xhr.open("PUT","/api/audio/"+key);
+  xhr.setRequestHeader("authorization","Bearer "+token);
+  xhr.setRequestHeader("content-type",mimeType||"audio/mpeg");
+  xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){ const p=ev.loaded/ev.total*100; showBar(p); setStatus("uploading "+sizeStr+" — "+Math.round(p)+"%"); } };
+  xhr.onload=()=>{
+    const secs=((Date.now()-t0)/1000).toFixed(1); let j={}; try{j=JSON.parse(xhr.responseText);}catch(_){}
+    if(xhr.status>=200&&xhr.status<300){
+      showBar(100); setStatus("uploaded ✓ "+sizeStr+" in "+secs+"s"); setTimeout(hideBar,1500);
+      if(onDone) onDone(j.url||("/api/audio/"+key),key);
+    } else if(xhr.status===401){ hideBar(); setStatus("✕ unauthorized"); clearToken(); }
+    else { hideBar(); setStatus("✕ upload failed ("+xhr.status+"): "+(j.error||xhr.statusText||"server error")); }
+  };
+  xhr.onerror=()=>{ hideBar(); setStatus("✕ network error"); };
+  xhr.timeout=180000; xhr.send(blob);
+}
+
+function trimClip(o){
+  setStatus("downloading for trim…");
+  _decodeUrl(o.url).then(buf=>{
+    openTrimmer(buf, o.key, ()=>{ refresh(); },
+      (blob,userKey)=>{ const ext=_mimeExt(blob.type); const resolvedKey=(userKey||o.key).replace(/\.[^.]+$/,"."+ext); doUpload(blob, resolvedKey, blob.type, refresh); });
+  }).catch(e=>setStatus("download failed — "+e.message));
+}
+document.getElementById("uploadFile").addEventListener("change",async e=>{
+  const f=e.target.files[0]; if(!f) return; e.target.value="";
+  try{
+    const ab=await f.arrayBuffer();
+    const ctx=new AudioContext(); let buf; try{ buf=await ctx.decodeAudioData(ab); }finally{ ctx.close(); }
+    const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
+    const defaultKey="library/"+(folder?folder+"/":"")+base+"."+ext;
+    openTrimmer(buf, defaultKey,
+      key=>{ doUpload(f, key||defaultKey, f.type||"audio/mpeg", refresh); },
+      (blob,userKey)=>{ doUpload(blob, userKey||defaultKey, blob.type, refresh); }
+    );
+  }catch(e){ setStatus("couldn't read that file — "+e.message); }
+});
+
+/* ---- Combine (blend) modal ---- */
+let _cmbSegs=[];
+function openCombineModal(objs){
+  if(objs.length<2){ alert("Select at least 2 clips to combine."); return; }
+  _cmbSegs=objs.map(o=>({o, lane:"main", f0:0, f1:1, buf:null, volPct:60}));
+  renderCombineLanes(); document.getElementById("cmbName").value="";
+  document.getElementById("combineOverlay").style.display="flex";
+}
+function closeCombineModal(){ document.getElementById("combineOverlay").style.display="none"; }
+document.getElementById("cmbCancel").onclick=closeCombineModal;
+document.getElementById("combineOverlay").addEventListener("click",ev=>{ if(ev.target===document.getElementById("combineOverlay")) closeCombineModal(); });
+function renderCombineLanes(){
+  const mainWrap=document.getElementById("cmbMain"), bgWrap=document.getElementById("cmbBg");
+  mainWrap.innerHTML=""; bgWrap.innerHTML="";
+  _cmbSegs.forEach(seg=>{
+    const row=document.createElement("div"); row.className="cmb-seg";
+    const nm=document.createElement("span"); nm.className="cmb-nm"; nm.textContent=seg.o.key.split("/").pop();
+    const laneSel=document.createElement("select");
+    laneSel.innerHTML='<option value="main">Main</option><option value="bg">Background</option>';
+    laneSel.value=seg.lane; laneSel.onchange=()=>{ seg.lane=laneSel.value; renderCombineLanes(); };
+    row.appendChild(nm); row.appendChild(laneSel);
+    if(seg.lane==="bg"){ const vol=document.createElement("input"); vol.type="range"; vol.min="0"; vol.max="100"; vol.value=seg.volPct;
+      vol.oninput=()=>{ seg.volPct=+vol.value; }; row.appendChild(vol); }
+    if(seg.lane==="main"){
+      const up=document.createElement("button"); up.textContent="↑";
+      up.onclick=()=>{ const idx=_cmbSegs.indexOf(seg); if(idx>0){ [_cmbSegs[idx-1],_cmbSegs[idx]]=[_cmbSegs[idx],_cmbSegs[idx-1]]; renderCombineLanes(); } };
+      const dn=document.createElement("button"); dn.textContent="↓";
+      dn.onclick=()=>{ const idx=_cmbSegs.indexOf(seg); if(idx<_cmbSegs.length-1){ [_cmbSegs[idx+1],_cmbSegs[idx]]=[_cmbSegs[idx],_cmbSegs[idx+1]]; renderCombineLanes(); } };
+      row.appendChild(up); row.appendChild(dn);
+    }
+    const rm=document.createElement("button"); rm.textContent="✕";
+    rm.onclick=()=>{ _cmbSegs=_cmbSegs.filter(s=>s!==seg); if(_cmbSegs.length<2){ closeCombineModal(); } else renderCombineLanes(); };
+    row.appendChild(rm);
+    (seg.lane==="bg"?bgWrap:mainWrap).appendChild(row);
+  });
+  if(!bgWrap.children.length) bgWrap.innerHTML='<div class="hint" style="margin:0">none — set a clip\'s lane to Background to blend it underneath</div>';
+  document.getElementById("cmbTotal").textContent=_cmbSegs.filter(s=>s.lane==="main").length+" clip(s) in sequence"+(_cmbSegs.some(s=>s.lane==="bg")?" · background blended under the whole thing":"");
+}
+document.getElementById("cmbRender").onclick=async()=>{
+  const mainSegs=_cmbSegs.filter(s=>s.lane==="main"), bgSegs=_cmbSegs.filter(s=>s.lane==="bg");
+  if(mainSegs.length<1){ alert("Need at least one clip in the Main sequence."); return; }
+  const btn=document.getElementById("cmbRender"); btn.textContent="rendering…"; btn.disabled=true;
+  try{
+    for(const s of _cmbSegs){ if(!s.buf) s.buf=await _decodeUrl(s.o.url); }
+    const blob=await _reencBlend(mainSegs,bgSegs);
+    const cFolder=document.getElementById("cmbFolderSel").value;
+    const name=slug((document.getElementById("cmbName").value||"combined").trim())||"combined";
+    const key="library/"+(cFolder?cFolder+"/":"")+name+".mp3";
+    closeCombineModal();
+    doUpload(blob, key, blob.type, refresh);
+  }catch(e){ alert("Combine failed: "+e.message); }
+  finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }
+};
+
+refresh();
+</script>
+</body>
+</html>

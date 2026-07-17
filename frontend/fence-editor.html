@@ -122,6 +122,51 @@
   .r2key{font-family:'Barlow Condensed';font-size:12px;color:#eef4fb;word-break:break-all}
   .r2sz{font-family:'Barlow Condensed';font-size:11px;color:#5b7088}
   .r2btns{display:flex;gap:6px;flex-shrink:0}
+  /* Audio Files panel (docked in the editor; also used standalone by /library) */
+  .af-tabs{display:flex;gap:4px;margin-bottom:6px}
+  .af-tab{flex:1;font-family:'Barlow Condensed';font-size:11px;font-weight:700;text-transform:uppercase;
+          letter-spacing:.4px;padding:6px 4px;text-align:center;border:1px solid var(--rim);border-radius:8px;
+          background:none;color:var(--fog);cursor:pointer}
+  .af-tab.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  .af-crumb{display:flex;align-items:center;gap:6px;margin:2px 0 6px;font-family:'Barlow Condensed';font-size:12px;color:var(--fog)}
+  .af-crumb select{flex:1;background:var(--slate-2);border:1px solid var(--rim);color:var(--ice);
+                    border-radius:7px;padding:4px 6px;font-family:'Barlow Condensed';font-size:12px}
+  .af-crumb button{flex:0 0 auto;background:none;border:1px solid var(--rim);border-radius:7px;color:var(--ice);
+                    font-family:'Barlow Condensed';font-size:11px;padding:4px 8px;cursor:pointer}
+  .af-list{max-height:220px;overflow-y:auto}
+  /* wraps on narrow viewports (the docked editor panel) — the button group
+     drops to its own right-aligned line instead of forcing the row to
+     overflow horizontally; on wider viewports (the standalone /library
+     page) everything still fits on one line */
+  .af-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0;border-top:1px solid #26344a}
+  .af-row .af-drag{cursor:grab;color:var(--fog);flex:0 0 auto;font-size:13px}
+  .af-row .af-info{flex:1 1 90px;min-width:0}
+  .af-row .af-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                    font-family:'Barlow Condensed';font-size:12px;color:#eef4fb}
+  .af-row .af-sz{font-family:'Barlow Condensed';font-size:10px;color:#5b7088}
+  .af-row .af-exp{font-family:'Barlow Condensed';font-size:10px;color:var(--amber)}
+  .af-row .af-btns{display:flex;gap:4px;flex:0 0 auto;margin-left:auto}
+  .af-row button{background:none;border:1px solid #26344a;border-radius:6px;color:#8fb6d4;
+                  font-family:'Barlow Condensed';font-weight:700;font-size:11px;padding:3px 7px;cursor:pointer;flex:0 0 auto}
+  .af-row button.af-use{background:#ff6a3d;border:none;color:#1a0d07}
+  .af-row button.af-del{border-color:var(--hazard);color:var(--hazard)}
+  .af-row input[type=checkbox]{flex:0 0 auto;accent-color:var(--coral)}
+  .af-empty{font-family:'Barlow Condensed';font-size:12px;color:var(--fog);text-align:center;padding:12px 0}
+  #combineOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);
+                 align-items:center;justify-content:center;padding:16px}
+  #combineBox{background:var(--slate);border:1px solid var(--rim);border-radius:16px;padding:18px;
+             width:100%;max-width:460px;display:flex;flex-direction:column;gap:10px;max-height:85vh;overflow-y:auto}
+  #combineBox h2{font-family:"Barlow Condensed";font-size:15px;font-weight:700;text-transform:uppercase;
+                letter-spacing:.5px;margin:0}
+  .cmb-lane-label{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--fog);margin:4px 0 2px}
+  .cmb-seg{display:flex;align-items:center;gap:6px;background:var(--slate-2);border:1px solid var(--rim);
+            border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px}
+  .cmb-seg .cmb-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cmb-seg select{background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:6px;
+                   padding:3px 5px;font-family:'Barlow Condensed';font-size:11px}
+  .cmb-seg input[type=range]{width:60px;accent-color:var(--coral)}
+  .cmb-seg button{background:none;border:1px solid var(--rim);border-radius:6px;color:var(--fog);
+                   padding:2px 6px;cursor:pointer;font-size:12px}
   #trimOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);
                align-items:center;justify-content:center;padding:16px}
   #trimBox{background:var(--slate);border:1px solid var(--rim);border-radius:16px;padding:18px;
@@ -841,7 +886,36 @@
       <button id="alVoiceTest" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 10px">▶ Test</button>
     </div>
     <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
-  </div>  </div><!-- /editSection -->
+  </div>
+
+  <!-- Audio Files -->
+  <hr style="margin:10px 0 6px">
+  <button id="audioFilesToggle" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:6px 10px;letter-spacing:.5px">&#9658; &#128193; Audio Files</button>
+  <div id="audioFilesBody" style="display:none;flex-direction:column;gap:6px;padding-top:6px">
+    <div class="af-tabs">
+      <button class="af-tab on" id="afTabProject" data-tab="project">This Project</button>
+      <button class="af-tab" id="afTabLibrary" data-tab="library">Library</button>
+    </div>
+    <div class="af-crumb" id="afCrumb" style="display:none">
+      <span>&#128193;</span>
+      <select id="afFolderSel"><option value="">Library (root)</option></select>
+      <button id="afNewFolder">+ Folder</button>
+    </div>
+    <div class="row" style="margin:0;gap:6px">
+      <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:6px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase">
+        Upload<input type="file" id="afUploadFile" accept="audio/*" style="display:none">
+      </label>
+      <button id="afRefresh" class="ghost" style="flex:0 0 auto;font-size:11px">&#8635;</button>
+    </div>
+    <div id="afBar" style="display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:2px 0">
+      <div id="afFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
+    </div>
+    <div id="afStatus" class="hint" style="display:none;font-size:10px;margin:0"></div>
+    <div class="af-list" id="afList"></div>
+    <button id="afCombineBtn" class="ghost" style="display:none;font-size:12px">Combine (0)</button>
+    <div class="hint">drag &#10241; onto a stop on the map, or a stop in the list, to assign a clip</div>
+  </div>
+  </div><!-- /editSection -->
   </div><!-- /panel-body -->
 </div><!-- /mainPanel -->
 
@@ -850,15 +924,6 @@
     <h3>Pick a region bot</h3>
     <div class="bpick-grid" id="botPickerGrid"></div>
     <button id="botPickerCancel" style="margin-top:8px;width:100%;background:none;border:1px solid var(--rim);color:var(--ice);font-family:'Barlow Condensed';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>
-  </div>
-</div>
-
-<div id="r2Picker">
-  <div id="r2PickerBox">
-    <div id="r2PickerTitle"></div>
-    <div id="r2PickerCount"></div>
-    <div id="r2PickerList"></div>
-    <button id="r2PickerCancel" style="margin-top:10px;width:100%;background:none;border:1px solid #26344a;color:#8fb6d4;font-family:'Barlow Condensed';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>
   </div>
 </div>
 
@@ -876,6 +941,31 @@
       <button id="trimPrev"   class="ghost" style="flex:0 0 auto">▶ Preview</button>
       <button id="trimSkip"   class="ghost" style="flex:1">Upload as-is</button>
       <button id="trimOk"     class="on"    style="flex:1">✓ Trim &amp; Upload</button>
+    </div>
+  </div>
+</div>
+
+<div id="combineOverlay">
+  <div id="combineBox">
+    <h2>Combine clips</h2>
+    <div class="hint">Main sequence plays clips one after another; an optional Background lane loops underneath the whole thing.</div>
+    <div class="cmb-lane-label">Main sequence</div>
+    <div id="cmbMain"></div>
+    <div class="cmb-lane-label">Background (optional, blended under the main sequence)</div>
+    <div id="cmbBg"></div>
+    <div style="margin:6px 0 2px">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save to</label>
+      <div class="row" style="margin:4px 0 0;gap:6px">
+        <select id="cmbFolderSel" style="flex:1;background:var(--slate-2);border:1px solid var(--rim);color:var(--ice);border-radius:7px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
+          <option value="">Library (root)</option>
+        </select>
+        <input id="cmbName" style="flex:1;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--snow);font-family:'Barlow Condensed';font-size:13px;padding:6px 8px" placeholder="combined-clip">
+      </div>
+    </div>
+    <div id="cmbTotal" class="hint"></div>
+    <div class="row" style="margin:0">
+      <button id="cmbCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
+      <button id="cmbRender" class="on" style="flex:1">Render + Upload &#9658;</button>
     </div>
   </div>
 </div>
@@ -1895,101 +1985,260 @@ document.getElementById("btnVoiceStop").onclick=()=>{
 };
 // pVoiceDone handlers removed — recording now opens the trimmer directly
 
-function closeR2Picker(){
-  const p=document.getElementById("r2Picker");
-  p.style.display="none";
-  document.getElementById("r2PickerList").innerHTML="";
+/* ---- Audio Files panel: "This Project" (auto-managed) + "Library" (shared, foldered) ---- */
+let afTab="project", afFolder="", afSelected=new Set(), afObjsById={};
+function afProjectId(){ return _currentProjectId||slug(projName())||null; }
+function afBarEl(){ return document.getElementById("afBar"); }
+function afFillEl(){ return document.getElementById("afFill"); }
+function afStat(){ const el=document.getElementById("afStatus"); if(el) el.style.display="block"; return el; }
+function afShowBar(p){ afBarEl().style.display="block"; afFillEl().style.width=Math.round(p)+"%"; }
+function afHideBar(){ afBarEl().style.display="none"; afFillEl().style.width="0%"; }
+
+function toggleAudioFilesPanel(){
+  const body=document.getElementById("audioFilesBody");
+  const open=body.style.display==="flex";
+  body.style.display=open?"none":"flex";
+  document.getElementById("audioFilesToggle").innerHTML=(open?"&#9658;":"&#9660;")+" &#128193; Audio Files";
+  if(!open) doAudioRefresh();
 }
-async function doBrowseR2(){
-  const tokEl=document.getElementById("adminTok");
-  let token=(tokEl&&tokEl.value.trim())||verifiedToken||(()=>{try{return sessionStorage.getItem("gp.admin")||"";}catch(e){return "";}})();
-  if(!token){
-    alert("Paste your API token into the token field at the top of the panel, then click Files again.");
-    tokEl&&tokEl.focus(); return;
+document.getElementById("audioFilesToggle").onclick=toggleAudioFilesPanel;
+document.getElementById("pAudioBrowse").onclick=()=>{
+  const body=document.getElementById("audioFilesBody");
+  if(body.style.display!=="flex") toggleAudioFilesPanel();
+  afSetTab("project");
+  body.scrollIntoView({behavior:"smooth",block:"nearest"});
+};
+
+function afSetTab(tab){
+  afTab=tab; afSelected.clear(); updateCombineBtn();
+  document.getElementById("afTabProject").classList.toggle("on",tab==="project");
+  document.getElementById("afTabLibrary").classList.toggle("on",tab==="library");
+  document.getElementById("afCrumb").style.display=tab==="library"?"flex":"none";
+  doAudioRefresh();
+}
+document.getElementById("afTabProject").onclick=()=>afSetTab("project");
+document.getElementById("afTabLibrary").onclick=()=>afSetTab("library");
+document.getElementById("afRefresh").onclick=doAudioRefresh;
+document.getElementById("afFolderSel").onchange=e=>{ afFolder=e.target.value; afSelected.clear(); updateCombineBtn(); doAudioRefresh(); };
+document.getElementById("afNewFolder").onclick=()=>{
+  const name=(prompt("New folder name:")||"").trim();
+  if(!name) return;
+  if(name.includes("/")){ alert('Library folders are flat — no "/" in the name.'); return; }
+  // Folders aren't real R2 objects — they exist once a file lands in them.
+  // Switching there now just means the next upload creates it.
+  afFolder=name;
+  const fsel=document.getElementById("afFolderSel");
+  if(![...fsel.options].some(o=>o.value===name)){
+    const opt=document.createElement("option"); opt.value=name; opt.textContent=name; fsel.appendChild(opt);
   }
-  if(!verifiedToken){ verifiedToken=token; try{sessionStorage.setItem("gp.admin",token);}catch(e){} }
+  fsel.value=name;
+  doAudioRefresh();
+};
+
+async function doAudioRefresh(){
+  const list=document.getElementById("afList");
+  list.innerHTML='<div class="af-empty">loading…</div>';
   try{
-    const r=await fetch("/api/audio-list",{headers:{authorization:"Bearer "+token}});
-    if(r.status===401){ alert("Token rejected (401).\n\nYour token needs 'publish' or 'audio' scope.\nRe-enter a valid token in the token field."); clearToken(); return; }
-    const objects=r.ok ? ((await r.json()).objects||[]) : [];
-    if(!objects.length){ alert("No audio files saved yet."); return; }
-
-    document.getElementById("r2PickerTitle").textContent="Audio files — all projects";
-    document.getElementById("r2PickerCount").textContent=objects.length+" file"+(objects.length===1?"":"s")+" — full path shown";
-
-    const list=document.getElementById("r2PickerList");
-    list.innerHTML="";
-
-    const doTrimR2=async(url,key)=>{
-      closeR2Picker();
-      if(sel>=0) aStat().textContent="downloading for trim…";
-      try{
-        const buf=await _decodeUrl(url);
-        const z=sel>=0?zones[sel]:null;
-        // Default to overwriting the source key so Files picker shows the trimmed version.
-        // Extension may change (e.g. mp3→webm); key extension is cosmetic — R2 uses content-type.
-        const trimDefaultKey=key;
-        openTrimmer(buf, trimDefaultKey,
-          _key=>{ if(z) z[zoneAudioField(z)]=url; if(sel>=0) aStat().innerHTML="kept original — assigned <b>"+key.split("/").pop()+"</b>"; },
-          async(blob,userKey)=>{
-            const ext=_mimeExt(blob.type);
-            const resolvedKey=(userKey||key).replace(/\.[^.]+$/,"."+ext);
-            doXhrUpload(blob, resolvedKey, blob.type);
-          }
-        );
-      }catch(e){ alert("Download failed — "+e.message); }
-    };
-
-    objects.forEach(o=>{
-      const kb=(o.size/1024).toFixed(0);
-      const row=document.createElement("div");
-      row.className="r2row";
-      const info=document.createElement("div");
-      info.style.cssText="flex:1;min-width:0";
-      const kd=document.createElement("div"); kd.className="r2key"; kd.textContent=o.key;
-      const sd=document.createElement("div"); sd.className="r2sz"; sd.textContent=kb+" KB";
-      info.appendChild(kd); info.appendChild(sd);
-      const btns=document.createElement("div"); btns.className="r2btns";
-      const trimBtn=document.createElement("button");
-      trimBtn.style.cssText="background:none;border:1px solid #26344a;border-radius:7px;color:#8fb6d4;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
-      trimBtn.textContent="✂ Trim";
-      trimBtn.addEventListener("click",()=>doTrimR2(o.url,o.key));
-      const useBtn=document.createElement("button");
-      useBtn.style.cssText="background:#ff6a3d;border:none;border-radius:7px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
-      useBtn.textContent="Use";
-      useBtn.addEventListener("click",()=>{
-        if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
-        zones[sel][zoneAudioField(zones[sel])]=o.url;
-        const _aLbl=document.getElementById("pAudioLabel"); if(_aLbl){_aLbl.textContent=o.key.split("/").pop();_aLbl.className="va-audio-label has-clip";}
-        updateVaSummary(zones[sel]);
-        aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
-        closeR2Picker();
-      });
-      const delBtn=document.createElement("button");
-      delBtn.style.cssText="background:none;border:1px solid var(--hazard);border-radius:7px;color:var(--hazard);font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer";
-      delBtn.textContent="✕";
-      delBtn.addEventListener("click",async()=>{
-        if(!confirm("Delete "+o.key+" from R2?\nThis cannot be undone.")) return;
-        delBtn.textContent="…"; delBtn.disabled=true;
-        try{
-          const dr=await fetch("/api/audio/"+o.key,{method:"DELETE",headers:{authorization:"Bearer "+token}});
-          if(dr.ok){
-            row.remove();
-            if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(o.url)))); }catch(e){}
-          } else{ alert("Delete failed: "+(await dr.text())); delBtn.textContent="✕"; delBtn.disabled=false; }
-        }catch(e){ alert("Delete failed: "+e.message); delBtn.textContent="✕"; delBtn.disabled=false; }
-      });
-      btns.appendChild(trimBtn); btns.appendChild(useBtn); btns.appendChild(delBtn);
-      row.appendChild(info); row.appendChild(btns);
-      list.appendChild(row);
-    });
-
-    document.getElementById("r2Picker").style.display="flex";
-  }catch(e){ alert("Browse files error: "+e.message); }
+    let qs;
+    if(afTab==="project"){
+      const pid=afProjectId();
+      if(!pid){ list.innerHTML='<div class="af-empty">save this tour first</div>'; return; }
+      qs="project="+encodeURIComponent(pid);
+    } else {
+      qs="scope=library"+(afFolder?"&folder="+encodeURIComponent(afFolder):"");
+    }
+    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
+    if(r.status===401){ list.innerHTML='<div class="af-empty">token rejected — needs audio/publish scope</div>'; clearToken(); return; }
+    const j=r.ok?await r.json():{objects:[]};
+    if(afTab==="library") afSyncFolderOptions(j.folders||[]);
+    renderAudioList(j.objects||[]);
+  }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
 }
-document.getElementById("r2Picker").addEventListener("click",ev=>{ if(ev.target===document.getElementById("r2Picker")) closeR2Picker(); });
-document.getElementById("r2PickerCancel").addEventListener("click",closeR2Picker);
-document.getElementById("pAudioBrowse").onclick=doBrowseR2;
+function afSyncFolderOptions(folders){
+  const keep=afFolder, opts='<option value="">Library (root)</option>'+folders.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
+  const fsel=document.getElementById("afFolderSel"); fsel.innerHTML=opts; fsel.value=keep; if(fsel.value!==keep) fsel.value="";
+  const cf=document.getElementById("cmbFolderSel"); if(cf){ const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value=""; }
+}
+
+function renderAudioList(objects){
+  const list=document.getElementById("afList");
+  list.innerHTML="";
+  afObjsById={};
+  if(!objects.length){ list.innerHTML='<div class="af-empty">no audio files yet</div>'; return; }
+  objects.forEach(o=>{ afObjsById[o.key]=o; list.appendChild(afBuildRow(o)); });
+}
+function afFmtExpiry(ts){
+  const ms=ts-Date.now(); if(ms<=0) return "expiring…";
+  const m=Math.round(ms/60000);
+  return m<60?("expires in "+m+"m"):("expires in "+Math.round(m/60)+"h");
+}
+function afBuildRow(o){
+  const kb=(o.size/1024).toFixed(0);
+  const row=document.createElement("div"); row.className="af-row";
+  row.draggable=true;
+  row.addEventListener("dragstart",e=>{
+    e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key);
+    e.dataTransfer.effectAllowed="copy";
+  });
+  const drag=document.createElement("span"); drag.className="af-drag"; drag.textContent="⠿";
+  const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=afSelected.has(o.key);
+  cb.addEventListener("change",()=>{ if(cb.checked) afSelected.add(o.key); else afSelected.delete(o.key); updateCombineBtn(); });
+  const playBtn=document.createElement("button"); playBtn.textContent="▶";
+  playBtn.addEventListener("click",()=>afTogglePlay(o,playBtn));
+  const info=document.createElement("div"); info.className="af-info";
+  const nm=document.createElement("div"); nm.className="af-name"; nm.textContent=o.key.split("/").pop();
+  const sz=document.createElement("div"); sz.className="af-sz"; sz.textContent=kb+" KB";
+  info.appendChild(nm); info.appendChild(sz);
+  if(o.expiresAt){ const exp=document.createElement("div"); exp.className="af-exp"; exp.textContent="⏳ "+afFmtExpiry(o.expiresAt); info.appendChild(exp); }
+  const btns=document.createElement("div"); btns.className="af-btns";
+  const trimBtn=document.createElement("button"); trimBtn.textContent="✂"; trimBtn.title="Trim";
+  trimBtn.addEventListener("click",()=>afTrim(o)); btns.appendChild(trimBtn);
+  if(afTab==="library"){
+    const mvBtn=document.createElement("button"); mvBtn.textContent="⇄"; mvBtn.title="Move";
+    mvBtn.addEventListener("click",()=>afMove(o)); btns.appendChild(mvBtn);
+  }
+  const delBtn=document.createElement("button"); delBtn.className="af-del"; delBtn.textContent="✕"; delBtn.title="Delete";
+  delBtn.addEventListener("click",()=>afDelete(o,row)); btns.appendChild(delBtn);
+  const useBtn=document.createElement("button"); useBtn.className="af-use"; useBtn.textContent="Use";
+  useBtn.addEventListener("click",()=>afUse(o)); btns.appendChild(useBtn);
+  row.appendChild(drag); row.appendChild(cb); row.appendChild(playBtn); row.appendChild(info); row.appendChild(btns);
+  return row;
+}
+let _afPlaying=null;
+function afTogglePlay(o,btn){
+  if(_afPlaying&&_afPlaying.url===o.url){ _afPlaying.audio.pause(); _afPlaying=null; btn.textContent="▶"; return; }
+  if(_afPlaying){ _afPlaying.audio.pause(); _afPlaying.btn.textContent="▶"; }
+  const audio=new Audio(o.url); audio.play();
+  audio.onended=()=>{ btn.textContent="▶"; _afPlaying=null; };
+  _afPlaying={url:o.url,audio,btn}; btn.textContent="⏸";
+}
+function afUse(o){
+  if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
+  zones[sel][zoneAudioField(zones[sel])]=o.url;
+  const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=o.key.split("/").pop();aLbl.className="va-audio-label has-clip";}
+  updateVaSummary(zones[sel]);
+  aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
+}
+function afTrim(o){
+  afStat().textContent="downloading for trim…";
+  _decodeUrl(o.url).then(buf=>{
+    const z=sel>=0?zones[sel]:null;
+    openTrimmer(buf, o.key,
+      ()=>{ if(z){ z[zoneAudioField(z)]=o.url; afStat().innerHTML="kept original — assigned <b>"+o.key.split("/").pop()+"</b>"; } doAudioRefresh(); },
+      (blob,userKey)=>{
+        const ext=_mimeExt(blob.type);
+        const resolvedKey=(userKey||o.key).replace(/\.[^.]+$/,"."+ext);
+        doXhrUpload(blob, resolvedKey, blob.type, {assignToZone:!!z, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh});
+      }
+    );
+  }).catch(e=>{ afStat().textContent="download failed — "+e.message; });
+}
+function afDelete(o,row){
+  if(!confirm("Delete "+o.key+" ?\nThis cannot be undone.")) return;
+  fetch("/api/audio/"+o.key,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}}).then(async r=>{
+    if(r.ok){
+      row.remove(); afSelected.delete(o.key); updateCombineBtn();
+      if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(o.url)))); }catch(e){}
+    } else alert("Delete failed: "+(await r.text()));
+  }).catch(e=>alert("Delete failed: "+e.message));
+}
+function afMove(o){
+  const dest=(prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', afFolder||"")||"").trim();
+  if(dest===(afFolder||"")) return;
+  if(dest.includes("/")){ alert('Library folders are flat — no "/".'); return; }
+  const to="library/"+(dest?dest+"/":"")+o.key.split("/").pop();
+  fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})})
+    .then(async r=>{ if(r.ok) doAudioRefresh(); else alert("Move failed: "+(await r.text())); })
+    .catch(e=>alert("Move failed: "+e.message));
+}
+function updateCombineBtn(){
+  const btn=document.getElementById("afCombineBtn");
+  btn.style.display=afSelected.size>=2?"block":"none";
+  btn.textContent="Combine ("+afSelected.size+")";
+}
+document.getElementById("afCombineBtn").onclick=()=>openCombineModal([...afSelected].map(k=>afObjsById[k]).filter(Boolean));
+document.getElementById("afUploadFile").addEventListener("change",async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  e.target.value="";
+  try{
+    const ab=await f.arrayBuffer();
+    const ctx=new AudioContext(); let buf; try{ buf=await ctx.decodeAudioData(ab); }finally{ ctx.close(); }
+    const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
+    const defaultKey=afTab==="library"
+      ? "library/"+(afFolder?afFolder+"/":"")+base+"."+ext
+      : (afProjectId()||"project")+"/"+base+"-"+Date.now().toString(36)+"."+ext;
+    openTrimmer(buf, defaultKey,
+      key=>{ doXhrUpload(f, key||defaultKey, f.type||"audio/mpeg", {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh}); },
+      (blob,userKey)=>{ doXhrUpload(blob, userKey||defaultKey, blob.type, {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh}); }
+    );
+  }catch(e){ afStat().textContent="couldn't read that file — "+e.message; }
+});
+
+/* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
+let _cmbSegs=[]; // {o, lane:'main'|'bg', f0,f1, buf(after decode), volPct}
+function openCombineModal(objs){
+  if(objs.length<2){ alert("Select at least 2 clips to combine."); return; }
+  _cmbSegs=objs.map(o=>({o, lane:"main", f0:0, f1:1, buf:null, volPct:60}));
+  renderCombineLanes();
+  document.getElementById("cmbName").value="";
+  document.getElementById("combineOverlay").style.display="flex";
+}
+function closeCombineModal(){ document.getElementById("combineOverlay").style.display="none"; }
+document.getElementById("cmbCancel").onclick=closeCombineModal;
+document.getElementById("combineOverlay").addEventListener("click",ev=>{ if(ev.target===document.getElementById("combineOverlay")) closeCombineModal(); });
+function renderCombineLanes(){
+  const mainWrap=document.getElementById("cmbMain"), bgWrap=document.getElementById("cmbBg");
+  mainWrap.innerHTML=""; bgWrap.innerHTML="";
+  _cmbSegs.forEach((seg,i)=>{
+    const row=document.createElement("div"); row.className="cmb-seg";
+    const nm=document.createElement("span"); nm.className="cmb-nm"; nm.textContent=seg.o.key.split("/").pop();
+    const laneSel=document.createElement("select");
+    laneSel.innerHTML='<option value="main">Main</option><option value="bg">Background</option>';
+    laneSel.value=seg.lane;
+    laneSel.onchange=()=>{ seg.lane=laneSel.value; renderCombineLanes(); };
+    row.appendChild(nm); row.appendChild(laneSel);
+    if(seg.lane==="bg"){
+      const vol=document.createElement("input"); vol.type="range"; vol.min="0"; vol.max="100"; vol.value=seg.volPct;
+      vol.oninput=()=>{ seg.volPct=+vol.value; };
+      row.appendChild(vol);
+    }
+    if(seg.lane==="main"){
+      const up=document.createElement("button"); up.textContent="↑";
+      up.onclick=()=>{ const idx=_cmbSegs.indexOf(seg); if(idx>0){ [_cmbSegs[idx-1],_cmbSegs[idx]]=[_cmbSegs[idx],_cmbSegs[idx-1]]; renderCombineLanes(); } };
+      const dn=document.createElement("button"); dn.textContent="↓";
+      dn.onclick=()=>{ const idx=_cmbSegs.indexOf(seg); if(idx<_cmbSegs.length-1){ [_cmbSegs[idx+1],_cmbSegs[idx]]=[_cmbSegs[idx],_cmbSegs[idx+1]]; renderCombineLanes(); } };
+      row.appendChild(up); row.appendChild(dn);
+    }
+    // No per-segment trim step here on purpose — it would have to reuse the
+    // single shared #trimOverlay's global OK/Skip handlers, which are wired
+    // once for the real per-stop trim-and-upload flow; hijacking them here
+    // would silently break that flow after the first use. If a clip needs
+    // trimming, trim it first with the row's own ✂ button (saves a new file),
+    // then select that trimmed file to combine — keeps this a small tool,
+    // not a second audio editor.
+    const rm=document.createElement("button"); rm.textContent="✕";
+    rm.onclick=()=>{ _cmbSegs=_cmbSegs.filter(s=>s!==seg); if(_cmbSegs.length<2){ closeCombineModal(); } else renderCombineLanes(); };
+    row.appendChild(rm);
+    (seg.lane==="bg"?bgWrap:mainWrap).appendChild(row);
+  });
+  if(!bgWrap.children.length) bgWrap.innerHTML='<div class="hint" style="margin:0">none — set a clip\'s lane to Background to blend it underneath</div>';
+  document.getElementById("cmbTotal").textContent=_cmbSegs.filter(s=>s.lane==="main").length+" clip(s) in sequence"+(_cmbSegs.some(s=>s.lane==="bg")?" · background blended under the whole thing":"");
+}
+document.getElementById("cmbRender").onclick=async()=>{
+  const mainSegs=_cmbSegs.filter(s=>s.lane==="main"), bgSegs=_cmbSegs.filter(s=>s.lane==="bg");
+  if(mainSegs.length<1){ alert("Need at least one clip in the Main sequence."); return; }
+  const btn=document.getElementById("cmbRender"); btn.textContent="rendering…"; btn.disabled=true;
+  try{
+    for(const s of _cmbSegs){ if(!s.buf) s.buf=await _decodeUrl(s.o.url); }
+    const blob=await _reencBlend(mainSegs,bgSegs);
+    const folder=document.getElementById("cmbFolderSel").value;
+    const name=slug((document.getElementById("cmbName").value||"combined").trim())||"combined";
+    const key="library/"+(folder?folder+"/":"")+name+".mp3";
+    closeCombineModal();
+    doXhrUpload(blob, key, blob.type, {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh});
+  }catch(e){ alert("Combine failed: "+e.message); }
+  finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }
+};
 document.getElementById("pActDev").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
@@ -2464,6 +2713,59 @@ async function _reenc(buf,f0,f1){
   const trimmed=await offline.startRendering();
   return _encodeMp3(trimmed);
 }
+// Combine tool's render: generalizes _reenc from one clip to a Main sequence
+// (same per-boundary fade, just offset by each clip's cumulative start time)
+// plus an optional Background lane, looped to fill the total duration and
+// blended in through its own bus with a soft overall fade in/out.
+async function _reencBlend(mainSegs,bgSegs){
+  if(!mainSegs.length) throw new Error("need at least one clip in the Main sequence");
+  const allBufs=mainSegs.map(s=>s.buf).concat(bgSegs.map(s=>s.buf));
+  const sr=Math.max(...allBufs.map(b=>b.sampleRate));
+  const nch=Math.max(...allBufs.map(b=>b.numberOfChannels));
+  const durs=mainSegs.map(s=>(s.f1-s.f0)*s.buf.duration);
+  const total=durs.reduce((a,b)=>a+b,0);
+  if(total<=0) throw new Error("nothing to render");
+  const offline=new OfflineAudioContext(nch,Math.round(total*sr),sr);
+
+  let t=0;
+  mainSegs.forEach((s,i)=>{
+    const src=offline.createBufferSource(), g=offline.createGain();
+    src.buffer=s.buf; src.connect(g); g.connect(offline.destination);
+    const d=durs[i], fade=Math.min(0.01,d/4);
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(1,t+fade);
+    g.gain.setValueAtTime(1,t+d-fade);
+    g.gain.linearRampToValueAtTime(0,t+d);
+    src.start(t, s.f0*s.buf.duration, d);
+    t+=d;
+  });
+
+  if(bgSegs.length){
+    const bgBus=offline.createGain();
+    const bgFade=Math.min(1,total/4);
+    bgBus.gain.setValueAtTime(0,0);
+    bgBus.gain.linearRampToValueAtTime(1,bgFade);
+    bgBus.gain.setValueAtTime(1,Math.max(bgFade,total-bgFade));
+    bgBus.gain.linearRampToValueAtTime(0,total);
+    bgBus.connect(offline.destination);
+    bgSegs.forEach(s=>{
+      const segDur=(s.f1-s.f0)*s.buf.duration; if(segDur<=0) return;
+      const gVal=Math.max(0,Math.min(1,(s.volPct==null?60:s.volPct)/100));
+      let bt=0;
+      while(bt<total){
+        const playDur=Math.min(segDur,total-bt);
+        const src=offline.createBufferSource(), g=offline.createGain();
+        g.gain.value=gVal;
+        src.buffer=s.buf; src.connect(g); g.connect(bgBus);
+        src.start(bt, s.f0*s.buf.duration, playDur);
+        bt+=segDur;
+      }
+    });
+  }
+
+  const rendered=await offline.startRendering();
+  return _encodeMp3(rendered);
+}
 let _lame=null;
 async function _loadLame(){
   if(_lame) return _lame;
@@ -2499,33 +2801,41 @@ async function _decodeUrl(url){
 function _mimeExt(mime){ return mime.includes("mpeg")||mime.includes("mp3")?"mp3":mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
 
 /* ── shared XHR uploader ── */
-function doXhrUpload(blob, key, mimeType, label){
-  const token=getToken(); if(!token){ aStat().textContent="upload cancelled — no token"; return; }
+// opts lets callers outside the per-stop panel (Library uploads, Combine
+// renders) reuse this uploader without silently reassigning whatever stop
+// happens to be selected, and without writing progress into the per-stop
+// status line that isn't even visible from where they were triggered.
+function doXhrUpload(blob, key, mimeType, opts){
+  opts=opts||{};
+  const assignToZone=opts.assignToZone!==false; // default true — matches every existing call site
+  const statusEl=opts.statusEl||aStat(), barShow=opts.barShow||showBar, barHide=opts.barHide||hideBar;
+  const token=getToken(); if(!token){ statusEl.textContent="upload cancelled — no token"; return; }
   const kb=blob.size/1024, sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
   const t0=Date.now();
-  showBar(0); aStat().textContent="uploading "+sizeStr+"…";
+  barShow(0); statusEl.textContent="uploading "+sizeStr+"…";
   const xhr=new XMLHttpRequest();
   xhr.open("PUT","/api/audio/"+key);
   xhr.setRequestHeader("authorization","Bearer "+token);
   xhr.setRequestHeader("content-type",mimeType||"audio/mpeg");
   xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){
     const p=ev.loaded/ev.total*100, secs=(Date.now()-t0)/1000, rate=ev.loaded/1024/Math.max(.1,secs);
-    showBar(p); aStat().textContent="uploading "+sizeStr+" — "+Math.round(p)+"% · "+rate.toFixed(0)+" KB/s"; } };
+    barShow(p); statusEl.textContent="uploading "+sizeStr+" — "+Math.round(p)+"% · "+rate.toFixed(0)+" KB/s"; } };
   xhr.onload=async()=>{
     const secs=((Date.now()-t0)/1000).toFixed(1); let j={}; try{j=JSON.parse(xhr.responseText);}catch(_){}
     if(xhr.status>=200&&xhr.status<300){
       const audioUrl=j.url||("/api/audio/"+key);
       if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(audioUrl)))); }catch(_){}
-      if(sel>=0){ zones[sel][zoneAudioField(zones[sel])]=audioUrl;
+      if(assignToZone&&sel>=0){ zones[sel][zoneAudioField(zones[sel])]=audioUrl;
         const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
         updateVaSummary(zones[sel]); }
-      showBar(100);
-      aStat().innerHTML="uploaded ✓ "+sizeStr+" in "+secs+"s → <b>/api/audio/"+key+"</b>";
-      setTimeout(hideBar,1500);
-    } else if(xhr.status===401){ clearToken(); hideBar(); aStat().textContent="✕ unauthorized — token cleared"; }
-    else { hideBar(); aStat().textContent="✕ upload failed ("+xhr.status+"): "+(j.error||xhr.statusText||"server error"); }
+      barShow(100);
+      statusEl.innerHTML="uploaded ✓ "+sizeStr+" in "+secs+"s → <b>/api/audio/"+key+"</b>";
+      setTimeout(barHide,1500);
+      if(opts.onDone) opts.onDone(audioUrl,key);
+    } else if(xhr.status===401){ clearToken(); barHide(); statusEl.textContent="✕ unauthorized — token cleared"; }
+    else { barHide(); statusEl.textContent="✕ upload failed ("+xhr.status+"): "+(j.error||xhr.statusText||"server error"); }
   };
-  xhr.onerror=()=>{ hideBar(); aStat().textContent="✕ network error"; };
+  xhr.onerror=()=>{ barHide(); statusEl.textContent="✕ network error"; };
   xhr.timeout=180000;
   xhr.send(blob);
 }
@@ -3546,41 +3856,62 @@ function addBotToZone(zone, botId){
   drop.onclick=()=>openBotPicker();
 })();
 
-/* ---- map canvas drop — drag bot from tray directly onto map zone ---- */
+/* ---- map canvas drop — drag a bot from the tray, or an audio clip from the
+   Audio Files panel, directly onto a map zone ---- */
 (function(){
+  function _nearestZone(pt){
+    let best=null,bestD=200;
+    zones.forEach((z,i)=>{
+      const c=zoneCenterLonLat(z); if(!c)return;
+      const d=SimGeo.hav([pt.lat,pt.lng],LL(c));
+      if(d<bestD){bestD=d;best=i;}
+    });
+    return best;
+  }
   function setupMapDrop(){
     const canvas=map.getCanvas();
     canvas.addEventListener("dragover",e=>{
-      if(e.dataTransfer.types.includes("botid")||e.dataTransfer.types.includes("botId".toLowerCase()))e.preventDefault();
+      if(e.dataTransfer.types.includes("botid")||e.dataTransfer.types.includes("audiourl"))e.preventDefault();
     });
     canvas.addEventListener("drop",e=>{
       e.preventDefault();
-      const botId=e.dataTransfer.getData("botId"); if(!botId)return;
+      const botId=e.dataTransfer.getData("botId"), audioUrl=e.dataTransfer.getData("audiourl");
+      if(!botId&&!audioUrl)return;
       const rect=canvas.getBoundingClientRect();
       const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
-      // find closest zone centre within 200m
-      let best=null,bestD=200;
-      zones.forEach((z,i)=>{
-        const c=zoneCenterLonLat(z); if(!c)return;
-        const d=SimGeo.hav([pt.lat,pt.lng],LL(c));
-        if(d<bestD){bestD=d;best=i;}
-      });
+      const best=_nearestZone(pt);
       if(best==null)return;
-      addBotToZone(zones[best],botId);
+      if(botId) addBotToZone(zones[best],botId);
+      if(audioUrl){
+        const key=e.dataTransfer.getData("audiokey")||audioUrl;
+        zones[best][zoneAudioField(zones[best])]=audioUrl;
+        if(sel===best){
+          const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
+          updateVaSummary(zones[best]);
+        }
+      }
       if(sel!==best){ selectZone(best); map.flyTo({center:zoneCenterLonLat(zones[best]),zoom:17}); }
     });
   }
   if(map._loaded) setupMapDrop(); else map.on("load",setupMapDrop);
 })();
 
-/* ---- zone list rows drop target ---- */
+/* ---- zone list rows drop target (bots or audio clips) ---- */
 function _makeZoneRowDroppable(rowEl, zoneIdx){
-  rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("botid")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
+  rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("botid")||e.dataTransfer.types.includes("audiourl")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
   rowEl.ondragleave=()=>rowEl.style.background="";
   rowEl.ondrop=e=>{ e.preventDefault();rowEl.style.background="";
-    const botId=e.dataTransfer.getData("botId"); if(!botId)return;
-    addBotToZone(zones[zoneIdx],botId);
-    if(sel===zoneIdx) renderZoneBots(zones[zoneIdx]); };
+    const botId=e.dataTransfer.getData("botId"), audioUrl=e.dataTransfer.getData("audiourl");
+    if(botId){ addBotToZone(zones[zoneIdx],botId); if(sel===zoneIdx) renderZoneBots(zones[zoneIdx]); }
+    if(audioUrl){
+      const key=e.dataTransfer.getData("audiokey")||audioUrl;
+      zones[zoneIdx][zoneAudioField(zones[zoneIdx])]=audioUrl;
+      if(sel===zoneIdx){
+        const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
+        updateVaSummary(zones[zoneIdx]);
+      }
+    }
+  };
 }
 
 /* ---- bot picker modal ---- */
