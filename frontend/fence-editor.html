@@ -1047,7 +1047,20 @@ function renderSources(){
   zones.forEach((z,i)=>{
     const s=z.shape, selected=(i===sel);
     const isPath=s.type==="path";
-    const c=zoneCenterLonLat(z), gr=zoneGenR(z);
+    // While testing, a path (moving ambient) stop's own rings track its
+    // current live position along the route (same position its amber
+    // marker uses via simAmbientCenterNow) instead of staying pinned to
+    // the route's starting point — that's the whole point of "moving
+    // ambient": the rings should visibly travel with it.
+    let c=zoneCenterLonLat(z);
+    if(isPath&&simMode&&simBundle){
+      const sz=simBundle.zones.find(x=>x.id===z.id);
+      if(sz&&sz.path&&sz.path.length>1){
+        const live=simAmbientCenterNow(sz,Date.now()); // [lat,lon]
+        c=[live[1],live[0]];
+      }
+    }
+    const gr=zoneGenR(z);
     // approach ring + audio fade ring — trigger-system rings, shown for every
     // zone type including path stops (path stops fire triggers too now, at
     // whatever point along the route they currently occupy at runtime)
@@ -1089,16 +1102,13 @@ function renderSources(){
   });
   map.getSource("fences").setData(fc(feats));
 
-  // project-level rings — shown only when a dot button is active. Centred on
-  // the sim avatar (red dot) while test mode is running so voice/full-vol/
-  // visitor range is easy to eyeball as it walks a path; falls back to the
-  // all-zones centroid otherwise (editor mode, or test mode before the
-  // avatar exists).
+  // project-level rings — shown only when a dot button is active (centred on all-zones centroid)
   if(map.getSource("project-rings")){
     const pf=[];
-    const pc=(simMode&&simAvatar)?(ll=>[ll.lng,ll.lat])(simAvatar.getLngLat())
-      :(zones.length?(allC=>[allC.reduce((s,c)=>s+c[0],0)/allC.length, allC.reduce((s,c)=>s+c[1],0)/allC.length])(zones.map(z=>zoneCenterLonLat(z))):null);
-    if(_activeProjSetting&&pc){
+    if(_activeProjSetting&&zones.length){
+      // centroid of all zone centers
+      const allC=zones.map(z=>zoneCenterLonLat(z));
+      const pc=[allC.reduce((s,c)=>s+c[0],0)/allC.length, allC.reduce((s,c)=>s+c[1],0)/allC.length];
       const rM=+(document.getElementById("audioRange").value)||64;
       const cM=+(document.getElementById("audioClear").value)||8;
       const vM=+(document.getElementById("visitorRadius").value)||15;
@@ -3131,6 +3141,7 @@ function enterTestMode(){
     if(!simBundle||!simBundle.zones.some(z=>z.path)) return;
     const now=Date.now();
     refreshSimAmbientMarker(now);
+    renderSources(); // move each path stop's own rings to its live position alongside its marker
     if(simAvatar) SimAmbient.update({lat:simAvatar.getLngLat().lat,lon:simAvatar.getLngLat().lng}, now, simBundle.zones);
   },1000);
   // build avatar — set lngLat before addTo or it lands at [0,0]
@@ -3139,10 +3150,8 @@ function enterTestMode(){
     simAvatar=new maplibregl.Marker({element:el,draggable:true}).setLngLat([c.lng,c.lat]).addTo(map);
     let dragT=0;
     simAvatar.on("drag",()=>{const now=performance.now();if(now-dragT<150)return;dragT=now;
-      const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());
-      if(_activeProjSetting) renderSources();});
+      const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());});
   } else simAvatar.setLngLat([c.lng,c.lat]);
-  if(_activeProjSetting) renderSources(); // snap ghost ring to the avatar's starting spot
   // create tracker markers for dynamic zones
   simOrigCenters={};simTrackers=[];
   zones.forEach((z,i)=>{
@@ -3230,7 +3239,6 @@ function simPlay(){
     const pt=simPathPointAt(Math.min(simDist,total));
     const jLat=pt[0]+(Math.random()-.5)*3/111320,jLon=pt[1]+(Math.random()-.5)*3/111320;
     simAvatar.setLngLat([jLon,jLat]);
-    if(_activeProjSetting) renderSources(); // keep voice/full-vol/visitor ghost ring pinned to the avatar
     feedSim(jLat,jLon,4,vT);
     if(ended){simPause();simLogEv("sev-sys","walk complete");}
   },250);}
@@ -4010,8 +4018,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   setSpeed(1.4,"🚴 Bike");
 })();
 map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspended"&&SimVoice.ctx.resume();
-  const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());
-  if(_activeProjSetting) renderSources();});
+  const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());});
 
 /* ============================================================
    Audio Lab — embedded spatial audio tester
