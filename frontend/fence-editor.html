@@ -61,6 +61,15 @@
   .gp-toast-ok{background:var(--go)}
   .gp-toast-warn{background:var(--amber)}
   .gp-toast-err{background:var(--hazard);color:var(--snow)}
+  .gp-confirm{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:9999;
+             font-family:"Barlow Condensed";font-size:14px;font-weight:600;color:var(--night);background:var(--amber);
+             padding:10px 14px;border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.35);display:flex;gap:10px;align-items:center;
+             opacity:0;transition:opacity .2s,transform .2s;max-width:min(92vw,560px);text-align:left}
+  .gp-confirm.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .gp-confirm button{font-family:"Barlow Condensed";font-size:13px;font-weight:700;padding:5px 12px;border-radius:6px;
+             border:1px solid var(--night);cursor:pointer;flex:0 0 auto}
+  .gp-confirm .gp-c-restore{background:var(--night);color:var(--snow)}
+  .gp-confirm .gp-c-discard{background:transparent;color:var(--night)}
   hr{border:none;border-top:1px solid var(--rim);margin:10px 0}
   .props{border:1px solid var(--coral);border-radius:12px;padding:10px;margin:8px 0;background:rgba(255,106,61,.05)}
   .props h2{font-family:"Barlow Condensed";font-size:13px;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px;color:var(--coral)}
@@ -920,6 +929,10 @@ function autoSave(){
     }catch(e){}
   },800);
 }
+// Draft restore requires an explicit click — a stale draft must never
+// silently swap out whatever's currently in the editor (see the "Golden"
+// incident: opening /editor bare replaced an unrelated project's state
+// with a week-old draft before anyone had a chance to say no).
 function autoRestore(){
   try{
     const raw=localStorage.getItem(DRAFT_KEY);
@@ -928,12 +941,27 @@ function autoRestore(){
     if(!snap||!Array.isArray(snap.zones)||!snap.zones.length) return false;
     // stale after 7 days
     if(Date.now()-snap.savedAt>7*24*3600*1000){ localStorage.removeItem(DRAFT_KEY); return false; }
-    zones=snap.zones; sel=-1;
-    _currentProjectId=snap.id||null;
-    document.getElementById("projCrumb").textContent=snap.name||snap.id||"draft";
-    render(); refreshProps();
-    ps().innerHTML="draft restored (<b>"+snap.zones.length+" zone"+(snap.zones.length===1?"":"s")+"</b>) — Publish to save to D1 &nbsp;<button onclick=\"localStorage.removeItem('"+DRAFT_KEY+"');zones=[];sel=-1;render();refreshProps();ps().textContent='draft cleared';\" style=\"font-size:11px;padding:2px 7px;border-radius:5px;background:transparent;border:1px solid var(--rim);color:var(--fog);cursor:pointer;font-family:'Barlow Condensed'\">discard</button>";
-    toast("Restored an unsaved local draft (\""+(snap.name||snap.id||"untitled")+"\") — not the platform's copy. Check this is the project you meant to edit.","warn");
+    const label=snap.name||snap.id||"untitled";
+    const b=document.createElement("div");
+    b.className="gp-confirm";
+    b.innerHTML="<span>Unsaved local draft found: \""+label+"\" ("+snap.zones.length+" zone"+(snap.zones.length===1?"":"s")+
+      ") — not the platform's copy. Restore it into the editor?</span>"+
+      "<button class=\"gp-c-restore\">Restore</button><button class=\"gp-c-discard\">Discard</button>";
+    document.body.appendChild(b);
+    requestAnimationFrame(()=>b.classList.add("show"));
+    b.querySelector(".gp-c-restore").onclick=()=>{
+      zones=snap.zones; sel=-1;
+      _currentProjectId=snap.id||null;
+      document.getElementById("projCrumb").textContent=label;
+      render(); refreshProps();
+      ps().textContent="draft restored ("+snap.zones.length+" zone"+(snap.zones.length===1?"":"s")+") — Publish to save to D1";
+      b.remove();
+    };
+    b.querySelector(".gp-c-discard").onclick=()=>{
+      localStorage.removeItem(DRAFT_KEY);
+      ps().textContent="draft discarded";
+      b.remove();
+    };
     return true;
   }catch(e){ return false; }
 }
@@ -1061,13 +1089,16 @@ function renderSources(){
   });
   map.getSource("fences").setData(fc(feats));
 
-  // project-level rings — shown only when a dot button is active (centred on all-zones centroid)
+  // project-level rings — shown only when a dot button is active. Centred on
+  // the sim avatar (red dot) while test mode is running so voice/full-vol/
+  // visitor range is easy to eyeball as it walks a path; falls back to the
+  // all-zones centroid otherwise (editor mode, or test mode before the
+  // avatar exists).
   if(map.getSource("project-rings")){
     const pf=[];
-    if(_activeProjSetting&&zones.length){
-      // centroid of all zone centers
-      const allC=zones.map(z=>zoneCenterLonLat(z));
-      const pc=[allC.reduce((s,c)=>s+c[0],0)/allC.length, allC.reduce((s,c)=>s+c[1],0)/allC.length];
+    const pc=(simMode&&simAvatar)?(ll=>[ll.lng,ll.lat])(simAvatar.getLngLat())
+      :(zones.length?(allC=>[allC.reduce((s,c)=>s+c[0],0)/allC.length, allC.reduce((s,c)=>s+c[1],0)/allC.length])(zones.map(z=>zoneCenterLonLat(z))):null);
+    if(_activeProjSetting&&pc){
       const rM=+(document.getElementById("audioRange").value)||64;
       const cM=+(document.getElementById("audioClear").value)||8;
       const vM=+(document.getElementById("visitorRadius").value)||15;
@@ -3108,8 +3139,10 @@ function enterTestMode(){
     simAvatar=new maplibregl.Marker({element:el,draggable:true}).setLngLat([c.lng,c.lat]).addTo(map);
     let dragT=0;
     simAvatar.on("drag",()=>{const now=performance.now();if(now-dragT<150)return;dragT=now;
-      const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());});
+      const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());
+      if(_activeProjSetting) renderSources();});
   } else simAvatar.setLngLat([c.lng,c.lat]);
+  if(_activeProjSetting) renderSources(); // snap ghost ring to the avatar's starting spot
   // create tracker markers for dynamic zones
   simOrigCenters={};simTrackers=[];
   zones.forEach((z,i)=>{
@@ -3197,6 +3230,7 @@ function simPlay(){
     const pt=simPathPointAt(Math.min(simDist,total));
     const jLat=pt[0]+(Math.random()-.5)*3/111320,jLon=pt[1]+(Math.random()-.5)*3/111320;
     simAvatar.setLngLat([jLon,jLat]);
+    if(_activeProjSetting) renderSources(); // keep voice/full-vol/visitor ghost ring pinned to the avatar
     feedSim(jLat,jLon,4,vT);
     if(ended){simPause();simLogEv("sev-sys","walk complete");}
   },250);}
@@ -3976,7 +4010,8 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   setSpeed(1.4,"🚴 Bike");
 })();
 map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspended"&&SimVoice.ctx.resume();
-  const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());});
+  const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());
+  if(_activeProjSetting) renderSources();});
 
 /* ============================================================
    Audio Lab — embedded spatial audio tester
