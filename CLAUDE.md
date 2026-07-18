@@ -107,14 +107,18 @@ This file is never committed. In production, secrets are set via `npx wrangler s
 All audio lives in the `geofence-audio` R2 bucket as a flat key-value store — there are no real directories, only key prefixes. Two scopes:
 
 - **Project-owned** (`<projectId>/<file>.<ext>`): populated only by a project's own per-stop Record/Upload buttons (`fence-editor.html`) and the Field Recorder (`field-recorder.html`). Only ever visible/listed while inside that owning project — never shown cross-project. Deleting a project (`DELETE /api/projects/:id` or an app cascade-delete) also deletes everything under its `<projectId>/` prefix (`deleteProjectRows` in `worker.js`), so nothing gets orphaned.
-- **Library** (`library/<file>.<ext>` at the root, or `library/<folder>/<file>.<ext>` — one flat level, no nesting): general-purpose uploads reusable across every project, managed from the standalone `/library` page or the Fence Editor's own "Audio Files" panel (Library tab). `library` is a reserved project id/slug — `POST /api/projects` rejects it.
+- **Library** (`library/<orgId>/<file>.<ext>` at that company's root, or `library/<orgId>/<folder>/<file>.<ext>` — one flat level, no nesting): general-purpose uploads reusable across every project belonging to one company, managed from the standalone `/library` page or the Fence Editor's own "Audio Files" panel (Library tab). Scoped by `orgId` — the same client id used everywhere else (`project.orgId`, `app.orgId`, `user_account.org_id`) — so two different companies never see each other's shared audio, even though they share the same R2 bucket. `library` is a reserved project id/slug — `POST /api/projects` rejects it. The Fence Editor derives the org from the project's "Customer" dropdown (`clientSel`); the standalone `/library` page uses the shared `client-picker.js` component.
 
 **`GET /api/audio-list`** takes exactly one of three query shapes (a bare call with no param 400s — it used to leak the whole bucket):
 - `?project=<id>` — that project's own clips, annotated with `expiresAt` for any clip still tied to a live, not-yet-expired `live_zone` row (Field Recorder's "live-stop" mode; cleaned up by the existing `cleanupLiveZones` cron, unchanged by any of this).
-- `?scope=library[&folder=<name>]` — Library root or one folder, plus the list of subfolders found there.
+- `?scope=library&org=<clientId>[&folder=<name>]` — that company's Library root or one folder, plus the list of subfolders found there. **Only a root listing (`folder` omitted) is authoritative for "which folders exist"** — a folder-scoped listing's own `folders` array is always empty (no nesting), so the frontend must not use it to overwrite its known folder list, or sibling folders appear to vanish once you open one.
 - `?scope=all` — master-token only; full-bucket view, for reclaiming truly orphaned legacy keys.
 
-**`POST /api/audio/move`** (`{from, to}`) relocates a file between Library folders — implemented server-side as get→put→delete in one request rather than round-tripping the file through the browser. Library-only; project-owned clips aren't movable (they stay tied to whichever stop recorded them).
+**`POST /api/audio/move`** (`{from, to}`) relocates a file between Library folders **within the same company's org** — implemented server-side as get→put→delete in one request rather than round-tripping the file through the browser. Library-only; project-owned clips aren't movable (they stay tied to whichever stop recorded them).
+
+**`DELETE /api/audio/folder?org=<clientId>&folder=<name>`** deletes every object under that Library folder in one call (paginated `list`+batch `delete`), for when you want to remove a folder instead of its files one at a time.
+
+**Library uploads always get a short uniqueness suffix** (`<name>-<timestamp36>.<ext>`, matching how project-owned uploads already worked) — two files with the same original filename in the same folder no longer silently overwrite each other.
 
 The Fence Editor's "Audio Files" panel and the standalone `/library` page both let you select 2+ clips and **Combine** them: a Main sequence (played back to back) plus an optional Background lane (looped/blended underneath at its own volume) get rendered client-side through the same `OfflineAudioContext` → lamejs MP3 pipeline the single-clip Trim tool already uses (`_reenc`/`_reencBlend` in `fence-editor.html`), then uploaded as a new Library file.
 
@@ -232,9 +236,10 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | GET/POST | `/api/consent` | public |
 | POST | `/api/events` | public (requires stored `store-history` consent) |
 | GET | `/api/analytics` | scoped (`analytics`) |
-| GET | `/api/audio-list` | requires `?project=`, `?scope=library`, or `?scope=all`; scoped (`audio`/`publish`), `?scope=all` is master-only |
-| GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped (`audio` or `publish`) |
-| POST | `/api/audio/move` | scoped (`audio` or `publish`); `library/` keys only |
+| GET | `/api/audio-list` | requires `?project=`, `?scope=library&org=`, or `?scope=all`; scoped (`audio`/`publish`) + same-org, `?scope=all` is master-only |
+| GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped (`audio` or `publish`) + same-org for `library/` keys |
+| POST | `/api/audio/move` | scoped (`audio` or `publish`) + same-org; `library/` keys only, can't cross companies |
+| DELETE | `/api/audio/folder?org=&folder=` | scoped (`audio` or `publish`) + same-org; deletes every file under that Library folder |
 | POST | `/api/transcribe` | public (Workers AI Whisper STT) |
 | POST | `/api/tts` | public (Workers AI speecht5_tts → WAV) |
 | GET | `/api/weather` | public (latest cached reading) |

@@ -896,10 +896,12 @@
       <button class="af-tab on" id="afTabProject" data-tab="project">This Project</button>
       <button class="af-tab" id="afTabLibrary" data-tab="library">Library</button>
     </div>
+    <div id="afNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to use its shared Library</div>
     <div class="af-crumb" id="afCrumb" style="display:none">
       <span>&#128193;</span>
       <select id="afFolderSel"><option value="">Library (root)</option></select>
       <button id="afNewFolder">+ Folder</button>
+      <button id="afDeleteFolder" style="display:none;color:var(--hazard);border-color:var(--hazard)">Delete folder</button>
     </div>
     <div class="row" style="margin:0;gap:6px">
       <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:6px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase">
@@ -1985,13 +1987,17 @@ document.getElementById("btnVoiceStop").onclick=()=>{
 };
 // pVoiceDone handlers removed — recording now opens the trimmer directly
 
-/* ---- Audio Files panel: "This Project" (auto-managed) + "Library" (shared, foldered) ---- */
+/* ---- Audio Files panel: "This Project" (auto-managed) + "Library" (shared, foldered, per-company) ---- */
 let afTab="project", afFolder="", afSelected=new Set(), afObjsById={};
 // R2 has no real directory objects — a folder only appears in a listing once
-// it holds a file. Track ones created this page-load so a brand-new empty
-// folder doesn't vanish the instant its own (empty) listing comes back.
+// it holds a file, and a *non-root* listing's own "folders" is always empty
+// (we don't nest), so only a root listing can be trusted as the full,
+// authoritative folder inventory. afPendingFolders covers the gap right
+// after creating a brand-new (still-empty) folder, before it has a file.
+let afKnownFolders=new Set();
 const afPendingFolders=new Set();
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
+function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
 function afBarEl(){ return document.getElementById("afBar"); }
 function afFillEl(){ return document.getElementById("afFill"); }
 function afStat(){ const el=document.getElementById("afStatus"); if(el) el.style.display="block"; return el; }
@@ -2032,11 +2038,32 @@ document.getElementById("afNewFolder").onclick=()=>{
   // Switching there now just means the next upload creates it.
   afPendingFolders.add(name);
   afFolder=name;
+  afSyncFolderOptions();
   doAudioRefresh();
+};
+document.getElementById("afDeleteFolder").onclick=async()=>{
+  const org=afOrgId(); if(!org||!afFolder) return;
+  if(!confirm('Delete the folder "'+afFolder+'" and everything in it? This cannot be undone.')) return;
+  try{
+    const r=await fetch("/api/audio/folder?org="+encodeURIComponent(org)+"&folder="+encodeURIComponent(afFolder),
+      {method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
+    afKnownFolders.delete(afFolder); afPendingFolders.delete(afFolder);
+    afFolder=""; afSelected.clear(); updateCombineBtn();
+    doAudioRefresh();
+  }catch(e){ alert("Delete failed: "+e.message); }
 };
 
 async function doAudioRefresh(){
   const list=document.getElementById("afList");
+  document.getElementById("afNoOrg").style.display="none";
+  if(afTab==="library" && !afOrgId()){
+    document.getElementById("afNoOrg").style.display="block";
+    document.getElementById("afCrumb").style.display="none";
+    list.innerHTML="";
+    return;
+  }
+  if(afTab==="library") document.getElementById("afCrumb").style.display="flex";
   list.innerHTML='<div class="af-empty">loading…</div>';
   try{
     let qs;
@@ -2045,20 +2072,24 @@ async function doAudioRefresh(){
       if(!pid){ list.innerHTML='<div class="af-empty">save this tour first</div>'; return; }
       qs="project="+encodeURIComponent(pid);
     } else {
-      qs="scope=library"+(afFolder?"&folder="+encodeURIComponent(afFolder):"");
+      qs="scope=library&org="+encodeURIComponent(afOrgId())+(afFolder?"&folder="+encodeURIComponent(afFolder):"");
     }
     const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
     if(r.status===401){ list.innerHTML='<div class="af-empty">token rejected — needs audio/publish scope</div>'; clearToken(); return; }
     const j=r.ok?await r.json():{objects:[]};
-    if(afTab==="library") afSyncFolderOptions(j.folders||[]);
+    if(afTab==="library"){
+      if(!afFolder) afKnownFolders=new Set(j.folders||[]); // only a root listing is authoritative
+      afSyncFolderOptions();
+    }
     renderAudioList(j.objects||[]);
   }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
 }
-function afSyncFolderOptions(folders){
-  const all=[...new Set([...folders, ...afPendingFolders])].sort();
+function afSyncFolderOptions(){
+  const all=[...new Set([...afKnownFolders, ...afPendingFolders])].sort();
   const keep=afFolder, opts='<option value="">Library (root)</option>'+all.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
   const fsel=document.getElementById("afFolderSel"); fsel.innerHTML=opts; fsel.value=keep; if(fsel.value!==keep) fsel.value="";
   const cf=document.getElementById("cmbFolderSel"); if(cf){ const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value=""; }
+  document.getElementById("afDeleteFolder").style.display=keep?"inline-block":"none";
 }
 
 function renderAudioList(objects){
@@ -2147,9 +2178,13 @@ function afMove(o){
   const dest=(prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', afFolder||"")||"").trim();
   if(dest===(afFolder||"")) return;
   if(dest.includes("/")){ alert('Library folders are flat — no "/".'); return; }
-  const to="library/"+(dest?dest+"/":"")+o.key.split("/").pop();
+  const org=o.key.split("/")[1]; // library/<org>/<folder?>/<file> — move within the same company
+  const to="library/"+org+"/"+(dest?dest+"/":"")+o.key.split("/").pop();
   fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})})
-    .then(async r=>{ if(r.ok) doAudioRefresh(); else alert("Move failed: "+(await r.text())); })
+    .then(async r=>{
+      if(r.ok){ if(dest) afPendingFolders.add(dest); doAudioRefresh(); }
+      else alert("Move failed: "+(await r.text()));
+    })
     .catch(e=>alert("Move failed: "+e.message));
 }
 function updateCombineBtn(){
@@ -2161,12 +2196,15 @@ document.getElementById("afCombineBtn").onclick=()=>openCombineModal([...afSelec
 document.getElementById("afUploadFile").addEventListener("change",async e=>{
   const f=e.target.files[0]; if(!f) return;
   e.target.value="";
+  if(afTab==="library" && !afOrgId()){ afStat().textContent="assign this tour to a customer first — see the Customer dropdown above"; return; }
   try{
     const ab=await f.arrayBuffer();
     const ctx=new AudioContext(); let buf; try{ buf=await ctx.decodeAudioData(ab); }finally{ ctx.close(); }
     const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
+    // Always append a short uniqueness suffix — two uploads with the same
+    // original filename must not silently overwrite each other.
     const defaultKey=afTab==="library"
-      ? "library/"+(afFolder?afFolder+"/":"")+base+"."+ext
+      ? "library/"+afOrgId()+"/"+(afFolder?afFolder+"/":"")+base+"-"+Date.now().toString(36)+"."+ext
       : (afProjectId()||"project")+"/"+base+"-"+Date.now().toString(36)+"."+ext;
     openTrimmer(buf, defaultKey,
       key=>{ doXhrUpload(f, key||defaultKey, f.type||"audio/mpeg", {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh}); },
@@ -2228,14 +2266,16 @@ function renderCombineLanes(){
 document.getElementById("cmbRender").onclick=async()=>{
   const mainSegs=_cmbSegs.filter(s=>s.lane==="main"), bgSegs=_cmbSegs.filter(s=>s.lane==="bg");
   if(mainSegs.length<1){ alert("Need at least one clip in the Main sequence."); return; }
+  const org=afOrgId(); if(!org){ alert("Assign this tour to a customer first — see the Customer dropdown above."); return; }
   const btn=document.getElementById("cmbRender"); btn.textContent="rendering…"; btn.disabled=true;
   try{
     for(const s of _cmbSegs){ if(!s.buf) s.buf=await _decodeUrl(s.o.url); }
     const blob=await _reencBlend(mainSegs,bgSegs);
     const folder=document.getElementById("cmbFolderSel").value;
     const name=slug((document.getElementById("cmbName").value||"combined").trim())||"combined";
-    const key="library/"+(folder?folder+"/":"")+name+".mp3";
+    const key="library/"+org+"/"+(folder?folder+"/":"")+name+"-"+Date.now().toString(36)+".mp3";
     closeCombineModal();
+    if(folder) afPendingFolders.add(folder);
     doXhrUpload(blob, key, blob.type, {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh});
   }catch(e){ alert("Combine failed: "+e.message); }
   finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }

@@ -306,6 +306,25 @@ function scopeOk(A, scope, targetAppId) {
   const appOk = (A.appId == null) || (targetAppId == null) || (A.appId === targetAppId);
   return hasScope && appOk;
 }
+// Library audio is shared across every project belonging to one company,
+// not across the whole bucket — the "org" here is the same client/orgId
+// used everywhere else (project.orgId, app.orgId, user_account.org_id).
+// A session caller's A.appId already *is* their org_id (see auth() above);
+// an API-key caller's A.appId is a workspace id, so it needs one lookup to
+// resolve which org that workspace belongs to.
+async function libraryScopeOk(env, A, orgId) {
+  if (!A) return false;
+  if (A.master) return true;
+  const scopes = (A.scopes || "").split(",").map(s => s.trim());
+  const hasScope = scopes.includes("*") || scopes.includes("audio") || scopes.includes("publish");
+  if (!hasScope) return false;
+  if (A.appId == null) return true; // unscoped key — matches scopeOk's existing wide-open convention
+  if (A.appId === orgId) return true;
+  try {
+    const row = await env.DB.prepare("SELECT orgId FROM app WHERE id=?").bind(A.appId).first();
+    return !!(row && row.orgId === orgId);
+  } catch (e) { return false; }
+}
 function scopesForRole(role) {
   if (role === "admin") return "*";
   if (role === "operator") return "analytics";
@@ -1644,13 +1663,14 @@ async function api(request, env, url) {
     }
 
     if (scope === "library") {
-      // Library files are shared across every project by design — any caller
-      // with audio/publish scope on any app can browse/use them (this repo
-      // is single-org; tighten to master-only here if that ever changes).
-      if (!scopeOk(A, "audio", null) && !scopeOk(A, "publish", null)) return json({ error: "unauthorized" }, 401, AC);
+      // Library is shared across every project belonging to ONE company —
+      // scoped by org (client id), not the whole bucket.
+      const orgId = url.searchParams.get("org");
+      if (!orgId) return json({ error: "?scope=library needs &org=<clientId>" }, 400);
+      if (!(await libraryScopeOk(env, A, orgId))) return json({ error: "unauthorized" }, 401, AC);
       const folder = url.searchParams.get("folder") || "";
       if (folder.includes("/")) return json({ error: "library folders are flat — no nested paths" }, 400);
-      const prefix = "library/" + (folder ? folder + "/" : "");
+      const prefix = "library/" + orgId + "/" + (folder ? folder + "/" : "");
       let objects = [], folders = [], cursor;
       do {
         const l = await env.AUDIO.list({ prefix, delimiter: "/", cursor });
@@ -1658,7 +1678,7 @@ async function api(request, env, url) {
         folders = folders.concat((l.delimitedPrefixes || []).map(p => p.slice(prefix.length, -1)));
         cursor = l.truncated ? l.cursor : undefined;
       } while (cursor);
-      return json({ scope: "library", folder: folder || null, folders, objects }, 200, AC);
+      return json({ scope: "library", org: orgId, folder: folder || null, folders, objects }, 200, AC);
     }
 
     if (scope === "all") {
@@ -1672,20 +1692,41 @@ async function api(request, env, url) {
       return json({ scope: "all", objects }, 200, AC);
     }
 
-    return json({ error: "specify ?project=<id>, ?scope=library, or ?scope=all" }, 400, AC);
+    return json({ error: "specify ?project=<id>, ?scope=library&org=<clientId>, or ?scope=all" }, 400, AC);
   }
 
-  // --- move/rename a library file (library-only; project clips stay auto-managed) ---
+  // --- delete an entire library folder (everything under it), org-scoped ---
+  if (path === "/api/audio/folder" && method === "DELETE") {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    const A = await auth(request, env);
+    const orgId = url.searchParams.get("org"), folder = url.searchParams.get("folder");
+    if (!orgId || !folder) return json({ error: "need org and folder" }, 400);
+    if (folder.includes("/")) return json({ error: "library folders are flat — no nested paths" }, 400);
+    if (!(await libraryScopeOk(env, A, orgId))) return json({ error: "unauthorized" }, 401, AC);
+    const prefix = "library/" + orgId + "/" + folder + "/";
+    let deleted = 0, cursor;
+    do {
+      const l = await env.AUDIO.list({ prefix, cursor });
+      if (l.objects.length) { await env.AUDIO.delete(l.objects.map(o => o.key)); deleted += l.objects.length; }
+      cursor = l.truncated ? l.cursor : undefined;
+    } while (cursor);
+    await logAudit(env, request, A, "audio.folder.delete", prefix + " (" + deleted + " files)");
+    return json({ ok: true, deleted, prefix }, 200, AC);
+  }
+
+  // --- move/rename a library file (library-only, same org; project clips stay auto-managed) ---
   if (path === "/api/audio/move" && method === "POST") {
     if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
     const A = await auth(request, env);
-    if (!scopeOk(A, "audio", null) && !scopeOk(A, "publish", null)) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json().catch(() => ({}));
     const from = (b.from || "").trim(), to = (b.to || "").trim();
     if (!from || !to) return json({ error: "need from and to" }, 400);
-    if (!from.startsWith("library/") || !to.startsWith("library/")) return json({ error: "only library/ files can be moved" }, 400);
-    if (to.split("/").length > 3) return json({ error: "library folders are flat — no nested paths" }, 400); // library/<folder?>/<file>
+    const fromParts = from.split("/"), toParts = to.split("/");
+    if (fromParts[0] !== "library" || toParts[0] !== "library") return json({ error: "only library/ files can be moved" }, 400);
+    if (fromParts[1] !== toParts[1]) return json({ error: "can't move a file to a different company's library" }, 400);
+    if (toParts.length > 4) return json({ error: "library folders are flat — no nested paths" }, 400); // library/<org>/<folder?>/<file>
     if (from === to) return json({ error: "from and to are the same" }, 400);
+    if (!(await libraryScopeOk(env, A, fromParts[1]))) return json({ error: "unauthorized" }, 401, AC);
     const existing = await env.AUDIO.head(to);
     if (existing) return json({ error: "a file already exists at " + to }, 409);
     const obj = await env.AUDIO.get(from);
@@ -1701,14 +1742,20 @@ async function api(request, env, url) {
     const key = decodeURIComponent(path.slice("/api/audio/".length)).trim();
     if (!key) return json({ error: "need an audio key" }, 400);
     if (!env.AUDIO) return json({ error: "no audio bucket bound (create R2 'geofence-audio' + binding)" }, 500);
-    const isLibrary = key.split("/")[0] === "library";
+    const keyParts = key.split("/");
+    const isLibrary = keyParts[0] === "library";
     if (method === "PUT") {
       const A = await auth(request, env);
-      const appId = isLibrary ? null : await projectAppId(env, key.split("/")[0]);
-      if (isLibrary ? (!scopeOk(A, "audio", null) && !scopeOk(A, "publish", null))
-                    : (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)))
-        return json({ error: "not authorized to upload to this app" }, 401, AC);
-      if (isLibrary && key.split("/").length > 3) return json({ error: "library folders are flat — no nested paths" }, 400);
+      if (isLibrary) {
+        const orgId = keyParts[1];
+        if (!orgId) return json({ error: "library keys need an org: library/<clientId>/<file>" }, 400);
+        if (!(await libraryScopeOk(env, A, orgId))) return json({ error: "not authorized to upload to this company's library" }, 401, AC);
+        if (keyParts.length > 4) return json({ error: "library folders are flat — no nested paths" }, 400);
+      } else {
+        const appId = await projectAppId(env, keyParts[0]);
+        if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId))
+          return json({ error: "not authorized to upload to this app" }, 401, AC);
+      }
       const ct = request.headers.get("content-type") || "application/octet-stream";
       await env.AUDIO.put(key, request.body, { httpMetadata: { contentType: ct } });
       await logAudit(env, request, A, "audio.put", key);
@@ -1727,10 +1774,13 @@ async function api(request, env, url) {
     }
     if (method === "DELETE") {
       const A = await auth(request, env);
-      const appId = isLibrary ? null : await projectAppId(env, key.split("/")[0]);
-      if (isLibrary ? (!scopeOk(A, "audio", null) && !scopeOk(A, "publish", null))
-                    : (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)))
-        return json({ error: "unauthorized" }, 401, AC);
+      if (isLibrary) {
+        const orgId = keyParts[1];
+        if (!orgId || !(await libraryScopeOk(env, A, orgId))) return json({ error: "unauthorized" }, 401, AC);
+      } else {
+        const appId = await projectAppId(env, keyParts[0]);
+        if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
+      }
       await env.AUDIO.delete(key);
       await logAudit(env, request, A, "audio.delete", key);
       return json({ ok: true, deleted: key }, 200, AC);
