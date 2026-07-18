@@ -1,0 +1,1263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chase Life — Audio Studio</title>
+<script src="role-gate.js"></script>
+<script src="client-picker.js"></script>
+<script>RoleGate.require(['admin']);</script>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
+         --snow:#ffffff;--ice:#c8dff2;--fog:#8aa5bf;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow);overflow:hidden}
+  body{display:flex;flex-direction:column}
+  .hdr{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rim);background:rgba(10,16,24,.95);flex:0 0 auto}
+  .hdr h1{font-family:"Black Han Sans";font-size:17px;margin:0;flex:0 0 auto}
+  .hdr .crumb{font-family:"Barlow Condensed";font-size:13px;color:var(--fog);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hdr a,.hdr button.linklike{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:6px 12px;white-space:nowrap;background:none;cursor:pointer}
+  .hdr a:hover,.hdr button.linklike:hover{border-color:var(--ice)}
+  button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+         font-size:12px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:8px;
+         padding:7px 12px;cursor:pointer}
+  button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  button.ghost{background:none}
+  button.danger{border-color:var(--hazard);color:var(--hazard)}
+  button:disabled{opacity:.4;cursor:default}
+  input,select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
+         color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:6px 9px}
+  .hint{font-family:"Barlow";font-size:12px;color:var(--fog)}
+
+  /* ---- project picker screen ---- */
+  #pickerScreen{flex:1;overflow:auto;padding:20px}
+  #pickerScreen .inner{max-width:840px;margin:0 auto}
+  #pickerScreen h2{font-family:"Barlow Condensed";font-size:14px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:18px 0 8px}
+  .proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+  .proj-tile{background:rgba(255,255,255,.03);border:1px solid var(--rim);border-radius:12px;padding:14px;cursor:pointer;transition:.12s;display:flex;flex-direction:column;gap:6px}
+  .proj-tile:hover{border-color:var(--coral);background:rgba(255,106,61,.05)}
+  .proj-tile .pt-name{font-family:"Barlow Condensed";font-size:15px;font-weight:600}
+  .proj-tile .pt-meta{font-family:"Barlow Condensed";font-size:11px;color:var(--fog)}
+
+  /* ---- main studio screen ---- */
+  #studioScreen{flex:1;display:none;min-height:0}
+  #studioScreen.show{display:flex}
+  .rail{width:280px;flex:0 0 280px;border-right:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;background:rgba(255,255,255,.01)}
+  .rail-tabs{display:flex;gap:4px;padding:8px 8px 0}
+  .rail-tab{flex:1;font-family:'Barlow Condensed';font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+             background:none;border:1px solid var(--rim);border-radius:7px 7px 0 0;color:var(--fog);padding:7px 4px}
+  .rail-tab.on{background:var(--slate-2);color:var(--snow);border-bottom-color:var(--slate-2)}
+  .rail-body{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px;min-height:0}
+  .crumb-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .crumb-row button{font-size:10px;padding:4px 8px}
+  .tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+  .folder-tile{border:1px solid var(--rim);border-radius:9px;padding:10px 6px;text-align:center;cursor:pointer;background:rgba(255,255,255,.02);
+               font-family:'Barlow Condensed';font-size:11px;color:var(--ice);display:flex;flex-direction:column;align-items:center;gap:4px}
+  .folder-tile .fi{font-size:20px}
+  .folder-tile:hover,.folder-tile.dragover{border-color:var(--coral);background:rgba(255,106,61,.08)}
+  .folder-tile.new{border-style:dashed;color:var(--fog)}
+  .folder-tile input{width:90%;font-size:11px;padding:3px 4px;text-align:center}
+  .clip-list{display:flex;flex-direction:column;gap:4px}
+  .clip-tile{display:flex;align-items:center;gap:6px;padding:6px 7px;border:1px solid #26344a;border-radius:8px;cursor:grab;background:rgba(255,255,255,.02)}
+  .clip-tile:hover{border-color:var(--ice)}
+  .clip-tile .ct-drag{color:var(--fog);flex:0 0 auto;font-size:13px}
+  .clip-tile .ct-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'Barlow Condensed';font-size:12px}
+  .clip-tile button{flex:0 0 auto;padding:3px 7px;font-size:11px}
+  .rail-empty{font-family:'Barlow Condensed';font-size:12px;color:var(--fog);text-align:center;padding:16px 0}
+  .rail-foot{padding:8px;border-top:1px solid var(--rim);flex:0 0 auto}
+  .rail-foot label{display:block;font-family:'Barlow Condensed';font-size:10px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+
+  .studio-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+  .toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--rim);flex-wrap:wrap;flex:0 0 auto}
+  .toolbar .sep{width:1px;height:20px;background:var(--rim);margin:0 2px}
+  .toolbar .spacer{flex:1}
+  .zoomlbl{font-family:'Barlow Condensed';font-size:11px;color:var(--fog);width:44px;text-align:center}
+
+  .tl-scroll{flex:1;overflow:auto;position:relative;background:#0c1420}
+  .tl-body{position:relative;min-width:100%;width:max-content}
+  .tl-ruler{display:flex;position:sticky;top:0;z-index:3;background:#0c1420;border-bottom:1px solid var(--rim)}
+  .tl-ruler-head{position:sticky;left:0;z-index:4;width:170px;flex:0 0 170px;background:#0c1420;border-right:1px solid var(--rim)}
+  .tl-ruler-marks{position:relative;height:22px}
+  .tl-ruler-marks .mark{position:absolute;top:0;bottom:0;border-left:1px solid #1c2a3d;font-family:'Barlow Condensed';font-size:9px;color:var(--fog);padding-left:3px}
+  .track{display:flex;border-bottom:1px solid #16202f}
+  .track-head{position:sticky;left:0;z-index:2;width:170px;flex:0 0 170px;background:#0e1622;border-right:1px solid var(--rim);
+              padding:6px 8px;display:flex;flex-direction:column;gap:4px;justify-content:center}
+  .track-head .tn{font-family:'Barlow Condensed';font-size:12px;font-weight:600;background:none;border:none;color:var(--snow);
+                  padding:0;cursor:text;border-bottom:1px dashed transparent;width:100%}
+  .track-head .tn:focus{outline:none;border-bottom-color:var(--coral)}
+  .track-head .tbtns{display:flex;gap:3px;flex-wrap:wrap}
+  .track-head .tbtns button{padding:2px 6px;font-size:10px}
+  .track-head input[type=range]{width:100%;accent-color:var(--coral)}
+  .track-lane{position:relative;height:60px;flex:0 0 auto}
+  .track-lane.dragover{background:rgba(255,106,61,.06)}
+  .track-add{display:flex;align-items:center;padding:8px}
+  .segment{position:absolute;top:4px;bottom:4px;border-radius:6px;background:#1e2b40;border:1px solid #33465f;overflow:hidden;cursor:grab}
+  .segment.sel{border-color:var(--coral);box-shadow:0 0 0 1px var(--coral)}
+  .segment.loop{background:repeating-linear-gradient(135deg,#1e2b40,#1e2b40 8px,#223250 8px,#223250 16px)}
+  .segment canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .segment .seg-fades{position:absolute;inset:0;pointer-events:none}
+  .segment .seg-label{position:absolute;top:1px;left:4px;font-family:'Barlow Condensed';font-size:10px;color:var(--ice);
+                       text-shadow:0 1px 2px #000;pointer-events:none;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}
+  .seg-handle{position:absolute;top:0;bottom:0;width:7px;cursor:ew-resize;background:rgba(255,255,255,.14)}
+  .seg-handle.l{left:0} .seg-handle.r{right:0}
+  .seg-handle:hover{background:var(--coral)}
+  .seg-fade-handle{position:absolute;top:0;width:10px;height:10px;background:var(--amber);border-radius:50%;cursor:ew-resize;transform:translate(-50%,-3px)}
+  .seg-fade-handle.r{transform:translate(50%,-3px)}
+  #tlPlayhead{position:absolute;top:0;bottom:0;width:1px;background:var(--hazard);z-index:5;pointer-events:none}
+  #tlPlayhead::before{content:"";position:absolute;top:-6px;left:-4px;border:5px solid transparent;border-top-color:var(--hazard)}
+
+  .selbar{display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--rim);background:rgba(255,255,255,.02);flex:0 0 auto}
+  .selbar.show{display:flex}
+  .selbar .sn{font-family:'Barlow Condensed';font-size:12px;color:var(--ice);flex:0 0 auto;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .selbar label{font-family:'Barlow Condensed';font-size:10px;color:var(--fog);text-transform:uppercase;display:flex;align-items:center;gap:4px}
+  .selbar input[type=range]{width:80px;accent-color:var(--coral)}
+
+  /* ---- overlays (record / spatial / export) ---- */
+  .overlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);align-items:center;justify-content:center;padding:16px}
+  .overlay.show{display:flex}
+  .obox{background:var(--slate);border:1px solid var(--rim);border-radius:16px;padding:18px;width:100%;max-width:460px;
+        display:flex;flex-direction:column;gap:12px;max-height:88vh;overflow-y:auto}
+  .obox h2{font-family:"Barlow Condensed";font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:0}
+  .row{display:flex;gap:8px;margin:0}
+  .row button{flex:1}
+  #recCanvas{width:100%;height:80px;background:var(--slate-2);border:1px solid var(--rim);border-radius:10px;display:block}
+  #recTimer{font-family:'Barlow Condensed';font-size:20px;text-align:center;color:var(--hazard)}
+
+  .radar-grid{display:grid;grid-template-columns:200px 1fr;gap:14px}
+  @media(max-width:500px){ .radar-grid{grid-template-columns:1fr} }
+  #radar{width:100%;height:auto;border-radius:12px;background:#0c1622;touch-action:none}
+  .read{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-family:"Barlow Condensed"}
+  .read div{font-size:11px;color:var(--fog)}
+  .read b{display:block;font-size:15px;color:var(--snow);font-weight:600}
+  details.adv{margin-top:4px}
+  details.adv summary{font-family:'Barlow Condensed';font-size:11px;color:var(--fog);cursor:pointer;text-transform:uppercase;letter-spacing:.4px}
+  .slider{display:flex;align-items:center;gap:8px;margin:6px 0}
+  .slider input[type=range]{flex:1;accent-color:var(--coral)}
+  .slider .val{font-family:"Barlow Condensed";font-size:12px;color:var(--ice);width:60px;text-align:right}
+  .seg{display:flex;border:1px solid var(--rim);border-radius:9px;overflow:hidden;width:max-content}
+  .seg button{background:transparent;color:var(--ice);border:none;border-radius:0;padding:6px 10px;font-size:11px}
+  .seg button.on{background:var(--coral);color:#1a0d07}
+
+  #barWrap{display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:4px 0}
+  #barFill{height:100%;width:0%;background:var(--coral);transition:width .08s linear}
+  #status{display:none;font-family:"Barlow Condensed";font-size:12px;color:var(--fog);padding:0 12px 6px}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>🎛 Audio Studio</h1>
+  <span id="clientPickerNav" style="display:flex;align-items:center"></span>
+  <span class="crumb" id="hdrCrumb"></span>
+  <button class="linklike" id="btnBackToProjects" style="display:none">&larr; Projects</button>
+  <a href="/">Home</a>
+</div>
+
+<div id="status"></div>
+<div id="barWrap"><div id="barFill"></div></div>
+
+<!-- ================= project picker ================= -->
+<div id="pickerScreen">
+  <div class="inner">
+    <div class="hint" id="noOrgHint">Pick a company above to see its projects.</div>
+    <div id="projPickerBody" style="display:none">
+      <h2>Projects</h2>
+      <div class="proj-grid" id="projGrid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= main studio ================= -->
+<div id="studioScreen">
+  <div class="rail">
+    <div class="rail-tabs">
+      <button class="rail-tab on" id="railTabProject">This Project</button>
+      <button class="rail-tab" id="railTabLibrary">Library</button>
+    </div>
+    <div class="rail-body" id="railBody"></div>
+    <div class="rail-foot">
+      <label class="file" style="border:1px solid var(--rim);border-radius:8px;padding:7px 10px;cursor:pointer;display:block;text-align:center;color:var(--ice);font-family:'Barlow Condensed';font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.4px">
+        Upload<input type="file" id="railUpload" accept="audio/*" style="display:none">
+      </label>
+    </div>
+  </div>
+
+  <div class="studio-main">
+    <div class="toolbar">
+      <button id="btnPlay">▶ Play</button>
+      <button id="btnCut" class="ghost" title="Split selected segment at playhead">✂ Cut</button>
+      <div class="sep"></div>
+      <button id="btnRecord" class="ghost">🎙 Record</button>
+      <div class="sep"></div>
+      <button id="btnAddTrack" class="ghost">+ Track</button>
+      <div class="spacer"></div>
+      <button id="btnZoomOut" class="ghost" title="Zoom out">－</button>
+      <span class="zoomlbl" id="zoomLbl">80px/s</span>
+      <button id="btnZoomIn" class="ghost" title="Zoom in">＋</button>
+      <div class="sep"></div>
+      <button id="btnExport" class="on">Export ▶</button>
+    </div>
+
+    <div class="tl-scroll" id="tlScroll">
+      <div class="tl-body" id="tlBody">
+        <div class="tl-ruler">
+          <div class="tl-ruler-head"></div>
+          <div class="tl-ruler-marks" id="tlRulerMarks"></div>
+        </div>
+        <div id="tlTracks"></div>
+        <div id="tlPlayhead"></div>
+      </div>
+    </div>
+
+    <div class="selbar" id="selBar">
+      <span class="sn" id="selName">—</span>
+      <button id="selCopy" class="ghost" title="Duplicate">⎘ Copy</button>
+      <button id="selLoop" class="ghost" title="Loop to fill">🔁 Loop</button>
+      <button id="selSpatial" class="ghost" title="Apply spatial filter">🎯 Spatial</button>
+      <label>gain <input type="range" id="selGain" min="-24" max="12" value="0" step="1"><span id="selGainV">0dB</span></label>
+      <span class="spacer" style="flex:1"></span>
+      <button id="selDelete" class="danger">✕ Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= record overlay ================= -->
+<div class="overlay" id="recOverlay">
+  <div class="obox">
+    <h2>Record a clip</h2>
+    <canvas id="recCanvas" height="80"></canvas>
+    <div id="recTimer">0:00</div>
+    <div class="row">
+      <button id="recCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
+      <button id="recToggle" class="on" style="flex:1">● Start recording</button>
+    </div>
+    <div class="hint">Recording lands directly on the timeline as a new track — trim and fade it there.</div>
+  </div>
+</div>
+
+<!-- ================= spatial filter overlay ================= -->
+<div class="overlay" id="spatialOverlay">
+  <div class="obox" style="max-width:560px">
+    <h2>Spatial filter</h2>
+    <div class="hint">Drag the dot: angle = direction around the visitor, distance = how far away it sounds. Preview auditions live; Bake renders a new clip and replaces the segment's audio.</div>
+    <div class="radar-grid">
+      <div>
+        <canvas id="radar" width="200" height="200"></canvas>
+        <div class="read">
+          <div>direction<b id="rAz">—</b></div>
+          <div>distance<b id="rDist">—</b></div>
+        </div>
+      </div>
+      <div>
+        <div class="seg" id="spMode">
+          <button data-m="stereo" class="on">Stereo</button>
+          <button data-m="hrtf">3-D (HRTF)</button>
+        </div>
+        <details class="adv">
+          <summary>Advanced tuning</summary>
+          <div class="slider"><span class="k" style="width:90px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">clear dist</span><input type="range" id="spClearM" min="2" max="40" value="8"><span class="val" id="spClearMv">8 m</span></div>
+          <div class="slider"><span class="k" style="width:90px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">far dist</span><input type="range" id="spFarM" min="20" max="150" value="64"><span class="val" id="spFarMv">64 m</span></div>
+          <div class="slider"><span class="k" style="width:90px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">hi cutoff</span><input type="range" id="spHiHz" min="2000" max="16000" value="7000" step="100"><span class="val" id="spHiHzv">7000 Hz</span></div>
+          <div class="slider"><span class="k" style="width:90px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">lo cutoff</span><input type="range" id="spLoHz" min="250" max="3000" value="600" step="50"><span class="val" id="spLoHzv">600 Hz</span></div>
+          <div class="slider"><span class="k" style="width:90px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">min gain</span><input type="range" id="spMinGain" min="0" max="100" value="5"><span class="val" id="spMinGainv">0.05</span></div>
+          <div class="slider"><span class="k" style="width:90px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">curve</span><input type="range" id="spCurve" min="100" max="400" value="110" step="10"><span class="val" id="spCurvev">1.1×</span></div>
+          <div class="slider"><span class="k" style="width:90px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">reverb</span><input type="range" id="spReverbMax" min="0" max="100" value="40"><span class="val" id="spReverbMaxv">0.40</span></div>
+        </details>
+      </div>
+    </div>
+    <div class="row">
+      <button id="spCancel" class="ghost" style="flex:0 0 auto">✕ Close</button>
+      <button id="spPreview" class="ghost" style="flex:1">▶ Preview</button>
+      <button id="spBake" class="on" style="flex:1">Bake &amp; Replace</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= export overlay ================= -->
+<div class="overlay" id="exportOverlay">
+  <div class="obox">
+    <h2>Export timeline</h2>
+    <div style="margin:2px 0">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save as</label>
+      <input id="expName" style="width:100%;margin-top:4px" placeholder="mixed-clip">
+    </div>
+    <div class="seg" id="expDest" style="width:100%">
+      <button data-d="project" class="on" style="flex:1">This Project</button>
+      <button data-d="library" style="flex:1">Library</button>
+    </div>
+    <div id="expFolderRow" style="display:none">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Folder</label>
+      <div class="tile-grid" id="expFolderGrid" style="margin-top:4px"></div>
+    </div>
+    <div id="expTotal" class="hint"></div>
+    <div class="row">
+      <button id="expCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
+      <button id="expRender" class="on" style="flex:1">Render + Upload ▶</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+function getToken(){ return localStorage.getItem("gp.session")||""; }
+function clearToken(){ localStorage.removeItem("gp.session"); location.replace("/login?next="+encodeURIComponent(location.href)); }
+const statusEl=document.getElementById("status");
+function setStatus(html){ statusEl.style.display="block"; statusEl.innerHTML=html; }
+function showBar(p){ document.getElementById("barWrap").style.display="block"; document.getElementById("barFill").style.width=Math.round(p)+"%"; }
+function hideBar(){ document.getElementById("barWrap").style.display="none"; document.getElementById("barFill").style.width="0%"; }
+function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
+function audioExt(name,type){
+  const m=(name||"").match(/\.(mp3|m4a|aac|wav|ogg|webm)$/i); if(m) return m[1].toLowerCase();
+  if((type||"").includes("mp4")||(type||"").includes("m4a")) return "m4a";
+  if((type||"").includes("ogg")) return "ogg";
+  if((type||"").includes("wav")) return "wav";
+  return "webm";
+}
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
+
+/* ============================================================
+   Core render pipeline — canonical copy (mp3 encode / decode / peaks).
+   ============================================================ */
+let _lame=null;
+async function _loadLame(){
+  if(_lame) return _lame;
+  try{ const mod=await import('https://esm.sh/@breezystack/lamejs@1.2.7'); _lame=mod.Mp3Encoder; return _lame; }catch(e){ return null; }
+}
+function _pcm16(f){ const out=new Int16Array(f.length); for(let i=0;i<f.length;i++){ const v=Math.max(-1,Math.min(1,f[i])); out[i]=v<0?v*0x8000:v*0x7fff; } return out; }
+async function _encodeMp3(buf){
+  const Mp3Encoder=await _loadLame();
+  if(!Mp3Encoder) throw new Error("mp3 encoder failed to load — check your connection and try again");
+  const nch=buf.numberOfChannels>1?2:1, sr=buf.sampleRate;
+  const left=_pcm16(buf.getChannelData(0)), right=nch>1?_pcm16(buf.getChannelData(1)):null;
+  const enc=new Mp3Encoder(nch,sr,128); const chunks=[], block=1152;
+  for(let i=0;i<left.length;i+=block){
+    const out=right?enc.encodeBuffer(left.subarray(i,i+block),right.subarray(i,i+block)):enc.encodeBuffer(left.subarray(i,i+block));
+    if(out.length) chunks.push(out);
+  }
+  const tail=enc.flush(); if(tail.length) chunks.push(tail);
+  return new Blob(chunks,{type:"audio/mpeg"});
+}
+const _bufCache=new Map();
+async function _decodeUrl(url){
+  if(_bufCache.has(url)) return _bufCache.get(url);
+  const p=(async()=>{
+    const r=await fetch(url); const ab=await r.arrayBuffer();
+    const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab); await tmp.close(); return buf;
+  })();
+  _bufCache.set(url,p);
+  try{ return await p; }catch(e){ _bufCache.delete(url); throw e; }
+}
+function _buildPeaks(buf,N){
+  N=N||300;
+  const data=buf.getChannelData(0), step=Math.max(1,Math.floor(data.length/N)), out=[];
+  for(let i=0;i<N;i++){ let mx=0; for(let j=0;j<step;j++) mx=Math.max(mx,Math.abs(data[i*step+j]||0)); out.push(mx); }
+  return out;
+}
+function _mimeExt(mime){ return mime.includes("mpeg")||mime.includes("mp3")?"mp3":mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
+
+/* ============================================================
+   Timeline data model + offline render.
+   Timeline = { tracks:[ { id,name,muted,solo,gainDb,
+     segments:[ { id,sourceKey,sourceUrl,buf,peaks,f0,f1,trackOffsetSec,
+                  fadeInSec,fadeOutSec,gainDb,loopToFill,spatialFilter,label } ] } ] }
+   ============================================================ */
+let studio={ org:null, projectId:null, projectName:null, deepZone:null, deepBearing:null };
+let timeline={ tracks:[] };
+let nextTrackId=1, nextSegId=1;
+let selSegId=null;
+let pxPerSec=80;
+let playheadSec=0;
+
+function dbToLin(db){ return Math.pow(10,(db||0)/20); }
+
+function allSegments(){ const out=[]; timeline.tracks.forEach(t=>t.segments.forEach(s=>out.push({t,s}))); return out; }
+function segEndSec(s){ return s.trackOffsetSec+(s.f1-s.f0)*s.buf.duration; }
+function totalDurationSec(){
+  let max=0;
+  timeline.tracks.forEach(t=>t.segments.forEach(s=>{ if(!s.loopToFill) max=Math.max(max,segEndSec(s)); }));
+  if(max<=0){ timeline.tracks.forEach(t=>t.segments.forEach(s=>{ max=Math.max(max,(s.f1-s.f0)*s.buf.duration); })); }
+  return max;
+}
+function activeTracks(){
+  const anySolo=timeline.tracks.some(t=>t.solo);
+  return timeline.tracks.filter(t=>anySolo?t.solo:!t.muted);
+}
+
+function _impulse(ctx,seconds,decay){
+  const rate=ctx.sampleRate, len=Math.floor(rate*seconds), buf=ctx.createBuffer(2,len,rate);
+  for(let ch=0;ch<2;ch++){ const d=buf.getChannelData(ch); for(let i=0;i<len;i++){ d[i]=(Math.random()*2-1)*Math.pow(1-i/len,decay); } }
+  return buf;
+}
+
+function scheduleSegment(offline, s, bus, total){
+  const dur=(s.f1-s.f0)*s.buf.duration;
+  if(dur<=0) return;
+  total=total!=null?total:totalDurationSec();
+  const playOnce=(startAt)=>{
+    if(startAt>=total) return;
+    const playDur=Math.min(dur,total-startAt);
+    const src=offline.createBufferSource(), g=offline.createGain();
+    src.buffer=s.buf;
+    src.connect(g); g.connect(bus);
+    const fadeIn=Math.max(s.fadeInSec||0,0.005), fadeOut=Math.max(s.fadeOutSec||0,0.005);
+    const gv=dbToLin(s.gainDb);
+    g.gain.setValueAtTime(0,startAt);
+    g.gain.linearRampToValueAtTime(gv,Math.min(startAt+fadeIn,startAt+playDur));
+    if(playDur>fadeOut){
+      g.gain.setValueAtTime(gv,startAt+playDur-fadeOut);
+      g.gain.linearRampToValueAtTime(0,startAt+playDur);
+    }
+    src.start(startAt, s.f0*s.buf.duration, playDur);
+  };
+  if(s.loopToFill){
+    let t=s.trackOffsetSec;
+    while(t<total){ playOnce(t); t+=dur; }
+  } else {
+    playOnce(s.trackOffsetSec);
+  }
+}
+function buildBakeGraph(ctx,inputGain,params){
+  const lowpass=ctx.createBiquadFilter(); lowpass.type="lowpass"; lowpass.frequency.value=params.cutoff; lowpass.Q.value=0.7;
+  inputGain.connect(lowpass);
+  let panOut;
+  if(params.mode==="hrtf" && ctx.createPanner){
+    const panner=ctx.createPanner(); panner.panningModel="HRTF"; panner.distanceModel="linear";
+    panner.refDistance=1; panner.maxDistance=10000; panner.rolloffFactor=0;
+    const r=2, X=Math.sin(params.az)*r, Z=-Math.cos(params.az)*r;
+    if(panner.positionX){ panner.positionX.value=X; panner.positionY.value=0; panner.positionZ.value=Z; } else panner.setPosition(X,0,Z);
+    lowpass.connect(panner); panOut=panner;
+  } else {
+    const stereo=ctx.createStereoPanner(); stereo.pan.value=params.pan;
+    lowpass.connect(stereo); panOut=stereo;
+  }
+  const vol=ctx.createGain(); vol.gain.value=params.gain;
+  panOut.connect(vol);
+  const out=ctx.createGain();
+  const dry=ctx.createGain(); dry.gain.value=1;
+  vol.connect(dry); dry.connect(out);
+  if(params.wet>0.001){
+    const conv=ctx.createConvolver(); conv.buffer=_impulse(ctx,1.6,2.6);
+    const wet=ctx.createGain(); wet.gain.value=params.wet;
+    vol.connect(conv); conv.connect(wet); wet.connect(out);
+  }
+  return out;
+}
+async function renderTimeline(){
+  const segs=allSegments(); if(!segs.length) throw new Error("timeline is empty");
+  const sr=Math.max(...segs.map(x=>x.s.buf.sampleRate));
+  const total=totalDurationSec(); if(total<=0) throw new Error("nothing to render");
+  const offline=new OfflineAudioContext(2,Math.round(total*sr),sr);
+  activeTracks().forEach(t=>{
+    const bus=offline.createGain(); bus.gain.value=dbToLin(t.gainDb); bus.connect(offline.destination);
+    t.segments.forEach(s=>scheduleSegment(offline,s,bus,total));
+  });
+  const rendered=await offline.startRendering();
+  return _encodeMp3(rendered);
+}
+async function bakeSpatialFilter(seg,params){
+  const buf=seg.buf, sr=buf.sampleRate;
+  const dur=(seg.f1-seg.f0)*buf.duration;
+  const offline=new OfflineAudioContext(2,Math.round(dur*sr),sr);
+  const src=offline.createBufferSource(); src.buffer=buf;
+  const g=offline.createGain(); g.gain.value=1;
+  src.connect(g);
+  const out=buildBakeGraph(offline,g,params);
+  out.connect(offline.destination);
+  src.start(0, seg.f0*buf.duration, dur);
+  const rendered=await offline.startRendering();
+  return _encodeMp3(rendered);
+}
+
+/* ============================================================
+   Upload helper
+   ============================================================ */
+function uploadBlob(blob,key,mimeType){
+  return new Promise((resolve,reject)=>{
+    const token=getToken(); if(!token){ reject(new Error("no token")); return; }
+    const kb=blob.size/1024, sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
+    showBar(0); setStatus("uploading "+sizeStr+"…");
+    const xhr=new XMLHttpRequest();
+    xhr.open("PUT","/api/audio/"+key);
+    xhr.setRequestHeader("authorization","Bearer "+token);
+    xhr.setRequestHeader("content-type",mimeType||"audio/mpeg");
+    xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){ showBar(ev.loaded/ev.total*100); } };
+    xhr.onload=()=>{
+      let j={}; try{ j=JSON.parse(xhr.responseText); }catch(e){}
+      if(xhr.status>=200&&xhr.status<300){ showBar(100); setStatus("uploaded ✓ "+sizeStr); setTimeout(hideBar,1200); resolve({url:j.url||("/api/audio/"+key),key}); }
+      else if(xhr.status===401){ hideBar(); clearToken(); reject(new Error("unauthorized")); }
+      else { hideBar(); setStatus("✕ upload failed: "+(j.error||xhr.statusText)); reject(new Error(j.error||xhr.statusText)); }
+    };
+    xhr.onerror=()=>{ hideBar(); setStatus("✕ network error"); reject(new Error("network error")); };
+    xhr.timeout=180000; xhr.send(blob);
+  });
+}
+
+/* ============================================================
+   Init / routing — company then project.
+   ============================================================ */
+function initFromUrl(){
+  const qs=new URLSearchParams(location.search);
+  studio.projectId=qs.get("project")||null;
+  studio.deepZone=qs.get("zone")||null;
+  studio.deepBearing=qs.has("bearing")?Number(qs.get("bearing")):null;
+}
+function showPicker(){
+  document.getElementById("pickerScreen").style.display="block";
+  document.getElementById("studioScreen").classList.remove("show");
+  document.getElementById("btnBackToProjects").style.display="none";
+  document.getElementById("hdrCrumb").textContent="";
+}
+function showStudio(){
+  document.getElementById("pickerScreen").style.display="none";
+  document.getElementById("studioScreen").classList.add("show");
+  document.getElementById("btnBackToProjects").style.display="inline-block";
+  document.getElementById("hdrCrumb").textContent=studio.projectName||studio.projectId;
+}
+async function loadProjectPicker(){
+  const org=currentOrg();
+  document.getElementById("noOrgHint").style.display=org?"none":"block";
+  document.getElementById("projPickerBody").style.display=org?"block":"none";
+  if(!org) return;
+  const grid=document.getElementById("projGrid");
+  grid.innerHTML='<div class="hint">loading…</div>';
+  try{
+    const r=await fetch("/api/projects?org="+encodeURIComponent(org),{headers:{authorization:"Bearer "+getToken()}});
+    const j=r.ok?await r.json():{projects:[]};
+    const projects=j.projects||[];
+    if(!projects.length){ grid.innerHTML='<div class="hint">no projects yet for this company.</div>'; return; }
+    grid.innerHTML="";
+    projects.forEach(p=>{
+      const tile=document.createElement("div"); tile.className="proj-tile";
+      tile.innerHTML='<div class="pt-name">'+esc(p.name||p.id)+'</div><div class="pt-meta">'+(p.status||"draft")+'</div>';
+      tile.onclick=()=>{ const u=new URLSearchParams(location.search); u.set("project",p.id); location.search=u.toString(); };
+      grid.appendChild(tile);
+    });
+  }catch(e){ grid.innerHTML='<div class="hint">error: '+e.message+'</div>'; }
+}
+async function enterProject(){
+  document.getElementById("hdrCrumb").textContent=studio.projectId;
+  showStudio();
+  try{
+    const org=currentOrg();
+    const r=await fetch("/api/projects?org="+encodeURIComponent(org),{headers:{authorization:"Bearer "+getToken()}});
+    const j=r.ok?await r.json():{projects:[]};
+    const p=(j.projects||[]).find(x=>x.id===studio.projectId);
+    if(p){ studio.projectName=p.name||p.id; document.getElementById("hdrCrumb").textContent=studio.projectName; }
+  }catch(e){}
+  refreshRail();
+}
+document.getElementById("btnBackToProjects").onclick=()=>{
+  const u=new URLSearchParams(location.search); u.delete("project"); u.delete("zone"); u.delete("bearing");
+  location.search=u.toString();
+};
+
+/* ============================================================
+   Source rail — "This Project" + "Library" (graphical file browser)
+   ============================================================ */
+let railTab="project", railFolder="";
+let railKnownFolders=new Set(), railPendingFolders=new Set();
+function railOrgId(){ return currentOrg(); }
+function setRailTab(tab){
+  railTab=tab; railFolder="";
+  document.getElementById("railTabProject").classList.toggle("on",tab==="project");
+  document.getElementById("railTabLibrary").classList.toggle("on",tab==="library");
+  refreshRail();
+}
+document.getElementById("railTabProject").onclick=()=>setRailTab("project");
+document.getElementById("railTabLibrary").onclick=()=>setRailTab("library");
+
+async function refreshRail(){
+  const body=document.getElementById("railBody");
+  if(!studio.projectId){ body.innerHTML=""; return; }
+  body.innerHTML='<div class="rail-empty">loading…</div>';
+  try{
+    let qs, objects=[], folders=null;
+    if(railTab==="project"){
+      qs="project="+encodeURIComponent(studio.projectId);
+    } else {
+      const org=railOrgId(); if(!org){ body.innerHTML='<div class="rail-empty">pick a company above</div>'; return; }
+      qs="scope=library&org="+encodeURIComponent(org)+(railFolder?"&folder="+encodeURIComponent(railFolder):"");
+    }
+    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
+    if(r.status===401){ body.innerHTML='<div class="rail-empty">token rejected</div>'; clearToken(); return; }
+    const j=r.ok?await r.json():{objects:[],folders:[]};
+    objects=j.objects||[];
+    if(railTab==="library"){
+      if(!railFolder) railKnownFolders=new Set(j.folders||[]);
+      folders=[...new Set([...railKnownFolders,...railPendingFolders])].sort();
+    }
+    renderRail(objects,folders);
+  }catch(e){ body.innerHTML='<div class="rail-empty">error: '+e.message+'</div>'; }
+}
+function renderRail(objects,folders){
+  const body=document.getElementById("railBody"); body.innerHTML="";
+  if(folders!==null){
+    const crumb=document.createElement("div"); crumb.className="crumb-row";
+    if(railFolder){ const back=document.createElement("button"); back.className="ghost"; back.textContent="← Library root";
+      back.onclick=()=>{ railFolder=""; refreshRail(); }; crumb.appendChild(back); }
+    else { const lbl=document.createElement("span"); lbl.className="hint"; lbl.textContent="📁 Library"; crumb.appendChild(lbl); }
+    body.appendChild(crumb);
+    if(!railFolder){
+      const grid=document.createElement("div"); grid.className="tile-grid";
+      folders.forEach(f=>grid.appendChild(buildFolderTile(f)));
+      grid.appendChild(buildNewFolderTile());
+      body.appendChild(grid);
+    } else {
+      const delBtn=document.createElement("button"); delBtn.className="danger ghost"; delBtn.style.fontSize="10px";
+      delBtn.textContent="Delete folder \""+railFolder+"\"";
+      delBtn.onclick=async()=>{
+        const org=railOrgId();
+        if(!confirm('Delete the folder "'+railFolder+'" and everything in it? This cannot be undone.')) return;
+        const r=await fetch("/api/audio/folder?org="+encodeURIComponent(org)+"&folder="+encodeURIComponent(railFolder),{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+        if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
+        railKnownFolders.delete(railFolder); railPendingFolders.delete(railFolder); railFolder="";
+        refreshRail();
+      };
+      body.appendChild(delBtn);
+    }
+  }
+  const list=document.createElement("div"); list.className="clip-list";
+  if(!objects.length){ list.innerHTML='<div class="rail-empty">no clips yet</div>'; }
+  else objects.forEach(o=>list.appendChild(buildClipTile(o)));
+  body.appendChild(list);
+}
+function buildFolderTile(name){
+  const t=document.createElement("div"); t.className="folder-tile";
+  t.innerHTML='<span class="fi">📁</span><span>'+esc(name)+'</span>';
+  t.onclick=()=>{ railFolder=name; refreshRail(); };
+  t.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("audiourl")){ e.preventDefault(); t.classList.add("dragover"); } });
+  t.addEventListener("dragleave",()=>t.classList.remove("dragover"));
+  t.addEventListener("drop",e=>{
+    e.preventDefault(); t.classList.remove("dragover");
+    const key=e.dataTransfer.getData("audiokey"); if(!key||!key.startsWith("library/")) return;
+    moveLibraryClip(key,name);
+  });
+  return t;
+}
+function buildNewFolderTile(){
+  const t=document.createElement("div"); t.className="folder-tile new";
+  t.innerHTML='<span class="fi">＋</span><span>New folder</span>';
+  t.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("audiourl")){ e.preventDefault(); t.classList.add("dragover"); } });
+  t.addEventListener("dragleave",()=>t.classList.remove("dragover"));
+  t.addEventListener("drop",e=>{
+    e.preventDefault(); t.classList.remove("dragover");
+    const key=e.dataTransfer.getData("audiokey"); if(!key||!key.startsWith("library/")) return;
+    flipToInput(t,name=>{ railPendingFolders.add(name); moveLibraryClip(key,name); });
+  });
+  t.onclick=()=>flipToInput(t,name=>{ railPendingFolders.add(name); railFolder=name; refreshRail(); });
+  return t;
+}
+function flipToInput(tile,onCommit){
+  tile.innerHTML='<input type="text" placeholder="name" maxlength="40">';
+  const inp=tile.querySelector("input"); inp.focus();
+  const commit=()=>{
+    const name=slug(inp.value);
+    if(name && !name.includes("/")) onCommit(name);
+    else refreshRail();
+  };
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") refreshRail(); });
+  inp.addEventListener("blur",commit);
+}
+async function moveLibraryClip(fromKey,destFolder){
+  const org=fromKey.split("/")[1];
+  const to="library/"+org+"/"+(destFolder?destFolder+"/":"")+fromKey.split("/").pop();
+  if(to===fromKey) return;
+  try{
+    const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:fromKey,to})});
+    if(!r.ok){ alert("Move failed: "+(await r.text())); return; }
+    refreshRail();
+  }catch(e){ alert("Move failed: "+e.message); }
+}
+function buildClipTile(o){
+  const row=document.createElement("div"); row.className="clip-tile"; row.draggable=true;
+  row.addEventListener("dragstart",e=>{ e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key); e.dataTransfer.effectAllowed="copy"; });
+  const drag=document.createElement("span"); drag.className="ct-drag"; drag.textContent="⠿";
+  const playBtn=document.createElement("button"); playBtn.textContent="▶"; playBtn.title="Preview";
+  playBtn.onclick=()=>railTogglePlay(o,playBtn);
+  const nm=document.createElement("span"); nm.className="ct-name"; nm.textContent=o.key.split("/").pop();
+  const addBtn=document.createElement("button"); addBtn.textContent="+"; addBtn.title="Add to timeline";
+  addBtn.onclick=()=>addClipToTimeline(o);
+  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(nm); row.appendChild(addBtn);
+  return row;
+}
+let _railPlaying=null;
+function railTogglePlay(o,btn){
+  if(_railPlaying&&_railPlaying.url===o.url){ _railPlaying.audio.pause(); _railPlaying=null; btn.textContent="▶"; return; }
+  if(_railPlaying){ _railPlaying.audio.pause(); _railPlaying.btn.textContent="▶"; }
+  const audio=new Audio(o.url); audio.play();
+  audio.onended=()=>{ btn.textContent="▶"; _railPlaying=null; };
+  _railPlaying={url:o.url,audio,btn}; btn.textContent="⏸";
+}
+document.getElementById("railUpload").addEventListener("change",async e=>{
+  const f=e.target.files[0]; if(!f) return; e.target.value="";
+  if(railTab==="library" && !railOrgId()){ setStatus("pick a company above first"); return; }
+  const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
+  const key=railTab==="library"
+    ? "library/"+railOrgId()+"/"+(railFolder?railFolder+"/":"")+base+"-"+Date.now().toString(36)+"."+ext
+    : studio.projectId+"/"+base+"-"+Date.now().toString(36)+"."+ext;
+  try{ await uploadBlob(f,key,f.type||"audio/mpeg"); refreshRail(); }catch(err){ setStatus("✕ upload failed: "+err.message); }
+});
+
+/* ============================================================
+   Timeline UI
+   ============================================================ */
+function newTrack(name){
+  const t={ id:nextTrackId++, name:name||("Track "+(timeline.tracks.length+1)), muted:false, solo:false, gainDb:0, segments:[] };
+  timeline.tracks.push(t); return t;
+}
+async function getBufAndPeaks(url){
+  const buf=await _decodeUrl(url);
+  return { buf, peaks:_buildPeaks(buf) };
+}
+async function addClipToTimeline(o,track,offsetSec){
+  setStatus("loading "+o.key.split("/").pop()+"…");
+  try{
+    const {buf,peaks}=await getBufAndPeaks(o.url);
+    hideBar(); statusEl.style.display="none";
+    if(!track){ track=timeline.tracks[timeline.tracks.length-1]||newTrack(); }
+    const seg={ id:nextSegId++, sourceKey:o.key, sourceUrl:o.url, buf, peaks, f0:0, f1:1,
+      trackOffsetSec: offsetSec!=null?offsetSec:(track.segments.length?Math.max(...track.segments.map(segEndSec)):0),
+      fadeInSec:0.01, fadeOutSec:0.01, gainDb:0, loopToFill:false, spatialFilter:null,
+      label:o.key.split("/").pop() };
+    track.segments.push(seg);
+    selSegId=seg.id;
+    renderTimelineUI();
+  }catch(e){ setStatus("✕ couldn't load clip: "+e.message); }
+}
+
+function timeToPx(t){ return t*pxPerSec; }
+function laneWidthPx(){ return Math.max(600, totalDurationSec()*pxPerSec+160); }
+
+function renderTimelineUI(){
+  const tracksEl=document.getElementById("tlTracks");
+  tracksEl.innerHTML="";
+  const laneW=laneWidthPx();
+  timeline.tracks.forEach(t=>tracksEl.appendChild(buildTrackRow(t,laneW)));
+  const addRow=document.createElement("div"); addRow.className="track-add";
+  addRow.style.width=(170+laneW)+"px";
+  addRow.innerHTML='<button class="ghost" id="tlAddTrackInline">+ New track</button>';
+  addRow.querySelector("button").onclick=()=>{ newTrack(); renderTimelineUI(); };
+  tracksEl.appendChild(addRow);
+  renderRuler(laneW);
+  document.getElementById("tlBody").style.width=(170+laneW)+"px";
+  updatePlayheadUI();
+  updateSelBar();
+}
+function renderRuler(laneW){
+  const marks=document.getElementById("tlRulerMarks");
+  marks.style.width=laneW+"px";
+  marks.innerHTML="";
+  const total=totalDurationSec();
+  const stepSec = pxPerSec>=120?1 : pxPerSec>=40?5 : 10;
+  for(let s=0;s<=Math.max(total,10);s+=stepSec){
+    const m=document.createElement("div"); m.className="mark"; m.style.left=timeToPx(s)+"px"; m.style.width=(stepSec*pxPerSec)+"px";
+    m.textContent=Math.floor(s/60)+":"+(Math.floor(s%60)+"").padStart(2,"0");
+    marks.appendChild(m);
+  }
+}
+function buildTrackRow(t,laneW){
+  const row=document.createElement("div"); row.className="track"; row.style.width=(170+laneW)+"px";
+  const head=document.createElement("div"); head.className="track-head";
+  const nm=document.createElement("input"); nm.className="tn"; nm.value=t.name;
+  nm.addEventListener("change",()=>{ t.name=nm.value||t.name; });
+  const btns=document.createElement("div"); btns.className="tbtns";
+  const muteBtn=document.createElement("button"); muteBtn.textContent="🔇"; muteBtn.className=t.muted?"on":"ghost";
+  muteBtn.onclick=()=>{ t.muted=!t.muted; renderTimelineUI(); };
+  const soloBtn=document.createElement("button"); soloBtn.textContent="S"; soloBtn.className=t.solo?"on":"ghost";
+  soloBtn.onclick=()=>{ t.solo=!t.solo; renderTimelineUI(); };
+  const delBtn=document.createElement("button"); delBtn.textContent="✕"; delBtn.className="ghost";
+  delBtn.onclick=()=>{
+    if(t.segments.length && !confirm('Delete track "'+t.name+'" and its '+t.segments.length+' clip(s)?')) return;
+    timeline.tracks=timeline.tracks.filter(x=>x!==t); renderTimelineUI();
+  };
+  btns.appendChild(muteBtn); btns.appendChild(soloBtn); btns.appendChild(delBtn);
+  const gain=document.createElement("input"); gain.type="range"; gain.min="-24"; gain.max="12"; gain.value=t.gainDb; gain.step="1";
+  gain.oninput=()=>{ t.gainDb=+gain.value; };
+  head.appendChild(nm); head.appendChild(btns); head.appendChild(gain);
+
+  const lane=document.createElement("div"); lane.className="track-lane"; lane.style.width=laneW+"px";
+  lane.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("audiourl")){ e.preventDefault(); lane.classList.add("dragover"); } });
+  lane.addEventListener("dragleave",()=>lane.classList.remove("dragover"));
+  lane.addEventListener("drop",e=>{
+    e.preventDefault(); lane.classList.remove("dragover");
+    const url=e.dataTransfer.getData("audiourl"), key=e.dataTransfer.getData("audiokey");
+    if(!url) return;
+    const rect=lane.getBoundingClientRect();
+    const offsetSec=Math.max(0,(e.clientX-rect.left)/pxPerSec);
+    addClipToTimeline({url,key},t,offsetSec);
+  });
+  lane.addEventListener("click",e=>{ if(e.target===lane){ setPlayhead((e.clientX-lane.getBoundingClientRect().left)/pxPerSec); } });
+  t.segments.forEach(s=>lane.appendChild(buildSegmentEl(s,t)));
+  row.appendChild(head); row.appendChild(lane);
+  return row;
+}
+function buildSegmentEl(s,t){
+  const dur=(s.f1-s.f0)*s.buf.duration;
+  const el=document.createElement("div"); el.className="segment"+(s.id===selSegId?" sel":"")+(s.loopToFill?" loop":"");
+  el.style.left=timeToPx(s.trackOffsetSec)+"px"; el.style.width=Math.max(10,timeToPx(dur))+"px";
+  const label=document.createElement("div"); label.className="seg-label"; label.textContent=s.label||"clip";
+  const cv=document.createElement("canvas"); el.appendChild(cv); el.appendChild(label);
+  paintSegmentWaveform(cv,s);
+  const hl=document.createElement("div"); hl.className="seg-handle l";
+  const hr=document.createElement("div"); hr.className="seg-handle r";
+  const fadeInH=document.createElement("div"); fadeInH.className="seg-fade-handle";
+  fadeInH.style.left=Math.min(timeToPx(s.fadeInSec),parseFloat(el.style.width))+"px";
+  const fadeOutH=document.createElement("div"); fadeOutH.className="seg-fade-handle r";
+  fadeOutH.style.right=Math.min(timeToPx(s.fadeOutSec),parseFloat(el.style.width))+"px";
+  el.appendChild(hl); el.appendChild(hr); el.appendChild(fadeInH); el.appendChild(fadeOutH);
+
+  el.addEventListener("mousedown",e=>{
+    if(e.target===hl||e.target===hr||e.target===fadeInH||e.target===fadeOutH) return;
+    selSegId=s.id; renderTimelineUI();
+    const startX=e.clientX, startOffset=s.trackOffsetSec;
+    const onMove=me=>{ s.trackOffsetSec=Math.max(0,startOffset+(me.clientX-startX)/pxPerSec); renderTimelineUI(); };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+  hl.addEventListener("mousedown",e=>{
+    e.stopPropagation(); const startX=e.clientX, startF0=s.f0, startOffset=s.trackOffsetSec;
+    const onMove=me=>{
+      const dt=(me.clientX-startX)/pxPerSec;
+      let newF0=Math.min(startF0+dt/s.buf.duration, s.f1-0.02); newF0=Math.max(0,newF0);
+      s.trackOffsetSec=Math.max(0,startOffset+(newF0-startF0)*s.buf.duration);
+      s.f0=newF0; renderTimelineUI();
+    };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+  hr.addEventListener("mousedown",e=>{
+    e.stopPropagation(); const startX=e.clientX, startF1=s.f1;
+    const onMove=me=>{
+      const dt=(me.clientX-startX)/pxPerSec;
+      s.f1=Math.max(s.f0+0.02, Math.min(1, startF1+dt/s.buf.duration));
+      renderTimelineUI();
+    };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+  fadeInH.addEventListener("mousedown",e=>{
+    e.stopPropagation(); const startX=e.clientX, start=s.fadeInSec;
+    const onMove=me=>{ s.fadeInSec=Math.max(0.005,Math.min(dur/2,start+(me.clientX-startX)/pxPerSec)); renderTimelineUI(); };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+  fadeOutH.addEventListener("mousedown",e=>{
+    e.stopPropagation(); const startX=e.clientX, start=s.fadeOutSec;
+    const onMove=me=>{ s.fadeOutSec=Math.max(0.005,Math.min(dur/2,start-(me.clientX-startX)/pxPerSec)); renderTimelineUI(); };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+  return el;
+}
+function paintSegmentWaveform(cv,s){
+  const dpr=window.devicePixelRatio||1;
+  const W=Math.max(10,(s.f1-s.f0)*s.buf.duration*pxPerSec), H=52;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+"px"; cv.style.height=H+"px";
+  const ctx=cv.getContext("2d"); ctx.scale(dpr,dpr);
+  const N=s.peaks.length, si=Math.floor(s.f0*N), ei=Math.max(si+1,Math.ceil(s.f1*N));
+  const slice=s.peaks.slice(si,ei);
+  const mid=H/2, bw=W/Math.max(1,slice.length);
+  ctx.fillStyle="#5b8fd6";
+  slice.forEach((p,i)=>{ const x=i*bw, bh=Math.max(1,p*(H-6)/2); ctx.fillRect(x,mid-bh,Math.max(1,bw-0.5),bh*2); });
+}
+function findSeg(id){ for(const t of timeline.tracks) for(const s of t.segments) if(s.id===id) return {t,s}; return null; }
+function updateSelBar(){
+  const bar=document.getElementById("selBar");
+  const found=selSegId!=null?findSeg(selSegId):null;
+  bar.classList.toggle("show",!!found);
+  if(!found) return;
+  const {s}=found;
+  document.getElementById("selName").textContent=s.label||"clip";
+  document.getElementById("selLoop").classList.toggle("on",!!s.loopToFill);
+  document.getElementById("selGain").value=s.gainDb;
+  document.getElementById("selGainV").textContent=s.gainDb+"dB";
+}
+document.getElementById("selGain").oninput=e=>{
+  const found=findSeg(selSegId); if(!found) return;
+  found.s.gainDb=+e.target.value; document.getElementById("selGainV").textContent=found.s.gainDb+"dB";
+};
+document.getElementById("selLoop").onclick=()=>{
+  const found=findSeg(selSegId); if(!found) return;
+  found.s.loopToFill=!found.s.loopToFill; renderTimelineUI();
+};
+document.getElementById("selCopy").onclick=()=>{
+  const found=findSeg(selSegId); if(!found) return;
+  const {t,s}=found; const dur=(s.f1-s.f0)*s.buf.duration;
+  const copy=Object.assign({},s,{ id:nextSegId++, trackOffsetSec:s.trackOffsetSec+dur });
+  t.segments.push(copy); selSegId=copy.id; renderTimelineUI();
+};
+document.getElementById("selDelete").onclick=()=>{
+  const found=findSeg(selSegId); if(!found) return;
+  found.t.segments=found.t.segments.filter(x=>x!==found.s); selSegId=null; renderTimelineUI();
+};
+document.getElementById("btnAddTrack").onclick=()=>{ newTrack(); renderTimelineUI(); };
+document.getElementById("btnCut").onclick=()=>{
+  const found=selSegId!=null?findSeg(selSegId):null; if(!found){ alert("Select a segment first."); return; }
+  const {t,s}=found; const dur=(s.f1-s.f0)*s.buf.duration;
+  if(playheadSec<=s.trackOffsetSec+0.02 || playheadSec>=s.trackOffsetSec+dur-0.02){ alert("Move the playhead inside the selected segment first."); return; }
+  const splitFrac=(playheadSec-s.trackOffsetSec)/dur;
+  const splitF=s.f0+splitFrac*(s.f1-s.f0);
+  const segB=Object.assign({},s,{ id:nextSegId++, f0:splitF, trackOffsetSec:playheadSec, fadeInSec:0.005 });
+  s.f1=splitF; s.fadeOutSec=0.005;
+  t.segments.push(segB); selSegId=segB.id; renderTimelineUI();
+};
+document.getElementById("btnZoomIn").onclick=()=>{ pxPerSec=Math.min(400,Math.round(pxPerSec*1.3)); document.getElementById("zoomLbl").textContent=pxPerSec+"px/s"; renderTimelineUI(); };
+document.getElementById("btnZoomOut").onclick=()=>{ pxPerSec=Math.max(10,Math.round(pxPerSec/1.3)); document.getElementById("zoomLbl").textContent=pxPerSec+"px/s"; renderTimelineUI(); };
+
+function setPlayhead(sec){ playheadSec=Math.max(0,sec); updatePlayheadUI(); }
+function updatePlayheadUI(){
+  document.getElementById("tlPlayhead").style.left=(170+timeToPx(playheadSec))+"px";
+}
+
+/* ---- live preview playback ---- */
+let previewCtx=null, previewSources=[], previewRAF=null, previewStartWall=0, previewStartSec=0;
+document.getElementById("btnPlay").onclick=()=>{
+  if(previewSources.length){ stopPreview(); return; }
+  startPreview();
+};
+function startPreview(){
+  if(!allSegments().length) return;
+  previewCtx=new AudioContext();
+  const startSec=playheadSec;
+  activeTracks().forEach(t=>{
+    const bus=previewCtx.createGain(); bus.gain.value=dbToLin(t.gainDb); bus.connect(previewCtx.destination);
+    t.segments.forEach(s=>{
+      const dur=(s.f1-s.f0)*s.buf.duration, segStart=s.trackOffsetSec, segEnd=segStart+dur;
+      if(segEnd<=startSec && !s.loopToFill) return;
+      const into=Math.max(0,startSec-segStart);
+      const src=previewCtx.createBufferSource(); src.buffer=s.buf;
+      const g=previewCtx.createGain(); g.gain.value=dbToLin(s.gainDb);
+      src.connect(g); g.connect(bus);
+      const when=previewCtx.currentTime+Math.max(0,segStart-startSec);
+      const playDur=Math.max(0,dur-into);
+      if(playDur>0) src.start(when, s.f0*s.buf.duration+into, playDur);
+      previewSources.push(src);
+    });
+  });
+  previewStartWall=previewCtx.currentTime; previewStartSec=startSec;
+  document.getElementById("btnPlay").textContent="■ Stop";
+  const tick=()=>{
+    if(!previewCtx) return;
+    playheadSec=previewStartSec+(previewCtx.currentTime-previewStartWall);
+    updatePlayheadUI();
+    if(playheadSec<totalDurationSec()) previewRAF=requestAnimationFrame(tick);
+    else stopPreview();
+  };
+  previewRAF=requestAnimationFrame(tick);
+}
+function stopPreview(){
+  previewSources.forEach(s=>{ try{s.stop();}catch(e){} }); previewSources=[];
+  if(previewRAF){ cancelAnimationFrame(previewRAF); previewRAF=null; }
+  if(previewCtx){ previewCtx.close().catch(()=>{}); previewCtx=null; }
+  document.getElementById("btnPlay").textContent="▶ Play";
+}
+
+/* ============================================================
+   Recording
+   ============================================================ */
+const _vMime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"";
+let _recStream=null,_recRec=null,_recChunks=[],_recAnalyser=null,_recRAF=null,_recCtx=null,_recTimer=null,_recT0=0;
+document.getElementById("btnRecord").onclick=()=>{
+  document.getElementById("recOverlay").classList.add("show");
+  document.getElementById("recToggle").textContent="● Start recording";
+  document.getElementById("recTimer").textContent="0:00";
+};
+document.getElementById("recCancel").onclick=()=>{
+  if(_recRec&&_recRec.state==="recording") _recRec.stop();
+  document.getElementById("recOverlay").classList.remove("show");
+};
+document.getElementById("recOverlay").addEventListener("click",e=>{ if(e.target===document.getElementById("recOverlay")&&!(_recRec&&_recRec.state==="recording")) document.getElementById("recOverlay").classList.remove("show"); });
+document.getElementById("recToggle").onclick=async()=>{
+  if(_recRec&&_recRec.state==="recording"){ _recRec.stop(); return; }
+  try{
+    if(!_recStream) _recStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+  }catch(e){ alert("Microphone access denied.\n\n"+e.message); return; }
+  _recChunks=[];
+  _recCtx=new AudioContext({sampleRate:48000});
+  const src=_recCtx.createMediaStreamSource(_recStream);
+  const dest=_recCtx.createMediaStreamDestination();
+  _recAnalyser=_recCtx.createAnalyser(); _recAnalyser.fftSize=1024;
+  src.connect(dest); src.connect(_recAnalyser);
+  const mime=_vMime||"";
+  _recRec=mime?new MediaRecorder(dest.stream,{mimeType:mime,audioBitsPerSecond:192000}):new MediaRecorder(dest.stream,{audioBitsPerSecond:192000});
+  _recRec.ondataavailable=e=>{ if(e.data.size>0) _recChunks.push(e.data); };
+  _recRec.onstop=async()=>{
+    if(_recRAF){ cancelAnimationFrame(_recRAF); _recRAF=null; }
+    clearInterval(_recTimer);
+    _recCtx.close().catch(()=>{});
+    const blob=new Blob(_recChunks,{type:_recRec.mimeType||"audio/mp4"});
+    document.getElementById("recOverlay").classList.remove("show");
+    document.getElementById("recToggle").textContent="● Start recording";
+    try{
+      const ab=await blob.arrayBuffer();
+      const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab); await tmp.close();
+      const peaks=_buildPeaks(buf);
+      const existing=selSegId!=null?findSeg(selSegId):null;
+      const track=existing?existing.t:newTrack("Recording");
+      const seg={ id:nextSegId++, sourceKey:null, sourceUrl:null, buf, peaks, f0:0, f1:1,
+        trackOffsetSec: track.segments.length?Math.max(...track.segments.map(segEndSec)):playheadSec,
+        fadeInSec:0.01, fadeOutSec:0.01, gainDb:0, loopToFill:false, spatialFilter:null,
+        label:"recording-"+new Date().toISOString().slice(11,19).replace(/:/g,"") };
+      track.segments.push(seg); selSegId=seg.id; renderTimelineUI();
+    }catch(e){ alert("decode failed: "+e.message); }
+  };
+  _recRec.start(500);
+  _recT0=Date.now();
+  document.getElementById("recToggle").textContent="■ Stop";
+  _recTimer=setInterval(()=>{
+    const sElapsed=Math.floor((Date.now()-_recT0)/1000);
+    document.getElementById("recTimer").textContent=Math.floor(sElapsed/60)+":"+(sElapsed%60).toString().padStart(2,"0");
+  },500);
+  drawRecCanvas();
+};
+function drawRecCanvas(){
+  const cv=document.getElementById("recCanvas"), ctx=cv.getContext("2d"), dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth||380,H=80; cv.width=W*dpr; cv.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  const data=new Uint8Array(_recAnalyser.fftSize);
+  (function loop(){
+    if(!_recAnalyser) return;
+    _recAnalyser.getByteTimeDomainData(data);
+    ctx.clearRect(0,0,W,H); ctx.strokeStyle="#ff6a3d"; ctx.lineWidth=2; ctx.beginPath();
+    const step=W/data.length;
+    for(let i=0;i<data.length;i++){ const v=data[i]/128-1, y=H/2+v*H/2*0.9, x=i*step; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
+    ctx.stroke();
+    _recRAF=requestAnimationFrame(loop);
+  })();
+}
+
+/* ============================================================
+   Spatial filter — radar preview + offline bake
+   ============================================================ */
+const StudioSpatialPreview={
+  ctx:null, buffer:null, src:null, nodes:null, playing:false,
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.4, tau:0.09, curve:1.1, mode:"stereo" },
+  ensureCtx(){ if(this.ctx) return this.ctx; this.ctx=new (window.AudioContext||window.webkitAudioContext)(); return this.ctx; },
+  build(){
+    const ctx=this.ensureCtx();
+    const lowpass=ctx.createBiquadFilter(); lowpass.type="lowpass"; lowpass.frequency.value=this.tuning.hiHz; lowpass.Q.value=0.7;
+    const stereo=ctx.createStereoPanner();
+    let panner=null;
+    if(ctx.createPanner){ panner=ctx.createPanner(); panner.panningModel="HRTF"; panner.distanceModel="linear";
+      panner.refDistance=1; panner.maxDistance=10000; panner.rolloffFactor=0; }
+    const dry=ctx.createGain(); dry.gain.value=1;
+    const conv=ctx.createConvolver(); conv.buffer=_impulse(ctx,1.6,2.6);
+    const wet=ctx.createGain(); wet.gain.value=0;
+    const fade=ctx.createGain(); fade.gain.value=0;
+    const vol=ctx.createGain(); vol.gain.value=1;
+    lowpass.connect(stereo); stereo.connect(vol);
+    vol.connect(dry); dry.connect(fade);
+    vol.connect(conv); conv.connect(wet); wet.connect(fade);
+    fade.connect(ctx.destination);
+    this.nodes={ lowpass, stereo, panner, dry, conv, wet, fade, vol };
+    this.setMode(this.tuning.mode);
+  },
+  setMode(mode){
+    this.tuning.mode=mode; if(!this.nodes) return;
+    const { lowpass, stereo, panner, vol }=this.nodes;
+    try{ lowpass.disconnect(); }catch(e){} try{ stereo.disconnect(); }catch(e){} if(panner) try{ panner.disconnect(); }catch(e){}
+    if(mode==="hrtf" && panner){ lowpass.connect(panner); panner.connect(vol); } else { lowpass.connect(stereo); stereo.connect(vol); }
+  },
+  setBuffer(buffer){ this.buffer=buffer; },
+  play(){
+    if(!this.buffer) return false;
+    const ctx=this.ensureCtx(); if(ctx.state==="suspended") ctx.resume();
+    if(!this.nodes) this.build();
+    if(this.src){ try{ this.src.stop(); }catch(e){} }
+    const src=ctx.createBufferSource(); src.buffer=this.buffer; src.loop=true; src.connect(this.nodes.lowpass); src.start();
+    this.src=src; this.playing=true;
+    const g=this.nodes.fade.gain; g.cancelScheduledValues(ctx.currentTime); g.setValueAtTime(g.value,ctx.currentTime); g.linearRampToValueAtTime(1,ctx.currentTime+0.4);
+    return true;
+  },
+  stop(){
+    if(!this.nodes||!this.src) return;
+    const ctx=this.ctx, g=this.nodes.fade.gain;
+    g.cancelScheduledValues(ctx.currentTime); g.setValueAtTime(g.value,ctx.currentTime); g.linearRampToValueAtTime(0,ctx.currentTime+0.3);
+    const s=this.src; setTimeout(()=>{ try{ s.stop(); }catch(e){} },350);
+    this.playing=false;
+  },
+  update(az,distM){
+    if(!this.nodes) return null;
+    const ctx=this.ctx, t=this.tuning, tau=t.tau;
+    const f=Math.max(0,Math.min(1,(distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
+    const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz,f);
+    const gain=t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve||2);
+    const wet=t.reverbMax*Math.pow(f,0.6);
+    const pan=Math.max(-1,Math.min(1,Math.sin(az)));
+    this.nodes.lowpass.frequency.setTargetAtTime(cutoff,ctx.currentTime,tau);
+    this.nodes.vol.gain.setTargetAtTime(gain,ctx.currentTime,tau);
+    this.nodes.wet.gain.setTargetAtTime(wet,ctx.currentTime,tau);
+    if(t.mode==="hrtf" && this.nodes.panner){
+      const r=2, X=Math.sin(az)*r, Z=-Math.cos(az)*r, p=this.nodes.panner;
+      if(p.positionX){ p.positionX.setTargetAtTime(X,ctx.currentTime,tau); p.positionY.setTargetAtTime(0,ctx.currentTime,tau); p.positionZ.setTargetAtTime(Z,ctx.currentTime,tau); } else p.setPosition(X,0,Z);
+    } else { this.nodes.stereo.pan.setTargetAtTime(pan,ctx.currentTime,tau); }
+    return { cutoff, gain, wet, pan };
+  }
+};
+let spSeg=null, spAz=Math.PI/2, spDistM=20;
+const RAD=90, MAXM=80;
+function spRadarPos(){ return { x:Math.sin(spAz)*(spDistM/MAXM)*RAD, y:-Math.cos(spAz)*(spDistM/MAXM)*RAD }; }
+function drawRadar(){
+  const cv=document.getElementById("radar"), rx=cv.getContext("2d"), W=cv.width,H=cv.height,cx=W/2,cy=H/2;
+  rx.clearRect(0,0,W,H);
+  rx.strokeStyle="#1c2a3d"; rx.lineWidth=1;
+  [0.33,0.66,1].forEach(k=>{ rx.beginPath(); rx.arc(cx,cy,RAD*k,0,7); rx.stroke(); });
+  rx.strokeStyle="#8fb6d4"; rx.lineWidth=2; rx.beginPath(); rx.moveTo(cx,cy); rx.lineTo(cx,cy-20); rx.stroke();
+  rx.fillStyle="#5b7088"; rx.font="10px Barlow Condensed"; rx.fillText("you ▲",cx-14,cy+14);
+  const p=spRadarPos(), sx=cx+p.x, sy=cy+p.y;
+  rx.strokeStyle="#26344a"; rx.beginPath(); rx.moveTo(cx,cy); rx.lineTo(sx,sy); rx.stroke();
+  rx.fillStyle="#ff6a3d"; rx.beginPath(); rx.arc(sx,sy,9,0,7); rx.fill();
+}
+function refreshSpatialReadout(){
+  const out=StudioSpatialPreview.update(spAz,spDistM);
+  const deg=Math.round(((spAz*180/Math.PI)+360)%360);
+  document.getElementById("rAz").textContent=deg+"°";
+  document.getElementById("rDist").textContent=Math.round(spDistM)+" m";
+  drawRadar();
+  return out;
+}
+function currentSpatialParams(){
+  const t=StudioSpatialPreview.tuning;
+  const f=Math.max(0,Math.min(1,(spDistM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
+  return {
+    az:spAz, mode:t.mode, pan:Math.max(-1,Math.min(1,Math.sin(spAz))),
+    cutoff: t.hiHz*Math.pow(t.loHz/t.hiHz,f),
+    gain: t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve||2),
+    wet: t.reverbMax*Math.pow(f,0.6)
+  };
+}
+(function(){
+  const radar=document.getElementById("radar");
+  let dragging=false;
+  function pos(e){ const r=radar.getBoundingClientRect(), t=e.touches?e.touches[0]:e;
+    const sx=radar.width/r.width, sy=radar.height/r.height;
+    return { x:(t.clientX-r.left)*sx-radar.width/2, y:(t.clientY-r.top)*sy-radar.height/2 }; }
+  function apply(e){ const p=pos(e); const r=Math.hypot(p.x,p.y); const cap=RAD; const rr=Math.min(r,cap);
+    spAz=Math.atan2(p.x,-p.y); spDistM=Math.max(0.5,(rr/RAD)*MAXM); refreshSpatialReadout(); }
+  radar.addEventListener("mousedown",e=>{ dragging=true; apply(e); });
+  window.addEventListener("mousemove",e=>{ if(dragging) apply(e); });
+  window.addEventListener("mouseup",()=>dragging=false);
+  radar.addEventListener("touchstart",e=>{ dragging=true; apply(e); e.preventDefault(); },{passive:false});
+  radar.addEventListener("touchmove",e=>{ if(dragging){ apply(e); e.preventDefault(); } },{passive:false});
+  radar.addEventListener("touchend",()=>dragging=false);
+})();
+document.getElementById("selSpatial").onclick=()=>{
+  const found=findSeg(selSegId); if(!found) return;
+  spSeg=found.s;
+  if(studio.deepBearing!=null && !spSeg.spatialFilter){ spAz=studio.deepBearing*Math.PI/180; studio.deepBearing=null; }
+  StudioSpatialPreview.setBuffer(spSeg.buf);
+  document.getElementById("spatialOverlay").classList.add("show");
+  refreshSpatialReadout();
+};
+document.getElementById("spCancel").onclick=()=>{ StudioSpatialPreview.stop(); document.getElementById("spatialOverlay").classList.remove("show"); };
+document.getElementById("spatialOverlay").addEventListener("click",e=>{ if(e.target===document.getElementById("spatialOverlay")){ StudioSpatialPreview.stop(); document.getElementById("spatialOverlay").classList.remove("show"); } });
+document.getElementById("spPreview").onclick=()=>{
+  if(StudioSpatialPreview.playing){ StudioSpatialPreview.stop(); document.getElementById("spPreview").textContent="▶ Preview"; return; }
+  StudioSpatialPreview.play(); refreshSpatialReadout(); document.getElementById("spPreview").textContent="■ Stop";
+};
+document.getElementById("spMode").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  document.getElementById("spMode").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+  StudioSpatialPreview.setMode(b.dataset.m); refreshSpatialReadout();
+});
+function spSlider(id,fmt,apply){ const el=document.getElementById(id), v=document.getElementById(id+"v");
+  const upd=()=>{ const n=+el.value; v.textContent=fmt(n); apply(n); refreshSpatialReadout(); }; el.oninput=upd; }
+spSlider("spClearM", n=>n+" m", n=>StudioSpatialPreview.tuning.clearM=n);
+spSlider("spFarM", n=>n+" m", n=>StudioSpatialPreview.tuning.farM=n);
+spSlider("spHiHz", n=>n+" Hz", n=>StudioSpatialPreview.tuning.hiHz=n);
+spSlider("spLoHz", n=>n+" Hz", n=>StudioSpatialPreview.tuning.loHz=n);
+spSlider("spMinGain", n=>(n/100).toFixed(2), n=>StudioSpatialPreview.tuning.minGain=n/100);
+spSlider("spCurve", n=>(n/100).toFixed(1)+"×", n=>StudioSpatialPreview.tuning.curve=n/100);
+spSlider("spReverbMax", n=>(n/100).toFixed(2), n=>StudioSpatialPreview.tuning.reverbMax=n/100);
+document.getElementById("spBake").onclick=async()=>{
+  if(!spSeg) return;
+  const btn=document.getElementById("spBake"); btn.textContent="baking…"; btn.disabled=true;
+  try{
+    const params=currentSpatialParams();
+    const blob=await bakeSpatialFilter(spSeg,params);
+    const base=(spSeg.label||"clip").replace(/\.[^.]+$/,"").replace(/-spatial$/,"");
+    const org=railOrgId();
+    const key = spSeg.sourceKey && spSeg.sourceKey.startsWith("library/")
+      ? spSeg.sourceKey.replace(/\/[^/]+$/, "/"+base+"-spatial-"+Date.now().toString(36)+".mp3")
+      : (org ? "library/"+org+"/"+base+"-spatial-"+Date.now().toString(36)+".mp3"
+             : studio.projectId+"/"+base+"-spatial-"+Date.now().toString(36)+".mp3");
+    const {url}=await uploadBlob(blob,key,"audio/mpeg");
+    const newBuf=await _decodeUrl(url);
+    spSeg.buf=newBuf; spSeg.peaks=_buildPeaks(newBuf); spSeg.f0=0; spSeg.f1=1;
+    spSeg.sourceKey=key; spSeg.sourceUrl=url; spSeg.spatialFilter={azimuthDeg:Math.round((spAz*180/Math.PI+360)%360),distancePct:Math.round(spDistM/MAXM*100)};
+    spSeg.label=key.split("/").pop();
+    StudioSpatialPreview.stop();
+    document.getElementById("spatialOverlay").classList.remove("show");
+    renderTimelineUI(); refreshRail();
+  }catch(e){ alert("Bake failed: "+e.message); }
+  finally{ btn.textContent="Bake & Replace"; btn.disabled=false; }
+};
+
+/* ============================================================
+   Export
+   ============================================================ */
+let expDest="project";
+document.getElementById("btnExport").onclick=()=>{
+  if(!allSegments().length){ alert("Add at least one clip to the timeline first."); return; }
+  document.getElementById("expName").value="";
+  document.getElementById("expTotal").textContent=allSegments().length+" clip(s) across "+timeline.tracks.length+" track(s) · "+totalDurationSec().toFixed(1)+"s total";
+  syncExportFolderGrid();
+  document.getElementById("exportOverlay").classList.add("show");
+};
+document.getElementById("expCancel").onclick=()=>document.getElementById("exportOverlay").classList.remove("show");
+document.getElementById("exportOverlay").addEventListener("click",e=>{ if(e.target===document.getElementById("exportOverlay")) document.getElementById("exportOverlay").classList.remove("show"); });
+document.getElementById("expDest").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  document.getElementById("expDest").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+  expDest=b.dataset.d;
+  document.getElementById("expFolderRow").style.display=expDest==="library"?"block":"none";
+});
+let expFolder="";
+function syncExportFolderGrid(){
+  const grid=document.getElementById("expFolderGrid"); grid.innerHTML="";
+  const all=[...new Set([...railKnownFolders,...railPendingFolders])].sort();
+  const rootTile=document.createElement("div"); rootTile.className="folder-tile"+(expFolder===""?" dragover":"");
+  rootTile.innerHTML='<span class="fi">📁</span><span>root</span>'; rootTile.onclick=()=>{ expFolder=""; syncExportFolderGrid(); };
+  grid.appendChild(rootTile);
+  all.forEach(f=>{
+    const t=document.createElement("div"); t.className="folder-tile"+(expFolder===f?" dragover":"");
+    t.innerHTML='<span class="fi">📁</span><span>'+esc(f)+'</span>'; t.onclick=()=>{ expFolder=f; syncExportFolderGrid(); };
+    grid.appendChild(t);
+  });
+}
+document.getElementById("expRender").onclick=async()=>{
+  const btn=document.getElementById("expRender"); btn.textContent="rendering…"; btn.disabled=true;
+  try{
+    const blob=await renderTimeline();
+    const name=slug(document.getElementById("expName").value||"mixed")||"mixed";
+    let key;
+    if(expDest==="project"){ key=studio.projectId+"/studio-"+name+"-"+Date.now().toString(36)+".mp3"; }
+    else{
+      const org=railOrgId(); if(!org){ alert("pick a company above first"); return; }
+      key="library/"+org+"/"+(expFolder?expFolder+"/":"")+name+"-"+Date.now().toString(36)+".mp3";
+      if(expFolder) railPendingFolders.add(expFolder);
+    }
+    await uploadBlob(blob,key,"audio/mpeg");
+    document.getElementById("exportOverlay").classList.remove("show");
+    if(expDest==="project" && railTab==="project") refreshRail();
+    if(expDest==="library" && railTab==="library") refreshRail();
+  }catch(e){ alert("Export failed: "+e.message); }
+  finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }
+};
+
+/* ============================================================
+   Boot
+   ============================================================ */
+document.addEventListener("keydown",e=>{
+  if(document.activeElement && ["INPUT","TEXTAREA"].includes(document.activeElement.tagName)) return;
+  if(e.code==="Space"){ e.preventDefault(); document.getElementById("btnPlay").click(); }
+  if(e.key==="Delete"||e.key==="Backspace"){ if(selSegId!=null){ e.preventDefault(); document.getElementById("selDelete").click(); } }
+});
+initFromUrl();
+ClientPicker.init({ navEl: document.getElementById("clientPickerNav"), onChange: ()=>{
+  railKnownFolders=new Set(); railPendingFolders.clear();
+  if(studio.projectId) enterProject(); else { showPicker(); loadProjectPicker(); }
+}});
+if(studio.projectId){ newTrack(); enterProject(); renderTimelineUI(); }
+else { showPicker(); loadProjectPicker(); }
+</script>
+</body>
+</html>

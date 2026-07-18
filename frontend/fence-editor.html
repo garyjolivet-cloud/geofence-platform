@@ -133,6 +133,11 @@
                     border-radius:7px;padding:4px 6px;font-family:'Barlow Condensed';font-size:12px}
   .af-crumb button{flex:0 0 auto;background:none;border:1px solid var(--rim);border-radius:7px;color:var(--ice);
                     font-family:'Barlow Condensed';font-size:11px;padding:4px 8px;cursor:pointer}
+  .af-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:4px;margin:0 0 6px}
+  .af-folder-tile{border:1px solid var(--rim);border-radius:7px;padding:6px 4px;text-align:center;cursor:pointer;
+                   background:rgba(255,255,255,.02);font-family:'Barlow Condensed';font-size:10px;color:var(--ice);
+                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .af-folder-tile:hover{border-color:var(--coral)}
   .af-list{max-height:220px;overflow-y:auto}
   /* wraps on narrow viewports (the docked editor panel) — the button group
      drops to its own right-aligned line instead of forcing the row to
@@ -688,18 +693,6 @@
       </div>
       <div id="pAudioStatus" class="hint" style="display:none;font-size:10px;margin:0 0 4px"></div>
 
-      <!-- voice capture -->
-      <div id="pVoiceRow" style="margin-top:2px">
-        <div id="pVoiceIdle">
-          <button id="btnVoiceRec" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:5px 8px">🎙 Record voice clip</button>
-        </div>
-        <div id="pVoiceRecording" style="display:none;gap:6px;align-items:center">
-          <span id="pVoiceTimerDisp" style="font-family:'Barlow Condensed';font-size:12px;color:var(--hazard);flex:1">● 0:00</span>
-          <button id="btnVoiceStop" class="ghost" style="color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:5px 8px">⏹ Stop</button>
-        </div>
-        <div id="pVoiceDone" style="display:none"></div>
-      </div>
-
       <!-- what-plays summary -->
       <div class="va-summary empty" id="vaSummary">nothing set — add a clip or a bot</div>
     </div>
@@ -888,33 +881,25 @@
     <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
   </div>
 
-  <!-- Audio Files -->
+  <!-- Audio Files: drag-source-only palette. All editing (record/trim/move/
+       delete/combine/upload) lives in Audio Studio — "Open in Studio" below. -->
   <hr style="margin:10px 0 6px">
   <button id="audioFilesToggle" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:6px 10px;letter-spacing:.5px">&#9658; &#128193; Audio Files</button>
   <div id="audioFilesBody" style="display:none;flex-direction:column;gap:6px;padding-top:6px">
     <div class="af-tabs">
-      <button class="af-tab on" id="afTabProject" data-tab="project">This Project</button>
-      <button class="af-tab" id="afTabLibrary" data-tab="library">Library</button>
+      <button class="af-tab on" id="afTabProject">This Project</button>
+      <button class="af-tab" id="afTabLibrary">Library</button>
+      <button id="afRefresh" class="ghost" style="flex:0 0 auto;font-size:11px">&#8635;</button>
     </div>
     <div id="afNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to use its shared Library</div>
     <div class="af-crumb" id="afCrumb" style="display:none">
-      <span>&#128193;</span>
-      <select id="afFolderSel"><option value="">Library (root)</option></select>
-      <button id="afNewFolder">+ Folder</button>
-      <button id="afDeleteFolder" style="display:none;color:var(--hazard);border-color:var(--hazard)">Delete folder</button>
+      <button id="afFolderBack" class="ghost" style="display:none;font-size:10px">&larr; root</button>
+      <span class="hint" id="afFolderLabel">&#128193; Library (root)</span>
     </div>
-    <div class="row" style="margin:0;gap:6px">
-      <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:6px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase">
-        Upload<input type="file" id="afUploadFile" accept="audio/*" style="display:none">
-      </label>
-      <button id="afRefresh" class="ghost" style="flex:0 0 auto;font-size:11px">&#8635;</button>
-    </div>
-    <div id="afBar" style="display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:2px 0">
-      <div id="afFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
-    </div>
+    <div id="afFolderGrid" class="af-folder-grid" style="display:none"></div>
     <div id="afStatus" class="hint" style="display:none;font-size:10px;margin:0"></div>
     <div class="af-list" id="afList"></div>
-    <button id="afCombineBtn" class="ghost" style="display:none;font-size:12px">Combine (0)</button>
+    <a href="/studio" id="afOpenStudio" style="display:block;margin-top:2px;color:var(--coral);text-decoration:none;font-family:'Barlow Condensed';font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Open in Studio &rarr;</a>
     <div class="hint">drag &#10241; onto a stop on the map, or a stop in the list, to assign a clip</div>
   </div>
   </div><!-- /editSection -->
@@ -1605,6 +1590,7 @@ let _activeProjSetting=null;
 function selectZone(i){ sel=i; render(); refreshProps(); }
 function refreshProps(){
   const box=document.getElementById("props");
+  const _osLink=document.getElementById("afOpenStudio"); if(_osLink) _osLink.href=afOpenStudioHref();
   if(sel<0 || !zones[sel]){ box.style.display="none"; return; }
   const z=zones[sel]; box.style.display="block";
   document.getElementById("pTitle").textContent=z.shape.type.toUpperCase()+" stop";
@@ -1632,7 +1618,6 @@ function refreshProps(){
     // fall through — path zones also populate the normal trigger fields below
   }
   document.getElementById("vaSummary").style.display="block";
-  document.getElementById("pVoiceRow").style.display="block";
   { const vPct=Math.round((z.volume??1)*100);
     document.getElementById("pVolume").value=vPct;
     document.getElementById("pVolumeV").textContent=vPct+"%"; }
@@ -1919,90 +1904,24 @@ document.getElementById("pAudioClear").onclick=async()=>{
   const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent="no clip";aLbl.className="va-audio-label";}
   updateVaSummary(z); };
 
-/* ── in-editor voice capture ────────────────────────── */
-const _vMime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"";
-let _vStream=null,_vRec=null,_vChunks=[],_vBlob=null,_vPrev=null,_vTimer=null,_vT0=0;
-
-function _vState(s){
-  document.getElementById("pVoiceIdle").style.display      = s==="idle"      ? "":"none";
-  document.getElementById("pVoiceRecording").style.display = s==="recording" ? "flex":"none";
-  document.getElementById("pVoiceDone").style.display      = s==="done"      ? "flex":"none";
-}
-document.getElementById("btnVoiceRec").onclick=async()=>{
-  if(sel<0){ alert("Click a zone on the map or in the list first, then record."); return; }
-  try{
-    if(!_vStream){
-      _vStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    }
-  }catch(e){
-    alert("Microphone access denied.\n\n"+e.message+"\n\nCheck browser site settings and allow the mic, then try again.");
-    return;
-  }
-  try{
-    _vChunks=[]; _vBlob=null;
-    const bCtx=new AudioContext({sampleRate:48000});
-    const src=bCtx.createMediaStreamSource(_vStream);
-    const dest=bCtx.createMediaStreamDestination();
-    src.connect(dest);
-    const mime=_vMime||"";
-    _vRec=mime ? new MediaRecorder(dest.stream,{mimeType:mime,audioBitsPerSecond:192000})
-               : new MediaRecorder(dest.stream,{audioBitsPerSecond:192000});
-    _vRec.ondataavailable=e=>{if(e.data.size>0)_vChunks.push(e.data);};
-    _vRec.onstop=async()=>{
-      bCtx.close().catch(()=>{});
-      clearInterval(_vTimer);
-      _vState("idle");
-      const blob=new Blob(_vChunks,{type:_vRec.mimeType||"audio/mp4"});
-      const z=zones[sel];
-      const proj=slug(projName())||"project";
-      const ext=blob.type.includes("mp4")?"m4a":"webm";
-      const defaultKey=proj+"/"+(slug(z.name||"clip")||"clip")+"-"+Date.now().toString(36)+"."+ext;
-      aStat().textContent="decoding…";
-      try{
-        const ab=await blob.arrayBuffer();
-        const tmp=new AudioContext();
-        const buf=await tmp.decodeAudioData(ab);
-        await tmp.close();
-        aStat().style.display="none";
-        openTrimmer(buf, defaultKey,
-          ()=>{ doXhrUpload(blob, defaultKey, blob.type); },
-          (trimmed,key)=>{ doXhrUpload(trimmed, key||defaultKey, trimmed.type); }
-        );
-      }catch(e){ aStat().textContent="decode failed: "+e.message; }
-    };
-    _vRec.start(500);
-    _vT0=Date.now();
-    _vTimer=setInterval(()=>{
-      const s=Math.floor((Date.now()-_vT0)/1000);
-      document.getElementById("pVoiceTimerDisp").textContent="● "+Math.floor(s/60)+":"+(s%60).toString().padStart(2,"0");
-    },500);
-    _vState("recording");
-  }catch(e){
-    alert("Recording failed: "+e.message);
-    _vStream=null;
-  }
-};
-document.getElementById("btnVoiceStop").onclick=()=>{
-  if(_vRec&&_vRec.state==="recording") _vRec.stop();
-};
-// pVoiceDone handlers removed — recording now opens the trimmer directly
-
-/* ---- Audio Files panel: "This Project" (auto-managed) + "Library" (shared, foldered, per-company) ---- */
-let afTab="project", afFolder="", afSelected=new Set(), afObjsById={};
-// R2 has no real directory objects — a folder only appears in a listing once
-// it holds a file, and a *non-root* listing's own "folders" is always empty
-// (we don't nest), so only a root listing can be trusted as the full,
-// authoritative folder inventory. afPendingFolders covers the gap right
-// after creating a brand-new (still-empty) folder, before it has a file.
-let afKnownFolders=new Set();
-const afPendingFolders=new Set();
+/* ---- Audio Files drawer: drag-source-only palette into Studio ----
+   Recording, trimming, moving, deleting, combining, and uploading now all
+   live in Audio Studio (/studio) — this panel only lists clips to drag onto
+   a stop, plus a read-only folder browser and a deep link into Studio. ---- */
+let afTab="project", afFolder="";
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
-function afBarEl(){ return document.getElementById("afBar"); }
-function afFillEl(){ return document.getElementById("afFill"); }
-function afStat(){ const el=document.getElementById("afStatus"); if(el) el.style.display="block"; return el; }
-function afShowBar(p){ afBarEl().style.display="block"; afFillEl().style.width=Math.round(p)+"%"; }
-function afHideBar(){ afBarEl().style.display="none"; afFillEl().style.width="0%"; }
+
+function afOpenStudioHref(){
+  const pid=afProjectId(); if(!pid) return "/studio";
+  const org=afOrgId();
+  let href=(org?"/studio?asClient="+encodeURIComponent(org)+"&":"/studio?")+"project="+encodeURIComponent(pid);
+  if(sel>=0){
+    const z=zones[sel];
+    href+="&zone="+encodeURIComponent(z.id)+"&bearing="+encodeURIComponent(z.bearingDeg!=null?z.bearingDeg:90);
+  }
+  return href;
+}
 
 function toggleAudioFilesPanel(){
   const body=document.getElementById("audioFilesBody");
@@ -2020,50 +1939,27 @@ document.getElementById("pAudioBrowse").onclick=()=>{
 };
 
 function afSetTab(tab){
-  afTab=tab; afSelected.clear(); updateCombineBtn();
+  afTab=tab; afFolder="";
   document.getElementById("afTabProject").classList.toggle("on",tab==="project");
   document.getElementById("afTabLibrary").classList.toggle("on",tab==="library");
-  document.getElementById("afCrumb").style.display=tab==="library"?"flex":"none";
   doAudioRefresh();
 }
 document.getElementById("afTabProject").onclick=()=>afSetTab("project");
 document.getElementById("afTabLibrary").onclick=()=>afSetTab("library");
 document.getElementById("afRefresh").onclick=doAudioRefresh;
-document.getElementById("afFolderSel").onchange=e=>{ afFolder=e.target.value; afSelected.clear(); updateCombineBtn(); doAudioRefresh(); };
-document.getElementById("afNewFolder").onclick=()=>{
-  const name=(prompt("New folder name:")||"").trim();
-  if(!name) return;
-  if(name.includes("/")){ alert('Library folders are flat — no "/" in the name.'); return; }
-  // Folders aren't real R2 objects — they exist once a file lands in them.
-  // Switching there now just means the next upload creates it.
-  afPendingFolders.add(name);
-  afFolder=name;
-  afSyncFolderOptions();
-  doAudioRefresh();
-};
-document.getElementById("afDeleteFolder").onclick=async()=>{
-  const org=afOrgId(); if(!org||!afFolder) return;
-  if(!confirm('Delete the folder "'+afFolder+'" and everything in it? This cannot be undone.')) return;
-  try{
-    const r=await fetch("/api/audio/folder?org="+encodeURIComponent(org)+"&folder="+encodeURIComponent(afFolder),
-      {method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-    if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
-    afKnownFolders.delete(afFolder); afPendingFolders.delete(afFolder);
-    afFolder=""; afSelected.clear(); updateCombineBtn();
-    doAudioRefresh();
-  }catch(e){ alert("Delete failed: "+e.message); }
-};
+document.getElementById("afFolderBack").onclick=()=>{ afFolder=""; doAudioRefresh(); };
 
 async function doAudioRefresh(){
   const list=document.getElementById("afList");
   document.getElementById("afNoOrg").style.display="none";
+  document.getElementById("afCrumb").style.display="none";
+  document.getElementById("afFolderGrid").style.display="none";
+  document.getElementById("afOpenStudio").href=afOpenStudioHref();
   if(afTab==="library" && !afOrgId()){
     document.getElementById("afNoOrg").style.display="block";
-    document.getElementById("afCrumb").style.display="none";
     list.innerHTML="";
     return;
   }
-  if(afTab==="library") document.getElementById("afCrumb").style.display="flex";
   list.innerHTML='<div class="af-empty">loading…</div>';
   try{
     let qs;
@@ -2076,28 +1972,32 @@ async function doAudioRefresh(){
     }
     const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
     if(r.status===401){ list.innerHTML='<div class="af-empty">token rejected — needs audio/publish scope</div>'; clearToken(); return; }
-    const j=r.ok?await r.json():{objects:[]};
+    const j=r.ok?await r.json():{objects:[],folders:[]};
     if(afTab==="library"){
-      if(!afFolder) afKnownFolders=new Set(j.folders||[]); // only a root listing is authoritative
-      afSyncFolderOptions();
+      document.getElementById("afCrumb").style.display="flex";
+      document.getElementById("afFolderBack").style.display=afFolder?"inline-block":"none";
+      document.getElementById("afFolderLabel").textContent=afFolder?("📁 "+afFolder):"📁 Library (root)";
+      if(!afFolder){
+        // non-root listings never report folders (R2 has no real nesting) —
+        // only a root listing is authoritative for "which folders exist".
+        const grid=document.getElementById("afFolderGrid");
+        grid.innerHTML="";
+        (j.folders||[]).forEach(f=>{
+          const t=document.createElement("div"); t.className="af-folder-tile"; t.textContent=f;
+          t.onclick=()=>{ afFolder=f; doAudioRefresh(); };
+          grid.appendChild(t);
+        });
+        grid.style.display=(j.folders||[]).length?"grid":"none";
+      }
     }
     renderAudioList(j.objects||[]);
   }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
 }
-function afSyncFolderOptions(){
-  const all=[...new Set([...afKnownFolders, ...afPendingFolders])].sort();
-  const keep=afFolder, opts='<option value="">Library (root)</option>'+all.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
-  const fsel=document.getElementById("afFolderSel"); fsel.innerHTML=opts; fsel.value=keep; if(fsel.value!==keep) fsel.value="";
-  const cf=document.getElementById("cmbFolderSel"); if(cf){ const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value=""; }
-  document.getElementById("afDeleteFolder").style.display=keep?"inline-block":"none";
-}
-
 function renderAudioList(objects){
   const list=document.getElementById("afList");
   list.innerHTML="";
-  afObjsById={};
   if(!objects.length){ list.innerHTML='<div class="af-empty">no audio files yet</div>'; return; }
-  objects.forEach(o=>{ afObjsById[o.key]=o; list.appendChild(afBuildRow(o)); });
+  objects.forEach(o=>list.appendChild(afBuildRow(o)));
 }
 function afFmtExpiry(ts){
   const ms=ts-Date.now(); if(ms<=0) return "expiring…";
@@ -2105,7 +2005,6 @@ function afFmtExpiry(ts){
   return m<60?("expires in "+m+"m"):("expires in "+Math.round(m/60)+"h");
 }
 function afBuildRow(o){
-  const kb=(o.size/1024).toFixed(0);
   const row=document.createElement("div"); row.className="af-row";
   row.draggable=true;
   row.addEventListener("dragstart",e=>{
@@ -2113,27 +2012,13 @@ function afBuildRow(o){
     e.dataTransfer.effectAllowed="copy";
   });
   const drag=document.createElement("span"); drag.className="af-drag"; drag.textContent="⠿";
-  const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=afSelected.has(o.key);
-  cb.addEventListener("change",()=>{ if(cb.checked) afSelected.add(o.key); else afSelected.delete(o.key); updateCombineBtn(); });
   const playBtn=document.createElement("button"); playBtn.textContent="▶";
   playBtn.addEventListener("click",()=>afTogglePlay(o,playBtn));
   const info=document.createElement("div"); info.className="af-info";
   const nm=document.createElement("div"); nm.className="af-name"; nm.textContent=o.key.split("/").pop();
-  const sz=document.createElement("div"); sz.className="af-sz"; sz.textContent=kb+" KB";
-  info.appendChild(nm); info.appendChild(sz);
+  info.appendChild(nm);
   if(o.expiresAt){ const exp=document.createElement("div"); exp.className="af-exp"; exp.textContent="⏳ "+afFmtExpiry(o.expiresAt); info.appendChild(exp); }
-  const btns=document.createElement("div"); btns.className="af-btns";
-  const trimBtn=document.createElement("button"); trimBtn.textContent="✂"; trimBtn.title="Trim";
-  trimBtn.addEventListener("click",()=>afTrim(o)); btns.appendChild(trimBtn);
-  if(afTab==="library"){
-    const mvBtn=document.createElement("button"); mvBtn.textContent="⇄"; mvBtn.title="Move";
-    mvBtn.addEventListener("click",()=>afMove(o)); btns.appendChild(mvBtn);
-  }
-  const delBtn=document.createElement("button"); delBtn.className="af-del"; delBtn.textContent="✕"; delBtn.title="Delete";
-  delBtn.addEventListener("click",()=>afDelete(o,row)); btns.appendChild(delBtn);
-  const useBtn=document.createElement("button"); useBtn.className="af-use"; useBtn.textContent="Use";
-  useBtn.addEventListener("click",()=>afUse(o)); btns.appendChild(useBtn);
-  row.appendChild(drag); row.appendChild(cb); row.appendChild(playBtn); row.appendChild(info); row.appendChild(btns);
+  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(info);
   return row;
 }
 let _afPlaying=null;
@@ -2144,74 +2029,6 @@ function afTogglePlay(o,btn){
   audio.onended=()=>{ btn.textContent="▶"; _afPlaying=null; };
   _afPlaying={url:o.url,audio,btn}; btn.textContent="⏸";
 }
-function afUse(o){
-  if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
-  zones[sel][zoneAudioField(zones[sel])]=o.url;
-  const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=o.key.split("/").pop();aLbl.className="va-audio-label has-clip";}
-  updateVaSummary(zones[sel]);
-  aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
-}
-function afTrim(o){
-  afStat().textContent="downloading for trim…";
-  _decodeUrl(o.url).then(buf=>{
-    const z=sel>=0?zones[sel]:null;
-    openTrimmer(buf, o.key,
-      ()=>{ if(z){ z[zoneAudioField(z)]=o.url; afStat().innerHTML="kept original — assigned <b>"+o.key.split("/").pop()+"</b>"; } doAudioRefresh(); },
-      (blob,userKey)=>{
-        const ext=_mimeExt(blob.type);
-        const resolvedKey=(userKey||o.key).replace(/\.[^.]+$/,"."+ext);
-        doXhrUpload(blob, resolvedKey, blob.type, {assignToZone:!!z, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh});
-      }
-    );
-  }).catch(e=>{ afStat().textContent="download failed — "+e.message; });
-}
-function afDelete(o,row){
-  if(!confirm("Delete "+o.key+" ?\nThis cannot be undone.")) return;
-  fetch("/api/audio/"+o.key,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}}).then(async r=>{
-    if(r.ok){
-      row.remove(); afSelected.delete(o.key); updateCombineBtn();
-      if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(o.url)))); }catch(e){}
-    } else alert("Delete failed: "+(await r.text()));
-  }).catch(e=>alert("Delete failed: "+e.message));
-}
-function afMove(o){
-  const dest=(prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', afFolder||"")||"").trim();
-  if(dest===(afFolder||"")) return;
-  if(dest.includes("/")){ alert('Library folders are flat — no "/".'); return; }
-  const org=o.key.split("/")[1]; // library/<org>/<folder?>/<file> — move within the same company
-  const to="library/"+org+"/"+(dest?dest+"/":"")+o.key.split("/").pop();
-  fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})})
-    .then(async r=>{
-      if(r.ok){ if(dest) afPendingFolders.add(dest); doAudioRefresh(); }
-      else alert("Move failed: "+(await r.text()));
-    })
-    .catch(e=>alert("Move failed: "+e.message));
-}
-function updateCombineBtn(){
-  const btn=document.getElementById("afCombineBtn");
-  btn.style.display=afSelected.size>=2?"block":"none";
-  btn.textContent="Combine ("+afSelected.size+")";
-}
-document.getElementById("afCombineBtn").onclick=()=>openCombineModal([...afSelected].map(k=>afObjsById[k]).filter(Boolean));
-document.getElementById("afUploadFile").addEventListener("change",async e=>{
-  const f=e.target.files[0]; if(!f) return;
-  e.target.value="";
-  if(afTab==="library" && !afOrgId()){ afStat().textContent="assign this tour to a customer first — see the Customer dropdown above"; return; }
-  try{
-    const ab=await f.arrayBuffer();
-    const ctx=new AudioContext(); let buf; try{ buf=await ctx.decodeAudioData(ab); }finally{ ctx.close(); }
-    const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
-    // Always append a short uniqueness suffix — two uploads with the same
-    // original filename must not silently overwrite each other.
-    const defaultKey=afTab==="library"
-      ? "library/"+afOrgId()+"/"+(afFolder?afFolder+"/":"")+base+"-"+Date.now().toString(36)+"."+ext
-      : (afProjectId()||"project")+"/"+base+"-"+Date.now().toString(36)+"."+ext;
-    openTrimmer(buf, defaultKey,
-      key=>{ doXhrUpload(f, key||defaultKey, f.type||"audio/mpeg", {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh}); },
-      (blob,userKey)=>{ doXhrUpload(blob, userKey||defaultKey, blob.type, {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh}); }
-    );
-  }catch(e){ afStat().textContent="couldn't read that file — "+e.message; }
-});
 
 /* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
 let _cmbSegs=[]; // {o, lane:'main'|'bg', f0,f1, buf(after decode), volPct}

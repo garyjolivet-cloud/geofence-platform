@@ -397,6 +397,7 @@ export default {
       "/share": "/share.html",
       "/audio": "/audio-bench.html",
       "/library": "/library.html",
+      "/studio": "/audio-studio.html",
       "/field": "/field-recorder.html",
       "/bots": "/bot-library.html",
       "/login": "/login.html",
