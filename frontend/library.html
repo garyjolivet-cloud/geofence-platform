@@ -154,6 +154,10 @@ function audioExt(name,type){
 function _mimeExt(mime){ return mime.includes("mpeg")||mime.includes("mp3")?"mp3":mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
 
 let folder="", selected=new Set(), objsByKey={};
+// R2 has no real directory objects — a folder only appears in a listing once
+// it holds a file. Track ones created this page-load so a brand-new empty
+// folder doesn't vanish the instant its own (empty) listing comes back.
+const pendingFolders=new Set();
 
 async function refresh(){
   const list=document.getElementById("afList");
@@ -168,7 +172,8 @@ async function refresh(){
   }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
 }
 function syncFolderOptions(folders){
-  const opts='<option value="">Library (root)</option>'+folders.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
+  const all=[...new Set([...folders, ...pendingFolders])].sort();
+  const opts='<option value="">Library (root)</option>'+all.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
   const fsel=document.getElementById("folderSel"); fsel.innerHTML=opts; fsel.value=folder; if(fsel.value!==folder) fsel.value="";
   const cf=document.getElementById("cmbFolderSel"); const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value="";
 }
@@ -241,10 +246,9 @@ document.getElementById("newFolderBtn").onclick=()=>{
   const name=(prompt("New folder name:")||"").trim();
   if(!name) return;
   if(name.includes("/")){ alert('Library folders are flat — no "/" in the name.'); return; }
+  pendingFolders.add(name);
   folder=name;
-  const fsel=document.getElementById("folderSel");
-  if(![...fsel.options].some(o=>o.value===name)){ const opt=document.createElement("option"); opt.value=name; opt.textContent=name; fsel.appendChild(opt); }
-  fsel.value=name; refresh();
+  refresh();
 };
 document.getElementById("combineBtn").onclick=()=>openCombineModal([...selected].map(k=>objsByKey[k]).filter(Boolean));
 

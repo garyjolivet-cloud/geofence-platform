@@ -1987,6 +1987,10 @@ document.getElementById("btnVoiceStop").onclick=()=>{
 
 /* ---- Audio Files panel: "This Project" (auto-managed) + "Library" (shared, foldered) ---- */
 let afTab="project", afFolder="", afSelected=new Set(), afObjsById={};
+// R2 has no real directory objects — a folder only appears in a listing once
+// it holds a file. Track ones created this page-load so a brand-new empty
+// folder doesn't vanish the instant its own (empty) listing comes back.
+const afPendingFolders=new Set();
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afBarEl(){ return document.getElementById("afBar"); }
 function afFillEl(){ return document.getElementById("afFill"); }
@@ -2026,12 +2030,8 @@ document.getElementById("afNewFolder").onclick=()=>{
   if(name.includes("/")){ alert('Library folders are flat — no "/" in the name.'); return; }
   // Folders aren't real R2 objects — they exist once a file lands in them.
   // Switching there now just means the next upload creates it.
+  afPendingFolders.add(name);
   afFolder=name;
-  const fsel=document.getElementById("afFolderSel");
-  if(![...fsel.options].some(o=>o.value===name)){
-    const opt=document.createElement("option"); opt.value=name; opt.textContent=name; fsel.appendChild(opt);
-  }
-  fsel.value=name;
   doAudioRefresh();
 };
 
@@ -2055,7 +2055,8 @@ async function doAudioRefresh(){
   }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
 }
 function afSyncFolderOptions(folders){
-  const keep=afFolder, opts='<option value="">Library (root)</option>'+folders.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
+  const all=[...new Set([...folders, ...afPendingFolders])].sort();
+  const keep=afFolder, opts='<option value="">Library (root)</option>'+all.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
   const fsel=document.getElementById("afFolderSel"); fsel.innerHTML=opts; fsel.value=keep; if(fsel.value!==keep) fsel.value="";
   const cf=document.getElementById("cmbFolderSel"); if(cf){ const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value=""; }
 }
