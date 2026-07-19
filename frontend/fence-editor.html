@@ -20,6 +20,19 @@
          background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
          backdrop-filter:blur(6px);transition:width .2s,padding .2s}
   .panel.mini{width:36px;padding:8px 6px;overflow:hidden}
+  /* Audio palette — floats independently of .panel so it never blocks map stops */
+  #audioPalette{position:absolute;top:10px;right:10px;width:280px;height:380px;min-width:220px;min-height:160px;
+                max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
+                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:6;
+                backdrop-filter:blur(6px);display:flex;flex-direction:column}
+  #audioPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
+  #audioPalette.mini #audioPaletteBody{display:none}
+  #audioPaletteHead{display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:move;user-select:none;
+                    border-bottom:1px solid var(--rim);flex:0 0 auto;font-family:"Barlow Condensed";font-size:12px;
+                    font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ice)}
+  #audioPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #audioPaletteHead button{flex:0 0 auto;padding:3px 8px;font-size:13px}
+  #audioPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
   .panel.mini .panel-body{display:none}
   #panelMinBtn{background:none;border:none;color:var(--fog);cursor:pointer;padding:2px 4px;
                font-size:14px;line-height:1;flex-shrink:0;margin-left:auto}
@@ -133,6 +146,11 @@
                     border-radius:7px;padding:4px 6px;font-family:'Barlow Condensed';font-size:12px}
   .af-crumb button{flex:0 0 auto;background:none;border:1px solid var(--rim);border-radius:7px;color:var(--ice);
                     font-family:'Barlow Condensed';font-size:11px;padding:4px 8px;cursor:pointer}
+  .af-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:4px;margin:0 0 6px}
+  .af-folder-tile{border:1px solid var(--rim);border-radius:7px;padding:6px 4px;text-align:center;cursor:pointer;
+                   background:rgba(255,255,255,.02);font-family:'Barlow Condensed';font-size:10px;color:var(--ice);
+                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .af-folder-tile:hover{border-color:var(--coral)}
   .af-list{max-height:220px;overflow-y:auto}
   /* wraps on narrow viewports (the docked editor panel) — the button group
      drops to its own right-aligned line instead of forcing the row to
@@ -452,14 +470,12 @@
 <div class="panel" id="mainPanel">
   <!-- collapse/expand buttons -->
   <button id="panelExpandBtn" onclick="document.getElementById('mainPanel').classList.remove('mini')" title="Expand panel">▶</button>
-  <!-- breadcrumb: Home › Client › Tour -->
+  <!-- breadcrumb: Home › Client (project name lives below, large + bold) -->
   <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:12px">
     <a href="/" style="color:var(--fog);text-decoration:none;transition:.12s" onmouseover="this.style.color='var(--ice)'" onmouseout="this.style.color='var(--fog)'">← Home</a>
     <span style="color:var(--rim)">›</span>
     <span id="clientCrumb" style="color:var(--fog)">—</span>
-    <span style="color:var(--rim)">›</span>
-    <span id="projCrumb" contenteditable="true" spellcheck="false" style="color:var(--ice);white-space:nowrap;overflow:hidden;outline:none;cursor:text;border-bottom:1px dashed var(--rim);min-width:40px" title="click to rename">new tour</span>
-    <button id="panelMinBtn" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
+    <button id="panelMinBtn" style="margin-left:auto" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
   </div>
   <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
@@ -467,12 +483,13 @@
 
   <!-- editor-only controls — hidden in test mode -->
   <div id="editorControls">
-    <!-- token -->
-    <div class="row" style="margin:0 0 4px">
-      <input id="adminTok" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
-      <button id="tokTest" class="ghost" style="flex:0 0 auto">Test</button>
-    </div>
-    <div class="hint" id="platStatus" style="margin:0 0 4px">token required for Load, Publish</div>
+    <!-- project name — large, bold, high-contrast; the one place to view/rename it -->
+    <span id="projCrumb" contenteditable="true" spellcheck="false"
+          style="display:block;font-family:'Black Han Sans';font-size:22px;line-height:1.15;color:var(--snow);
+                 outline:none;cursor:text;border-bottom:1px dashed var(--rim);margin:0 0 8px;padding:0 0 3px"
+          title="click to rename">new tour</span>
+    <!-- shared status line — publish/upload/delete feedback lands here throughout the editor -->
+    <div class="hint" id="platStatus" style="margin:0 0 4px">sign in required for Load, Publish</div>
     <!-- customer picker — which client this project belongs to; Publish applies it -->
     <label class="k" style="margin:2px 0 0">customer (Publish assigns this project to it)</label>
     <div class="row" style="margin:0 0 4px;gap:6px">
@@ -484,12 +501,6 @@
     <!-- publish -->
     <div class="row" style="margin:0">
       <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
-    </div>
-    <!-- delete -->
-    <div class="row" style="margin:4px 0 0">
-      <button id="projDel" class="ghost" style="flex:1;color:var(--hazard);border-color:var(--hazard);font-size:11px">✕ Del Project</button>
-      <button id="appDel" class="ghost" style="flex:1;color:var(--hazard);border-color:var(--hazard);font-size:11px">✕ Del App</button>
-      <button id="nukeAllBtn" class="ghost" style="flex:0 0 auto;color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:6px 8px" title="wipe all data">☢</button>
     </div>
     <!-- project settings -->
     <div style="margin-top:6px">
@@ -520,9 +531,7 @@
           <input type="range" id="audioClear"    min="2"  max="40"  value="8"  step="1"  style="width:100%;accent-color:var(--coral);display:none">
           <input type="range" id="visitorRadius" min="5"  max="80"  value="15" step="1"  style="width:100%;accent-color:var(--coral);display:none">
         </div>
-        <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
-        <select id="visitorBotSel"><option value="">— none —</option></select>
-        <label class="k" style="margin-top:6px">live stop duration</label>
+        <label class="k" style="margin-top:2px">live stop duration</label>
         <select id="liveTtlMs">
           <option value="120000">2 min</option>
           <option value="300000" selected>5 min (default)</option>
@@ -627,10 +636,6 @@
     <h2 id="pTitle">Stop</h2>
     <label class="k">name</label>
     <input id="pName" placeholder="Mountain Flower Garden">
-    <label class="chk" id="pHazardRow" style="margin:4px 0 6px">
-      <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
-    </label>
-
     <!-- ── Path movement (path stops only) — plus the full trigger system below,
          same as every other stop: hazard flag, Voices & Audio, Bots & Chat,
          speak-when/dwell, and Advanced (needle/approach/tracker/webhook/bearing) ── -->
@@ -688,25 +693,30 @@
       </div>
       <div id="pAudioStatus" class="hint" style="display:none;font-size:10px;margin:0 0 4px"></div>
 
-      <!-- voice capture -->
-      <div id="pVoiceRow" style="margin-top:2px">
-        <div id="pVoiceIdle">
-          <button id="btnVoiceRec" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:5px 8px">🎙 Record voice clip</button>
-        </div>
-        <div id="pVoiceRecording" style="display:none;gap:6px;align-items:center">
-          <span id="pVoiceTimerDisp" style="font-family:'Barlow Condensed';font-size:12px;color:var(--hazard);flex:1">● 0:00</span>
-          <button id="btnVoiceStop" class="ghost" style="color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:5px 8px">⏹ Stop</button>
-        </div>
-        <div id="pVoiceDone" style="display:none"></div>
-      </div>
-
       <!-- what-plays summary -->
       <div class="va-summary empty" id="vaSummary">nothing set — add a clip or a bot</div>
     </div>
 
-    <!-- ── Bots & Chat ── (collapsed by default; auto-expands when bots/TTS set) -->
-    <div class="adv-toggle" id="botToggle"><span class="arr">▶</span> Bots &amp; Chat</div>
-    <div class="adv-body" id="botBody">
+    <div id="pFiresRow">
+      <label class="k" style="margin-top:8px">speak when</label>
+      <select id="pFires">
+        <option value="enter">Visitor arrives</option>
+        <option value="dwell">Visitor lingers</option>
+      </select>
+      <div class="row" id="dwellRow" style="display:none">
+        <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
+        <input id="pDwell" type="number" value="20" min="2" style="flex:1">
+      </div>
+    </div>
+
+    <!-- Advanced collapsible — hazard flag + all Bots & Chat settings live here
+         too now, rather than in their own separate top-level toggles -->
+    <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
+    <div class="adv-body" id="advBody">
+      <label class="chk" id="pHazardRow" style="margin:0 0 6px">
+        <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
+      </label>
+      <hr>
       <!-- bot greeting delay (shown only when clip + bot both set) -->
       <div class="va-timing" id="vaTiming" style="display:none">
         <label class="k">bot greeting delay — clip plays first</label>
@@ -730,23 +740,7 @@
       <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
       <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
       <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
-    </div>
-
-    <div id="pFiresRow">
-      <label class="k" style="margin-top:8px">speak when</label>
-      <select id="pFires">
-        <option value="enter">Visitor arrives</option>
-        <option value="dwell">Visitor lingers</option>
-      </select>
-      <div class="row" id="dwellRow" style="display:none">
-        <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
-        <input id="pDwell" type="number" value="20" min="2" style="flex:1">
-      </div>
-    </div>
-
-    <!-- Advanced collapsible -->
-    <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
-    <div class="adv-body" id="advBody">
+      <hr>
       <label class="chk"><input type="checkbox" id="pNeedle" checked> point the arrow here on approach</label>
       <div class="half">
         <div><label class="k">approach ring m</label><input id="pApproach" type="number" value="30" min="8"></div>
@@ -804,13 +798,82 @@
     </div>
   </div>
 
-  <!-- bot tray (collapsed by default) -->
-  <div class="bot-tray" id="botTray">
-    <div class="bot-tray-head" id="botTrayHead">
-      <label class="k" style="cursor:pointer"><span class="arr">▶</span> 🤖 Region Bots</label>
-      <a href="/bots" target="_blank" onclick="event.stopPropagation()" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
+  <!-- Advanced (project-level): visitor bot, region bots, and Audio Lab —
+       all secondary/rarely-touched project config, tucked behind one toggle
+       instead of three separate always-visible blocks. -->
+  <div style="margin-top:6px">
+    <div class="adv-toggle" id="advProjToggle"><span class="arr">▶</span> Advanced</div>
+    <div id="advProjBody" class="adv-body" style="padding-top:6px">
+      <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
+      <select id="visitorBotSel"><option value="">— none —</option></select>
+      <hr>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <label class="k" style="margin:0">🤖 Region Bots</label>
+        <a href="/bots" target="_blank" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
+      </div>
+      <div class="bot-tray-scroll" id="botTrayScroll" style="display:flex"></div>
+      <hr>
+      <label class="k" style="margin:0 0 4px">&#128266; Audio Lab</label>
+      <div class="row" style="margin:0;gap:6px">
+        <label id="alFileLabel" style="flex:1;text-align:center;font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;border:1px solid var(--rim);border-radius:8px;padding:7px;cursor:pointer;color:var(--ice)">Load file<input type="file" id="alFile" accept="audio/*" style="display:none"></label>
+        <button id="alZoneClip" class="ghost" style="flex:1;font-size:12px;padding:7px">Zone clip</button>
+        <button id="alTone" class="ghost" style="flex:0 0 auto;font-size:12px;padding:7px">Tone</button>
+      </div>
+      <div class="row" style="margin:0;gap:6px">
+        <button id="alPlay" style="flex:1;font-size:13px;padding:9px">&#9654; Play</button>
+        <div style="display:flex;border:1px solid var(--rim);border-radius:8px;overflow:hidden;flex:0 0 auto">
+          <button data-m="stereo" class="alMode" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;background:var(--coral);color:#1a0d07;cursor:pointer;font-family:'Barlow Condensed';font-weight:700">Stereo</button>
+          <button data-m="hrtf" class="alMode ghost" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;cursor:pointer;font-family:'Barlow Condensed';font-weight:700;color:var(--ice)">3D</button>
+        </div>
+      </div>
+      <span class="k" style="margin:2px 0 0">pan test</span>
+      <div class="row" style="margin:0;gap:6px">
+        <button id="alPanL" class="ghost" style="flex:1;font-size:12px">&#9664; Left</button>
+        <button id="alPanC" class="ghost" style="flex:1;font-size:12px">&#9679; Center</button>
+        <button id="alPanR" class="ghost" style="flex:1;font-size:12px">Right &#9654;</button>
+      </div>
+      <span class="k" style="margin:2px 0 0">distance &mdash; <span id="alDistV">0</span> m</span>
+      <input type="range" id="alDist" min="0" max="80" value="0" step="1" style="width:100%;accent-color:var(--coral);margin-bottom:2px">
+
+      <span class="k" style="margin:6px 0 0">eq &amp; reverb</span>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">muffling</span>
+          <input type="range" id="alLoHz" min="100" max="3000" value="600" step="50" style="flex:1;accent-color:var(--coral)">
+          <span id="alLoHzV" style="width:52px;text-align:right;color:var(--ice)">600 Hz</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">reverb</span>
+          <input type="range" id="alRevMax" min="0" max="100" value="40" step="5" style="flex:1;accent-color:var(--coral)">
+          <span id="alRevMaxV" style="width:52px;text-align:right;color:var(--ice)">0.40</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">min vol</span>
+          <input type="range" id="alMinGain" min="0" max="50" value="5" step="1" style="flex:1;accent-color:var(--coral)">
+          <span id="alMinGainV" style="width:52px;text-align:right;color:var(--ice)">0.05</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">falloff</span>
+          <input type="range" id="alCurve" min="50" max="300" value="110" step="10" style="flex:1;accent-color:var(--coral)">
+          <span id="alCurveV" style="width:52px;text-align:right;color:var(--ice)">1.1&times;</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:'Barlow Condensed';font-size:12px;color:var(--ice);background:rgba(14,22,34,.6);border:1px solid var(--rim);border-radius:8px;padding:7px 10px">
+        <span>cut <b id="alHz" style="color:var(--snow)">&#8212;</b></span>
+        <span>gain <b id="alGain" style="color:var(--snow)">&#8212;</b></span>
+        <span>rev <b id="alRev" style="color:var(--snow)">&#8212;</b></span>
+        <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
+      </div>
+
+      <span class="k" style="margin:6px 0 0">voice</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="alVoice" style="flex:1;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
+          <option value="">— loading voices —</option>
+        </select>
+        <button id="alVoiceTest" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 10px">▶ Test</button>
+      </div>
+      <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
     </div>
-    <div class="bot-tray-scroll" id="botTrayScroll"></div>
   </div>
 
   <hr>
@@ -823,103 +886,37 @@
   <button id="copyBtn" style="display:none">Copy</button>
   <button id="loadPois" style="display:none">Ref</button>
 
-  <!-- Audio Lab -->
-  <hr style="margin:10px 0 6px">
-  <button id="audioLabToggle" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:6px 10px;letter-spacing:.5px">&#9658; &#128266; Audio Lab</button>
-  <div id="audioLabBody" style="display:none;flex-direction:column;gap:6px;padding-top:6px">
-    <div class="row" style="margin:0;gap:6px">
-      <label id="alFileLabel" style="flex:1;text-align:center;font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;border:1px solid var(--rim);border-radius:8px;padding:7px;cursor:pointer;color:var(--ice)">Load file<input type="file" id="alFile" accept="audio/*" style="display:none"></label>
-      <button id="alZoneClip" class="ghost" style="flex:1;font-size:12px;padding:7px">Zone clip</button>
-      <button id="alTone" class="ghost" style="flex:0 0 auto;font-size:12px;padding:7px">Tone</button>
-    </div>
-    <div class="row" style="margin:0;gap:6px">
-      <button id="alPlay" style="flex:1;font-size:13px;padding:9px">&#9654; Play</button>
-      <div style="display:flex;border:1px solid var(--rim);border-radius:8px;overflow:hidden;flex:0 0 auto">
-        <button data-m="stereo" class="alMode" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;background:var(--coral);color:#1a0d07;cursor:pointer;font-family:'Barlow Condensed';font-weight:700">Stereo</button>
-        <button data-m="hrtf" class="alMode ghost" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;cursor:pointer;font-family:'Barlow Condensed';font-weight:700;color:var(--ice)">3D</button>
-      </div>
-    </div>
-    <span class="k" style="margin:2px 0 0">pan test</span>
-    <div class="row" style="margin:0;gap:6px">
-      <button id="alPanL" class="ghost" style="flex:1;font-size:12px">&#9664; Left</button>
-      <button id="alPanC" class="ghost" style="flex:1;font-size:12px">&#9679; Center</button>
-      <button id="alPanR" class="ghost" style="flex:1;font-size:12px">Right &#9654;</button>
-    </div>
-    <span class="k" style="margin:2px 0 0">distance &mdash; <span id="alDistV">0</span> m</span>
-    <input type="range" id="alDist" min="0" max="80" value="0" step="1" style="width:100%;accent-color:var(--coral);margin-bottom:2px">
-
-    <span class="k" style="margin:6px 0 0">eq &amp; reverb</span>
-    <div style="display:flex;flex-direction:column;gap:4px">
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">muffling</span>
-        <input type="range" id="alLoHz" min="100" max="3000" value="600" step="50" style="flex:1;accent-color:var(--coral)">
-        <span id="alLoHzV" style="width:52px;text-align:right;color:var(--ice)">600 Hz</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">reverb</span>
-        <input type="range" id="alRevMax" min="0" max="100" value="40" step="5" style="flex:1;accent-color:var(--coral)">
-        <span id="alRevMaxV" style="width:52px;text-align:right;color:var(--ice)">0.40</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">min vol</span>
-        <input type="range" id="alMinGain" min="0" max="50" value="5" step="1" style="flex:1;accent-color:var(--coral)">
-        <span id="alMinGainV" style="width:52px;text-align:right;color:var(--ice)">0.05</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">falloff</span>
-        <input type="range" id="alCurve" min="50" max="300" value="110" step="10" style="flex:1;accent-color:var(--coral)">
-        <span id="alCurveV" style="width:52px;text-align:right;color:var(--ice)">1.1&times;</span>
-      </div>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:'Barlow Condensed';font-size:12px;color:var(--ice);background:rgba(14,22,34,.6);border:1px solid var(--rim);border-radius:8px;padding:7px 10px">
-      <span>cut <b id="alHz" style="color:var(--snow)">&#8212;</b></span>
-      <span>gain <b id="alGain" style="color:var(--snow)">&#8212;</b></span>
-      <span>rev <b id="alRev" style="color:var(--snow)">&#8212;</b></span>
-      <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
-    </div>
-
-    <span class="k" style="margin:6px 0 0">voice</span>
-    <div style="display:flex;gap:6px;align-items:center">
-      <select id="alVoice" style="flex:1;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
-        <option value="">— loading voices —</option>
-      </select>
-      <button id="alVoiceTest" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 10px">▶ Test</button>
-    </div>
-    <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
-  </div>
-
-  <!-- Audio Files -->
-  <hr style="margin:10px 0 6px">
-  <button id="audioFilesToggle" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:6px 10px;letter-spacing:.5px">&#9658; &#128193; Audio Files</button>
-  <div id="audioFilesBody" style="display:none;flex-direction:column;gap:6px;padding-top:6px">
-    <div class="af-tabs">
-      <button class="af-tab on" id="afTabProject" data-tab="project">This Project</button>
-      <button class="af-tab" id="afTabLibrary" data-tab="library">Library</button>
-    </div>
-    <div id="afNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to use its shared Library</div>
-    <div class="af-crumb" id="afCrumb" style="display:none">
-      <span>&#128193;</span>
-      <select id="afFolderSel"><option value="">Library (root)</option></select>
-      <button id="afNewFolder">+ Folder</button>
-      <button id="afDeleteFolder" style="display:none;color:var(--hazard);border-color:var(--hazard)">Delete folder</button>
-    </div>
-    <div class="row" style="margin:0;gap:6px">
-      <label class="file" style="flex:1;text-align:center;border:1px solid var(--rim);border-radius:8px;padding:6px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase">
-        Upload<input type="file" id="afUploadFile" accept="audio/*" style="display:none">
-      </label>
-      <button id="afRefresh" class="ghost" style="flex:0 0 auto;font-size:11px">&#8635;</button>
-    </div>
-    <div id="afBar" style="display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:2px 0">
-      <div id="afFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
-    </div>
-    <div id="afStatus" class="hint" style="display:none;font-size:10px;margin:0"></div>
-    <div class="af-list" id="afList"></div>
-    <button id="afCombineBtn" class="ghost" style="display:none;font-size:12px">Combine (0)</button>
-    <div class="hint">drag &#10241; onto a stop on the map, or a stop in the list, to assign a clip</div>
-  </div>
   </div><!-- /editSection -->
   </div><!-- /panel-body -->
 </div><!-- /mainPanel -->
+
+<!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
+     move/delete/combine/upload) lives in Audio Studio — "Open in Studio"
+     below. Floats independently of mainPanel (drag the header, resize from
+     the bottom-right corner) so it never blocks the map's own stops. -->
+<div id="audioPalette">
+  <div id="audioPaletteHead">
+    <span class="ttl">&#128193; Audio Palette</span>
+    <button id="audioPaletteMin" class="ghost" title="Minimize">&#8722;</button>
+  </div>
+  <div id="audioPaletteBody">
+    <div class="af-tabs">
+      <button class="af-tab on" id="afTabProject">This Project</button>
+      <button class="af-tab" id="afTabLibrary">Library</button>
+      <button id="afRefresh" class="ghost" style="flex:0 0 auto;font-size:11px">&#8635;</button>
+    </div>
+    <div id="afNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to use its shared Library</div>
+    <div class="af-crumb" id="afCrumb" style="display:none">
+      <button id="afFolderBack" class="ghost" style="display:none;font-size:10px">&larr; root</button>
+      <span class="hint" id="afFolderLabel">&#128193; Library (root)</span>
+    </div>
+    <div id="afFolderGrid" class="af-folder-grid" style="display:none"></div>
+    <div id="afStatus" class="hint" style="display:none;font-size:10px;margin:0"></div>
+    <div class="af-list" id="afList"></div>
+    <a href="/studio" id="afOpenStudio" style="display:block;margin-top:2px;color:var(--coral);text-decoration:none;font-family:'Barlow Condensed';font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Open in Studio &rarr;</a>
+    <div class="hint">drag &#10241; onto a stop on the map, or a stop in the list, to assign a clip</div>
+  </div>
+</div>
 
 <div id="botPicker">
   <div id="botPickerBox">
@@ -1190,6 +1187,7 @@ function renderSources(){
     const _bslots=Array.isArray(z.bots)?z.bots:(z.botId?[{botId:z.botId}]:[]);
     const _botAv=_bslots.slice(0,3).map(sl=>{const b=editorBots.find(x=>x.id===sl.botId);return b?(b.avatar||"🤖"):"";}).filter(Boolean).join("");
     const _lp={kind:"label",name:z.name,zIdx:i}; if(_botAv)_lp.botAv=_botAv;
+    if(z[zoneAudioField(z)]) _lp.hasAudio=true;
     feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
   });
   map.getSource("fences").setData(fc(feats));
@@ -1267,6 +1265,14 @@ map.on("load",()=>{
      layout:{"text-field":["get","botAv"],"text-size":18,"text-offset":[0,-1.4],
              "text-font":["Open Sans Regular"],"text-allow-overlap":true},
      paint:{"text-color":"#ffffff","text-halo-color":"#0a1018","text-halo-width":1.5}});
+  // small speaker badge — shown whenever the stop (or path) has a clip
+  // assigned (zoneAudioField), offset to the side so it doesn't collide
+  // with bot avatars sitting directly above the name
+  map.addLayer({id:"audio-lbl",type:"symbol",source:"fences",
+     filter:["all",["==","kind","label"],["has","hasAudio"]],
+     layout:{"text-field":"🔊","text-size":13,"text-offset":[1.7,1.15],
+             "text-font":["Open Sans Regular"],"text-allow-overlap":true},
+     paint:{"text-color":"#38e0a6","text-halo-color":"#0a1018","text-halo-width":1.3}});
   map.addLayer({id:"draft-line",type:"line",source:"draft",
      paint:{"line-color":"#ffc24d","line-width":2,"line-dasharray":[2,1]}});
   map.addLayer({id:"draft-pts",type:"circle",source:"draft",filter:["==","$type","Point"],
@@ -1605,6 +1611,7 @@ let _activeProjSetting=null;
 function selectZone(i){ sel=i; render(); refreshProps(); }
 function refreshProps(){
   const box=document.getElementById("props");
+  const _osLink=document.getElementById("afOpenStudio"); if(_osLink) _osLink.href=afOpenStudioHref();
   if(sel<0 || !zones[sel]){ box.style.display="none"; return; }
   const z=zones[sel]; box.style.display="block";
   document.getElementById("pTitle").textContent=z.shape.type.toUpperCase()+" stop";
@@ -1612,12 +1619,9 @@ function refreshProps(){
   const isPath=z.shape.type==="path";
 
   // Path stops fire the full trigger system too (hazard flag, bots/chat,
-  // "speak when"/dwell, Advanced needle/approach/tracker/webhook/bearing) —
+  // "speak when"/dwell, all folded into the single Advanced section below) —
   // exactly like every other stop — plus their own Movement/ambient section.
-  document.getElementById("pHazardRow").style.display="flex";
   document.getElementById("pFiresRow").style.display="block";
-  document.getElementById("botToggle").style.display="block";
-  document.getElementById("botBody").style.display="";
   document.getElementById("advToggle").style.display="block";
   document.getElementById("advBody").style.display="";
   document.getElementById("pPathSection").style.display=isPath?"block":"none";
@@ -1632,7 +1636,6 @@ function refreshProps(){
     // fall through — path zones also populate the normal trigger fields below
   }
   document.getElementById("vaSummary").style.display="block";
-  document.getElementById("pVoiceRow").style.display="block";
   { const vPct=Math.round((z.volume??1)*100);
     document.getElementById("pVolume").value=vPct;
     document.getElementById("pVolumeV").textContent=vPct+"%"; }
@@ -1673,19 +1676,23 @@ function refreshProps(){
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   document.getElementById("pIsHazard").checked = !!z.isHazard;
   updateVaSummary(z);
-  // Auto-expand Bots & Chat when zone already has bots or TTS content
-  const hasBotContent=(z.bots||[]).length>0||!!(z.say||"").trim();
-  const botTgl=document.getElementById("botToggle");
-  const botBdy=document.getElementById("botBody");
-  if(botTgl&&botBdy){
-    if(hasBotContent){ botTgl.classList.add("open"); botBdy.classList.add("open"); }
-    else{ botTgl.classList.remove("open"); botBdy.classList.remove("open"); }
+  // Auto-expand Advanced when the zone already has bot/TTS content or the
+  // hazard flag set — both now live inside it, and a config that already
+  // exists shouldn't disappear into a collapsed section unnoticed.
+  const hasAdvContent=(z.bots||[]).length>0||!!(z.say||"").trim()||!!z.isHazard;
+  const advTgl=document.getElementById("advToggle");
+  const advBdy=document.getElementById("advBody");
+  if(advTgl&&advBdy){
+    if(hasAdvContent){ advTgl.classList.add("open"); advBdy.classList.add("open"); }
+    else{ advTgl.classList.remove("open"); advBdy.classList.remove("open"); }
   }
 }
 function updateVaSummary(zone){
   const el=document.getElementById("vaSummary"); if(!el) return;
   const timingEl=document.getElementById("vaTiming");
-  const hasClip=!!zone[zoneAudioField(zone)];
+  const clipUrl=zone[zoneAudioField(zone)];
+  const hasClip=!!clipUrl;
+  const clipName=hasClip?(clipUrl.split("/").pop()||"clip"):"";
   const firstSlot=(zone.bots||[])[0];
   const firstBot=firstSlot?editorBots.find(b=>b.id===firstSlot.botId):null;
   const hasSay=!!(zone.say||"").trim();
@@ -1693,9 +1700,9 @@ function updateVaSummary(zone){
   const fireLabel=fires==="dwell"?"on dwell":"on entry";
   let txt="", isEmpty=false;
   if(hasClip&&firstBot){
-    txt="🎵 clip → "+(firstBot.avatar||"🤖")+" "+firstBot.name+" "+fireLabel;
+    txt="🎵 "+clipName+" → "+(firstBot.avatar||"🤖")+" "+firstBot.name+" "+fireLabel;
   } else if(hasClip){
-    txt="🎵 audio clip plays spatially — no bot";
+    txt="🎵 "+clipName+" plays spatially — no bot";
   } else if(firstBot){
     txt=(firstBot.avatar||"🤖")+" "+firstBot.name+" greets "+fireLabel;
   } else if(hasSay){
@@ -1862,17 +1869,6 @@ loadClients();
     const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
   });
 })();
-
-// Test button: verify the token against the server, plainly
-document.getElementById("tokTest").onclick=async()=>{
-  const t=(document.getElementById("adminTok").value||"").trim();
-  if(!t){ ps().textContent="type a token first, then Test"; return; }
-  ps().textContent="checking token…";
-  try{ const r=await fetch("/api/auth-check",{ headers:{ authorization:"Bearer "+t } });
-    if(r.ok){ verifiedToken=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads, publish, and new apps will work"; }
-    else ps().innerHTML="token <b style='color:var(--hazard)'>rejected ✕</b> — doesn't match the server's ADMIN_TOKEN secret";
-  }catch(e){ ps().textContent="couldn't reach the server to check"; }
-};
 const aStat=()=>{const el=document.getElementById("pAudioStatus");if(el)el.style.display="block";return el;};
 const aBar=()=>document.getElementById("pAudioBar");
 const aFill=()=>document.getElementById("pAudioFill");
@@ -1917,153 +1913,86 @@ document.getElementById("pAudioClear").onclick=async()=>{
   }
   delete z[fld]; hideBar(); aStat().textContent="clip removed";
   const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent="no clip";aLbl.className="va-audio-label";}
-  updateVaSummary(z); };
+  updateVaSummary(z); render(); };
 
-/* ── in-editor voice capture ────────────────────────── */
-const _vMime=["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm;codecs=opus","audio/webm"].find(t=>MediaRecorder.isTypeSupported(t))||"";
-let _vStream=null,_vRec=null,_vChunks=[],_vBlob=null,_vPrev=null,_vTimer=null,_vT0=0;
-
-function _vState(s){
-  document.getElementById("pVoiceIdle").style.display      = s==="idle"      ? "":"none";
-  document.getElementById("pVoiceRecording").style.display = s==="recording" ? "flex":"none";
-  document.getElementById("pVoiceDone").style.display      = s==="done"      ? "flex":"none";
-}
-document.getElementById("btnVoiceRec").onclick=async()=>{
-  if(sel<0){ alert("Click a zone on the map or in the list first, then record."); return; }
-  try{
-    if(!_vStream){
-      _vStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    }
-  }catch(e){
-    alert("Microphone access denied.\n\n"+e.message+"\n\nCheck browser site settings and allow the mic, then try again.");
-    return;
-  }
-  try{
-    _vChunks=[]; _vBlob=null;
-    const bCtx=new AudioContext({sampleRate:48000});
-    const src=bCtx.createMediaStreamSource(_vStream);
-    const dest=bCtx.createMediaStreamDestination();
-    src.connect(dest);
-    const mime=_vMime||"";
-    _vRec=mime ? new MediaRecorder(dest.stream,{mimeType:mime,audioBitsPerSecond:192000})
-               : new MediaRecorder(dest.stream,{audioBitsPerSecond:192000});
-    _vRec.ondataavailable=e=>{if(e.data.size>0)_vChunks.push(e.data);};
-    _vRec.onstop=async()=>{
-      bCtx.close().catch(()=>{});
-      clearInterval(_vTimer);
-      _vState("idle");
-      const blob=new Blob(_vChunks,{type:_vRec.mimeType||"audio/mp4"});
-      const z=zones[sel];
-      const proj=slug(projName())||"project";
-      const ext=blob.type.includes("mp4")?"m4a":"webm";
-      const defaultKey=proj+"/"+(slug(z.name||"clip")||"clip")+"-"+Date.now().toString(36)+"."+ext;
-      aStat().textContent="decoding…";
-      try{
-        const ab=await blob.arrayBuffer();
-        const tmp=new AudioContext();
-        const buf=await tmp.decodeAudioData(ab);
-        await tmp.close();
-        aStat().style.display="none";
-        openTrimmer(buf, defaultKey,
-          ()=>{ doXhrUpload(blob, defaultKey, blob.type); },
-          (trimmed,key)=>{ doXhrUpload(trimmed, key||defaultKey, trimmed.type); }
-        );
-      }catch(e){ aStat().textContent="decode failed: "+e.message; }
-    };
-    _vRec.start(500);
-    _vT0=Date.now();
-    _vTimer=setInterval(()=>{
-      const s=Math.floor((Date.now()-_vT0)/1000);
-      document.getElementById("pVoiceTimerDisp").textContent="● "+Math.floor(s/60)+":"+(s%60).toString().padStart(2,"0");
-    },500);
-    _vState("recording");
-  }catch(e){
-    alert("Recording failed: "+e.message);
-    _vStream=null;
-  }
-};
-document.getElementById("btnVoiceStop").onclick=()=>{
-  if(_vRec&&_vRec.state==="recording") _vRec.stop();
-};
-// pVoiceDone handlers removed — recording now opens the trimmer directly
-
-/* ---- Audio Files panel: "This Project" (auto-managed) + "Library" (shared, foldered, per-company) ---- */
-let afTab="project", afFolder="", afSelected=new Set(), afObjsById={};
-// R2 has no real directory objects — a folder only appears in a listing once
-// it holds a file, and a *non-root* listing's own "folders" is always empty
-// (we don't nest), so only a root listing can be trusted as the full,
-// authoritative folder inventory. afPendingFolders covers the gap right
-// after creating a brand-new (still-empty) folder, before it has a file.
-let afKnownFolders=new Set();
-const afPendingFolders=new Set();
+/* ---- Audio Files drawer: drag-source-only palette into Studio ----
+   Recording, trimming, moving, deleting, combining, and uploading now all
+   live in Audio Studio (/studio) — this panel only lists clips to drag onto
+   a stop, plus a read-only folder browser and a deep link into Studio. ---- */
+let afTab="project", afFolder="";
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
-function afBarEl(){ return document.getElementById("afBar"); }
-function afFillEl(){ return document.getElementById("afFill"); }
-function afStat(){ const el=document.getElementById("afStatus"); if(el) el.style.display="block"; return el; }
-function afShowBar(p){ afBarEl().style.display="block"; afFillEl().style.width=Math.round(p)+"%"; }
-function afHideBar(){ afBarEl().style.display="none"; afFillEl().style.width="0%"; }
 
-function toggleAudioFilesPanel(){
-  const body=document.getElementById("audioFilesBody");
-  const open=body.style.display==="flex";
-  body.style.display=open?"none":"flex";
-  document.getElementById("audioFilesToggle").innerHTML=(open?"&#9658;":"&#9660;")+" &#128193; Audio Files";
-  if(!open) doAudioRefresh();
+function afOpenStudioHref(){
+  const pid=afProjectId(); if(!pid) return "/studio";
+  const org=afOrgId();
+  let href=(org?"/studio?asClient="+encodeURIComponent(org)+"&":"/studio?")+"project="+encodeURIComponent(pid);
+  if(sel>=0){
+    const z=zones[sel];
+    href+="&zone="+encodeURIComponent(z.id)+"&bearing="+encodeURIComponent(z.bearingDeg!=null?z.bearingDeg:90);
+  }
+  return href;
 }
-document.getElementById("audioFilesToggle").onclick=toggleAudioFilesPanel;
+
+/* ---- Audio palette: floating panel (drag header to move, resize from the
+   bottom-right corner via native CSS resize, minimize via the header button) ---- */
+function unminimizeAudioPalette(){
+  const p=document.getElementById("audioPalette");
+  if(p.classList.contains("mini")){ p.classList.remove("mini"); doAudioRefresh(); }
+}
+document.getElementById("audioPaletteMin").onclick=e=>{
+  e.stopPropagation();
+  const p=document.getElementById("audioPalette");
+  const wasMini=p.classList.contains("mini");
+  p.classList.toggle("mini");
+  document.getElementById("audioPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
+  if(wasMini) doAudioRefresh();
+};
+(function(){
+  const head=document.getElementById("audioPaletteHead"), pal=document.getElementById("audioPalette");
+  head.addEventListener("mousedown",e=>{
+    if(e.target.closest("button")) return; // don't drag when clicking the minimize button
+    const rect=pal.getBoundingClientRect();
+    // switch from the initial right-anchored position to explicit left/top
+    // so the drag can freely reposition it from here on
+    pal.style.right="auto"; pal.style.left=rect.left+"px"; pal.style.top=rect.top+"px";
+    const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
+    const onMove=me=>{
+      const maxLeft=window.innerWidth-40, maxTop=window.innerHeight-40;
+      pal.style.left=Math.min(maxLeft,Math.max(0,startLeft+(me.clientX-startX)))+"px";
+      pal.style.top=Math.min(maxTop,Math.max(0,startTop+(me.clientY-startY)))+"px";
+    };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+})();
 document.getElementById("pAudioBrowse").onclick=()=>{
-  const body=document.getElementById("audioFilesBody");
-  if(body.style.display!=="flex") toggleAudioFilesPanel();
+  unminimizeAudioPalette();
   afSetTab("project");
-  body.scrollIntoView({behavior:"smooth",block:"nearest"});
 };
 
 function afSetTab(tab){
-  afTab=tab; afSelected.clear(); updateCombineBtn();
+  afTab=tab; afFolder="";
   document.getElementById("afTabProject").classList.toggle("on",tab==="project");
   document.getElementById("afTabLibrary").classList.toggle("on",tab==="library");
-  document.getElementById("afCrumb").style.display=tab==="library"?"flex":"none";
   doAudioRefresh();
 }
 document.getElementById("afTabProject").onclick=()=>afSetTab("project");
 document.getElementById("afTabLibrary").onclick=()=>afSetTab("library");
 document.getElementById("afRefresh").onclick=doAudioRefresh;
-document.getElementById("afFolderSel").onchange=e=>{ afFolder=e.target.value; afSelected.clear(); updateCombineBtn(); doAudioRefresh(); };
-document.getElementById("afNewFolder").onclick=()=>{
-  const name=(prompt("New folder name:")||"").trim();
-  if(!name) return;
-  if(name.includes("/")){ alert('Library folders are flat — no "/" in the name.'); return; }
-  // Folders aren't real R2 objects — they exist once a file lands in them.
-  // Switching there now just means the next upload creates it.
-  afPendingFolders.add(name);
-  afFolder=name;
-  afSyncFolderOptions();
-  doAudioRefresh();
-};
-document.getElementById("afDeleteFolder").onclick=async()=>{
-  const org=afOrgId(); if(!org||!afFolder) return;
-  if(!confirm('Delete the folder "'+afFolder+'" and everything in it? This cannot be undone.')) return;
-  try{
-    const r=await fetch("/api/audio/folder?org="+encodeURIComponent(org)+"&folder="+encodeURIComponent(afFolder),
-      {method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-    if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
-    afKnownFolders.delete(afFolder); afPendingFolders.delete(afFolder);
-    afFolder=""; afSelected.clear(); updateCombineBtn();
-    doAudioRefresh();
-  }catch(e){ alert("Delete failed: "+e.message); }
-};
+document.getElementById("afFolderBack").onclick=()=>{ afFolder=""; doAudioRefresh(); };
 
 async function doAudioRefresh(){
   const list=document.getElementById("afList");
   document.getElementById("afNoOrg").style.display="none";
+  document.getElementById("afCrumb").style.display="none";
+  document.getElementById("afFolderGrid").style.display="none";
+  document.getElementById("afOpenStudio").href=afOpenStudioHref();
   if(afTab==="library" && !afOrgId()){
     document.getElementById("afNoOrg").style.display="block";
-    document.getElementById("afCrumb").style.display="none";
     list.innerHTML="";
     return;
   }
-  if(afTab==="library") document.getElementById("afCrumb").style.display="flex";
   list.innerHTML='<div class="af-empty">loading…</div>';
   try{
     let qs;
@@ -2076,28 +2005,32 @@ async function doAudioRefresh(){
     }
     const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
     if(r.status===401){ list.innerHTML='<div class="af-empty">token rejected — needs audio/publish scope</div>'; clearToken(); return; }
-    const j=r.ok?await r.json():{objects:[]};
+    const j=r.ok?await r.json():{objects:[],folders:[]};
     if(afTab==="library"){
-      if(!afFolder) afKnownFolders=new Set(j.folders||[]); // only a root listing is authoritative
-      afSyncFolderOptions();
+      document.getElementById("afCrumb").style.display="flex";
+      document.getElementById("afFolderBack").style.display=afFolder?"inline-block":"none";
+      document.getElementById("afFolderLabel").textContent=afFolder?("📁 "+afFolder):"📁 Library (root)";
+      if(!afFolder){
+        // non-root listings never report folders (R2 has no real nesting) —
+        // only a root listing is authoritative for "which folders exist".
+        const grid=document.getElementById("afFolderGrid");
+        grid.innerHTML="";
+        (j.folders||[]).forEach(f=>{
+          const t=document.createElement("div"); t.className="af-folder-tile"; t.textContent=f;
+          t.onclick=()=>{ afFolder=f; doAudioRefresh(); };
+          grid.appendChild(t);
+        });
+        grid.style.display=(j.folders||[]).length?"grid":"none";
+      }
     }
     renderAudioList(j.objects||[]);
   }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
 }
-function afSyncFolderOptions(){
-  const all=[...new Set([...afKnownFolders, ...afPendingFolders])].sort();
-  const keep=afFolder, opts='<option value="">Library (root)</option>'+all.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
-  const fsel=document.getElementById("afFolderSel"); fsel.innerHTML=opts; fsel.value=keep; if(fsel.value!==keep) fsel.value="";
-  const cf=document.getElementById("cmbFolderSel"); if(cf){ const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value=""; }
-  document.getElementById("afDeleteFolder").style.display=keep?"inline-block":"none";
-}
-
 function renderAudioList(objects){
   const list=document.getElementById("afList");
   list.innerHTML="";
-  afObjsById={};
   if(!objects.length){ list.innerHTML='<div class="af-empty">no audio files yet</div>'; return; }
-  objects.forEach(o=>{ afObjsById[o.key]=o; list.appendChild(afBuildRow(o)); });
+  objects.forEach(o=>list.appendChild(afBuildRow(o)));
 }
 function afFmtExpiry(ts){
   const ms=ts-Date.now(); if(ms<=0) return "expiring…";
@@ -2105,7 +2038,6 @@ function afFmtExpiry(ts){
   return m<60?("expires in "+m+"m"):("expires in "+Math.round(m/60)+"h");
 }
 function afBuildRow(o){
-  const kb=(o.size/1024).toFixed(0);
   const row=document.createElement("div"); row.className="af-row";
   row.draggable=true;
   row.addEventListener("dragstart",e=>{
@@ -2113,27 +2045,13 @@ function afBuildRow(o){
     e.dataTransfer.effectAllowed="copy";
   });
   const drag=document.createElement("span"); drag.className="af-drag"; drag.textContent="⠿";
-  const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=afSelected.has(o.key);
-  cb.addEventListener("change",()=>{ if(cb.checked) afSelected.add(o.key); else afSelected.delete(o.key); updateCombineBtn(); });
   const playBtn=document.createElement("button"); playBtn.textContent="▶";
   playBtn.addEventListener("click",()=>afTogglePlay(o,playBtn));
   const info=document.createElement("div"); info.className="af-info";
   const nm=document.createElement("div"); nm.className="af-name"; nm.textContent=o.key.split("/").pop();
-  const sz=document.createElement("div"); sz.className="af-sz"; sz.textContent=kb+" KB";
-  info.appendChild(nm); info.appendChild(sz);
+  info.appendChild(nm);
   if(o.expiresAt){ const exp=document.createElement("div"); exp.className="af-exp"; exp.textContent="⏳ "+afFmtExpiry(o.expiresAt); info.appendChild(exp); }
-  const btns=document.createElement("div"); btns.className="af-btns";
-  const trimBtn=document.createElement("button"); trimBtn.textContent="✂"; trimBtn.title="Trim";
-  trimBtn.addEventListener("click",()=>afTrim(o)); btns.appendChild(trimBtn);
-  if(afTab==="library"){
-    const mvBtn=document.createElement("button"); mvBtn.textContent="⇄"; mvBtn.title="Move";
-    mvBtn.addEventListener("click",()=>afMove(o)); btns.appendChild(mvBtn);
-  }
-  const delBtn=document.createElement("button"); delBtn.className="af-del"; delBtn.textContent="✕"; delBtn.title="Delete";
-  delBtn.addEventListener("click",()=>afDelete(o,row)); btns.appendChild(delBtn);
-  const useBtn=document.createElement("button"); useBtn.className="af-use"; useBtn.textContent="Use";
-  useBtn.addEventListener("click",()=>afUse(o)); btns.appendChild(useBtn);
-  row.appendChild(drag); row.appendChild(cb); row.appendChild(playBtn); row.appendChild(info); row.appendChild(btns);
+  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(info);
   return row;
 }
 let _afPlaying=null;
@@ -2144,74 +2062,6 @@ function afTogglePlay(o,btn){
   audio.onended=()=>{ btn.textContent="▶"; _afPlaying=null; };
   _afPlaying={url:o.url,audio,btn}; btn.textContent="⏸";
 }
-function afUse(o){
-  if(sel<0){ alert("Select a stop on the map first, then click Use to assign this clip."); return; }
-  zones[sel][zoneAudioField(zones[sel])]=o.url;
-  const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=o.key.split("/").pop();aLbl.className="va-audio-label has-clip";}
-  updateVaSummary(zones[sel]);
-  aStat().innerHTML="clip assigned ✓ → <b>"+o.key.split("/").pop()+"</b> — hit Publish to save";
-}
-function afTrim(o){
-  afStat().textContent="downloading for trim…";
-  _decodeUrl(o.url).then(buf=>{
-    const z=sel>=0?zones[sel]:null;
-    openTrimmer(buf, o.key,
-      ()=>{ if(z){ z[zoneAudioField(z)]=o.url; afStat().innerHTML="kept original — assigned <b>"+o.key.split("/").pop()+"</b>"; } doAudioRefresh(); },
-      (blob,userKey)=>{
-        const ext=_mimeExt(blob.type);
-        const resolvedKey=(userKey||o.key).replace(/\.[^.]+$/,"."+ext);
-        doXhrUpload(blob, resolvedKey, blob.type, {assignToZone:!!z, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh});
-      }
-    );
-  }).catch(e=>{ afStat().textContent="download failed — "+e.message; });
-}
-function afDelete(o,row){
-  if(!confirm("Delete "+o.key+" ?\nThis cannot be undone.")) return;
-  fetch("/api/audio/"+o.key,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}}).then(async r=>{
-    if(r.ok){
-      row.remove(); afSelected.delete(o.key); updateCombineBtn();
-      if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(o.url)))); }catch(e){}
-    } else alert("Delete failed: "+(await r.text()));
-  }).catch(e=>alert("Delete failed: "+e.message));
-}
-function afMove(o){
-  const dest=(prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', afFolder||"")||"").trim();
-  if(dest===(afFolder||"")) return;
-  if(dest.includes("/")){ alert('Library folders are flat — no "/".'); return; }
-  const org=o.key.split("/")[1]; // library/<org>/<folder?>/<file> — move within the same company
-  const to="library/"+org+"/"+(dest?dest+"/":"")+o.key.split("/").pop();
-  fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})})
-    .then(async r=>{
-      if(r.ok){ if(dest) afPendingFolders.add(dest); doAudioRefresh(); }
-      else alert("Move failed: "+(await r.text()));
-    })
-    .catch(e=>alert("Move failed: "+e.message));
-}
-function updateCombineBtn(){
-  const btn=document.getElementById("afCombineBtn");
-  btn.style.display=afSelected.size>=2?"block":"none";
-  btn.textContent="Combine ("+afSelected.size+")";
-}
-document.getElementById("afCombineBtn").onclick=()=>openCombineModal([...afSelected].map(k=>afObjsById[k]).filter(Boolean));
-document.getElementById("afUploadFile").addEventListener("change",async e=>{
-  const f=e.target.files[0]; if(!f) return;
-  e.target.value="";
-  if(afTab==="library" && !afOrgId()){ afStat().textContent="assign this tour to a customer first — see the Customer dropdown above"; return; }
-  try{
-    const ab=await f.arrayBuffer();
-    const ctx=new AudioContext(); let buf; try{ buf=await ctx.decodeAudioData(ab); }finally{ ctx.close(); }
-    const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
-    // Always append a short uniqueness suffix — two uploads with the same
-    // original filename must not silently overwrite each other.
-    const defaultKey=afTab==="library"
-      ? "library/"+afOrgId()+"/"+(afFolder?afFolder+"/":"")+base+"-"+Date.now().toString(36)+"."+ext
-      : (afProjectId()||"project")+"/"+base+"-"+Date.now().toString(36)+"."+ext;
-    openTrimmer(buf, defaultKey,
-      key=>{ doXhrUpload(f, key||defaultKey, f.type||"audio/mpeg", {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh}); },
-      (blob,userKey)=>{ doXhrUpload(blob, userKey||defaultKey, blob.type, {assignToZone:false, statusEl:afStat(), barShow:afShowBar, barHide:afHideBar, onDone:doAudioRefresh}); }
-    );
-  }catch(e){ afStat().textContent="couldn't read that file — "+e.message; }
-});
 
 /* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
 let _cmbSegs=[]; // {o, lane:'main'|'bg', f0,f1, buf(after decode), volPct}
@@ -2526,60 +2376,10 @@ async function publishToPlatform(){
   }catch(e){ ps().textContent="publish failed: "+e.message; toast("Publish failed: "+e.message,"err"); }
 }
 document.getElementById("publishBtn").onclick=publishToPlatform;
-
-// delete project
-document.getElementById("projDel").onclick=async()=>{
-  const id=_currentProjectId;
-  if(!id){ ps().textContent="no project loaded — publish first to create one"; return; }
-  if(!confirm("Delete project \""+id+"\" and all its bundles? This cannot be undone.")) return;
-  const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
-  ps().textContent="deleting "+id+"…";
-  try{
-    const r=await fetch("/api/projects/"+encodeURIComponent(id),{
-      method:"DELETE", headers:{authorization:"Bearer "+token} });
-    const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour";
-      zones=[]; sel=-1; tool=null; draft=[]; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps();
-      ps().textContent="deleted "+id+" ✓ — go back to home to open another project"; }
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
-    else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="delete failed: "+e.message; }
-};
-
-// delete app (cascade — also deletes all projects inside it)
-document.getElementById("appDel").onclick=async()=>{
-  const id=document.getElementById("appSel").value;
-  if(!id){ ps().textContent="pick an app to delete first"; return; }
-  if(!confirm("Delete app \""+id+"\" AND all its projects/bundles? Cannot be undone.")) return;
-  const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
-  ps().textContent="deleting app "+id+"…";
-  try{
-    const r=await fetch("/api/apps/"+encodeURIComponent(id)+"?cascade=true",{
-      method:"DELETE", headers:{authorization:"Bearer "+token} });
-    const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps(); loadApps(); ps().textContent="deleted app "+id+" ✓ — go back to home to open another project"; }
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
-    else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="delete failed: "+e.message; }
-};
-
-// nuke all data
-document.getElementById("nukeAllBtn").onclick=async()=>{
-  if(!confirm("☢ NUKE ALL DATA?\n\nThis permanently deletes every app, project, bundle, bot, key, and event in the database. Cannot be undone.")) return;
-  if(!confirm("Are you absolutely sure? Type OK in the next prompt.")) return;
-  const answer=prompt("Type DELETE to confirm:");
-  if((answer||"").trim().toUpperCase()!=="DELETE"){ ps().textContent="nuke cancelled"; return; }
-  const token=getToken(); if(!token){ ps().textContent="need admin token to nuke"; return; }
-  ps().textContent="nuking all data…";
-  try{
-    const r=await fetch("/api/nuke",{method:"DELETE",headers:{authorization:"Bearer "+token}});
-    const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps(); loadApps();
-      ps().textContent="☢ all data wiped — "+((j.wiped||[]).join(", ")); }
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
-    else ps().textContent="nuke failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="nuke failed: "+e.message; }
-};
+// Delete Project / Delete App / Nuke were removed from the editor (2026-07-19)
+// — project deletion lives on the homepage project cards; app deletion and
+// nuke are master-only operations that don't belong in the day-to-day
+// per-tour editing view.
 
 // clear all stops + reset map state
 document.getElementById("clearAllBtn").onclick=()=>{
@@ -2868,7 +2668,7 @@ function doXhrUpload(blob, key, mimeType, opts){
       if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(audioUrl)))); }catch(_){}
       if(assignToZone&&sel>=0){ zones[sel][zoneAudioField(zones[sel])]=audioUrl;
         const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
-        updateVaSummary(zones[sel]); }
+        updateVaSummary(zones[sel]); render(); }
       barShow(100);
       statusEl.innerHTML="uploaded ✓ "+sizeStr+" in "+secs+"s → <b>/api/audio/"+key+"</b>";
       setTimeout(barHide,1500);
@@ -3066,7 +2866,16 @@ const SimVoice={
   async playZone(zone){if(!zone||!zone.audioUrl||!simSoundOn)return;
     const url=zone.audioUrl;if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
     this.ensure();this.loadingUrl=url;
-    let loaded;try{loaded=await this.load(url);}catch(e){this.loadingUrl=null;simLogEv("sev-warn","audio load failed: "+e.message);return;}
+    let loaded;try{loaded=await this.load(url);}catch(e){
+      this.loadingUrl=null;
+      // load() re-throws instantly for a URL already known to be dead (from its
+      // own _dead cache) — feedSim() calls playZone() on every simulated GPS
+      // tick, so without this dedup a single 404'd clip floods the sim log with
+      // one line per tick instead of one line for the actual failure.
+      if(!this._warned)this._warned=new Set();
+      if(!this._warned.has(url)){ this._warned.add(url); simLogEv("sev-warn","audio load failed: "+e.message); }
+      return;
+    }
     this.loadingUrl=null;if(this.ctx.state==="suspended")this.ctx.resume();
     if(this.src){
       if(this.src._el){this.src._el.pause();this.src._el.src='';try{this.src.disconnect();}catch(e){}}
@@ -3106,7 +2915,7 @@ const SimVoice={
       if(s&&s._el){s._el.pause();s._el.src='';try{s.disconnect();}catch(e){}}
       else{try{s.stop();}catch(e){}};},650);
     this.playing=false;this.currentUrl=null;this.src=null;},
-  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this.loadingUrl=null;}
+  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;}
 };
 
 // Ambient (path stop) clip playback in Test Mode — separate channel from
@@ -3124,7 +2933,9 @@ const SimAmbient={
     this.gain.connect(this.ctx.destination); },
   async load(url){
     if(this.buffers[url]) return this.buffers[url];
-    const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(r.status+" — "+url);
+    if(this._dead&&this._dead.has(url)) throw new Error("skipped (previous 404)");
+    const r=await fetch(url,{cache:"no-cache"});
+    if(!r.ok){ if(!this._dead)this._dead=new Set(); this._dead.add(url); throw new Error(r.status+" — "+url); }
     const ab=await r.arrayBuffer();
     const buf=await this.ctx.decodeAudioData(ab.slice(0));
     this.buffers[url]=buf; return buf;
@@ -3135,7 +2946,14 @@ const SimAmbient={
     if(this.loadingUrl===url) return;
     this.loadingUrl=url;
     let buf; try{ buf=await this.load(url); }
-    catch(e){ this.loadingUrl=null; simLogEv("sev-warn","ambient clip failed to load: "+e.message); return; }
+    catch(e){
+      this.loadingUrl=null;
+      // same tick-driven-spam risk as SimVoice.playZone — only log a dead
+      // ambient clip once, not on every call while the visitor lingers near it.
+      if(!this._warned)this._warned=new Set();
+      if(!this._warned.has(url)){ this._warned.add(url); simLogEv("sev-warn","ambient clip failed to load: "+e.message); }
+      return;
+    }
     this.loadingUrl=null;
     if(this.zoneId!==zone.id) return; // moved on while loading
     if(this.src){ try{this.src.stop();}catch(e){} }
@@ -3163,6 +2981,7 @@ const SimAmbient={
     if(this.src){ try{this.src.stop();}catch(e){} this.src=null; }
     if(this.gain) this.gain.gain.value=0;
     this.zoneId=null; this.loadingUrl=null;
+    this._dead=new Set(); this._warned=new Set();
   }
 };
 
@@ -3523,6 +3342,7 @@ function enterTestMode(){
   });
   document.getElementById("editSection").style.display="none";
   document.getElementById("editorControls").style.display="none";
+  document.getElementById("audioPalette").style.display="none"; // no clip-assignment during a simulated walk
   document.getElementById("simPanel").style.display="flex";
   document.getElementById("testModeBtn").textContent="✕ Exit test";
   document.getElementById("testModeBtn").classList.add("on");
@@ -3552,6 +3372,7 @@ function exitTestMode(){
   render();
   document.getElementById("editSection").style.display="";
   document.getElementById("editorControls").style.display="";
+  document.getElementById("audioPalette").style.display="flex";
   document.getElementById("simPanel").style.display="none";
   document.getElementById("testModeBtn").textContent="▶ Test";
   document.getElementById("testModeBtn").classList.remove("on");
@@ -3609,21 +3430,16 @@ document.getElementById("projCfgToggle").onclick=()=>{
 document.getElementById("mapKeyBtn").onclick=()=>document.getElementById("mapKeyOverlay").classList.toggle("open");
 document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.target===e.currentTarget) e.currentTarget.classList.remove("open"); });
 
-/* ---- advanced section toggle ---- */
+/* ---- advanced section toggle (also covers hazard + bots/chat, folded in above) ---- */
 document.getElementById("advToggle").onclick=()=>{
   document.getElementById("advToggle").classList.toggle("open");
   document.getElementById("advBody").classList.toggle("open");
 };
 
-/* ---- bots & chat section toggle ---- */
-document.getElementById("botToggle").onclick=()=>{
-  document.getElementById("botToggle").classList.toggle("open");
-  document.getElementById("botBody").classList.toggle("open");
-};
-
-/* ---- bot tray collapse ---- */
-document.getElementById("botTrayHead").onclick=()=>{
-  document.getElementById("botTrayHead").classList.toggle("open");
+/* ---- project-level advanced toggle (visitor bot, region bots, Audio Lab) ---- */
+document.getElementById("advProjToggle").onclick=()=>{
+  document.getElementById("advProjToggle").classList.toggle("open");
+  document.getElementById("advProjBody").classList.toggle("open");
 };
 
 
@@ -3929,6 +3745,7 @@ function addBotToZone(zone, botId){
         if(sel===best){
           const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
           updateVaSummary(zones[best]);
+          render(); // sel===best skips selectZone's render() below — refresh the map's 🔊 badge now
         }
       }
       if(sel!==best){ selectZone(best); map.flyTo({center:zoneCenterLonLat(zones[best]),zoom:17}); }
@@ -3951,6 +3768,7 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
         const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
         updateVaSummary(zones[zoneIdx]);
       }
+      render(); // refresh the map's 🔊 badge for this stop
     }
   };
 }
@@ -4530,12 +4348,8 @@ const AudioLab = {
 
   init(){
     const $=id=>document.getElementById(id);
-    const tog=$("audioLabToggle"), body=$("audioLabBody");
-    tog.onclick=()=>{
-      const open=body.style.display==="flex";
-      body.style.display=open?"none":"flex";
-      tog.textContent=(open?"▸":"▾")+" 🔊 Audio Lab";
-    };
+    // Audio Lab now lives inside the project-level "Advanced" section
+    // (advProjToggle/advProjBody) — no separate toggle of its own.
 
     // file load
     $("alFile").onchange=async e=>{
