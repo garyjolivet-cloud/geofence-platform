@@ -1690,7 +1690,9 @@ function refreshProps(){
 function updateVaSummary(zone){
   const el=document.getElementById("vaSummary"); if(!el) return;
   const timingEl=document.getElementById("vaTiming");
-  const hasClip=!!zone[zoneAudioField(zone)];
+  const clipUrl=zone[zoneAudioField(zone)];
+  const hasClip=!!clipUrl;
+  const clipName=hasClip?(clipUrl.split("/").pop()||"clip"):"";
   const firstSlot=(zone.bots||[])[0];
   const firstBot=firstSlot?editorBots.find(b=>b.id===firstSlot.botId):null;
   const hasSay=!!(zone.say||"").trim();
@@ -1698,9 +1700,9 @@ function updateVaSummary(zone){
   const fireLabel=fires==="dwell"?"on dwell":"on entry";
   let txt="", isEmpty=false;
   if(hasClip&&firstBot){
-    txt="🎵 clip → "+(firstBot.avatar||"🤖")+" "+firstBot.name+" "+fireLabel;
+    txt="🎵 "+clipName+" → "+(firstBot.avatar||"🤖")+" "+firstBot.name+" "+fireLabel;
   } else if(hasClip){
-    txt="🎵 audio clip plays spatially — no bot";
+    txt="🎵 "+clipName+" plays spatially — no bot";
   } else if(firstBot){
     txt=(firstBot.avatar||"🤖")+" "+firstBot.name+" greets "+fireLabel;
   } else if(hasSay){
