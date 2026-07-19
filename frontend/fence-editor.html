@@ -2866,7 +2866,16 @@ const SimVoice={
   async playZone(zone){if(!zone||!zone.audioUrl||!simSoundOn)return;
     const url=zone.audioUrl;if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
     this.ensure();this.loadingUrl=url;
-    let loaded;try{loaded=await this.load(url);}catch(e){this.loadingUrl=null;simLogEv("sev-warn","audio load failed: "+e.message);return;}
+    let loaded;try{loaded=await this.load(url);}catch(e){
+      this.loadingUrl=null;
+      // load() re-throws instantly for a URL already known to be dead (from its
+      // own _dead cache) — feedSim() calls playZone() on every simulated GPS
+      // tick, so without this dedup a single 404'd clip floods the sim log with
+      // one line per tick instead of one line for the actual failure.
+      if(!this._warned)this._warned=new Set();
+      if(!this._warned.has(url)){ this._warned.add(url); simLogEv("sev-warn","audio load failed: "+e.message); }
+      return;
+    }
     this.loadingUrl=null;if(this.ctx.state==="suspended")this.ctx.resume();
     if(this.src){
       if(this.src._el){this.src._el.pause();this.src._el.src='';try{this.src.disconnect();}catch(e){}}
@@ -2906,7 +2915,7 @@ const SimVoice={
       if(s&&s._el){s._el.pause();s._el.src='';try{s.disconnect();}catch(e){}}
       else{try{s.stop();}catch(e){}};},650);
     this.playing=false;this.currentUrl=null;this.src=null;},
-  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this.loadingUrl=null;}
+  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;}
 };
 
 // Ambient (path stop) clip playback in Test Mode — separate channel from
@@ -2924,7 +2933,9 @@ const SimAmbient={
     this.gain.connect(this.ctx.destination); },
   async load(url){
     if(this.buffers[url]) return this.buffers[url];
-    const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(r.status+" — "+url);
+    if(this._dead&&this._dead.has(url)) throw new Error("skipped (previous 404)");
+    const r=await fetch(url,{cache:"no-cache"});
+    if(!r.ok){ if(!this._dead)this._dead=new Set(); this._dead.add(url); throw new Error(r.status+" — "+url); }
     const ab=await r.arrayBuffer();
     const buf=await this.ctx.decodeAudioData(ab.slice(0));
     this.buffers[url]=buf; return buf;
@@ -2935,7 +2946,14 @@ const SimAmbient={
     if(this.loadingUrl===url) return;
     this.loadingUrl=url;
     let buf; try{ buf=await this.load(url); }
-    catch(e){ this.loadingUrl=null; simLogEv("sev-warn","ambient clip failed to load: "+e.message); return; }
+    catch(e){
+      this.loadingUrl=null;
+      // same tick-driven-spam risk as SimVoice.playZone — only log a dead
+      // ambient clip once, not on every call while the visitor lingers near it.
+      if(!this._warned)this._warned=new Set();
+      if(!this._warned.has(url)){ this._warned.add(url); simLogEv("sev-warn","ambient clip failed to load: "+e.message); }
+      return;
+    }
     this.loadingUrl=null;
     if(this.zoneId!==zone.id) return; // moved on while loading
     if(this.src){ try{this.src.stop();}catch(e){} }
@@ -2963,6 +2981,7 @@ const SimAmbient={
     if(this.src){ try{this.src.stop();}catch(e){} this.src=null; }
     if(this.gain) this.gain.gain.value=0;
     this.zoneId=null; this.loadingUrl=null;
+    this._dead=new Set(); this._warned=new Set();
   }
 };
 
