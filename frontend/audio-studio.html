@@ -57,6 +57,7 @@
   .folder-tile .fi{font-size:20px}
   .folder-tile:hover,.folder-tile.dragover{border-color:var(--coral);background:rgba(255,106,61,.08)}
   .folder-tile.new{border-style:dashed;color:var(--fog)}
+  .folder-tile.current{border-color:var(--coral);color:var(--snow)}
   .folder-tile input{width:90%;font-size:11px;padding:3px 4px;text-align:center}
   .clip-list{display:flex;flex-direction:column;gap:4px}
   .clip-tile{display:flex;align-items:center;gap:6px;padding:6px 7px;border:1px solid #26344a;border-radius:8px;cursor:grab;background:rgba(255,255,255,.02)}
@@ -594,16 +595,19 @@ function renderRail(objects,folders){
   const body=document.getElementById("railBody"); body.innerHTML="";
   if(folders!==null){
     const crumb=document.createElement("div"); crumb.className="crumb-row";
-    if(railFolder){ const back=document.createElement("button"); back.className="ghost"; back.textContent="← Library root";
-      back.onclick=()=>{ railFolder=""; refreshRail(); }; crumb.appendChild(back); }
-    else { const lbl=document.createElement("span"); lbl.className="hint"; lbl.textContent="📁 Library"; crumb.appendChild(lbl); }
+    const lbl=document.createElement("span"); lbl.className="hint";
+    lbl.textContent=railFolder?("📁 "+railFolder):"📁 Library (root)";
+    crumb.appendChild(lbl);
     body.appendChild(crumb);
-    if(!railFolder){
-      const grid=document.createElement("div"); grid.className="tile-grid";
-      folders.forEach(f=>grid.appendChild(buildFolderTile(f)));
-      grid.appendChild(buildNewFolderTile());
-      body.appendChild(grid);
-    } else {
+    // Folder tiles (including root) stay visible no matter which folder is
+    // currently open, so a clip can be dragged straight from one folder to
+    // another — or back to root — without navigating out first.
+    const grid=document.createElement("div"); grid.className="tile-grid";
+    grid.appendChild(buildFolderTile("","Library (root)"));
+    folders.forEach(f=>grid.appendChild(buildFolderTile(f)));
+    grid.appendChild(buildNewFolderTile());
+    body.appendChild(grid);
+    if(railFolder){
       const delBtn=document.createElement("button"); delBtn.className="danger ghost"; delBtn.style.fontSize="10px";
       delBtn.textContent="Delete folder \""+railFolder+"\"";
       delBtn.onclick=async()=>{
@@ -622,9 +626,9 @@ function renderRail(objects,folders){
   else objects.forEach(o=>list.appendChild(buildClipTile(o)));
   body.appendChild(list);
 }
-function buildFolderTile(name){
-  const t=document.createElement("div"); t.className="folder-tile";
-  t.innerHTML='<span class="fi">📁</span><span>'+esc(name)+'</span>';
+function buildFolderTile(name,label){
+  const t=document.createElement("div"); t.className="folder-tile"+(name===railFolder?" current":"");
+  t.innerHTML='<span class="fi">📁</span><span>'+esc(label!=null?label:name)+'</span>';
   t.onclick=()=>{ railFolder=name; refreshRail(); };
   t.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("audiourl")){ e.preventDefault(); t.classList.add("dragover"); } });
   t.addEventListener("dragleave",()=>t.classList.remove("dragover"));
@@ -811,7 +815,23 @@ function buildSegmentEl(s,t){
     if(e.target===hl||e.target===hr||e.target===fadeInH||e.target===fadeOutH) return;
     selSegId=s.id; renderTimelineUI();
     const startX=e.clientX, startOffset=s.trackOffsetSec;
-    const onMove=me=>{ s.trackOffsetSec=Math.max(0,startOffset+(me.clientX-startX)/pxPerSec); renderTimelineUI(); };
+    let curTrack=t;
+    // Snapshot each track lane's vertical bounds once, up front — renderTimelineUI()
+    // rebuilds the whole DOM on every move below, so a live element reference would
+    // go stale after the first frame, but track order/count doesn't change mid-drag.
+    const laneRects=[...document.querySelectorAll(".track-lane")].map((laneEl,i)=>{
+      const r=laneEl.getBoundingClientRect();
+      return { trackId: timeline.tracks[i] && timeline.tracks[i].id, top:r.top, bottom:r.bottom };
+    });
+    const onMove=me=>{
+      s.trackOffsetSec=Math.max(0,startOffset+(me.clientX-startX)/pxPerSec);
+      const hit=laneRects.find(r=>me.clientY>=r.top&&me.clientY<r.bottom);
+      if(hit && hit.trackId!==curTrack.id){
+        const dest=timeline.tracks.find(x=>x.id===hit.trackId);
+        if(dest){ curTrack.segments=curTrack.segments.filter(x=>x!==s); dest.segments.push(s); curTrack=dest; }
+      }
+      renderTimelineUI();
+    };
     const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
     document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
   });
