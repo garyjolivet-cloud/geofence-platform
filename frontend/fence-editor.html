@@ -490,12 +490,6 @@
     <div class="row" style="margin:0">
       <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
     </div>
-    <!-- delete -->
-    <div class="row" style="margin:4px 0 0">
-      <button id="projDel" class="ghost" style="flex:1;color:var(--hazard);border-color:var(--hazard);font-size:11px">✕ Del Project</button>
-      <button id="appDel" class="ghost" style="flex:1;color:var(--hazard);border-color:var(--hazard);font-size:11px">✕ Del App</button>
-      <button id="nukeAllBtn" class="ghost" style="flex:0 0 auto;color:var(--hazard);border-color:var(--hazard);font-size:11px;padding:6px 8px" title="wipe all data">☢</button>
-    </div>
     <!-- project settings -->
     <div style="margin-top:6px">
       <button id="projCfgToggle" class="ghost" style="width:100%;font-size:11px;text-align:left;padding:6px 10px">▸ Project Settings</button>
@@ -632,10 +626,6 @@
     <h2 id="pTitle">Stop</h2>
     <label class="k">name</label>
     <input id="pName" placeholder="Mountain Flower Garden">
-    <label class="chk" id="pHazardRow" style="margin:4px 0 6px">
-      <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
-    </label>
-
     <!-- ── Path movement (path stops only) — plus the full trigger system below,
          same as every other stop: hazard flag, Voices & Audio, Bots & Chat,
          speak-when/dwell, and Advanced (needle/approach/tracker/webhook/bearing) ── -->
@@ -697,9 +687,26 @@
       <div class="va-summary empty" id="vaSummary">nothing set — add a clip or a bot</div>
     </div>
 
-    <!-- ── Bots & Chat ── (collapsed by default; auto-expands when bots/TTS set) -->
-    <div class="adv-toggle" id="botToggle"><span class="arr">▶</span> Bots &amp; Chat</div>
-    <div class="adv-body" id="botBody">
+    <div id="pFiresRow">
+      <label class="k" style="margin-top:8px">speak when</label>
+      <select id="pFires">
+        <option value="enter">Visitor arrives</option>
+        <option value="dwell">Visitor lingers</option>
+      </select>
+      <div class="row" id="dwellRow" style="display:none">
+        <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
+        <input id="pDwell" type="number" value="20" min="2" style="flex:1">
+      </div>
+    </div>
+
+    <!-- Advanced collapsible — hazard flag + all Bots & Chat settings live here
+         too now, rather than in their own separate top-level toggles -->
+    <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
+    <div class="adv-body" id="advBody">
+      <label class="chk" id="pHazardRow" style="margin:0 0 6px">
+        <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
+      </label>
+      <hr>
       <!-- bot greeting delay (shown only when clip + bot both set) -->
       <div class="va-timing" id="vaTiming" style="display:none">
         <label class="k">bot greeting delay — clip plays first</label>
@@ -723,23 +730,7 @@
       <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
       <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
       <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
-    </div>
-
-    <div id="pFiresRow">
-      <label class="k" style="margin-top:8px">speak when</label>
-      <select id="pFires">
-        <option value="enter">Visitor arrives</option>
-        <option value="dwell">Visitor lingers</option>
-      </select>
-      <div class="row" id="dwellRow" style="display:none">
-        <label class="k" style="flex:0 0 auto;align-self:center;margin:0">after (sec)</label>
-        <input id="pDwell" type="number" value="20" min="2" style="flex:1">
-      </div>
-    </div>
-
-    <!-- Advanced collapsible -->
-    <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
-    <div class="adv-body" id="advBody">
+      <hr>
       <label class="chk"><input type="checkbox" id="pNeedle" checked> point the arrow here on approach</label>
       <div class="half">
         <div><label class="k">approach ring m</label><input id="pApproach" type="number" value="30" min="8"></div>
@@ -1607,12 +1598,9 @@ function refreshProps(){
   const isPath=z.shape.type==="path";
 
   // Path stops fire the full trigger system too (hazard flag, bots/chat,
-  // "speak when"/dwell, Advanced needle/approach/tracker/webhook/bearing) —
+  // "speak when"/dwell, all folded into the single Advanced section below) —
   // exactly like every other stop — plus their own Movement/ambient section.
-  document.getElementById("pHazardRow").style.display="flex";
   document.getElementById("pFiresRow").style.display="block";
-  document.getElementById("botToggle").style.display="block";
-  document.getElementById("botBody").style.display="";
   document.getElementById("advToggle").style.display="block";
   document.getElementById("advBody").style.display="";
   document.getElementById("pPathSection").style.display=isPath?"block":"none";
@@ -1667,13 +1655,15 @@ function refreshProps(){
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   document.getElementById("pIsHazard").checked = !!z.isHazard;
   updateVaSummary(z);
-  // Auto-expand Bots & Chat when zone already has bots or TTS content
-  const hasBotContent=(z.bots||[]).length>0||!!(z.say||"").trim();
-  const botTgl=document.getElementById("botToggle");
-  const botBdy=document.getElementById("botBody");
-  if(botTgl&&botBdy){
-    if(hasBotContent){ botTgl.classList.add("open"); botBdy.classList.add("open"); }
-    else{ botTgl.classList.remove("open"); botBdy.classList.remove("open"); }
+  // Auto-expand Advanced when the zone already has bot/TTS content or the
+  // hazard flag set — both now live inside it, and a config that already
+  // exists shouldn't disappear into a collapsed section unnoticed.
+  const hasAdvContent=(z.bots||[]).length>0||!!(z.say||"").trim()||!!z.isHazard;
+  const advTgl=document.getElementById("advToggle");
+  const advBdy=document.getElementById("advBody");
+  if(advTgl&&advBdy){
+    if(hasAdvContent){ advTgl.classList.add("open"); advBdy.classList.add("open"); }
+    else{ advTgl.classList.remove("open"); advBdy.classList.remove("open"); }
   }
 }
 function updateVaSummary(zone){
@@ -2352,60 +2342,10 @@ async function publishToPlatform(){
   }catch(e){ ps().textContent="publish failed: "+e.message; toast("Publish failed: "+e.message,"err"); }
 }
 document.getElementById("publishBtn").onclick=publishToPlatform;
-
-// delete project
-document.getElementById("projDel").onclick=async()=>{
-  const id=_currentProjectId;
-  if(!id){ ps().textContent="no project loaded — publish first to create one"; return; }
-  if(!confirm("Delete project \""+id+"\" and all its bundles? This cannot be undone.")) return;
-  const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
-  ps().textContent="deleting "+id+"…";
-  try{
-    const r=await fetch("/api/projects/"+encodeURIComponent(id),{
-      method:"DELETE", headers:{authorization:"Bearer "+token} });
-    const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour";
-      zones=[]; sel=-1; tool=null; draft=[]; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps();
-      ps().textContent="deleted "+id+" ✓ — go back to home to open another project"; }
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
-    else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="delete failed: "+e.message; }
-};
-
-// delete app (cascade — also deletes all projects inside it)
-document.getElementById("appDel").onclick=async()=>{
-  const id=document.getElementById("appSel").value;
-  if(!id){ ps().textContent="pick an app to delete first"; return; }
-  if(!confirm("Delete app \""+id+"\" AND all its projects/bundles? Cannot be undone.")) return;
-  const token=getToken(); if(!token){ ps().textContent="need admin token to delete"; return; }
-  ps().textContent="deleting app "+id+"…";
-  try{
-    const r=await fetch("/api/apps/"+encodeURIComponent(id)+"?cascade=true",{
-      method:"DELETE", headers:{authorization:"Bearer "+token} });
-    const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps(); loadApps(); ps().textContent="deleted app "+id+" ✓ — go back to home to open another project"; }
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
-    else ps().textContent="delete failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="delete failed: "+e.message; }
-};
-
-// nuke all data
-document.getElementById("nukeAllBtn").onclick=async()=>{
-  if(!confirm("☢ NUKE ALL DATA?\n\nThis permanently deletes every app, project, bundle, bot, key, and event in the database. Cannot be undone.")) return;
-  if(!confirm("Are you absolutely sure? Type OK in the next prompt.")) return;
-  const answer=prompt("Type DELETE to confirm:");
-  if((answer||"").trim().toUpperCase()!=="DELETE"){ ps().textContent="nuke cancelled"; return; }
-  const token=getToken(); if(!token){ ps().textContent="need admin token to nuke"; return; }
-  ps().textContent="nuking all data…";
-  try{
-    const r=await fetch("/api/nuke",{method:"DELETE",headers:{authorization:"Bearer "+token}});
-    const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=null; document.getElementById("projCrumb").textContent="new tour"; zones=[]; sel=-1; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps(); loadApps();
-      ps().textContent="☢ all data wiped — "+((j.wiped||[]).join(", ")); }
-    else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared"; }
-    else ps().textContent="nuke failed: "+(j.error||("HTTP "+r.status));
-  }catch(e){ ps().textContent="nuke failed: "+e.message; }
-};
+// Delete Project / Delete App / Nuke were removed from the editor (2026-07-19)
+// — project deletion lives on the homepage project cards; app deletion and
+// nuke are master-only operations that don't belong in the day-to-day
+// per-tour editing view.
 
 // clear all stops + reset map state
 document.getElementById("clearAllBtn").onclick=()=>{
@@ -3435,16 +3375,10 @@ document.getElementById("projCfgToggle").onclick=()=>{
 document.getElementById("mapKeyBtn").onclick=()=>document.getElementById("mapKeyOverlay").classList.toggle("open");
 document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.target===e.currentTarget) e.currentTarget.classList.remove("open"); });
 
-/* ---- advanced section toggle ---- */
+/* ---- advanced section toggle (also covers hazard + bots/chat, folded in above) ---- */
 document.getElementById("advToggle").onclick=()=>{
   document.getElementById("advToggle").classList.toggle("open");
   document.getElementById("advBody").classList.toggle("open");
-};
-
-/* ---- bots & chat section toggle ---- */
-document.getElementById("botToggle").onclick=()=>{
-  document.getElementById("botToggle").classList.toggle("open");
-  document.getElementById("botBody").classList.toggle("open");
 };
 
 /* ---- bot tray collapse ---- */
