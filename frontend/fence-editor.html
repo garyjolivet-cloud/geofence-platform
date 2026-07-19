@@ -20,6 +20,19 @@
          background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
          backdrop-filter:blur(6px);transition:width .2s,padding .2s}
   .panel.mini{width:36px;padding:8px 6px;overflow:hidden}
+  /* Audio palette — floats independently of .panel so it never blocks map stops */
+  #audioPalette{position:absolute;top:10px;right:10px;width:280px;height:380px;min-width:220px;min-height:160px;
+                max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
+                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:6;
+                backdrop-filter:blur(6px);display:flex;flex-direction:column}
+  #audioPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
+  #audioPalette.mini #audioPaletteBody{display:none}
+  #audioPaletteHead{display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:move;user-select:none;
+                    border-bottom:1px solid var(--rim);flex:0 0 auto;font-family:"Barlow Condensed";font-size:12px;
+                    font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ice)}
+  #audioPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #audioPaletteHead button{flex:0 0 auto;padding:3px 8px;font-size:13px}
+  #audioPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
   .panel.mini .panel-body{display:none}
   #panelMinBtn{background:none;border:none;color:var(--fog);cursor:pointer;padding:2px 4px;
                font-size:14px;line-height:1;flex-shrink:0;margin-left:auto}
@@ -457,14 +470,12 @@
 <div class="panel" id="mainPanel">
   <!-- collapse/expand buttons -->
   <button id="panelExpandBtn" onclick="document.getElementById('mainPanel').classList.remove('mini')" title="Expand panel">▶</button>
-  <!-- breadcrumb: Home › Client › Tour -->
+  <!-- breadcrumb: Home › Client (project name lives below, large + bold) -->
   <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:12px">
     <a href="/" style="color:var(--fog);text-decoration:none;transition:.12s" onmouseover="this.style.color='var(--ice)'" onmouseout="this.style.color='var(--fog)'">← Home</a>
     <span style="color:var(--rim)">›</span>
     <span id="clientCrumb" style="color:var(--fog)">—</span>
-    <span style="color:var(--rim)">›</span>
-    <span id="projCrumb" contenteditable="true" spellcheck="false" style="color:var(--ice);white-space:nowrap;overflow:hidden;outline:none;cursor:text;border-bottom:1px dashed var(--rim);min-width:40px" title="click to rename">new tour</span>
-    <button id="panelMinBtn" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
+    <button id="panelMinBtn" style="margin-left:auto" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
   </div>
   <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
@@ -472,12 +483,13 @@
 
   <!-- editor-only controls — hidden in test mode -->
   <div id="editorControls">
-    <!-- token -->
-    <div class="row" style="margin:0 0 4px">
-      <input id="adminTok" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="admin token" style="flex:1">
-      <button id="tokTest" class="ghost" style="flex:0 0 auto">Test</button>
-    </div>
-    <div class="hint" id="platStatus" style="margin:0 0 4px">token required for Load, Publish</div>
+    <!-- project name — large, bold, high-contrast; the one place to view/rename it -->
+    <span id="projCrumb" contenteditable="true" spellcheck="false"
+          style="display:block;font-family:'Black Han Sans';font-size:22px;line-height:1.15;color:var(--snow);
+                 outline:none;cursor:text;border-bottom:1px dashed var(--rim);margin:0 0 8px;padding:0 0 3px"
+          title="click to rename">new tour</span>
+    <!-- shared status line — publish/upload/delete feedback lands here throughout the editor -->
+    <div class="hint" id="platStatus" style="margin:0 0 4px">sign in required for Load, Publish</div>
     <!-- customer picker — which client this project belongs to; Publish applies it -->
     <label class="k" style="margin:2px 0 0">customer (Publish assigns this project to it)</label>
     <div class="row" style="margin:0 0 4px;gap:6px">
@@ -519,9 +531,7 @@
           <input type="range" id="audioClear"    min="2"  max="40"  value="8"  step="1"  style="width:100%;accent-color:var(--coral);display:none">
           <input type="range" id="visitorRadius" min="5"  max="80"  value="15" step="1"  style="width:100%;accent-color:var(--coral);display:none">
         </div>
-        <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
-        <select id="visitorBotSel"><option value="">— none —</option></select>
-        <label class="k" style="margin-top:6px">live stop duration</label>
+        <label class="k" style="margin-top:2px">live stop duration</label>
         <select id="liveTtlMs">
           <option value="120000">2 min</option>
           <option value="300000" selected>5 min (default)</option>
@@ -788,13 +798,82 @@
     </div>
   </div>
 
-  <!-- bot tray (collapsed by default) -->
-  <div class="bot-tray" id="botTray">
-    <div class="bot-tray-head" id="botTrayHead">
-      <label class="k" style="cursor:pointer"><span class="arr">▶</span> 🤖 Region Bots</label>
-      <a href="/bots" target="_blank" onclick="event.stopPropagation()" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
+  <!-- Advanced (project-level): visitor bot, region bots, and Audio Lab —
+       all secondary/rarely-touched project config, tucked behind one toggle
+       instead of three separate always-visible blocks. -->
+  <div style="margin-top:6px">
+    <div class="adv-toggle" id="advProjToggle"><span class="arr">▶</span> Advanced</div>
+    <div id="advProjBody" class="adv-body" style="padding-top:6px">
+      <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
+      <select id="visitorBotSel"><option value="">— none —</option></select>
+      <hr>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <label class="k" style="margin:0">🤖 Region Bots</label>
+        <a href="/bots" target="_blank" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
+      </div>
+      <div class="bot-tray-scroll" id="botTrayScroll" style="display:flex"></div>
+      <hr>
+      <label class="k" style="margin:0 0 4px">&#128266; Audio Lab</label>
+      <div class="row" style="margin:0;gap:6px">
+        <label id="alFileLabel" style="flex:1;text-align:center;font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;border:1px solid var(--rim);border-radius:8px;padding:7px;cursor:pointer;color:var(--ice)">Load file<input type="file" id="alFile" accept="audio/*" style="display:none"></label>
+        <button id="alZoneClip" class="ghost" style="flex:1;font-size:12px;padding:7px">Zone clip</button>
+        <button id="alTone" class="ghost" style="flex:0 0 auto;font-size:12px;padding:7px">Tone</button>
+      </div>
+      <div class="row" style="margin:0;gap:6px">
+        <button id="alPlay" style="flex:1;font-size:13px;padding:9px">&#9654; Play</button>
+        <div style="display:flex;border:1px solid var(--rim);border-radius:8px;overflow:hidden;flex:0 0 auto">
+          <button data-m="stereo" class="alMode" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;background:var(--coral);color:#1a0d07;cursor:pointer;font-family:'Barlow Condensed';font-weight:700">Stereo</button>
+          <button data-m="hrtf" class="alMode ghost" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;cursor:pointer;font-family:'Barlow Condensed';font-weight:700;color:var(--ice)">3D</button>
+        </div>
+      </div>
+      <span class="k" style="margin:2px 0 0">pan test</span>
+      <div class="row" style="margin:0;gap:6px">
+        <button id="alPanL" class="ghost" style="flex:1;font-size:12px">&#9664; Left</button>
+        <button id="alPanC" class="ghost" style="flex:1;font-size:12px">&#9679; Center</button>
+        <button id="alPanR" class="ghost" style="flex:1;font-size:12px">Right &#9654;</button>
+      </div>
+      <span class="k" style="margin:2px 0 0">distance &mdash; <span id="alDistV">0</span> m</span>
+      <input type="range" id="alDist" min="0" max="80" value="0" step="1" style="width:100%;accent-color:var(--coral);margin-bottom:2px">
+
+      <span class="k" style="margin:6px 0 0">eq &amp; reverb</span>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">muffling</span>
+          <input type="range" id="alLoHz" min="100" max="3000" value="600" step="50" style="flex:1;accent-color:var(--coral)">
+          <span id="alLoHzV" style="width:52px;text-align:right;color:var(--ice)">600 Hz</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">reverb</span>
+          <input type="range" id="alRevMax" min="0" max="100" value="40" step="5" style="flex:1;accent-color:var(--coral)">
+          <span id="alRevMaxV" style="width:52px;text-align:right;color:var(--ice)">0.40</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">min vol</span>
+          <input type="range" id="alMinGain" min="0" max="50" value="5" step="1" style="flex:1;accent-color:var(--coral)">
+          <span id="alMinGainV" style="width:52px;text-align:right;color:var(--ice)">0.05</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
+          <span style="width:72px">falloff</span>
+          <input type="range" id="alCurve" min="50" max="300" value="110" step="10" style="flex:1;accent-color:var(--coral)">
+          <span id="alCurveV" style="width:52px;text-align:right;color:var(--ice)">1.1&times;</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:'Barlow Condensed';font-size:12px;color:var(--ice);background:rgba(14,22,34,.6);border:1px solid var(--rim);border-radius:8px;padding:7px 10px">
+        <span>cut <b id="alHz" style="color:var(--snow)">&#8212;</b></span>
+        <span>gain <b id="alGain" style="color:var(--snow)">&#8212;</b></span>
+        <span>rev <b id="alRev" style="color:var(--snow)">&#8212;</b></span>
+        <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
+      </div>
+
+      <span class="k" style="margin:6px 0 0">voice</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="alVoice" style="flex:1;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
+          <option value="">— loading voices —</option>
+        </select>
+        <button id="alVoiceTest" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 10px">▶ Test</button>
+      </div>
+      <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
     </div>
-    <div class="bot-tray-scroll" id="botTrayScroll"></div>
   </div>
 
   <hr>
@@ -807,76 +886,20 @@
   <button id="copyBtn" style="display:none">Copy</button>
   <button id="loadPois" style="display:none">Ref</button>
 
-  <!-- Audio Lab -->
-  <hr style="margin:10px 0 6px">
-  <button id="audioLabToggle" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:6px 10px;letter-spacing:.5px">&#9658; &#128266; Audio Lab</button>
-  <div id="audioLabBody" style="display:none;flex-direction:column;gap:6px;padding-top:6px">
-    <div class="row" style="margin:0;gap:6px">
-      <label id="alFileLabel" style="flex:1;text-align:center;font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;border:1px solid var(--rim);border-radius:8px;padding:7px;cursor:pointer;color:var(--ice)">Load file<input type="file" id="alFile" accept="audio/*" style="display:none"></label>
-      <button id="alZoneClip" class="ghost" style="flex:1;font-size:12px;padding:7px">Zone clip</button>
-      <button id="alTone" class="ghost" style="flex:0 0 auto;font-size:12px;padding:7px">Tone</button>
-    </div>
-    <div class="row" style="margin:0;gap:6px">
-      <button id="alPlay" style="flex:1;font-size:13px;padding:9px">&#9654; Play</button>
-      <div style="display:flex;border:1px solid var(--rim);border-radius:8px;overflow:hidden;flex:0 0 auto">
-        <button data-m="stereo" class="alMode" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;background:var(--coral);color:#1a0d07;cursor:pointer;font-family:'Barlow Condensed';font-weight:700">Stereo</button>
-        <button data-m="hrtf" class="alMode ghost" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;cursor:pointer;font-family:'Barlow Condensed';font-weight:700;color:var(--ice)">3D</button>
-      </div>
-    </div>
-    <span class="k" style="margin:2px 0 0">pan test</span>
-    <div class="row" style="margin:0;gap:6px">
-      <button id="alPanL" class="ghost" style="flex:1;font-size:12px">&#9664; Left</button>
-      <button id="alPanC" class="ghost" style="flex:1;font-size:12px">&#9679; Center</button>
-      <button id="alPanR" class="ghost" style="flex:1;font-size:12px">Right &#9654;</button>
-    </div>
-    <span class="k" style="margin:2px 0 0">distance &mdash; <span id="alDistV">0</span> m</span>
-    <input type="range" id="alDist" min="0" max="80" value="0" step="1" style="width:100%;accent-color:var(--coral);margin-bottom:2px">
+  </div><!-- /editSection -->
+  </div><!-- /panel-body -->
+</div><!-- /mainPanel -->
 
-    <span class="k" style="margin:6px 0 0">eq &amp; reverb</span>
-    <div style="display:flex;flex-direction:column;gap:4px">
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">muffling</span>
-        <input type="range" id="alLoHz" min="100" max="3000" value="600" step="50" style="flex:1;accent-color:var(--coral)">
-        <span id="alLoHzV" style="width:52px;text-align:right;color:var(--ice)">600 Hz</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">reverb</span>
-        <input type="range" id="alRevMax" min="0" max="100" value="40" step="5" style="flex:1;accent-color:var(--coral)">
-        <span id="alRevMaxV" style="width:52px;text-align:right;color:var(--ice)">0.40</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">min vol</span>
-        <input type="range" id="alMinGain" min="0" max="50" value="5" step="1" style="flex:1;accent-color:var(--coral)">
-        <span id="alMinGainV" style="width:52px;text-align:right;color:var(--ice)">0.05</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-        <span style="width:72px">falloff</span>
-        <input type="range" id="alCurve" min="50" max="300" value="110" step="10" style="flex:1;accent-color:var(--coral)">
-        <span id="alCurveV" style="width:52px;text-align:right;color:var(--ice)">1.1&times;</span>
-      </div>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:'Barlow Condensed';font-size:12px;color:var(--ice);background:rgba(14,22,34,.6);border:1px solid var(--rim);border-radius:8px;padding:7px 10px">
-      <span>cut <b id="alHz" style="color:var(--snow)">&#8212;</b></span>
-      <span>gain <b id="alGain" style="color:var(--snow)">&#8212;</b></span>
-      <span>rev <b id="alRev" style="color:var(--snow)">&#8212;</b></span>
-      <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
-    </div>
-
-    <span class="k" style="margin:6px 0 0">voice</span>
-    <div style="display:flex;gap:6px;align-items:center">
-      <select id="alVoice" style="flex:1;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
-        <option value="">— loading voices —</option>
-      </select>
-      <button id="alVoiceTest" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 10px">▶ Test</button>
-    </div>
-    <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
+<!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
+     move/delete/combine/upload) lives in Audio Studio — "Open in Studio"
+     below. Floats independently of mainPanel (drag the header, resize from
+     the bottom-right corner) so it never blocks the map's own stops. -->
+<div id="audioPalette">
+  <div id="audioPaletteHead">
+    <span class="ttl">&#128193; Audio Palette</span>
+    <button id="audioPaletteMin" class="ghost" title="Minimize">&#8722;</button>
   </div>
-
-  <!-- Audio Files: drag-source-only palette. All editing (record/trim/move/
-       delete/combine/upload) lives in Audio Studio — "Open in Studio" below. -->
-  <hr style="margin:10px 0 6px">
-  <button id="audioFilesToggle" class="ghost" style="width:100%;text-align:left;font-size:11px;padding:6px 10px;letter-spacing:.5px">&#9658; &#128193; Audio Files</button>
-  <div id="audioFilesBody" style="display:none;flex-direction:column;gap:6px;padding-top:6px">
+  <div id="audioPaletteBody">
     <div class="af-tabs">
       <button class="af-tab on" id="afTabProject">This Project</button>
       <button class="af-tab" id="afTabLibrary">Library</button>
@@ -893,9 +916,7 @@
     <a href="/studio" id="afOpenStudio" style="display:block;margin-top:2px;color:var(--coral);text-decoration:none;font-family:'Barlow Condensed';font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Open in Studio &rarr;</a>
     <div class="hint">drag &#10241; onto a stop on the map, or a stop in the list, to assign a clip</div>
   </div>
-  </div><!-- /editSection -->
-  </div><!-- /panel-body -->
-</div><!-- /mainPanel -->
+</div>
 
 <div id="botPicker">
   <div id="botPickerBox">
@@ -1846,17 +1867,6 @@ loadClients();
     const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
   });
 })();
-
-// Test button: verify the token against the server, plainly
-document.getElementById("tokTest").onclick=async()=>{
-  const t=(document.getElementById("adminTok").value||"").trim();
-  if(!t){ ps().textContent="type a token first, then Test"; return; }
-  ps().textContent="checking token…";
-  try{ const r=await fetch("/api/auth-check",{ headers:{ authorization:"Bearer "+t } });
-    if(r.ok){ verifiedToken=t; try{ sessionStorage.setItem("gp.admin",t); }catch(e){} ps().innerHTML="token <b style='color:var(--go)'>valid ✓</b> — uploads, publish, and new apps will work"; }
-    else ps().innerHTML="token <b style='color:var(--hazard)'>rejected ✕</b> — doesn't match the server's ADMIN_TOKEN secret";
-  }catch(e){ ps().textContent="couldn't reach the server to check"; }
-};
 const aStat=()=>{const el=document.getElementById("pAudioStatus");if(el)el.style.display="block";return el;};
 const aBar=()=>document.getElementById("pAudioBar");
 const aFill=()=>document.getElementById("pAudioFill");
@@ -1922,19 +1932,41 @@ function afOpenStudioHref(){
   return href;
 }
 
-function toggleAudioFilesPanel(){
-  const body=document.getElementById("audioFilesBody");
-  const open=body.style.display==="flex";
-  body.style.display=open?"none":"flex";
-  document.getElementById("audioFilesToggle").innerHTML=(open?"&#9658;":"&#9660;")+" &#128193; Audio Files";
-  if(!open) doAudioRefresh();
+/* ---- Audio palette: floating panel (drag header to move, resize from the
+   bottom-right corner via native CSS resize, minimize via the header button) ---- */
+function unminimizeAudioPalette(){
+  const p=document.getElementById("audioPalette");
+  if(p.classList.contains("mini")){ p.classList.remove("mini"); doAudioRefresh(); }
 }
-document.getElementById("audioFilesToggle").onclick=toggleAudioFilesPanel;
+document.getElementById("audioPaletteMin").onclick=e=>{
+  e.stopPropagation();
+  const p=document.getElementById("audioPalette");
+  const wasMini=p.classList.contains("mini");
+  p.classList.toggle("mini");
+  document.getElementById("audioPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
+  if(wasMini) doAudioRefresh();
+};
+(function(){
+  const head=document.getElementById("audioPaletteHead"), pal=document.getElementById("audioPalette");
+  head.addEventListener("mousedown",e=>{
+    if(e.target.closest("button")) return; // don't drag when clicking the minimize button
+    const rect=pal.getBoundingClientRect();
+    // switch from the initial right-anchored position to explicit left/top
+    // so the drag can freely reposition it from here on
+    pal.style.right="auto"; pal.style.left=rect.left+"px"; pal.style.top=rect.top+"px";
+    const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
+    const onMove=me=>{
+      const maxLeft=window.innerWidth-40, maxTop=window.innerHeight-40;
+      pal.style.left=Math.min(maxLeft,Math.max(0,startLeft+(me.clientX-startX)))+"px";
+      pal.style.top=Math.min(maxTop,Math.max(0,startTop+(me.clientY-startY)))+"px";
+    };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+})();
 document.getElementById("pAudioBrowse").onclick=()=>{
-  const body=document.getElementById("audioFilesBody");
-  if(body.style.display!=="flex") toggleAudioFilesPanel();
+  unminimizeAudioPalette();
   afSetTab("project");
-  body.scrollIntoView({behavior:"smooth",block:"nearest"});
 };
 
 function afSetTab(tab){
@@ -3289,6 +3321,7 @@ function enterTestMode(){
   });
   document.getElementById("editSection").style.display="none";
   document.getElementById("editorControls").style.display="none";
+  document.getElementById("audioPalette").style.display="none"; // no clip-assignment during a simulated walk
   document.getElementById("simPanel").style.display="flex";
   document.getElementById("testModeBtn").textContent="✕ Exit test";
   document.getElementById("testModeBtn").classList.add("on");
@@ -3318,6 +3351,7 @@ function exitTestMode(){
   render();
   document.getElementById("editSection").style.display="";
   document.getElementById("editorControls").style.display="";
+  document.getElementById("audioPalette").style.display="flex";
   document.getElementById("simPanel").style.display="none";
   document.getElementById("testModeBtn").textContent="▶ Test";
   document.getElementById("testModeBtn").classList.remove("on");
@@ -3381,9 +3415,10 @@ document.getElementById("advToggle").onclick=()=>{
   document.getElementById("advBody").classList.toggle("open");
 };
 
-/* ---- bot tray collapse ---- */
-document.getElementById("botTrayHead").onclick=()=>{
-  document.getElementById("botTrayHead").classList.toggle("open");
+/* ---- project-level advanced toggle (visitor bot, region bots, Audio Lab) ---- */
+document.getElementById("advProjToggle").onclick=()=>{
+  document.getElementById("advProjToggle").classList.toggle("open");
+  document.getElementById("advProjBody").classList.toggle("open");
 };
 
 
@@ -4292,12 +4327,8 @@ const AudioLab = {
 
   init(){
     const $=id=>document.getElementById(id);
-    const tog=$("audioLabToggle"), body=$("audioLabBody");
-    tog.onclick=()=>{
-      const open=body.style.display==="flex";
-      body.style.display=open?"none":"flex";
-      tog.textContent=(open?"▸":"▾")+" 🔊 Audio Lab";
-    };
+    // Audio Lab now lives inside the project-level "Advanced" section
+    // (advProjToggle/advProjBody) — no separate toggle of its own.
 
     // file load
     $("alFile").onchange=async e=>{
