@@ -1715,19 +1715,28 @@ async function api(request, env, url) {
     return json({ ok: true, deleted, prefix }, 200, AC);
   }
 
-  // --- move/rename a library file (library-only, same org; project clips stay auto-managed) ---
+  // --- move/rename a library file (any folder incl. root, same org), or rename a
+  // project-owned file in place (same project only — it still can't change owners) ---
   if (path === "/api/audio/move" && method === "POST") {
     if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
     const A = await auth(request, env);
     const b = await request.json().catch(() => ({}));
     const from = (b.from || "").trim(), to = (b.to || "").trim();
     if (!from || !to) return json({ error: "need from and to" }, 400);
-    const fromParts = from.split("/"), toParts = to.split("/");
-    if (fromParts[0] !== "library" || toParts[0] !== "library") return json({ error: "only library/ files can be moved" }, 400);
-    if (fromParts[1] !== toParts[1]) return json({ error: "can't move a file to a different company's library" }, 400);
-    if (toParts.length > 4) return json({ error: "library folders are flat — no nested paths" }, 400); // library/<org>/<folder?>/<file>
     if (from === to) return json({ error: "from and to are the same" }, 400);
-    if (!(await libraryScopeOk(env, A, fromParts[1]))) return json({ error: "unauthorized" }, 401, AC);
+    const fromParts = from.split("/"), toParts = to.split("/");
+    const isLibrary = fromParts[0] === "library";
+    if (isLibrary !== (toParts[0] === "library")) return json({ error: "can't move a file between the library and a project" }, 400);
+    if (isLibrary) {
+      if (fromParts[1] !== toParts[1]) return json({ error: "can't move a file to a different company's library" }, 400);
+      if (toParts.length > 4) return json({ error: "library folders are flat — no nested paths" }, 400); // library/<org>/<folder?>/<file>
+      if (!(await libraryScopeOk(env, A, fromParts[1]))) return json({ error: "unauthorized" }, 401, AC);
+    } else {
+      if (fromParts[0] !== toParts[0]) return json({ error: "project-owned clips can be renamed but not moved to a different project" }, 400);
+      if (fromParts.length !== 2 || toParts.length !== 2) return json({ error: "project-owned clips are flat — no folders" }, 400);
+      const appId = await projectAppId(env, fromParts[0]);
+      if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
+    }
     const existing = await env.AUDIO.head(to);
     if (existing) return json({ error: "a file already exists at " + to }, 409);
     const obj = await env.AUDIO.get(from);

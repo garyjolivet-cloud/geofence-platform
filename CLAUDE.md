@@ -114,7 +114,7 @@ All audio lives in the `geofence-audio` R2 bucket as a flat key-value store — 
 - `?scope=library&org=<clientId>[&folder=<name>]` — that company's Library root or one folder, plus the list of subfolders found there. **Only a root listing (`folder` omitted) is authoritative for "which folders exist"** — a folder-scoped listing's own `folders` array is always empty (no nesting), so the frontend must not use it to overwrite its known folder list, or sibling folders appear to vanish once you open one.
 - `?scope=all` — master-token only; full-bucket view, for reclaiming truly orphaned legacy keys.
 
-**`POST /api/audio/move`** (`{from, to}`) relocates a file between Library folders **within the same company's org** — implemented server-side as get→put→delete in one request rather than round-tripping the file through the browser. Library-only; project-owned clips aren't movable (they stay tied to whichever stop recorded them).
+**`POST /api/audio/move`** (`{from, to}`) relocates or renames a file — implemented server-side as get→put→delete in one request rather than round-tripping the file through the browser. Two allowed shapes: a Library file can move between folders (including root) **within the same company's org**; a project-owned file can only be renamed **in place within the same project** (`fromParts[0]===toParts[0]`, both flat 2-segment keys) — it still can't change owners/projects. Renaming/moving a clip changes its R2 key, so any zone/stop that already stored the old `audioUrl` will silently 404 until re-assigned — same tradeoff Library moves already had, now also true for project clips.
 
 **`DELETE /api/audio/folder?org=<clientId>&folder=<name>`** deletes every object under that Library folder in one call (paginated `list`+batch `delete`), for when you want to remove a folder instead of its files one at a time.
 
@@ -238,7 +238,7 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | GET | `/api/analytics` | scoped (`analytics`) |
 | GET | `/api/audio-list` | requires `?project=`, `?scope=library&org=`, or `?scope=all`; scoped (`audio`/`publish`) + same-org, `?scope=all` is master-only |
 | GET/PUT/DELETE | `/api/audio/:key` | GET public, PUT/DELETE scoped (`audio` or `publish`) + same-org for `library/` keys |
-| POST | `/api/audio/move` | scoped (`audio` or `publish`) + same-org; `library/` keys only, can't cross companies |
+| POST | `/api/audio/move` | scoped (`audio` or `publish`); Library keys move within same org, project keys rename in place within same project — neither can cross owners |
 | DELETE | `/api/audio/folder?org=&folder=` | scoped (`audio` or `publish`) + same-org; deletes every file under that Library folder |
 | POST | `/api/transcribe` | public (Workers AI Whisper STT) |
 | POST | `/api/tts` | public (Workers AI speecht5_tts → WAV) |

@@ -82,6 +82,18 @@
   .upload-menu-item+.upload-menu-item{border-top:1px solid var(--rim)}
   .upload-menu-item .um-note{display:block;font-size:10px;color:var(--fog);font-weight:400;margin-top:2px}
 
+  .clip-menu{display:none;position:absolute;top:100%;right:6px;margin-top:4px;min-width:150px;
+             background:var(--slate);border:1px solid var(--rim);border-radius:10px;overflow:hidden;
+             box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:25;flex-direction:column}
+  .clip-menu.show{display:flex}
+  .clip-menu-item{display:block;width:100%;text-align:left;font-family:'Barlow Condensed';font-size:12px;font-weight:600;
+                  color:var(--ice);text-decoration:none;background:none;border:none;border-radius:0;padding:8px 12px;cursor:pointer}
+  .clip-menu-item:hover{background:rgba(255,106,61,.1);color:var(--snow)}
+  .clip-menu-item+.clip-menu-item{border-top:1px solid var(--rim)}
+  .clip-menu-item.danger{color:var(--hazard)}
+  .clip-menu-folders{max-height:180px;overflow-y:auto;border-top:1px solid var(--rim)}
+  .ct-name input{width:100%;font-size:12px;padding:2px 4px}
+
   .studio-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
   .toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--rim);flex-wrap:wrap;flex:0 0 auto}
   .toolbar .sep{width:1px;height:20px;background:var(--rim);margin:0 2px}
@@ -693,7 +705,7 @@ async function moveLibraryClip(fromKey,destFolder){
   }catch(e){ alert("Move failed: "+e.message); }
 }
 function buildClipTile(o){
-  const row=document.createElement("div"); row.className="clip-tile"; row.draggable=true;
+  const row=document.createElement("div"); row.className="clip-tile"; row.draggable=true; row.style.position="relative";
   row.addEventListener("dragstart",e=>{ e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key); e.dataTransfer.effectAllowed="copy"; });
   const drag=document.createElement("span"); drag.className="ct-drag"; drag.textContent="⠿";
   const playBtn=document.createElement("button"); playBtn.textContent="▶"; playBtn.title="Preview";
@@ -701,8 +713,82 @@ function buildClipTile(o){
   const nm=document.createElement("span"); nm.className="ct-name"; nm.textContent=o.key.split("/").pop();
   const addBtn=document.createElement("button"); addBtn.textContent="+"; addBtn.title="Add to timeline";
   addBtn.onclick=()=>addClipToTimeline(o);
-  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(nm); row.appendChild(addBtn);
+  const moreBtn=document.createElement("button"); moreBtn.textContent="⋯"; moreBtn.title="Rename, move, or delete";
+  const menu=buildClipMenu(o,nm);
+  moreBtn.onclick=e=>{
+    e.stopPropagation();
+    const wasOpen=menu.classList.contains("show");
+    closeClipMenus();
+    if(!wasOpen){ menu.classList.add("show"); _openClipMenu=menu; }
+  };
+  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(nm); row.appendChild(addBtn); row.appendChild(moreBtn); row.appendChild(menu);
   return row;
+}
+let _openClipMenu=null;
+function closeClipMenus(){
+  document.querySelectorAll(".clip-menu.show").forEach(m=>m.classList.remove("show"));
+  _openClipMenu=null;
+}
+document.addEventListener("click",e=>{
+  if(_openClipMenu && !_openClipMenu.contains(e.target)) closeClipMenus();
+});
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeClipMenus(); });
+function buildClipMenu(o,nameEl){
+  const menu=document.createElement("div"); menu.className="clip-menu";
+  const renameBtn=document.createElement("button"); renameBtn.className="clip-menu-item"; renameBtn.type="button"; renameBtn.textContent="✎ Rename";
+  renameBtn.onclick=e=>{ e.stopPropagation(); closeClipMenus(); startClipRename(o,nameEl); };
+  menu.appendChild(renameBtn);
+  if(o.key.startsWith("library/")){
+    const moveBtn=document.createElement("button"); moveBtn.className="clip-menu-item"; moveBtn.type="button"; moveBtn.textContent="📁 Move to…";
+    moveBtn.onclick=e=>{ e.stopPropagation(); showMoveSubmenu(o,menu); };
+    menu.appendChild(moveBtn);
+  }
+  const delBtn=document.createElement("button"); delBtn.className="clip-menu-item danger"; delBtn.type="button"; delBtn.textContent="🗑 Delete";
+  delBtn.onclick=async e=>{
+    e.stopPropagation(); closeClipMenus();
+    const name=o.key.split("/").pop();
+    if(!confirm('Delete "'+name+'"? This cannot be undone.')) return;
+    try{
+      const r=await fetch(o.url,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+      if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
+      refreshRail();
+    }catch(e){ alert("Delete failed: "+e.message); }
+  };
+  menu.appendChild(delBtn);
+  return menu;
+}
+function startClipRename(o,nameEl){
+  const dir=o.key.slice(0,o.key.length-o.key.split("/").pop().length);
+  const oldName=o.key.split("/").pop();
+  const ext=audioExt(oldName,""), base=oldName.replace(/\.[^.]+$/,"");
+  nameEl.innerHTML='<input type="text" maxlength="60">';
+  const inp=nameEl.querySelector("input"); inp.value=base; inp.focus(); inp.select();
+  const commit=async()=>{
+    const newBase=slug(inp.value);
+    if(!newBase || newBase===base){ refreshRail(); return; }
+    const to=dir+newBase+"."+ext;
+    try{
+      const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})});
+      if(!r.ok){ alert("Rename failed: "+(await r.text())); return; }
+      refreshRail();
+    }catch(e){ alert("Rename failed: "+e.message); }
+  };
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") refreshRail(); });
+  inp.addEventListener("blur",commit);
+}
+function showMoveSubmenu(o,menu){
+  const old=menu.querySelector(".clip-menu-folders"); if(old){ old.remove(); return; }
+  const wrap=document.createElement("div"); wrap.className="clip-menu-folders";
+  const currentFolder=o.key.split("/").slice(2,-1).join("/");
+  const opts=[["","Library (root)"],...[...new Set([...railKnownFolders,...railPendingFolders])].sort().map(f=>[f,f])];
+  opts.forEach(([val,label])=>{
+    if(val===currentFolder) return;
+    const b=document.createElement("button"); b.className="clip-menu-item"; b.type="button"; b.textContent="📁 "+label;
+    b.onclick=e=>{ e.stopPropagation(); closeClipMenus(); moveLibraryClip(o.key,val); };
+    wrap.appendChild(b);
+  });
+  if(!wrap.children.length){ wrap.innerHTML='<div class="clip-menu-item" style="cursor:default;color:var(--fog)">no other folders</div>'; }
+  menu.appendChild(wrap);
 }
 let _railPlaying=null;
 function railTogglePlay(o,btn){
