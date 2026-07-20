@@ -66,6 +66,18 @@
   #barWrap{display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:8px 0}
   #barFill{height:100%;width:0%;background:var(--coral);transition:width .08s linear}
   #status{display:none;font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin-bottom:8px}
+  .upload-wrap{position:relative;display:flex;gap:4px}
+  #uploadMoreBtn{padding:8px 10px}
+  .upload-menu{display:none;position:absolute;top:100%;right:0;margin-top:4px;min-width:220px;
+               background:var(--slate);border:1px solid var(--rim);border-radius:10px;overflow:hidden;
+               box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:20;flex-direction:column}
+  .upload-menu.show{display:flex}
+  .upload-menu-item{display:block;width:100%;text-align:left;font-family:'Barlow Condensed';font-size:12px;font-weight:600;
+                    text-transform:none;letter-spacing:0;color:var(--ice);text-decoration:none;background:none;
+                    border:none;border-radius:0;padding:10px 12px;cursor:pointer;flex:1 1 auto}
+  .upload-menu-item:hover{background:rgba(255,106,61,.1);color:var(--snow)}
+  .upload-menu-item+.upload-menu-item{border-top:1px solid var(--rim)}
+  .upload-menu-item .um-note{display:block;font-size:10px;color:var(--fog);font-weight:400;margin-top:2px}
 </style>
 </head>
 <body>
@@ -85,9 +97,16 @@
     <select id="folderSel"><option value="">Library (root)</option></select>
     <button id="newFolderBtn" class="ghost">+ Folder</button>
     <button id="deleteFolderBtn" class="ghost" style="display:none;color:var(--hazard);border-color:var(--hazard)">Delete folder</button>
-    <label class="ghost" style="border:1px solid var(--rim);border-radius:9px;padding:8px 14px;cursor:pointer;font-family:'Barlow Condensed';font-weight:600;text-transform:uppercase;font-size:13px;letter-spacing:.4px">
-      Upload<input type="file" id="uploadFile" accept="audio/*" style="display:none">
-    </label>
+    <div class="upload-wrap">
+      <div id="uploadMenu" class="upload-menu">
+        <a href="https://pixabay.com/sound-effects/" target="_blank" rel="noopener" class="upload-menu-item">🎧 Free sound effects (Pixabay)</a>
+        <button id="pickDownloadsBtn" class="upload-menu-item" type="button">📁 Choose from Downloads</button>
+      </div>
+      <label class="ghost" style="border:1px solid var(--rim);border-radius:9px;padding:8px 14px;cursor:pointer;font-family:'Barlow Condensed';font-weight:600;text-transform:uppercase;font-size:13px;letter-spacing:.4px">
+        Upload<input type="file" id="uploadFile" accept="audio/*" style="display:none">
+      </label>
+      <button id="uploadMoreBtn" class="ghost" type="button" title="More ways to add a clip">&#9662;</button>
+    </div>
     <button id="refreshBtn" class="ghost">&#8635;</button>
   </div>
 
@@ -491,8 +510,8 @@ function trimClip(o){
       (blob,userKey)=>{ const ext=_mimeExt(blob.type); const resolvedKey=(userKey||o.key).replace(/\.[^.]+$/,"."+ext); doUpload(blob, resolvedKey, blob.type, refresh); });
   }).catch(e=>setStatus("download failed — "+e.message));
 }
-document.getElementById("uploadFile").addEventListener("change",async e=>{
-  const f=e.target.files[0]; if(!f) return; e.target.value="";
+async function ingestUploadFile(f){
+  if(!f) return;
   const org=currentOrg(); if(!org){ setStatus("pick a company above first"); return; }
   try{
     const ab=await f.arrayBuffer();
@@ -506,6 +525,43 @@ document.getElementById("uploadFile").addEventListener("change",async e=>{
       (blob,userKey)=>{ doUpload(blob, userKey||defaultKey, blob.type, refresh); }
     );
   }catch(e){ setStatus("couldn't read that file — "+e.message); }
+}
+document.getElementById("uploadFile").addEventListener("change",e=>{
+  const f=e.target.files[0]; e.target.value=""; ingestUploadFile(f);
+});
+
+/* ---- Upload dropdown: free sound-effects link + a Downloads-scoped picker.
+   window.showOpenFilePicker only exists in Chromium browsers — feature-test
+   it (not user-agent sniffing) so this degrades to the same plain file
+   dialog everywhere else instead of ever being a dead control. ---- */
+const canPickDownloads=typeof window.showOpenFilePicker==="function";
+(function(){
+  const note=document.createElement("span"); note.className="um-note";
+  note.textContent=canPickDownloads?"opens straight into Downloads":"opens the file picker (Chrome/Edge open it in Downloads directly)";
+  document.getElementById("pickDownloadsBtn").appendChild(note);
+})();
+function closeUploadMenu(){ document.getElementById("uploadMenu").classList.remove("show"); }
+function toggleUploadMenu(e){
+  e.stopPropagation();
+  document.getElementById("uploadMenu").classList.toggle("show");
+}
+document.getElementById("uploadMoreBtn").addEventListener("click",toggleUploadMenu);
+document.addEventListener("click",e=>{
+  const menu=document.getElementById("uploadMenu");
+  if(menu.classList.contains("show") && !menu.contains(e.target) && e.target.id!=="uploadMoreBtn") closeUploadMenu();
+});
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeUploadMenu(); });
+document.getElementById("uploadMenu").querySelector("a").addEventListener("click",closeUploadMenu);
+document.getElementById("pickDownloadsBtn").addEventListener("click",async()=>{
+  closeUploadMenu();
+  if(!canPickDownloads){ document.getElementById("uploadFile").click(); return; }
+  try{
+    const [handle]=await window.showOpenFilePicker({
+      types:[{description:"Audio",accept:{"audio/*":[".mp3",".m4a",".wav",".ogg",".webm",".aac"]}}],
+      startIn:"downloads", multiple:false
+    });
+    ingestUploadFile(await handle.getFile());
+  }catch(e){ if(e.name!=="AbortError") setStatus("✕ couldn't open file picker: "+e.message); }
 });
 
 /* ---- Combine (blend) modal ---- */

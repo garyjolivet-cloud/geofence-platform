@@ -346,8 +346,18 @@
   .va-audio-icon{font-size:16px;flex:0 0 auto}
   .va-audio-label{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .va-audio-label.has-clip{color:var(--go)}
-  .va-audio-btns{display:flex;gap:4px;flex-shrink:0}
+  .va-audio-btns{display:flex;gap:4px;flex-shrink:0;position:relative}
   .va-audio-btns button{padding:5px 8px;font-size:11px}
+  .upload-menu{display:none;position:absolute;top:100%;left:0;margin-top:4px;min-width:220px;
+               background:var(--slate);border:1px solid var(--rim);border-radius:10px;overflow:hidden;
+               box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:20;flex-direction:column}
+  .upload-menu.show{display:flex}
+  .upload-menu-item{display:block;width:100%;text-align:left;font-family:'Barlow Condensed';font-size:12px;font-weight:600;
+                    text-transform:none;letter-spacing:0;color:var(--ice);text-decoration:none;background:none;
+                    border:none;border-radius:0;padding:10px 12px;cursor:pointer;flex:1 1 auto}
+  .upload-menu-item:hover{background:rgba(255,106,61,.1);color:var(--snow)}
+  .upload-menu-item+.upload-menu-item{border-top:1px solid var(--rim)}
+  .upload-menu-item .um-note{display:block;font-size:10px;color:var(--fog);font-weight:400;margin-top:2px}
   .va-summary{font-family:"Barlow Condensed";font-size:12px;color:var(--ice);padding:5px 8px;
               background:rgba(200,223,242,.06);border:1px solid rgba(200,223,242,.1);
               border-radius:7px;margin:4px 0;min-height:26px}
@@ -675,9 +685,14 @@
         <span class="va-audio-icon">🎵</span>
         <span class="va-audio-label" id="pAudioLabel">no clip</span>
         <div class="va-audio-btns">
+          <div id="pAudioUploadMenu" class="upload-menu">
+            <a href="https://pixabay.com/sound-effects/" target="_blank" rel="noopener" class="upload-menu-item">🎧 Free sound effects (Pixabay)</a>
+            <button id="pAudioPickDownloads" class="upload-menu-item" type="button">📁 Choose from Downloads</button>
+          </div>
           <label class="file" style="border:1px solid var(--rim);border-radius:8px;padding:5px 8px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';text-transform:uppercase;font-size:11px;letter-spacing:.4px;flex:0 0 auto">
             Upload<input type="file" id="pAudioFile" accept="audio/*" style="display:none">
           </label>
+          <button id="pAudioUploadMoreBtn" class="ghost" type="button" title="More ways to add a clip">&#9662;</button>
           <button id="pAudioBrowse" class="ghost">Files</button>
           <button id="pAudioPlay" class="ghost">▶</button>
           <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)">✕</button>
@@ -1884,8 +1899,7 @@ function audioExt(name,type){ const m=(name||"").match(/\.(mp3|m4a|aac|wav|ogg|w
   if(m) return m[1].toLowerCase(); if(/mp3|mpeg/.test(type)) return "mp3"; if(/m4a|aac|mp4/.test(type)) return "m4a";
   if(/wav/.test(type)) return "wav"; if(/ogg/.test(type)) return "ogg"; return "mp3"; }
 
-document.getElementById("pAudioFile").onchange=async(e)=>{
-  const f=e.target.files[0]; e.target.value="";
+async function ingestPAudioFile(f){
   if(!f||sel<0) return;
   aStat().textContent="decoding audio…";
   let buf;
@@ -1898,7 +1912,43 @@ document.getElementById("pAudioFile").onchange=async(e)=>{
     key=>doXhrUpload(f, key||defaultKey, f.type||"audio/mpeg"),
     (blob,key)=>doXhrUpload(blob, key||defaultKey, blob.type)
   );
+}
+document.getElementById("pAudioFile").onchange=(e)=>{
+  const f=e.target.files[0]; e.target.value=""; ingestPAudioFile(f);
 };
+
+/* ---- Upload dropdown: free sound-effects link + a Downloads-scoped picker.
+   window.showOpenFilePicker only exists in Chromium browsers — feature-test
+   it (not user-agent sniffing) so this degrades to the same plain file
+   dialog everywhere else instead of ever being a dead control. ---- */
+const canPAudioPickDownloads=typeof window.showOpenFilePicker==="function";
+(function(){
+  const note=document.createElement("span"); note.className="um-note";
+  note.textContent=canPAudioPickDownloads?"opens straight into Downloads":"opens the file picker (Chrome/Edge open it in Downloads directly)";
+  document.getElementById("pAudioPickDownloads").appendChild(note);
+})();
+function closePAudioUploadMenu(){ document.getElementById("pAudioUploadMenu").classList.remove("show"); }
+document.getElementById("pAudioUploadMoreBtn").addEventListener("click",e=>{
+  e.stopPropagation();
+  document.getElementById("pAudioUploadMenu").classList.toggle("show");
+});
+document.addEventListener("click",e=>{
+  const menu=document.getElementById("pAudioUploadMenu");
+  if(menu.classList.contains("show") && !menu.contains(e.target) && e.target.id!=="pAudioUploadMoreBtn") closePAudioUploadMenu();
+});
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closePAudioUploadMenu(); });
+document.getElementById("pAudioUploadMenu").querySelector("a").addEventListener("click",closePAudioUploadMenu);
+document.getElementById("pAudioPickDownloads").addEventListener("click",async()=>{
+  closePAudioUploadMenu();
+  if(!canPAudioPickDownloads){ document.getElementById("pAudioFile").click(); return; }
+  try{
+    const [handle]=await window.showOpenFilePicker({
+      types:[{description:"Audio",accept:{"audio/*":[".mp3",".m4a",".wav",".ogg",".webm",".aac"]}}],
+      startIn:"downloads", multiple:false
+    });
+    ingestPAudioFile(await handle.getFile());
+  }catch(e){ if(e.name!=="AbortError") aStat().textContent="couldn't open file picker: "+e.message; }
+});
 let _preview=null;
 document.getElementById("pAudioPlay").onclick=()=>{
   const btn=document.getElementById("pAudioPlay");
