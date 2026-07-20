@@ -780,6 +780,7 @@ function buildClipMenu(o,nameEl){
   return menu;
 }
 function startClipRename(o,nameEl){
+  if(nameEl.querySelector("input")) return; // already renaming this row — don't stack a second closure on top
   const dir=o.key.slice(0,o.key.length-o.key.split("/").pop().length);
   const oldName=o.key.split("/").pop();
   const ext=audioExt(oldName,""), base=oldName.replace(/\.[^.]+$/,"");
@@ -802,12 +803,18 @@ function startClipRename(o,nameEl){
     let r;
     try{ r=await move(to,false); }
     catch(e){ busy=false; alert("Rename failed: "+e.message); inp.focus(); return; }
+    if(r.status===404){
+      // the clip itself is gone (renamed/deleted elsewhere) — no point
+      // leaving them editing a name for a file that no longer exists.
+      busy=false; alert("This clip no longer exists — the list will refresh."); refreshRail(); return;
+    }
     if(r.status===409){
       const replace=confirm('A file named "'+newBase+"."+ext+'" already exists. Replace it?');
       if(replace){
         try{
           const r2=await move(to,true);
           busy=false;
+          if(r2.status===404){ alert("This clip no longer exists — the list will refresh."); refreshRail(); return; }
           if(!r2.ok){ alert("Replace failed: "+(await r2.text())); inp.focus(); return; }
           refreshRail();
         }catch(e){ busy=false; alert("Replace failed: "+e.message); inp.focus(); }

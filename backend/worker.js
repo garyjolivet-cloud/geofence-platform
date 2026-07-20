@@ -1737,6 +1737,10 @@ async function api(request, env, url) {
       const appId = await projectAppId(env, fromParts[0]);
       if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
     }
+    // Check the source exists BEFORE checking for a destination conflict —
+    // otherwise a stale/already-moved source still 409s ("replace it?"),
+    // the user confirms, and only then does the real 404 surface.
+    if (!(await env.AUDIO.head(from))) return json({ error: "source not found: " + from }, 404);
     const existing = await env.AUDIO.head(to);
     if (existing && !b.overwrite) return json({ error: "a file already exists at " + to }, 409);
     const obj = await env.AUDIO.get(from);
