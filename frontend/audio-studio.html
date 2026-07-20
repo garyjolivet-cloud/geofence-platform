@@ -712,12 +712,16 @@ function flipToInput(tile,onCommit){
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") refreshRail(); });
   inp.addEventListener("blur",commit);
 }
-async function moveLibraryClip(fromKey,destFolder){
+async function moveLibraryClip(fromKey,destFolder,overwrite){
   const org=fromKey.split("/")[1];
   const to="library/"+org+"/"+(destFolder?destFolder+"/":"")+fromKey.split("/").pop();
   if(to===fromKey) return;
   try{
-    const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:fromKey,to})});
+    const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:fromKey,to,overwrite:!!overwrite})});
+    if(r.status===409){
+      if(confirm('A file named "'+to.split("/").pop()+'" already exists there. Replace it?')) moveLibraryClip(fromKey,destFolder,true);
+      return;
+    }
     if(!r.ok){ alert("Move failed: "+(await r.text())); return; }
     refreshRail();
   }catch(e){ alert("Move failed: "+e.message); }
@@ -781,15 +785,41 @@ function startClipRename(o,nameEl){
   const ext=audioExt(oldName,""), base=oldName.replace(/\.[^.]+$/,"");
   nameEl.innerHTML='<input type="text" maxlength="60">';
   const inp=nameEl.querySelector("input"); inp.value=base; inp.focus(); inp.select();
+  // busy stays true for the whole round trip, including while confirm() is
+  // open — alert()/confirm() blur the focused input as a side effect, and
+  // without this guard that reentrant blur re-invokes commit() (which shows
+  // another alert(), which blurs again, ...), an infinite dialog loop. It
+  // only drops back to false once we've decided the outcome (retry, cancel
+  // back to editing, or give up) so any reentrant call in between is a no-op.
+  let busy=false;
+  const move=(to,overwrite)=>fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to,overwrite})});
   const commit=async()=>{
+    if(busy) return;
     const newBase=slug(inp.value);
     if(!newBase || newBase===base){ refreshRail(); return; }
+    busy=true;
     const to=dir+newBase+"."+ext;
-    try{
-      const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})});
-      if(!r.ok){ alert("Rename failed: "+(await r.text())); return; }
-      refreshRail();
-    }catch(e){ alert("Rename failed: "+e.message); }
+    let r;
+    try{ r=await move(to,false); }
+    catch(e){ busy=false; alert("Rename failed: "+e.message); inp.focus(); return; }
+    if(r.status===409){
+      const replace=confirm('A file named "'+newBase+"."+ext+'" already exists. Replace it?');
+      if(replace){
+        try{
+          const r2=await move(to,true);
+          busy=false;
+          if(!r2.ok){ alert("Replace failed: "+(await r2.text())); inp.focus(); return; }
+          refreshRail();
+        }catch(e){ busy=false; alert("Replace failed: "+e.message); inp.focus(); }
+      } else {
+        busy=false;
+        inp.focus(); inp.select(); // back to the name prompt to allow a change
+      }
+      return;
+    }
+    busy=false;
+    if(!r.ok){ alert("Rename failed: "+(await r.text())); inp.focus(); return; }
+    refreshRail();
   };
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") refreshRail(); });
   inp.addEventListener("blur",commit);

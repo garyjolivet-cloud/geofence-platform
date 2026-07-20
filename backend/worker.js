@@ -1738,7 +1738,7 @@ async function api(request, env, url) {
       if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
     }
     const existing = await env.AUDIO.head(to);
-    if (existing) return json({ error: "a file already exists at " + to }, 409);
+    if (existing && !b.overwrite) return json({ error: "a file already exists at " + to }, 409);
     const obj = await env.AUDIO.get(from);
     if (!obj) return json({ error: "source not found: " + from }, 404);
     await env.AUDIO.put(to, obj.body, { httpMetadata: obj.httpMetadata });
