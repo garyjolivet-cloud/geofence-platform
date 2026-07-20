@@ -689,10 +689,9 @@
             <a href="https://pixabay.com/sound-effects/" target="_blank" rel="noopener" class="upload-menu-item">🎧 Free sound effects (Pixabay)</a>
             <button id="pAudioPickDownloads" class="upload-menu-item" type="button">📁 Choose from Downloads</button>
           </div>
-          <label class="file" style="border:1px solid var(--rim);border-radius:8px;padding:5px 8px;cursor:pointer;color:var(--ice);font-family:'Barlow Condensed';text-transform:uppercase;font-size:11px;letter-spacing:.4px;flex:0 0 auto">
-            Upload<input type="file" id="pAudioFile" accept="audio/*" style="display:none">
-          </label>
+          <button id="pAudioUploadBtn" class="ghost" type="button" style="flex:0 0 auto">Upload</button>
           <button id="pAudioUploadMoreBtn" class="ghost" type="button" title="More ways to add a clip">&#9662;</button>
+          <input type="file" id="pAudioFile" accept="audio/*" style="display:none">
           <button id="pAudioBrowse" class="ghost">Files</button>
           <button id="pAudioPlay" class="ghost">▶</button>
           <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)">✕</button>
@@ -1928,13 +1927,15 @@ const canPAudioPickDownloads=typeof window.showOpenFilePicker==="function";
   document.getElementById("pAudioPickDownloads").appendChild(note);
 })();
 function closePAudioUploadMenu(){ document.getElementById("pAudioUploadMenu").classList.remove("show"); }
-document.getElementById("pAudioUploadMoreBtn").addEventListener("click",e=>{
+function togglePAudioUploadMenu(e){
   e.stopPropagation();
   document.getElementById("pAudioUploadMenu").classList.toggle("show");
-});
+}
+document.getElementById("pAudioUploadBtn").addEventListener("click",togglePAudioUploadMenu);
+document.getElementById("pAudioUploadMoreBtn").addEventListener("click",togglePAudioUploadMenu);
 document.addEventListener("click",e=>{
   const menu=document.getElementById("pAudioUploadMenu");
-  if(menu.classList.contains("show") && !menu.contains(e.target) && e.target.id!=="pAudioUploadMoreBtn") closePAudioUploadMenu();
+  if(menu.classList.contains("show") && !menu.contains(e.target) && e.target.id!=="pAudioUploadMoreBtn" && e.target.id!=="pAudioUploadBtn") closePAudioUploadMenu();
 });
 document.addEventListener("keydown",e=>{ if(e.key==="Escape") closePAudioUploadMenu(); });
 document.getElementById("pAudioUploadMenu").querySelector("a").addEventListener("click",closePAudioUploadMenu);

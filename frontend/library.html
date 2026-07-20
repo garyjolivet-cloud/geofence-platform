@@ -102,10 +102,9 @@
         <a href="https://pixabay.com/sound-effects/" target="_blank" rel="noopener" class="upload-menu-item">🎧 Free sound effects (Pixabay)</a>
         <button id="pickDownloadsBtn" class="upload-menu-item" type="button">📁 Choose from Downloads</button>
       </div>
-      <label class="ghost" style="border:1px solid var(--rim);border-radius:9px;padding:8px 14px;cursor:pointer;font-family:'Barlow Condensed';font-weight:600;text-transform:uppercase;font-size:13px;letter-spacing:.4px">
-        Upload<input type="file" id="uploadFile" accept="audio/*" style="display:none">
-      </label>
+      <button id="uploadBtn" class="ghost" type="button" style="font-weight:600;text-transform:uppercase;font-size:13px;letter-spacing:.4px">Upload</button>
       <button id="uploadMoreBtn" class="ghost" type="button" title="More ways to add a clip">&#9662;</button>
+      <input type="file" id="uploadFile" accept="audio/*" style="display:none">
     </div>
     <button id="refreshBtn" class="ghost">&#8635;</button>
   </div>
@@ -545,10 +544,11 @@ function toggleUploadMenu(e){
   e.stopPropagation();
   document.getElementById("uploadMenu").classList.toggle("show");
 }
+document.getElementById("uploadBtn").addEventListener("click",toggleUploadMenu);
 document.getElementById("uploadMoreBtn").addEventListener("click",toggleUploadMenu);
 document.addEventListener("click",e=>{
   const menu=document.getElementById("uploadMenu");
-  if(menu.classList.contains("show") && !menu.contains(e.target) && e.target.id!=="uploadMoreBtn") closeUploadMenu();
+  if(menu.classList.contains("show") && !menu.contains(e.target) && e.target.id!=="uploadMoreBtn" && e.target.id!=="uploadBtn") closeUploadMenu();
 });
 document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeUploadMenu(); });
 document.getElementById("uploadMenu").querySelector("a").addEventListener("click",closeUploadMenu);
