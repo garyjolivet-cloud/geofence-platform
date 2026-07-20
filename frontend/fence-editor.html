@@ -31,7 +31,7 @@
                     border-bottom:1px solid var(--rim);flex:0 0 auto;font-family:"Barlow Condensed";font-size:12px;
                     font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ice)}
   #audioPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #audioPaletteHead button{flex:0 0 auto;padding:3px 8px;font-size:13px}
+  #audioPaletteHead button,#audioPaletteHead a{flex:0 0 auto;padding:3px 8px;font-size:13px}
   #audioPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
   .panel.mini .panel-body{display:none}
   #panelMinBtn{background:none;border:none;color:var(--fog);cursor:pointer;padding:2px 4px;
@@ -680,23 +680,6 @@
     <div class="va-section" id="pAudioSection">
       <div class="va-label" id="pAudioSectionLabel">Voices &amp; Audio</div>
 
-      <!-- audio clip (moved out of Advanced) -->
-      <div class="va-audio-row">
-        <span class="va-audio-icon">🎵</span>
-        <span class="va-audio-label" id="pAudioLabel">no clip</span>
-        <div class="va-audio-btns">
-          <div id="pAudioUploadMenu" class="upload-menu">
-            <a href="https://pixabay.com/sound-effects/" target="_blank" rel="noopener" class="upload-menu-item">🎧 Free sound effects (Pixabay)</a>
-            <button id="pAudioPickDownloads" class="upload-menu-item" type="button">📁 Choose from Downloads</button>
-          </div>
-          <button id="pAudioUploadBtn" class="ghost" type="button" style="flex:0 0 auto">Upload</button>
-          <button id="pAudioUploadMoreBtn" class="ghost" type="button" title="More ways to add a clip">&#9662;</button>
-          <input type="file" id="pAudioFile" accept="audio/*" style="display:none">
-          <button id="pAudioBrowse" class="ghost">Files</button>
-          <button id="pAudioPlay" class="ghost">▶</button>
-          <button id="pAudioClear" class="ghost" style="color:var(--hazard);border-color:var(--hazard)">✕</button>
-        </div>
-      </div>
       <div style="display:flex;align-items:center;gap:8px;margin:4px 0 2px">
         <label class="k" style="flex:0 0 auto;margin:0">volume</label>
         <input type="range" id="pVolume" min="0" max="150" step="5" value="100" style="flex:1;accent-color:var(--coral)">
@@ -708,7 +691,10 @@
       <div id="pAudioStatus" class="hint" style="display:none;font-size:10px;margin:0 0 4px"></div>
 
       <!-- what-plays summary -->
-      <div class="va-summary empty" id="vaSummary">nothing set — add a clip or a bot</div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="va-summary empty" id="vaSummary" style="flex:1">nothing set — add a clip or a bot</div>
+        <button id="pAudioClear" class="ghost" style="flex:0 0 auto;color:var(--hazard);border-color:var(--hazard);display:none" title="Remove this clip">✕</button>
+      </div>
     </div>
 
     <div id="pFiresRow">
@@ -906,11 +892,13 @@
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
      move/delete/combine/upload) lives in Audio Studio — "Open in Studio"
-     below. Floats independently of mainPanel (drag the header, resize from
-     the bottom-right corner) so it never blocks the map's own stops. -->
+     in the header. Floats independently of mainPanel (drag the header,
+     resize from the bottom-right corner) so it never blocks the map's own
+     stops. -->
 <div id="audioPalette">
   <div id="audioPaletteHead">
     <span class="ttl">&#128193; Audio Palette</span>
+    <a href="/studio" id="afOpenStudio" class="ghost" style="color:var(--coral);text-decoration:none">Open in Studio &rarr;</a>
     <button id="audioPaletteMin" class="ghost" title="Minimize">&#8722;</button>
   </div>
   <div id="audioPaletteBody">
@@ -927,7 +915,6 @@
     <div id="afFolderGrid" class="af-folder-grid" style="display:none"></div>
     <div id="afStatus" class="hint" style="display:none;font-size:10px;margin:0"></div>
     <div class="af-list" id="afList"></div>
-    <a href="/studio" id="afOpenStudio" style="display:block;margin-top:2px;color:var(--coral);text-decoration:none;font-family:'Barlow Condensed';font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Open in Studio &rarr;</a>
     <div class="hint">drag &#10241; onto a stop on the map, or a stop in the list, to assign a clip</div>
   </div>
 </div>
@@ -1681,10 +1668,6 @@ function refreshProps(){
   document.getElementById("clientBotRow").style.display=z.trackerId?"block":"none";
   const advClientSel=document.getElementById("pClientBotIdAdv");
   if(advClientSel) advClientSel.value=z.clientBotId||"";
-  // audio label (top of props) — path zones show their ambient clip, not audioUrl
-  const aLbl=document.getElementById("pAudioLabel");
-  if(aLbl){ const clip=z[zoneAudioField(z)]; aLbl.textContent=clip?(clip.split("/").pop()||"clip"):"no clip";
-    aLbl.className="va-audio-label"+(clip?" has-clip":""); }
   document.getElementById("pBotDelay").value=z.botGreetingDelayS||0;
   document.getElementById("pBotDelayV").textContent=(z.botGreetingDelayS||0)+" s";
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
@@ -1726,6 +1709,8 @@ function updateVaSummary(zone){
   }
   el.textContent=txt; el.className="va-summary"+(isEmpty?" empty":"");
   if(timingEl) timingEl.style.display=(hasClip&&firstBot)?"block":"none";
+  const clearBtn=document.getElementById("pAudioClear");
+  if(clearBtn) clearBtn.style.display=hasClip?"inline-block":"none";
 }
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
 bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
@@ -1894,71 +1879,7 @@ const aBar=()=>document.getElementById("pAudioBar");
 const aFill=()=>document.getElementById("pAudioFill");
 function showBar(p){ aBar().style.display="block"; aFill().style.width=Math.round(p)+"%"; }
 function hideBar(){ aBar().style.display="none"; aFill().style.width="0%"; }
-function audioExt(name,type){ const m=(name||"").match(/\.(mp3|m4a|aac|wav|ogg|webm)$/i);
-  if(m) return m[1].toLowerCase(); if(/mp3|mpeg/.test(type)) return "mp3"; if(/m4a|aac|mp4/.test(type)) return "m4a";
-  if(/wav/.test(type)) return "wav"; if(/ogg/.test(type)) return "ogg"; return "mp3"; }
 
-async function ingestPAudioFile(f){
-  if(!f||sel<0) return;
-  aStat().textContent="decoding audio…";
-  let buf;
-  try{ const ab=await f.arrayBuffer(); const tmp=new AudioContext();
-    buf=await tmp.decodeAudioData(ab); await tmp.close(); }
-  catch(err){ aStat().textContent="couldn't decode: "+err.message; return; }
-  const z=zones[sel], proj=slug(projName())||"project";
-  const defaultKey=proj+"/"+z.id+"."+audioExt(f.name,f.type);
-  openTrimmer(buf, defaultKey,
-    key=>doXhrUpload(f, key||defaultKey, f.type||"audio/mpeg"),
-    (blob,key)=>doXhrUpload(blob, key||defaultKey, blob.type)
-  );
-}
-document.getElementById("pAudioFile").onchange=(e)=>{
-  const f=e.target.files[0]; e.target.value=""; ingestPAudioFile(f);
-};
-
-/* ---- Upload dropdown: free sound-effects link + a Downloads-scoped picker.
-   window.showOpenFilePicker only exists in Chromium browsers — feature-test
-   it (not user-agent sniffing) so this degrades to the same plain file
-   dialog everywhere else instead of ever being a dead control. ---- */
-const canPAudioPickDownloads=typeof window.showOpenFilePicker==="function";
-(function(){
-  const note=document.createElement("span"); note.className="um-note";
-  note.textContent=canPAudioPickDownloads?"opens straight into Downloads":"opens the file picker (Chrome/Edge open it in Downloads directly)";
-  document.getElementById("pAudioPickDownloads").appendChild(note);
-})();
-function closePAudioUploadMenu(){ document.getElementById("pAudioUploadMenu").classList.remove("show"); }
-function togglePAudioUploadMenu(e){
-  e.stopPropagation();
-  document.getElementById("pAudioUploadMenu").classList.toggle("show");
-}
-document.getElementById("pAudioUploadBtn").addEventListener("click",togglePAudioUploadMenu);
-document.getElementById("pAudioUploadMoreBtn").addEventListener("click",togglePAudioUploadMenu);
-document.addEventListener("click",e=>{
-  const menu=document.getElementById("pAudioUploadMenu");
-  if(menu.classList.contains("show") && !menu.contains(e.target) && e.target.id!=="pAudioUploadMoreBtn" && e.target.id!=="pAudioUploadBtn") closePAudioUploadMenu();
-});
-document.addEventListener("keydown",e=>{ if(e.key==="Escape") closePAudioUploadMenu(); });
-document.getElementById("pAudioUploadMenu").querySelector("a").addEventListener("click",closePAudioUploadMenu);
-document.getElementById("pAudioPickDownloads").addEventListener("click",async()=>{
-  closePAudioUploadMenu();
-  if(!canPAudioPickDownloads){ document.getElementById("pAudioFile").click(); return; }
-  try{
-    const [handle]=await window.showOpenFilePicker({
-      types:[{description:"Audio",accept:{"audio/*":[".mp3",".m4a",".wav",".ogg",".webm",".aac"]}}],
-      startIn:"downloads", multiple:false
-    });
-    ingestPAudioFile(await handle.getFile());
-  }catch(e){ if(e.name!=="AbortError") aStat().textContent="couldn't open file picker: "+e.message; }
-});
-let _preview=null;
-document.getElementById("pAudioPlay").onclick=()=>{
-  const btn=document.getElementById("pAudioPlay");
-  if(_preview){ try{ _preview.pause(); }catch(e){} _preview=null; btn.textContent="▶"; aStat().textContent="stopped"; return; }
-  if(sel<0) return; const u=zones[sel][zoneAudioField(zones[sel])]; if(!u){ aStat().textContent="no clip to preview"; return; }
-  try{ _preview=new Audio(u); _preview.play(); btn.textContent="■";
-    _preview.onended=()=>{ _preview=null; btn.textContent="▶"; };
-    aStat().textContent="previewing (flat — spatial happens in the engine)"; }
-  catch(e){ aStat().textContent="preview failed"; _preview=null; btn.textContent="▶"; } };
 document.getElementById("pAudioClear").onclick=async()=>{
   if(sel<0) return; const z=zones[sel]; const fld=zoneAudioField(z); if(!z[fld]){ return; }
   const url=z[fld]; const key=url.replace("/api/audio/",""); const token=getToken();
@@ -1969,7 +1890,6 @@ document.getElementById("pAudioClear").onclick=async()=>{
     }catch(e){}
   }
   delete z[fld]; hideBar(); aStat().textContent="clip removed";
-  const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent="no clip";aLbl.className="va-audio-label";}
   updateVaSummary(z); render(); };
 
 /* ---- Audio Files drawer: drag-source-only palette into Studio ----
@@ -2028,11 +1948,6 @@ document.getElementById("audioPaletteMin").onclick=e=>{
     document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
   });
 })();
-document.getElementById("pAudioBrowse").onclick=()=>{
-  unminimizeAudioPalette();
-  afSetTab("project");
-};
-
 function afSetTab(tab){
   afTab=tab; afFolder="";
   document.getElementById("afTabProject").classList.toggle("on",tab==="project");
@@ -2731,7 +2646,6 @@ function doXhrUpload(blob, key, mimeType, opts){
       const audioUrl=j.url||("/api/audio/"+key);
       if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(audioUrl)))); }catch(_){}
       if(assignToZone&&sel>=0){ zones[sel][zoneAudioField(zones[sel])]=audioUrl;
-        const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
         updateVaSummary(zones[sel]); render(); }
       barShow(100);
       statusEl.innerHTML="uploaded ✓ "+sizeStr+" in "+secs+"s → <b>/api/audio/"+key+"</b>";
@@ -3804,10 +3718,8 @@ function addBotToZone(zone, botId){
       if(best==null)return;
       if(botId) addBotToZone(zones[best],botId);
       if(audioUrl){
-        const key=e.dataTransfer.getData("audiokey")||audioUrl;
         zones[best][zoneAudioField(zones[best])]=audioUrl;
         if(sel===best){
-          const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
           updateVaSummary(zones[best]);
           render(); // sel===best skips selectZone's render() below — refresh the map's 🔊 badge now
         }
@@ -3826,10 +3738,8 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
     const botId=e.dataTransfer.getData("botId"), audioUrl=e.dataTransfer.getData("audiourl");
     if(botId){ addBotToZone(zones[zoneIdx],botId); if(sel===zoneIdx) renderZoneBots(zones[zoneIdx]); }
     if(audioUrl){
-      const key=e.dataTransfer.getData("audiokey")||audioUrl;
       zones[zoneIdx][zoneAudioField(zones[zoneIdx])]=audioUrl;
       if(sel===zoneIdx){
-        const aLbl=document.getElementById("pAudioLabel"); if(aLbl){aLbl.textContent=key.split("/").pop();aLbl.className="va-audio-label has-clip";}
         updateVaSummary(zones[zoneIdx]);
       }
       render(); // refresh the map's 🔊 badge for this stop
