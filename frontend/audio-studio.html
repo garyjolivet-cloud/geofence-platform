@@ -588,6 +588,19 @@ document.getElementById("btnBackToProjects").onclick=()=>{
   const u=new URLSearchParams(location.search); u.delete("project"); u.delete("zone"); u.delete("bearing");
   location.search=u.toString();
 };
+// Prefer a real back-navigation over the href when we can tell we arrived
+// here from the Fence Editor in this same tab: history.back() restores its
+// exact in-memory state (e.g. an unpublished Customer selection or unsaved
+// zone edits) via bfcache, where a fresh /editor?project= load only ever
+// has the last-PUBLISHED bundle to show. Falls through to the plain href
+// (already set correctly above) for modified clicks, new tabs, or a direct
+// deep link into Studio with no editor history to go back to.
+document.getElementById("btnBackToEditor").addEventListener("click",e=>{
+  if(e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey) return;
+  let cameFromEditor=false;
+  try{ cameFromEditor=["/editor","/fence-editor"].includes(new URL(document.referrer).pathname); }catch(err){}
+  if(cameFromEditor){ e.preventDefault(); history.back(); }
+});
 
 /* ============================================================
    Source rail — "This Project" + "Library" (graphical file browser)

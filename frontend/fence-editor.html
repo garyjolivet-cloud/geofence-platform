@@ -1190,7 +1190,7 @@ function renderSources(){
     if(z[zoneAudioField(z)]) _lp.hasAudio=true;
     feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
   });
-  map.getSource("fences").setData(fc(feats));
+  if(map.getSource("fences")) map.getSource("fences").setData(fc(feats));
 
   // project-level rings — shown only when a dot button is active (centred on all-zones centroid)
   if(map.getSource("project-rings")){
@@ -1235,7 +1235,7 @@ function renderSources(){
   if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
         geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
-  map.getSource("draft").setData(fc(d.concat(pts)));
+  if(map.getSource("draft")) map.getSource("draft").setData(fc(d.concat(pts)));
 }
 
 function render(){
@@ -1851,8 +1851,14 @@ async function loadClients(sel){
   }catch(e){}
 }
 // clients are managed from the home page
-loadApps();
-loadClients();
+// Kept as awaitable promises (not fire-and-forget) — loadFromPlatform()
+// needs both dropdowns' <option> lists populated before it can select the
+// project's saved app/customer by value; setting .value to an id with no
+// matching <option> yet is a silent no-op, which previously raced against
+// these two fetches and intermittently (but often) showed the customer as
+// "— unassigned —" even when the published bundle had one set.
+const _appsLoaded=loadApps();
+const _clientsLoaded=loadClients();
 // Editable tour name in breadcrumb
 (()=>{
   const el=document.getElementById("projCrumb");
@@ -2357,11 +2363,13 @@ async function loadFromPlatform(id){
     document.getElementById("out").value=JSON.stringify(b,null,2);
     document.getElementById("importBtn").click();
     document.getElementById("projCrumb").textContent=b.name||id;
+    await Promise.all([_appsLoaded,_clientsLoaded]);
     if(b.appId){ document.getElementById("appSel").value=b.appId; updateClientCrumb(); }
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
     fetchAndMergeBots();
+    doAudioRefresh();
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
 async function publishToPlatform(){
