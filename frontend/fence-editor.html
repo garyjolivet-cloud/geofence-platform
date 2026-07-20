@@ -1933,6 +1933,11 @@ function afOpenStudioHref(){
   }
   return href;
 }
+// Computed at click time rather than relying solely on the reactive updates in
+// refreshProps() — those can go stale (e.g. skipped by an unrelated error
+// earlier in a handler), silently sending you to Studio's bare project picker
+// instead of the project you were just editing.
+document.getElementById("afOpenStudio").addEventListener("click",e=>{ e.currentTarget.href=afOpenStudioHref(); });
 
 /* ---- Audio palette: floating panel (drag header to move, resize from the
    bottom-right corner via native CSS resize, minimize via the header button) ---- */

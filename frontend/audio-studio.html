@@ -175,6 +175,7 @@
   <h1>🎛 Audio Studio</h1>
   <span id="clientPickerNav" style="display:flex;align-items:center"></span>
   <span class="crumb" id="hdrCrumb"></span>
+  <a class="linklike" id="btnBackToEditor" href="/editor" style="display:none">&larr; Back to Editor</a>
   <button class="linklike" id="btnBackToProjects" style="display:none">&larr; Projects</button>
   <a href="/">Home</a>
 </div>
@@ -538,6 +539,7 @@ function showPicker(){
   document.getElementById("pickerScreen").style.display="block";
   document.getElementById("studioScreen").classList.remove("show");
   document.getElementById("btnBackToProjects").style.display="none";
+  document.getElementById("btnBackToEditor").style.display="none";
   document.getElementById("hdrCrumb").textContent="";
 }
 function showStudio(){
@@ -545,6 +547,9 @@ function showStudio(){
   document.getElementById("studioScreen").classList.add("show");
   document.getElementById("btnBackToProjects").style.display="inline-block";
   document.getElementById("hdrCrumb").textContent=studio.projectName||studio.projectId;
+  const backBtn=document.getElementById("btnBackToEditor");
+  if(studio.projectId){ backBtn.href="/editor?project="+encodeURIComponent(studio.projectId); backBtn.style.display="inline-block"; }
+  else backBtn.style.display="none";
 }
 async function loadProjectPicker(){
   const org=currentOrg();
