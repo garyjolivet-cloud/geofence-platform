@@ -1368,6 +1368,7 @@ async function api(request, env, url) {
   const mb = path.match(/^\/api\/projects\/([^/]+)\/bundle$/);
   if (mb) {
     const pid = decodeURIComponent(mb[1]);
+    if (pid === "library") return json({ error: "\"library\" is a reserved id" }, 400);
 
     if (method === "GET") {
       const row = await env.DB
@@ -1749,6 +1750,69 @@ async function api(request, env, url) {
     await env.AUDIO.delete(from);
     await logAudit(env, request, A, "audio.move", from + " -> " + to);
     return json({ ok: true, from, to, url: "/api/audio/" + to }, 200, AC);
+  }
+
+  // --- orphaned project audio: R2 objects under a project-id prefix whose
+  // project no longer exists in D1. Library keys are never candidates —
+  // they're excluded by construction (prefix check), not by allowlist. ---
+  if (path === "/api/audio-orphans" && method === "GET") {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
+    const { results: projRows } = await env.DB.prepare("SELECT id FROM project").all();
+    const liveIds = new Set((projRows || []).map(r => r.id));
+    let objects = [], cursor;
+    do {
+      const l = await env.AUDIO.list({ cursor });
+      objects = objects.concat(l.objects.map(o => ({ key: o.key, size: o.size, uploaded: o.uploaded })));
+      cursor = l.truncated ? l.cursor : undefined;
+    } while (cursor);
+    const groups = {};
+    for (const o of objects) {
+      const prefix = o.key.split("/")[0];
+      if (!prefix || prefix === "library" || liveIds.has(prefix)) continue;
+      if (!groups[prefix]) groups[prefix] = { prefix, files: [], totalSize: 0, oldest: null, newest: null };
+      const g = groups[prefix];
+      g.files.push(o.key);
+      g.totalSize += o.size;
+      const t = new Date(o.uploaded).getTime();
+      if (g.oldest === null || t < g.oldest) g.oldest = t;
+      if (g.newest === null || t > g.newest) g.newest = t;
+    }
+    const SAFETY_MS = 24 * 60 * 60 * 1000; // don't flag anything touched in the last 24h as delete-safe
+    const now = Date.now();
+    const orphans = Object.values(groups).map(g => ({
+      prefix: g.prefix, fileCount: g.files.length, totalSize: g.totalSize,
+      oldestUploaded: g.oldest ? new Date(g.oldest).toISOString() : null,
+      newestUploaded: g.newest ? new Date(g.newest).toISOString() : null,
+      safeToDelete: g.newest !== null && (now - g.newest) > SAFETY_MS
+    }));
+    return json({ orphanPrefixes: orphans.length, orphans }, 200, AC);
+  }
+
+  // --- delete confirmed-orphaned project audio, by prefix (see GET above) ---
+  if (path === "/api/audio-orphans" && method === "DELETE") {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const prefixes = Array.isArray(b.prefixes) ? b.prefixes : [];
+    if (!prefixes.length) return json({ error: "need a non-empty prefixes array" }, 400);
+    if (prefixes.some(p => !p || typeof p !== "string" || p === "library" || p.includes("/")))
+      return json({ error: "invalid prefix in list" }, 400);
+    const { results: projRows } = await env.DB.prepare("SELECT id FROM project").all();
+    const liveIds = new Set((projRows || []).map(r => r.id));
+    const results = [];
+    for (const prefix of prefixes) {
+      if (liveIds.has(prefix)) { results.push({ prefix, skipped: "now a live project id" }); continue; }
+      let deleted = 0, cursor;
+      do {
+        const l = await env.AUDIO.list({ prefix: prefix + "/", cursor });
+        if (l.objects.length) { await env.AUDIO.delete(l.objects.map(o => o.key)); deleted += l.objects.length; }
+        cursor = l.truncated ? l.cursor : undefined;
+      } while (cursor);
+      await logAudit(env, request, { keyId: "master" }, "audio.orphan.delete", prefix + " (" + deleted + " files)");
+      results.push({ prefix, deleted });
+    }
+    return json({ ok: true, results }, 200, AC);
   }
 
   // --- audio assets in R2: upload (scoped) + serve (public) ---
