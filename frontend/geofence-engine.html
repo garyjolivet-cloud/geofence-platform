@@ -36,25 +36,23 @@
         background:var(--slate); color:var(--fog); border:1px solid var(--rim)}
   .pill.live{color:var(--go); border-color:var(--go)}
   .pill.sim{color:var(--amber); border-color:var(--amber)}
+  .pill.idle{background:var(--coral); color:#1a0d07; border-color:var(--coral); cursor:pointer}
 
-  /* Needle / compass */
+  /* Needle / compass — trimmed to just the arrow, shown at the bottom of the panel;
+     the readout grid and target name/state text are hidden, not deleted, so the JS
+     that writes into them (diagnostics, HUD.log data) keeps working untouched */
   .needle-card{background:var(--slate); border:1px solid var(--rim); border-radius:18px;
-               padding:16px; text-align:center; margin-bottom:12px}
-  svg.compass{width:220px; height:220px; touch-action:none}
+               padding:8px; text-align:center; margin-bottom:0}
+  svg.compass{width:110px; height:110px; touch-action:none}
   .ring{fill:none; stroke:var(--slate-2); stroke-width:10}
   .tick{stroke:var(--fog); stroke-width:2}
   .card-N{stroke:var(--ice)}
   .needle{fill:var(--coral)}
   .needle.low{fill:var(--fog)}
-  .target-name{font-family:"Black Han Sans"; font-size:22px; margin:6px 0 0}
-  .target-sub{font-family:"Barlow Condensed"; text-transform:uppercase; letter-spacing:1px;
-              color:var(--ice); font-size:14px}
-  .state-line{font-family:"Barlow Condensed"; font-weight:600; font-size:16px;
-              text-transform:uppercase; letter-spacing:.5px; margin-top:8px}
-  .state-in{color:var(--go)} .state-near{color:var(--amber)} .state-out{color:var(--fog)}
+  .target-name, .target-sub, .state-line{display:none}
 
-  /* Readout grid */
-  .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:12px}
+  /* Readout grid — hidden: raw GPS diagnostics aren't useful to someone testing a geofence design */
+  .grid{display:none; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:12px}
   .cell{background:var(--slate); border:1px solid var(--rim); border-radius:12px; padding:9px 10px}
   .cell .k{font-family:"Barlow Condensed"; text-transform:uppercase; font-size:11px;
            letter-spacing:.6px; color:var(--fog)}
@@ -141,25 +139,12 @@
   <header>
     <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v18 · heading reliability</span> <a href="/" style="font-size:12px;font-family:'Barlow Condensed';font-weight:600;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:3px 8px">⌂</a></h1>
     <div style="display:flex;gap:8px;align-items:center">
-      <span id="pill" class="pill">OFF</span>
+      <span id="pill" class="pill idle" title="Tap to start your walk">▶ Start</span>
+      <button id="btnTools" class="hamburger" aria-label="Tools" title="Tools">🛠</button>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
       <button id="btnSettings" class="hamburger" aria-label="Settings" title="Settings">☰</button>
     </div>
   </header>
-
-  <div class="needle-card">
-    <svg class="compass" viewBox="-110 -110 220 220" aria-label="direction to next stop">
-      <circle class="ring" r="92"></circle>
-      <g id="ticks"></g>
-      <text id="northN" class="card-N cond" x="0" y="-78" text-anchor="middle"
-            dominant-baseline="central" font-size="13" fill="#8fb6d4">N</text>
-      <polygon id="needle" class="needle" points="0,-66 9,16 0,6 -9,16"></polygon>
-      <circle r="5" fill="#26344a"></circle>
-    </svg>
-    <div id="targetName" class="target-name">—</div>
-    <div id="targetSub" class="target-sub">no fix yet</div>
-    <div id="stateLine" class="state-line state-out">standby</div>
-  </div>
 
   <!-- guidance bot HUD — shown when guidance is active -->
   <div id="guidanceHud" style="display:none;background:var(--slate);border:2px solid var(--go);
@@ -190,38 +175,63 @@
     <div class="cell"><div class="k">Fixes</div><div class="v" id="vFix">0</div></div>
   </div>
 
-  <div class="controls">
-    <button id="btnStart" class="primary">Start GPS</button>
-    <button id="btnCompass">Compass</button>
-    <button id="btnSim">Sim</button>
-    <button id="btnAudio">Audio</button>
-    <button id="btnOffline" title="download tour for use with no signal">⬇ Offline</button>
-  </div>
-
-  <div id="calBanner" style="display:none;background:rgba(255,194,77,.12);border:1px solid var(--amber);color:var(--amber);border-radius:9px;padding:9px 12px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:13.5px;text-align:center;line-height:1.4">
-    🧭 Compass needs calibrating — wave the phone in a slow figure-8 a few times. Until it's steady, the voice plays centred (no direction).
-  </div>
-
-  <div id="simPanel" class="sim">
-    <div class="cond" style="text-align:center;color:var(--amber);text-transform:uppercase;letter-spacing:1px;font-size:12px">
-      Simulator — nudge a virtual position (no GPS needed)
+  <!-- Tools drawer — Start GPS/Compass/Sim/Audio controls + the event log live here now,
+       closed by default; opened via the header's 🛠 button, closed via the ✕ below -->
+  <div id="toolsDrawer" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-family:'Barlow Condensed';font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:var(--fog)">Tools</span>
+      <button id="toolsDrawerClose" class="hamburger" aria-label="Close" title="Close">✕</button>
     </div>
-    <div class="pad">
-      <span class="blank"></span><button data-dir="N">▲</button><span class="blank"></span>
-      <button data-dir="W">◄</button><button id="simHere">center</button><button data-dir="E">►</button>
-      <span class="blank"></span><button data-dir="S">▼</button><span class="blank"></span>
+
+    <div class="controls">
+      <button id="btnStart" class="primary">Start GPS</button>
+      <button id="btnCompass">Compass</button>
+      <button id="btnSim">Sim</button>
+      <button id="btnAudio">Audio</button>
+      <button id="btnOffline" title="download tour for use with no signal">⬇ Offline</button>
     </div>
-    <div class="hint">each nudge ≈ 5 m · pick a stop to center on:</div>
-    <div id="simZones" class="controls" style="margin:6px 0 0"></div>
+
+    <div id="calBanner" style="display:none;background:rgba(255,194,77,.12);border:1px solid var(--amber);color:var(--amber);border-radius:9px;padding:9px 12px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:13.5px;text-align:center;line-height:1.4">
+      🧭 Compass needs calibrating — wave the phone in a slow figure-8 a few times. Until it's steady, the voice plays centred (no direction).
+    </div>
+
+    <div id="simPanel" class="sim">
+      <div class="cond" style="text-align:center;color:var(--amber);text-transform:uppercase;letter-spacing:1px;font-size:12px">
+        Simulator — nudge a virtual position (no GPS needed)
+      </div>
+      <div class="pad">
+        <span class="blank"></span><button data-dir="N">▲</button><span class="blank"></span>
+        <button data-dir="W">◄</button><button id="simHere">center</button><button data-dir="E">►</button>
+        <span class="blank"></span><button data-dir="S">▼</button><span class="blank"></span>
+      </div>
+      <div class="hint">each nudge ≈ 5 m · pick a stop to center on:</div>
+      <div id="simZones" class="controls" style="margin:6px 0 0"></div>
+    </div>
+
+    <div id="coord" class="hint" style="text-align:center;cursor:pointer;padding:9px;border:1px solid var(--rim);border-radius:9px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:14px;color:var(--ice)">📍 start GPS, then tap here to capture your position</div>
+
+    <div class="logwrap">
+      <p class="k">Event log</p>
+      <div id="log" class="log"></div>
+    </div>
+    <div class="hint" id="srcHint">bundle: built-in sample · open over https on your phone for GPS + compass</div>
   </div>
 
-  <div id="coord" class="hint" style="text-align:center;cursor:pointer;padding:9px;border:1px solid var(--rim);border-radius:9px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:14px;color:var(--ice)">📍 start GPS, then tap here to capture your position</div>
-
-  <div class="logwrap">
-    <p class="k">Event log</p>
-    <div id="log" class="log"></div>
+  <!-- directional arrow — the only always-visible readout kept, shrunk and pinned
+       to the bottom of the panel; target name/sub/state text stay hidden (see CSS) -->
+  <div class="needle-card">
+    <svg class="compass" viewBox="-110 -110 220 220" aria-label="direction to next stop">
+      <circle class="ring" r="92"></circle>
+      <g id="ticks"></g>
+      <text id="northN" class="card-N cond" x="0" y="-78" text-anchor="middle"
+            dominant-baseline="central" font-size="13" fill="#8fb6d4">N</text>
+      <polygon id="needle" class="needle" points="0,-66 9,16 0,6 -9,16"></polygon>
+      <circle r="5" fill="#26344a"></circle>
+    </svg>
+    <div id="targetName" class="target-name">—</div>
+    <div id="targetSub" class="target-sub">no fix yet</div>
+    <div id="stateLine" class="state-line state-out">standby</div>
   </div>
-  <div class="hint" id="srcHint">bundle: built-in sample · open over https on your phone for GPS + compass</div>
 </div>
 
 <!-- Settings panel (slide up from bottom) -->
@@ -520,13 +530,38 @@ const Geofencer = {
 
 /* ============================ AUDIO ============================ */
 const Audio = {
-  unlocked:false, ctx:null, keepAlive:null,
+  unlocked:false, ctx:null, keepAlive:null, silenceEl:null,
+  // Confirmed on-device (2026-07-21): iOS Safari mutes plain AudioContext output when the
+  // phone's hardware ring/silent switch is flipped — SpatialVoice/AmbientVoice both route
+  // through raw WebAudio nodes, so they went silent even though everything logged as playing.
+  // Standard workaround: a real (unmuted) HTMLMediaElement loop shifts Safari's page-wide
+  // audio session into a category that ignores the switch; the silence is in the PCM data
+  // itself (a hand-built silent WAV), not the element's volume/muted flags.
+  _silentWavBlob(){
+    const sr=8000, n=sr; // 1s of silence @ 8kHz mono 16-bit — tiny, loops seamlessly
+    const buf=new ArrayBuffer(44+n*2), dv=new DataView(buf);
+    const str=(o,s)=>{ for(let i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); };
+    str(0,'RIFF'); dv.setUint32(4,36+n*2,true); str(8,'WAVE');
+    str(12,'fmt '); dv.setUint32(16,16,true); dv.setUint16(20,1,true);
+    dv.setUint16(22,1,true); dv.setUint32(24,sr,true); dv.setUint32(28,sr*2,true);
+    dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+    str(36,'data'); dv.setUint32(40,n*2,true);      // sample bytes stay zero = silence
+    return new Blob([buf],{type:'audio/wav'});
+  },
   unlock(){
     if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
     if(this.ctx && this.ctx.state==='suspended') this.ctx.resume();
     // keep-alive: an inaudible tone holds the context 'running' so cues still sound after idle/lock
     if(this.ctx && !this.keepAlive){ try{ const o=this.ctx.createOscillator(), g=this.ctx.createGain();
       g.gain.value=0.0001; o.frequency.value=30; o.connect(g); g.connect(this.ctx.destination); o.start(); this.keepAlive=o; }catch(e){} }
+    if(!this.silenceEl){ try{
+      const el=document.createElement('audio');
+      el.loop=true; el.volume=1; el.muted=false; el.setAttribute('playsinline','');
+      el.style.cssText='position:fixed;width:0;height:0;opacity:0;pointer-events:none';
+      el.src=URL.createObjectURL(this._silentWavBlob());
+      document.body.appendChild(el); el.play().catch(()=>{});
+      this.silenceEl=el;
+    }catch(e){} }
     if(this.unlocked) return;
     try{ const u=new SpeechSynthesisUtterance(" "); u.volume=0; speechSynthesis.speak(u); this.unlocked=true; }catch(e){}
   },
@@ -1121,6 +1156,13 @@ function destPoint(center, distM, bearingDeg){   // center=[lon,lat] -> [lon,lat
 }
 function LonLat(latLon){ return [latLon[1], latLon[0]]; }   // [lat,lon] -> [lon,lat]
 function fc(features){ return {type:'FeatureCollection', features}; }
+function circleRing(centerLonLat, radiusM, n){   // centerLonLat=[lon,lat] -> ring of [lon,lat]
+  n=n||48;
+  const [lon,lat]=centerLonLat, out=[];
+  const dLat=radiusM/111320, dLon=radiusM/(111320*Math.cos(lat*Math.PI/180));
+  for(let i=0;i<=n;i++){ const a=2*Math.PI*i/n; out.push([lon+dLon*Math.cos(a), lat+dLat*Math.sin(a)]); }
+  return out;
+}
 
 const MapView = {
   map:null, centered:false,
@@ -1139,6 +1181,15 @@ const MapView = {
       this.map.addSource('self',{type:'geojson',data:fc([])});
       this.map.addLayer({id:'self-dot',type:'circle',source:'self',
         paint:{'circle-radius':8,'circle-color':'#8fb6d4','circle-stroke-color':'#0a1018','circle-stroke-width':2.5}});
+
+      // trigger circle — the actual to-scale geometry that fires a zone's content
+      // (its "target" layer), drawn under the stop marker for every nearby zone
+      this.map.addSource('trigger-zones',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'trigger-fill',type:'fill',source:'trigger-zones',
+        filter:['==',['geometry-type'],'Polygon'],
+        paint:{'fill-color':'#ff6a3d','fill-opacity':.16}});
+      this.map.addLayer({id:'trigger-line',type:'line',source:'trigger-zones',
+        paint:{'line-color':'#ff6a3d','line-width':2}});
 
       this.map.addSource('nearby-stops',{type:'geojson',data:fc([])});
       this.map.addLayer({id:'stop-pts',type:'circle',source:'nearby-stops',
@@ -1174,14 +1225,33 @@ const MapView = {
 
     const R=(BUNDLE && BUNDLE.stopVisibilityRadiusM) || 150;
     const nearFeats=[];
+    const triggerFeats=[];
     (BUNDLE.zones||[]).forEach(z=>{
       if(!z.center) return;
       const zc=z.path?centerNow(z, nowMs):z.center;
       if(Geo.hav([p.lat,p.lon], zc)<=R){
         nearFeats.push({type:'Feature',properties:{name:z.name},geometry:{type:'Point',coordinates:LonLat(zc)}});
+
+        const tgt=(z.layers||[]).find(l=>l.kind==='target');
+        if(tgt){
+          if(tgt.radiusM!=null){
+            triggerFeats.push({type:'Feature',properties:{name:z.name},
+              geometry:{type:'Polygon',coordinates:[circleRing(LonLat(zc), tgt.radiusM)]}});
+          } else if(tgt.geometry && tgt.geometry.type==='polygon'){
+            triggerFeats.push({type:'Feature',properties:{name:z.name},
+              geometry:{type:'Polygon',coordinates:[tgt.geometry.coords.map(LonLat)]}});
+          } else if(tgt.geometry && tgt.geometry.type==='tripline'){
+            triggerFeats.push({type:'Feature',properties:{name:z.name},
+              geometry:{type:'LineString',coordinates:[LonLat(tgt.geometry.from),LonLat(tgt.geometry.to)]}});
+          } else if(tgt.geometry && tgt.geometry.type==='corridor'){
+            triggerFeats.push({type:'Feature',properties:{name:z.name},
+              geometry:{type:'LineString',coordinates:tgt.geometry.path.map(LonLat)}});
+          }
+        }
       }
     });
     this.map.getSource('nearby-stops')?.setData(fc(nearFeats));
+    this.map.getSource('trigger-zones')?.setData(fc(triggerFeats));
 
     if(pick && pick.zone){
       const zc=pick.center || centerNow(pick.zone, nowMs);
@@ -1566,6 +1636,14 @@ const Settings = {
 
 document.getElementById('btnSettings').onclick    = ()=>Settings.open();
 document.getElementById('btnSettingsClose').onclick= ()=>Settings.close();
+
+document.getElementById('btnTools').onclick = ()=>{
+  const d=document.getElementById('toolsDrawer');
+  d.style.display = (d.style.display==='none') ? 'block' : 'none';
+};
+document.getElementById('toolsDrawerClose').onclick = ()=>{
+  document.getElementById('toolsDrawer').style.display='none';
+};
 // tap backdrop to close
 document.getElementById('settingsPanel').addEventListener('click',e=>{
   if(e.target===document.getElementById('settingsPanel')) Settings.close(); });
@@ -1608,6 +1686,7 @@ function startGPS(){
   // Device GPS
   if(!navigator.geolocation){ HUD.log('ev-warn','no geolocation on this device'); return; }
   HUD.el('pill').textContent='GPS'; HUD.el('pill').className='pill live';
+  if(watchId!==null) return;   // already watching — pill CTA + drawer's Start GPS button both call startGPS()
   HUD.log('ev-sys','GPS started — walk the stops');
   watchId=navigator.geolocation.watchPosition(
     p=>HUD.onFix({lat:p.coords.latitude,lon:p.coords.longitude,
@@ -1619,6 +1698,7 @@ function startGPS(){
 function tickSim(){ HUD.onFix({lat:simPos[0],lon:simPos[1],acc:5,t:Date.now()}); }
 
 document.getElementById('btnStart').onclick=()=>{ if(simMode) toggleSim(); startGPS(); };
+document.getElementById('pill').onclick=()=>{ if(simMode) toggleSim(); startGPS(); };
 document.getElementById('guidanceStopBtn').onclick=()=>{
   if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
   const hud=document.getElementById('guidanceHud');
@@ -1895,7 +1975,10 @@ if('serviceWorker' in navigator){
     const wn=document.getElementById('walkerName').value.trim();
     if(wn) lsSet('gp.walker.name',wn); else lsDel('gp.walker.name');
     await record({ "store-history":tA.checked, "live-tracking":tB.checked }); close();
-    HUD.log('ev-sys','privacy set · analytics '+(tA.checked?'on':'off')+' · route '+(tB.checked?'on':'off')+(wn?' · name: '+wn:'')); };
+    HUD.log('ev-sys','privacy set · analytics '+(tA.checked?'on':'off')+' · route '+(tB.checked?'on':'off')+(wn?' · name: '+wn:''));
+    // this tap is a real user gesture — chain straight into GPS+audio unlock so a
+    // first-time visitor doesn't need a second, separate tap to hear anything
+    startGPS(); };
   document.getElementById('consentForget').onclick=async function(){
     if(confirm('Erase this device id and all of its data from the platform?')){
       await forget(); tA.checked=false; tB.checked=false;
