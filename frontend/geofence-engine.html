@@ -2,10 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Chase Life — Geofence Engine</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <style>
   :root{
     --night:#0a1018; --slate:#141d2b; --slate-2:#1b2738; --rim:#26344a;
@@ -13,11 +15,20 @@
     --fog:#5b7088; --hazard:#ff2f4e; --go:#38e0a6; --amber:#ffc24d;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{height:100%; overflow:hidden}
   body{margin:0; background:var(--night); color:var(--snow);
        font-family:"Barlow",system-ui,sans-serif; overscroll-behavior:none}
   h1,.disp{font-family:"Black Han Sans",sans-serif; font-weight:400}
   .cond{font-family:"Barlow Condensed",sans-serif}
-  .wrap{max-width:430px; margin:0 auto; padding:14px 14px 28px; min-height:100vh}
+  #map{position:fixed; inset:0; z-index:0; background:var(--night)}
+  .wrap{position:fixed; left:0; right:0; bottom:0; margin:0 auto;
+        max-width:430px; width:100%; z-index:10;
+        max-height:60vh; overflow-y:auto;
+        background:linear-gradient(180deg, rgba(20,29,43,.94), rgba(10,16,24,.97));
+        backdrop-filter:blur(6px);
+        border-radius:18px 18px 0 0;
+        filter:drop-shadow(0 -6px 20px rgba(0,0,0,.5));
+        padding:14px 14px calc(20px + env(safe-area-inset-bottom))}
   header{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px}
   header h1{font-size:20px; margin:0; letter-spacing:.3px}
   .pill{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:13px;
@@ -125,6 +136,7 @@
 <script src="/guidance-bot.js"></script>
 </head>
 <body>
+<div id="map"></div>
 <div class="wrap">
   <header>
     <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v18 · heading reliability</span> <a href="/" style="font-size:12px;font-family:'Barlow Condensed';font-weight:600;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:3px 8px">⌂</a></h1>
@@ -1032,6 +1044,9 @@ const HUD = {
     // it for the one shared SpatialVoice channel.
     AmbientVoice.tick(BUNDLE.zones, p, fix.t);
 
+    // live map: self position, radius-filtered nearby stops, crosshair + bearing on the current pick
+    MapView.onFix(p, fix.t, pick);
+
     // ---- render ----
     this.el('vAcc').innerHTML = fix.acc.toFixed(0)+' <small>m</small>';
     this.el('vSpd').innerHTML = sm.speed.toFixed(1)+' <small>m/s</small>';
@@ -1090,6 +1105,100 @@ const HUD = {
     } else { n.setAttribute('transform','rotate(0)'); }
   }
 };
+
+/* ========================== LIVE MAP ==========================
+   Full-screen MapLibre map behind the HUD. Reuses Geo.hav (existing
+   [lat,lon] distance function) for all radius checks — deliberately does
+   NOT introduce a second distance function in [lon,lat] order. destPoint/
+   LonLat/fc are small geometry helpers ported from fence-editor.html. */
+function destPoint(center, distM, bearingDeg){   // center=[lon,lat] -> [lon,lat]
+  const R=6371000, br=bearingDeg*Math.PI/180;
+  const lat1=center[1]*Math.PI/180, lon1=center[0]*Math.PI/180;
+  const lat2=Math.asin(Math.sin(lat1)*Math.cos(distM/R)+Math.cos(lat1)*Math.sin(distM/R)*Math.cos(br));
+  const lon2=lon1+Math.atan2(Math.sin(br)*Math.sin(distM/R)*Math.cos(lat1),
+                              Math.cos(distM/R)-Math.sin(lat1)*Math.sin(lat2));
+  return [lon2*180/Math.PI, lat2*180/Math.PI];
+}
+function LonLat(latLon){ return [latLon[1], latLon[0]]; }   // [lat,lon] -> [lon,lat]
+function fc(features){ return {type:'FeatureCollection', features}; }
+
+const MapView = {
+  map:null, centered:false,
+  init(){
+    this.map=new maplibregl.Map({
+      container:'map',
+      style:{version:8,
+        sources:{base:{type:'raster',
+          tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          tileSize:256, attribution:'Esri, Maxar'}},
+        layers:[{id:'base',type:'raster',source:'base'}]},
+      center:LonLat(BUNDLE.ref), zoom:16
+    });
+    this.map.addControl(new maplibregl.NavigationControl());
+    this.map.on('load', ()=>{
+      this.map.addSource('self',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'self-dot',type:'circle',source:'self',
+        paint:{'circle-radius':8,'circle-color':'#8fb6d4','circle-stroke-color':'#0a1018','circle-stroke-width':2.5}});
+
+      this.map.addSource('nearby-stops',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'stop-pts',type:'circle',source:'nearby-stops',
+        paint:{'circle-radius':6,'circle-color':'#ff6a3d','circle-stroke-color':'#0a1018','circle-stroke-width':2}});
+      this.map.addLayer({id:'stop-lbl',type:'symbol',source:'nearby-stops',
+        layout:{'text-field':['get','name'],'text-size':11,'text-offset':[0,1.2],'text-font':['Open Sans Regular']},
+        paint:{'text-color':'#eef4fb','text-halo-color':'#0a1018','text-halo-width':1.4}});
+
+      // crosshair — painted after nearby-stop markers, before the bearing arrow
+      this.map.addSource('crosshair',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'crosshair-cross',type:'symbol',source:'crosshair',
+        layout:{'text-field':'+','text-size':34,'text-font':['Open Sans Regular'],
+                'text-allow-overlap':true,'text-ignore-placement':true},
+        paint:{'text-color':'#ffffff','text-halo-color':'#000000','text-halo-width':3}});
+      this.map.addLayer({id:'crosshair-dot',type:'circle',source:'crosshair',
+        paint:{'circle-radius':5,'circle-color':'#ff6a3d','circle-stroke-color':'#000000','circle-stroke-width':1.5}});
+
+      // bearing line + arrowhead — topmost layer, on top of the crosshair
+      this.map.addSource('bearing-arrow',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'bearing-arrow-line',type:'line',source:'bearing-arrow',
+        filter:['==','$type','LineString'],
+        paint:{'line-color':'#ffc24d','line-width':3}});
+      this.map.addLayer({id:'bearing-arrow-head',type:'circle',source:'bearing-arrow',
+        filter:['==','$type','Point'],
+        paint:{'circle-radius':5,'circle-color':'#ffc24d','circle-stroke-color':'#0a1018','circle-stroke-width':2}});
+    });
+  },
+  recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
+  onFix(p, nowMs, pick){
+    if(!this.map || !this.map.isStyleLoaded()) return;
+    this.map.getSource('self')?.setData({type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]}});
+    if(!this.centered){ this.map.jumpTo({center:[p.lon,p.lat], zoom:17}); this.centered=true; }
+
+    const R=(BUNDLE && BUNDLE.stopVisibilityRadiusM) || 150;
+    const nearFeats=[];
+    (BUNDLE.zones||[]).forEach(z=>{
+      if(!z.center) return;
+      const zc=z.path?centerNow(z, nowMs):z.center;
+      if(Geo.hav([p.lat,p.lon], zc)<=R){
+        nearFeats.push({type:'Feature',properties:{name:z.name},geometry:{type:'Point',coordinates:LonLat(zc)}});
+      }
+    });
+    this.map.getSource('nearby-stops')?.setData(fc(nearFeats));
+
+    if(pick && pick.zone){
+      const zc=pick.center || centerNow(pick.zone, nowMs);
+      const ctrLL=LonLat(zc);
+      this.map.getSource('crosshair')?.setData({type:'Feature',geometry:{type:'Point',coordinates:ctrLL}});
+      const tip=destPoint(ctrLL, 20, pick.zone.bearingDeg ?? 90);
+      this.map.getSource('bearing-arrow')?.setData(fc([
+        {type:'Feature',properties:{},geometry:{type:'LineString',coordinates:[ctrLL,tip]}},
+        {type:'Feature',properties:{},geometry:{type:'Point',coordinates:tip}}
+      ]));
+    } else {
+      this.map.getSource('crosshair')?.setData(fc([]));
+      this.map.getSource('bearing-arrow')?.setData(fc([]));
+    }
+  }
+};
+MapView.init();
 
 /* compass ticks */
 (function(){ const g=document.getElementById('ticks');
@@ -1605,6 +1714,7 @@ EngineKokoro.tryLoad();
       try{ localStorage.removeItem(LKEY); }catch(_){}
       HUD.log('ev-warn','no stops published for this project yet'); return; }
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+    if(!HUD.pos) MapView.recenter(b.ref);
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
       ['hiHz','loHz','minGain','reverbMax','tau','curve'].forEach(k=>{ if(st[k]!=null) t[k]=st[k]; }); }
     try{ localStorage.setItem(LKEY, JSON.stringify(b)); }catch(e){}   // keep a copy for offline
@@ -1617,6 +1727,7 @@ EngineKokoro.tryLoad();
     let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
     if(cached){ try{ const b=JSON.parse(cached);
       BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+      if(!HUD.pos) MapView.recenter(b.ref);
       if(document.getElementById('simZones')) buildSimZones();
       HUD.log('ev-sys','offline — loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' from saved copy');
     }catch(_){ HUD.log('ev-warn','offline and saved copy unreadable — using built-in bundle'); } }

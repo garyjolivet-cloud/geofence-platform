@@ -156,7 +156,7 @@
      drops to its own right-aligned line instead of forcing the row to
      overflow horizontally; on wider viewports (the standalone /library
      page) everything still fits on one line */
-  .af-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0;border-top:1px solid #26344a}
+  .af-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0;border-top:1px solid #26344a;position:relative}
   .af-row .af-drag{cursor:grab;color:var(--fog);flex:0 0 auto;font-size:13px}
   .af-row .af-info{flex:1 1 90px;min-width:0}
   .af-row .af-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -170,6 +170,17 @@
   .af-row button.af-del{border-color:var(--hazard);color:var(--hazard)}
   .af-row input[type=checkbox]{flex:0 0 auto;accent-color:var(--coral)}
   .af-empty{font-family:'Barlow Condensed';font-size:12px;color:var(--fog);text-align:center;padding:12px 0}
+  .af-name input{width:100%;font-size:12px;padding:2px 4px}
+  .clip-menu{display:none;position:absolute;top:100%;right:6px;margin-top:4px;min-width:150px;
+             background:var(--slate);border:1px solid var(--rim);border-radius:10px;overflow:hidden;
+             box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:25;flex-direction:column}
+  .clip-menu.show{display:flex}
+  .clip-menu-item{display:block;width:100%;text-align:left;font-family:'Barlow Condensed';font-size:12px;font-weight:600;
+                  color:var(--ice);text-decoration:none;background:none;border:none;border-radius:0;padding:8px 12px;cursor:pointer}
+  .clip-menu-item:hover{background:rgba(255,106,61,.1);color:var(--snow)}
+  .clip-menu-item+.clip-menu-item{border-top:1px solid var(--rim)}
+  .clip-menu-item.danger{color:var(--hazard)}
+  .clip-menu-folders{max-height:180px;overflow-y:auto;border-top:1px solid var(--rim)}
   #combineOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);
                  align-items:center;justify-content:center;padding:16px}
   #combineBox{background:var(--slate);border:1px solid var(--rim);border-radius:16px;padding:18px;
@@ -533,6 +544,11 @@
             <span class="proj-dot-val"><span id="visitorRadiusV">15</span> m</span>
             <span class="proj-dot-name">visitor</span>
           </button>
+          <button class="proj-dot-btn" id="pdStopsBtn" onclick="openProjSlider('stopvis')">
+            <span class="proj-dot-icon" style="background:#ff4da6;border-style:dashed"></span>
+            <span class="proj-dot-val"><span id="stopVisRadiusV">150</span> m</span>
+            <span class="proj-dot-name">stop visibility</span>
+          </button>
         </div>
         <!-- hidden sliders — shown one at a time by openProjSlider() -->
         <div id="projSliderWrap" style="display:none" class="proj-slider-wrap">
@@ -540,6 +556,7 @@
           <input type="range" id="audioRange"    min="6"  max="160" value="64" step="2"  style="width:100%;accent-color:var(--coral);display:none">
           <input type="range" id="audioClear"    min="2"  max="40"  value="8"  step="1"  style="width:100%;accent-color:var(--coral);display:none">
           <input type="range" id="visitorRadius" min="5"  max="80"  value="15" step="1"  style="width:100%;accent-color:var(--coral);display:none">
+          <input type="range" id="stopVisRadius" min="20" max="500" value="150" step="10" style="width:100%;accent-color:var(--coral);display:none">
         </div>
         <label class="k" style="margin-top:2px">live stop duration</label>
         <select id="liveTtlMs">
@@ -692,6 +709,7 @@
 
       <!-- what-plays summary -->
       <div style="display:flex;align-items:center;gap:6px">
+        <button id="pAudioPlay" class="ghost" style="flex:0 0 auto;display:none" title="Play this clip">▶</button>
         <div class="va-summary empty" id="vaSummary" style="flex:1">nothing set — add a clip or a bot</div>
         <button id="pAudioClear" class="ghost" style="flex:0 0 auto;color:var(--hazard);border-color:var(--hazard);display:none" title="Remove this clip">✕</button>
       </div>
@@ -1203,6 +1221,7 @@ function renderSources(){
       const rM=+(document.getElementById("audioRange").value)||64;
       const cM=+(document.getElementById("audioClear").value)||8;
       const vM=+(document.getElementById("visitorRadius").value)||15;
+      const svM=+(document.getElementById("stopVisRadius").value)||150;
       if(_activeProjSetting==="voice"||_activeProjSetting==="clear"){
         pf.push({type:"Feature",properties:{pkind:"range"},geometry:{type:"Polygon",coordinates:[circleRing(pc,rM,64)]}});
         pf.push({type:"Feature",properties:{pkind:"rlabel",label:"voice range"},geometry:{type:"Point",coordinates:destPoint(pc,rM,0)}});
@@ -1214,6 +1233,10 @@ function renderSources(){
       if(_activeProjSetting==="visitor"){
         pf.push({type:"Feature",properties:{pkind:"visitor"},geometry:{type:"Polygon",coordinates:[circleRing(pc,vM,64)]}});
         pf.push({type:"Feature",properties:{pkind:"rlabel",label:"visitor"},geometry:{type:"Point",coordinates:destPoint(pc,vM,225)}});
+      }
+      if(_activeProjSetting==="stopvis"){
+        pf.push({type:"Feature",properties:{pkind:"stopvis"},geometry:{type:"Polygon",coordinates:[circleRing(pc,svM,64)]}});
+        pf.push({type:"Feature",properties:{pkind:"rlabel",label:"stop visibility"},geometry:{type:"Point",coordinates:destPoint(pc,svM,315)}});
       }
     }
     map.getSource("project-rings").setData(fc(pf));
@@ -1315,6 +1338,8 @@ map.on("load",()=>{
      paint:{"line-color":"#b96fff","line-width":1.5,"line-opacity":0.55}});
   map.addLayer({id:"proj-visitor-ring",type:"line",source:"project-rings",filter:["==","pkind","visitor"],
      paint:{"line-color":"#00e5ff","line-width":1.2,"line-dasharray":[2,3],"line-opacity":0.55}});
+  map.addLayer({id:"proj-stopvis-ring",type:"line",source:"project-rings",filter:["==","pkind","stopvis"],
+     paint:{"line-color":"#ff4da6","line-width":1.2,"line-dasharray":[3,3],"line-opacity":0.55}});
   map.addLayer({id:"proj-ring-lbl",type:"symbol",source:"project-rings",filter:["==","pkind","rlabel"],
      layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,0.8],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#b96fff","text-halo-color":"#0a1018","text-halo-width":1.2,"text-opacity":0.8}});
@@ -1711,7 +1736,30 @@ function updateVaSummary(zone){
   if(timingEl) timingEl.style.display=(hasClip&&firstBot)?"block":"none";
   const clearBtn=document.getElementById("pAudioClear");
   if(clearBtn) clearBtn.style.display=hasClip?"inline-block":"none";
+  const playBtn=document.getElementById("pAudioPlay");
+  if(playBtn){
+    playBtn.style.display=hasClip?"inline-block":"none";
+    if(!hasClip||_paPlaying?.url!==clipUrl) pAudioStopPlay();
+  }
 }
+let _paPlaying=null;
+function pAudioStopPlay(){
+  if(_paPlaying){ _paPlaying.audio.pause(); }
+  _paPlaying=null;
+  const btn=document.getElementById("pAudioPlay"); if(btn) btn.textContent="▶";
+}
+function pAudioTogglePlay(){
+  if(sel<0) return;
+  const url=zones[sel][zoneAudioField(zones[sel])]; if(!url) return;
+  const btn=document.getElementById("pAudioPlay");
+  if(_paPlaying&&_paPlaying.url===url){ pAudioStopPlay(); return; }
+  if(_paPlaying) pAudioStopPlay();
+  const audio=new Audio(url); audio.play();
+  audio.onended=()=>pAudioStopPlay();
+  _paPlaying={url,audio};
+  if(btn) btn.textContent="⏸";
+}
+document.getElementById("pAudioPlay").addEventListener("click",pAudioTogglePlay);
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
 bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
 bindProp("pSay",z=>{ z.say=document.getElementById("pSay").value; });
@@ -1797,12 +1845,15 @@ document.getElementById("audioClear").oninput=e=>{
   document.getElementById("audioClearV").textContent=e.target.value; renderSources(); };
 document.getElementById("visitorRadius").oninput=e=>{
   document.getElementById("visitorRadiusV").textContent=e.target.value; renderSources(); };
+document.getElementById("stopVisRadius").oninput=e=>{
+  document.getElementById("stopVisRadiusV").textContent=e.target.value; renderSources(); };
 
 // openProjSlider: toggle dot popover + show corresponding map ring
 const _projSliderCfg={
   voice:  {slId:"audioRange",   btnId:"pdVoiceBtn",   label:"Voice range — audio carries this far"},
   clear:  {slId:"audioClear",   btnId:"pdClearBtn",   label:"Full volume — inner radius at 100% volume"},
   visitor:{slId:"visitorRadius",btnId:"pdVisitorBtn", label:"Visitor bubble — sim visitor zone radius"},
+  stopvis:{slId:"stopVisRadius",btnId:"pdStopsBtn",   label:"Stop visibility — markers show within this range on the walk map"},
 };
 function openProjSlider(type){
   const already=_activeProjSetting===type;
@@ -1897,6 +1948,7 @@ document.getElementById("pAudioClear").onclick=async()=>{
    live in Audio Studio (/studio) — this panel only lists clips to drag onto
    a stop, plus a read-only folder browser and a deep link into Studio. ---- */
 let afTab="project", afFolder="";
+let afKnownFolders=new Set(), afPendingFolders=new Set();
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
 
@@ -1990,6 +2042,7 @@ async function doAudioRefresh(){
       if(!afFolder){
         // non-root listings never report folders (R2 has no real nesting) —
         // only a root listing is authoritative for "which folders exist".
+        afKnownFolders=new Set(j.folders||[]);
         const grid=document.getElementById("afFolderGrid");
         grid.innerHTML="";
         (j.folders||[]).forEach(f=>{
@@ -2028,7 +2081,15 @@ function afBuildRow(o){
   const nm=document.createElement("div"); nm.className="af-name"; nm.textContent=o.key.split("/").pop();
   info.appendChild(nm);
   if(o.expiresAt){ const exp=document.createElement("div"); exp.className="af-exp"; exp.textContent="⏳ "+afFmtExpiry(o.expiresAt); info.appendChild(exp); }
-  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(info);
+  const moreBtn=document.createElement("button"); moreBtn.textContent="⋯"; moreBtn.title="Rename, move, or delete";
+  const menu=buildClipMenu(o,nm);
+  moreBtn.onclick=e=>{
+    e.stopPropagation();
+    const wasOpen=menu.classList.contains("show");
+    closeClipMenus();
+    if(!wasOpen){ menu.classList.add("show"); _openClipMenu=menu; }
+  };
+  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(info); row.appendChild(moreBtn); row.appendChild(menu);
   return row;
 }
 let _afPlaying=null;
@@ -2038,6 +2099,119 @@ function afTogglePlay(o,btn){
   const audio=new Audio(o.url); audio.play();
   audio.onended=()=>{ btn.textContent="▶"; _afPlaying=null; };
   _afPlaying={url:o.url,audio,btn}; btn.textContent="⏸";
+}
+let _openClipMenu=null;
+function closeClipMenus(){
+  document.querySelectorAll(".clip-menu.show").forEach(m=>m.classList.remove("show"));
+  _openClipMenu=null;
+}
+document.addEventListener("click",e=>{
+  if(_openClipMenu && !_openClipMenu.contains(e.target)) closeClipMenus();
+});
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeClipMenus(); });
+function buildClipMenu(o,nameEl){
+  const menu=document.createElement("div"); menu.className="clip-menu";
+  const renameBtn=document.createElement("button"); renameBtn.className="clip-menu-item"; renameBtn.type="button"; renameBtn.textContent="✎ Rename";
+  renameBtn.onclick=e=>{ e.stopPropagation(); closeClipMenus(); startClipRename(o,nameEl); };
+  menu.appendChild(renameBtn);
+  if(o.key.startsWith("library/")){
+    const moveBtn=document.createElement("button"); moveBtn.className="clip-menu-item"; moveBtn.type="button"; moveBtn.textContent="📁 Move to…";
+    moveBtn.onclick=e=>{ e.stopPropagation(); showMoveSubmenu(o,menu); };
+    menu.appendChild(moveBtn);
+  }
+  const delBtn=document.createElement("button"); delBtn.className="clip-menu-item danger"; delBtn.type="button"; delBtn.textContent="🗑 Delete";
+  delBtn.onclick=async e=>{
+    e.stopPropagation(); closeClipMenus();
+    const name=o.key.split("/").pop();
+    if(!confirm('Delete "'+name+'"? This cannot be undone.')) return;
+    try{
+      const r=await fetch(o.url,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+      if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
+      doAudioRefresh();
+    }catch(e){ alert("Delete failed: "+e.message); }
+  };
+  menu.appendChild(delBtn);
+  return menu;
+}
+function startClipRename(o,nameEl){
+  if(nameEl.querySelector("input")) return; // already renaming this row — don't stack a second closure on top
+  const dir=o.key.slice(0,o.key.length-o.key.split("/").pop().length);
+  const oldName=o.key.split("/").pop();
+  const extM=oldName.match(/\.([^.]+)$/), ext=extM?extM[1]:"mp3", base=oldName.replace(/\.[^.]+$/,"");
+  nameEl.innerHTML='<input type="text" maxlength="60">';
+  const inp=nameEl.querySelector("input"); inp.value=base; inp.focus(); inp.select();
+  // busy stays true for the whole round trip, including while confirm() is
+  // open — alert()/confirm() blur the focused input as a side effect, and
+  // without this guard that reentrant blur re-invokes commit() (which shows
+  // another alert(), which blurs again, ...), an infinite dialog loop. It
+  // only drops back to false once we've decided the outcome (retry, cancel
+  // back to editing, or give up) so any reentrant call in between is a no-op.
+  let busy=false;
+  const move=(to,overwrite)=>fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to,overwrite})});
+  const commit=async()=>{
+    if(busy) return;
+    const newBase=slug(inp.value);
+    if(!newBase || newBase===base){ doAudioRefresh(); return; }
+    busy=true;
+    const to=dir+newBase+"."+ext;
+    let r;
+    try{ r=await move(to,false); }
+    catch(e){ busy=false; alert("Rename failed: "+e.message); inp.focus(); return; }
+    if(r.status===404){
+      // the clip itself is gone (renamed/deleted elsewhere) — no point
+      // leaving them editing a name for a file that no longer exists.
+      busy=false; alert("This clip no longer exists — the list will refresh."); doAudioRefresh(); return;
+    }
+    if(r.status===409){
+      const replace=confirm('A file named "'+newBase+"."+ext+'" already exists. Replace it?');
+      if(replace){
+        try{
+          const r2=await move(to,true);
+          busy=false;
+          if(r2.status===404){ alert("This clip no longer exists — the list will refresh."); doAudioRefresh(); return; }
+          if(!r2.ok){ alert("Replace failed: "+(await r2.text())); inp.focus(); return; }
+          doAudioRefresh();
+        }catch(e){ busy=false; alert("Replace failed: "+e.message); inp.focus(); }
+      } else {
+        busy=false;
+        inp.focus(); inp.select(); // back to the name prompt to allow a change
+      }
+      return;
+    }
+    busy=false;
+    if(!r.ok){ alert("Rename failed: "+(await r.text())); inp.focus(); return; }
+    doAudioRefresh();
+  };
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") doAudioRefresh(); });
+  inp.addEventListener("blur",commit);
+}
+function showMoveSubmenu(o,menu){
+  const old=menu.querySelector(".clip-menu-folders"); if(old){ old.remove(); return; }
+  const wrap=document.createElement("div"); wrap.className="clip-menu-folders";
+  const currentFolder=o.key.split("/").slice(2,-1).join("/");
+  const opts=[["","Library (root)"],...[...new Set([...afKnownFolders,...afPendingFolders])].sort().map(f=>[f,f])];
+  opts.forEach(([val,label])=>{
+    if(val===currentFolder) return;
+    const b=document.createElement("button"); b.className="clip-menu-item"; b.type="button"; b.textContent="📁 "+label;
+    b.onclick=e=>{ e.stopPropagation(); closeClipMenus(); moveLibraryClip(o.key,val); };
+    wrap.appendChild(b);
+  });
+  if(!wrap.children.length){ wrap.innerHTML='<div class="clip-menu-item" style="cursor:default;color:var(--fog)">no other folders</div>'; }
+  menu.appendChild(wrap);
+}
+async function moveLibraryClip(fromKey,destFolder,overwrite){
+  const org=fromKey.split("/")[1];
+  const to="library/"+org+"/"+(destFolder?destFolder+"/":"")+fromKey.split("/").pop();
+  if(to===fromKey) return;
+  try{
+    const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:fromKey,to,overwrite:!!overwrite})});
+    if(r.status===409){
+      if(confirm('A file named "'+to.split("/").pop()+'" already exists there. Replace it?')) moveLibraryClip(fromKey,destFolder,true);
+      return;
+    }
+    if(!r.ok){ alert("Move failed: "+(await r.text())); return; }
+    doAudioRefresh();
+  }catch(e){ alert("Move failed: "+e.message); }
 }
 
 /* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
@@ -2199,6 +2373,7 @@ function exportBundle(){
               ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)],
               spatialRangeM:+document.getElementById("audioRange").value,
               spatialClearM:+document.getElementById("audioClear").value,
+              stopVisibilityRadiusM:+document.getElementById("stopVisRadius").value,
               spatialTuning:AudioLab.getTuning(),
               appId:document.getElementById("appSel").value||null,
               orgId:document.getElementById("clientSel").value||null,
@@ -2275,6 +2450,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(b.name) document.getElementById("projCrumb").textContent=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
+    if(b.stopVisibilityRadiusM){ document.getElementById("stopVisRadius").value=b.stopVisibilityRadiusM; document.getElementById("stopVisRadiusV").textContent=b.stopVisibilityRadiusM; }
     if(b.spatialTuning) AudioLab.setTuning(b.spatialTuning);
     if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
     refreshBotDropdowns();
