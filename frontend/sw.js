@@ -26,7 +26,12 @@ self.addEventListener('fetch', e => {
       const c = await caches.open(CACHE);
       try {
         const res = await fetch(req);
-        if (res.ok) c.put(req, res.clone());
+        // <audio> elements issue Range requests (esp. iOS Safari) — the
+        // Cache API rejects storing 206 Partial Content, and that rejection
+        // surfaces to the page as an uncaught "FetchEvent.respondWith
+        // received an error" instead of just a failed cache write. Only the
+        // full 200 response is cacheable.
+        if (res.ok && res.status !== 206) c.put(req, res.clone()).catch(() => {});
         return res;
       } catch (err) {
         const hit = await c.match(req);
@@ -41,7 +46,7 @@ self.addEventListener('fetch', e => {
     const c = await caches.open(CACHE);
     try {
       const res = await fetch(req);
-      if (res.ok) c.put(req, res.clone());
+      if (res.ok && res.status !== 206) c.put(req, res.clone()).catch(() => {});
       return res;
     } catch (err) {
       const hit = await c.match(req);
