@@ -57,6 +57,8 @@
   .inv-box{margin-top:14px;padding:14px 16px;background:rgba(56,224,166,.07);border:1px solid rgba(56,224,166,.25);border-radius:10px;display:none}
   .inv-url{font-family:monospace;font-size:12.5px;color:var(--go);word-break:break-all;margin:6px 0 10px}
   .inv-copy{background:rgba(56,224,166,.12);border:1px solid rgba(56,224,166,.3);color:var(--go);border-radius:7px;padding:5px 12px;cursor:pointer;font-family:"Barlow Condensed";font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase}
+  .qrbox{background:#fff;display:inline-block;padding:10px;border-radius:10px;margin:8px 0}
+  .qrbox img{display:block}
   .form-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
   .form-row.trio{grid-template-columns:1fr 1fr auto}
   .form-col{display:flex;flex-direction:column;gap:4px}
@@ -131,7 +133,8 @@
           <button class="go" id="genLinkBtn" style="height:38px">Generate link</button>
         </div>
         <div class="inv-box" id="linkBox">
-          <div style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Walk link — copy and share with visitors:</div>
+          <div style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Walk link — copy, scan, or share with visitors:</div>
+          <div class="qrbox"><img id="linkQr" width="180" height="180" alt="QR code for this walk link"></div>
           <div class="inv-url" id="linkUrl"></div>
           <span id="linkExpiry" style="font-family:'Barlow Condensed';font-size:12px;color:var(--fog);display:block;margin-bottom:8px"></span>
           <button class="inv-copy" style="background:rgba(255,194,77,.12);border-color:rgba(255,194,77,.3);color:var(--amber)"
@@ -239,7 +242,8 @@
         </div>
         <button class="go" id="inviteBtn">Create &amp; get invite link</button>
         <div class="inv-box" id="inviteBox">
-          <div style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Copy and send this link to the new user:</div>
+          <div style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Copy, scan, or send this link to the new user:</div>
+          <div class="qrbox"><img id="inviteQr" width="180" height="180" alt="QR code for this invite link"></div>
           <div class="inv-url" id="inviteUrl"></div>
           <button class="inv-copy" onclick="navigator.clipboard.writeText(document.getElementById('inviteUrl').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy link',1800)})">Copy link</button>
         </div>
@@ -613,6 +617,7 @@ async function resendInvite(uid, email) {
   const j=await r.json();
   if(!r.ok){ alert("Error: "+(j.error||r.status)); return; }
   $("inviteUrl").textContent=j.inviteUrl;
+  $("inviteQr").src="https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=12&ecc=L&data="+encodeURIComponent(j.inviteUrl);
   $("inviteBox").style.display="block";
   alert("Invite link regenerated for "+email+". See below.");
 }
@@ -633,6 +638,7 @@ $("inviteBtn").onclick=async function(){
     const j=await r.json();
     if(!r.ok){alert("Error: "+(j.error||r.status));return;}
     $("inviteUrl").textContent=j.inviteUrl;
+    $("inviteQr").src="https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=12&ecc=L&data="+encodeURIComponent(j.inviteUrl);
     $("inviteBox").style.display="block";
     $("invEmail").value=""; $("invName").value="";
     loadTeam();
@@ -710,6 +716,7 @@ $("genLinkBtn").onclick = async function(){
     $("linkExpiry").textContent=j.expiresAt
       ? "Expires: "+new Date(j.expiresAt).toLocaleString()
       : "No expiry";
+    $("linkQr").src="https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=12&ecc=L&data="+encodeURIComponent(j.url);
     $("linkBox").style.display="block";
     // Keep the Active Links list (a separate project field below, only
     // populated on its own "Load" click) in sync with whatever link was

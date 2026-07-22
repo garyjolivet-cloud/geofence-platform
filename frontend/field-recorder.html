@@ -59,7 +59,7 @@ html,body{height:100%;background:var(--night);color:var(--snow);
 #hdr{display:flex;align-items:center;gap:10px;padding:10px 14px;
      background:var(--slate);border-bottom:1px solid var(--rim);flex-shrink:0}
 #hdr a{color:var(--ice);text-decoration:none;font-size:14px;flex-shrink:0}
-#projName{flex:1;font-weight:700;font-size:15px;text-align:center;
+#projName{flex:1;min-width:0;font-weight:700;font-size:15px;text-align:center;
           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #btnPub{padding:6px 14px;border-radius:8px;background:var(--coral);border:none;
         color:#1a0d07;font-family:"Barlow Condensed";font-weight:700;font-size:13px;
@@ -165,6 +165,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
       <button class="fr-sm" id="btnViewCal" onclick="setBookingsView('calendar')">Calendar</button>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
+      <span id="whoami" style="font-size:11px;color:var(--fog)"></span>
       <a href="/">⌂ Home</a>
       <a href="#" onclick="frSignOut(event)" style="color:var(--fog);font-size:13px">Sign out</a>
     </div>
@@ -176,9 +177,15 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
 <!-- ── field screen (?project param) ── -->
 <div id="screenField">
   <div id="signalBanner">⚠ NO SIGNAL — stops queued <span id="queueBadge"></span></div>
+  <div id="bundleWarn" style="flex-shrink:0;background:var(--hazard);color:#fff;display:none;align-items:center;justify-content:center;gap:10px;padding:6px 14px;font-size:13px;font-weight:700;text-align:center">
+    ⚠ Couldn't load this project's existing stops
+    <button onclick="retryBundleLoad()" style="background:rgba(255,255,255,.2);border:1px solid #fff;color:#fff;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer">Retry</button>
+  </div>
   <div id="hdr">
-    <a href="/field">◀ Sessions</a>
+    <a href="/field" id="backLink">◀ Sessions</a>
+    <span id="roleBadge" title="" style="font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 6px;border-radius:5px;background:var(--slate2);color:var(--fog);flex-shrink:0"></span>
     <span id="projName">Field</span>
+    <button id="btnQr" onclick="showFieldQr()" title="QR code to open this on your phone" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">▦</button>
     <button id="btnClear" onclick="clearCurrentSession()" title="Clear local data" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⚡</button>
     <button id="btnPub" disabled>✓ Pub</button>
   </div>
@@ -249,6 +256,13 @@ let _me = null;
 const _meReady = RoleGate.require(['admin', 'guide']).then(me => {
   _me = me;
   applyPreviewBanner();
+  // Signed-in-account indicator — cheap insurance against exactly the kind of
+  // mix-up that cost a long debugging session: a stale/wrong-role browser tab
+  // silently rendering role-appropriate UI with no clue which account it is.
+  const who = document.getElementById('whoami');
+  if(who) who.textContent = (me.email||'')+' · '+me.role;
+  const badge = document.getElementById('roleBadge');
+  if(badge){ badge.textContent = me.role.toUpperCase(); badge.title = me.email||''; }
   if (me.role === 'guide') {
     document.querySelector('.ss-hdr h1').textContent = 'My Bookings';
     const homeLink = document.querySelector('.ss-hdr a[href="/"]');
@@ -329,6 +343,7 @@ let liveActivity  = "walk";
 let liveRecState  = "idle"; // "idle" | "recording" | "uploading"
 let liveStops     = [];     // successfully published live stops (in-memory for this session)
 let liveNum       = 0;      // auto-increment counter for live stop names
+let publishedZones = [];    // the project's real published tour stops (fence-editor zones) — reference layer, not editable here
 let signalOk      = true;
 let db, map;
 
@@ -436,9 +451,12 @@ async function renderSessionsList(){
         : "No date set";
       const visitorsHtml = links.length
         ? links.map(lk=>`
-            <div style="background:#0d1520;border-radius:8px;padding:9px 12px;display:flex;align-items:center;gap:8px">
-              <span style="font-family:'Barlow Condensed';font-size:14px;font-weight:600;color:var(--ice);flex:1">${esc(lk.label)}</span>
-              <button onclick="navigator.clipboard.writeText('${esc(lk.url)}').then(()=>this.textContent='✓').catch(()=>{})" style="background:var(--coral);border:none;border-radius:6px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 12px;cursor:pointer;flex-shrink:0">Copy</button>
+            <div class="visitor-row" style="background:#0d1520;border-radius:8px;padding:9px 12px;display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-family:'Barlow Condensed';font-size:14px;font-weight:600;color:var(--ice);flex:1">${esc(lk.label)}</span>
+                <button onclick="toggleQr(this,'${esc(lk.url)}','.visitor-row')" style="background:var(--slate2);border:1px solid var(--rim);border-radius:6px;color:var(--ice);font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 10px;cursor:pointer;flex-shrink:0">QR</button>
+                <button onclick="navigator.clipboard.writeText('${esc(lk.url)}').then(()=>this.textContent='✓').catch(()=>{})" style="background:var(--coral);border:none;border-radius:6px;color:#1a0d07;font-family:'Barlow Condensed';font-weight:700;font-size:12px;padding:5px 12px;cursor:pointer;flex-shrink:0">Copy</button>
+              </div>
             </div>`).join("")
         : `<div style="font-family:'Barlow Condensed';font-size:13px;color:var(--fog);padding:4px 0">No visitors assigned — ask your admin to add walk links</div>`;
       return `<div class="sess-card">
@@ -493,6 +511,7 @@ async function renderSessionsList(){
       <div class="sc-meta">No local session — tap to start</div>
       <div class="sc-acts">
         <a class="sc-open" href="/field?project=${esc(p.id)}">Open Guide</a>
+        <button class="sc-open" onclick="toggleQr(this,'${location.origin}/field?project=${esc(p.id)}','.sess-card')">QR</button>
       </div>
     </div>`).join("");
 
@@ -510,6 +529,7 @@ async function renderSessionsList(){
       <div class="sc-meta">${meta}</div>
       <div class="sc-acts">
         <a class="sc-open" href="/field?project=${esc(s.projId)}">Open</a>
+        <button class="sc-open" onclick="toggleQr(this,'${location.origin}/field?project=${esc(s.projId)}','.sess-card')">QR</button>
         ${hasPub?`<button class="sc-pub" onclick="pubFromList('${esc(s.projId)}','${esc(s.name)}')">✓ Pub</button>`:''}
         <button class="sc-del" onclick="deleteSession('${esc(s.projId)}','${esc(s.name)}')" style="background:none;border:1px solid rgba(255,47,78,.35);color:rgba(255,47,78,.6);border-radius:9px;padding:8px 12px;cursor:pointer;font-family:'Barlow Condensed';font-size:13px;font-weight:600">✕</button>
       </div>
@@ -577,6 +597,19 @@ function initMap(){
   });
   map.addControl(new maplibregl.NavigationControl({showCompass:false}),"top-left");
   map.on("load",()=>{
+    // published tour stops (from the fence editor) — a read-only reference layer so
+    // anyone live in this project, guide or admin, can see the real stops on the map
+    // even if this browser has never locally recorded anything for this project
+    map.addSource("published-zones",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addLayer({id:"published-fill",type:"fill",source:"published-zones",
+      filter:["==",["geometry-type"],"Polygon"],
+      paint:{"fill-color":"#8fb6d4","fill-opacity":.30}});
+    map.addLayer({id:"published-line",type:"line",source:"published-zones",
+      paint:{"line-color":"#8fb6d4","line-width":3,"line-dasharray":[2,2]}});
+    map.addLayer({id:"published-lbl",type:"symbol",source:"published-zones",
+      layout:{"text-field":["get","name"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-0.6]},
+      paint:{"text-color":"#8fb6d4","text-halo-color":"#0a1018","text-halo-width":1.5}});
+
     map.addSource("zones",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
     map.addSource("dot",  {type:"geojson",data:{type:"Feature",geometry:{type:"Point",coordinates:[0,0]}}});
     map.addLayer({id:"zone-fill",type:"fill",source:"zones",
@@ -601,7 +634,65 @@ function initMap(){
       layout:{"text-field":["get","label"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-1.2]},
       paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.5}});
     refreshMap();
+    refreshPublishedZones();
+    // Safety net independent of GPS (which may be slow, denied, or indoors):
+    // isStyleLoaded() can still be false right at 'load' on a slow connection
+    // (base map tiles still fetching), so the very first attempt above can
+    // silently no-op. A couple of delayed retries catch that without waiting
+    // on a location fix that might not come for a while.
+    setTimeout(refreshPublishedZones, 2000);
+    setTimeout(refreshPublishedZones, 6000);
   });
+}
+
+// Field recorder is often used on a weak trail/resort signal, so a single-shot
+// fetch here would silently leave existing stops missing with zero indication
+// anything failed — retry once, and flag it visibly (with a manual retry) if
+// it still doesn't load, instead of just showing an empty list forever.
+async function _fetchBundleOnce(){
+  const br = await fetch("/api/projects/"+encodeURIComponent(projId)+"/bundle",{cache:"no-store"});
+  if(!br.ok) throw new Error("HTTP "+br.status);
+  return br.json();
+}
+async function loadPublishedBundle(){
+  const warn = document.getElementById("bundleWarn");
+  let ref = null;
+  try{
+    let b;
+    try{ b = await _fetchBundleOnce(); }
+    catch(e){ await new Promise(r=>setTimeout(r,1500)); b = await _fetchBundleOnce(); }
+    if(b.liveTtlMs>=30000) liveTtlMs=b.liveTtlMs;
+    if(Array.isArray(b.ref)) ref=b.ref;
+    publishedZones=Array.isArray(b.zones)?b.zones:[];
+    refreshPublishedZones(); renderStopList();
+    if(warn) warn.style.display="none";
+  }catch(e){
+    if(warn) warn.style.display="flex";
+  }
+  return {ref};
+}
+function retryBundleLoad(){ loadPublishedBundle(); }
+
+function refreshPublishedZones(){
+  if(!map||!map.isStyleLoaded()) return;
+  const feats=[];
+  publishedZones.forEach(z=>{
+    if(!z.center) return;
+    const tgt=(z.layers||[]).find(l=>l.kind==="target");
+    if(!tgt) return;
+    if(tgt.radiusM!=null){
+      feats.push({type:"Feature",properties:{name:z.name},
+        geometry:{type:"Polygon",coordinates:[circleRing(z.center[0],z.center[1],tgt.radiusM)]}});
+    } else if(tgt.geometry && tgt.geometry.type==="polygon"){
+      feats.push({type:"Feature",properties:{name:z.name},
+        geometry:{type:"Polygon",coordinates:[tgt.geometry.coords.map(c=>[c[1],c[0]])]}});
+    } else if(tgt.geometry && tgt.geometry.type==="tripline"){
+      feats.push({type:"Feature",properties:{name:z.name},
+        geometry:{type:"LineString",coordinates:[[tgt.geometry.from[1],tgt.geometry.from[0]],[tgt.geometry.to[1],tgt.geometry.to[0]]]}});
+    }
+  });
+  map.getSource("published-zones")?.setData({type:"FeatureCollection",features:feats});
+  renderStopList();
 }
 
 function refreshMap(){
@@ -646,18 +737,27 @@ function renderStopList(){
   const panel = document.getElementById("stopPanel");
   const now = Date.now();
 
-  // Merge and sort recent first (up to 6 items)
+  // Live stops, then every locally recorded stop, then already-published stops
+  // this session hasn't touched — the panel itself already scrolls
+  // (#stopPanel, max-height:130px), so there's no need to window this down.
+  // Published stops are shown (not just drawn on the map) and playable so
+  // they read as real, active content, not just a faint backdrop.
   const activeLive = liveStops.filter(s => s.expiresAt > now);
+  const localIds = new Set(stops.map(s=>s.id));
+  const published = publishedZones
+    .filter(z=>z.center && !localIds.has(z.id))
+    .map(z=>({id:z.id, name:z.name, audioUrl:z.audioUrl, _published:true}));
   const allItems = [
     ...activeLive.map(s=>({...s, _live:true})),
-    ...stops.slice(-Math.max(0, 6-activeLive.length)).map(s=>({...s, _live:false}))
-  ].slice(0, 6);
+    ...stops.map(s=>({...s, _live:false})),
+    ...published
+  ];
 
   if(!allItems.length){ panel.classList.remove("show"); return; }
   panel.classList.add("show");
 
   panel.innerHTML = allItems.map(s => {
-    const audioUrl = s._live ? s.audioUrl : clips.find(c=>c.id===s.clipId&&c.audioUrl)?.audioUrl;
+    const audioUrl = s._live || s._published ? s.audioUrl : clips.find(c=>c.id===s.clipId&&c.audioUrl)?.audioUrl;
     const playBtn  = audioUrl
       ? `<button class="sp-play" onclick="playStopAudio('${esc(audioUrl)}')">▶</button>`
       : "";
@@ -669,6 +769,13 @@ function renderStopList(){
         <span class="sp-dot" style="color:var(--hazard)">⬤</span>
         <span class="sp-name">${esc(s.name)}</span>
         <span class="sp-countdown" data-expires="${s.expiresAt}">${mins}:${secs}</span>
+        ${playBtn}
+      </div>`;
+    } else if(s._published){
+      return `<div class="sp-row">
+        <span class="sp-dot" style="color:var(--ice)" title="Already published">◈</span>
+        <span class="sp-name">${esc(s.name)}</span>
+        <span class="sp-countdown"></span>
         ${playBtn}
       </div>`;
     } else {
@@ -700,9 +807,18 @@ setInterval(()=>{
   if(changed){ renderStopList(); refreshMap(); }
 }, 1000);
 
+let _playingAudio = null, _playingUrl = null;
 function playStopAudio(url){
+  if(_playingAudio && _playingUrl === url){
+    _playingAudio.pause();
+    _playingAudio = null; _playingUrl = null;
+    return;
+  }
+  if(_playingAudio){ _playingAudio.pause(); }
   const a = new Audio(url);
+  a.onended = () => { if(_playingAudio===a){ _playingAudio=null; _playingUrl=null; } };
   a.play().catch(e => setStatus("Playback: "+e.message));
+  _playingAudio = a; _playingUrl = url;
 }
 
 /* ── mode & activity ────────────────────────────────── */
@@ -778,6 +894,11 @@ async function initPermissions(){
       }
       document.getElementById("btnMark").disabled = false;
       refreshMap();
+      // refreshPublishedZones() only ever got one shot (map 'load' event) and
+      // silently no-oped if the style wasn't fully loaded yet (slow tiles on
+      // a weak trail signal) — piggyback on every GPS fix, same as refreshMap,
+      // so it keeps retrying until it actually succeeds instead of just once.
+      refreshPublishedZones();
       if(first){ map.flyTo({center:[lon,lat],zoom:17}); setStatus("Ready"); }
     },
     err => setStatus("GPS: "+err.message),
@@ -1079,6 +1200,31 @@ function playSignalChime(ascending){
   }catch(e){}
 }
 
+function showFieldQr(){
+  const url = location.origin+"/field?project="+encodeURIComponent(projId);
+  const qr  = "https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=12&ecc=L&data="+encodeURIComponent(url);
+  openSheet("Scan to continue on your phone",
+    `<div style="text-align:center">
+       <img src="${qr}" width="220" height="220" alt="QR code for this project's Field Recorder" style="background:#fff;border-radius:12px;padding:10px">
+       <a href="${esc(url)}" class="hint" style="margin-top:10px;word-break:break-all;display:block;color:var(--ice)">${esc(url)}</a>
+     </div>`,
+    async () => {}, "Done", false);
+}
+
+function toggleQr(btn, url, hostSelector){
+  const row = btn.closest(hostSelector);
+  const existing = row.querySelector(".visitor-qr");
+  if(existing){ existing.remove(); btn.textContent="QR"; return; }
+  const img = document.createElement("img");
+  img.className = "visitor-qr";
+  img.width = 160; img.height = 160;
+  img.alt = "QR code for this link";
+  img.style.cssText = "background:#fff;border-radius:8px;padding:8px;align-self:flex-start;margin-top:6px";
+  img.src = "https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=12&ecc=L&data="+encodeURIComponent(url);
+  row.appendChild(img);
+  btn.textContent="Hide";
+}
+
 /* ── mark stop (persistent mode) ────────────────────── */
 document.getElementById("btnMark").onclick = () => {
   if(!lastPos){ setStatus("No GPS yet"); return; }
@@ -1160,7 +1306,7 @@ async function doPublish(pid, pname, token){
   }
 
   setProg("Publishing bundle…", 0.88);
-  const zones = myStops.map(s=>{
+  const newZones = myStops.map(s=>{
     const cl   = clips.find(c=>c.id===s.clipId&&c.audioUrl);
     const genR = Math.max(30,(s.radiusM||12)*2.5);
     return {
@@ -1171,9 +1317,23 @@ async function doPublish(pid, pname, token){
     };
   });
 
+  // Merge, don't replace: the bundle PUT endpoint overwrites the whole zones
+  // array, and this project may have real content from the fence editor
+  // (bots, hazards, custom triggers) that field recorder knows nothing about.
+  // Pull the live bundle, keep every zone this session didn't touch, and only
+  // add/update the stops recorded here.
+  let base = {};
+  try{
+    const gb = await fetch(`/api/projects/${encodeURIComponent(pid)}/bundle`,{cache:"no-store"});
+    if(gb.ok) base = await gb.json();
+  }catch(e){ /* no existing bundle yet — publishing for the first time */ }
+  const existingZones = Array.isArray(base.zones) ? base.zones : [];
+  const newIds = new Set(newZones.map(z=>z.id));
+  const zones = [...existingZones.filter(z=>!newIds.has(z.id)), ...newZones];
+
   const bp = await fetch(`/api/projects/${encodeURIComponent(pid)}/bundle`,{
     method:"PUT",headers:{...hdr,"Content-Type":"application/json"},
-    body:JSON.stringify({name:pname, zones, version:1})
+    body:JSON.stringify({...base, name:pname, zones, version:1})
   });
   if(!bp.ok){
     const msg = await bp.text().catch(()=>"");
@@ -1220,9 +1380,10 @@ async function clearCurrentSession(){
   for(const s of stops) await dbDelete("stops",s.id);
   for(const c of clips.filter(c=>c.projId===projId)) await dbDelete("clips",c.id);
   await dbDelete("sessions",projId);
-  stops=[]; clips=[]; liveStops=[]; lastStop=null; session=null;
+  stops=[]; clips=[]; liveStops=[]; lastStop=null; session=null; publishedZones=[];
   document.getElementById("btnPub").disabled=true;
   refreshMap();
+  refreshPublishedZones();
   renderStopList();
   setStatus("Session cleared");
 }
@@ -1264,12 +1425,9 @@ async function init(){
     // offline — continue with local data, projectName stays null
   }catch(e){}
 
-  // Read project settings (liveTtlMs) from published bundle
-  let _bundleRef = null;
-  try{
-    const br = await fetch("/api/projects/"+encodeURIComponent(projId)+"/bundle",{cache:"no-store"});
-    if(br.ok){ const b=await br.json(); if(b.liveTtlMs>=30000) liveTtlMs=b.liveTtlMs; if(Array.isArray(b.ref)) _bundleRef=b.ref; }
-  }catch(e){ /* offline — keep default */ }
+  // Read project settings (liveTtlMs) + real published stops from published bundle.
+  const _bundleRefBox = await loadPublishedBundle();
+  const _bundleRef = _bundleRefBox.ref;
 
   document.getElementById("screenSessions").style.display = "none";
   document.getElementById("screenField").style.display = "flex";
@@ -1287,17 +1445,31 @@ async function init(){
   }
 
   document.getElementById("projName").textContent = displayName;
-  if(stops.length) document.getElementById("btnPub").disabled = false;
 
-  // Guides are live-only: persistent recording is admin/operator only
+  // Guides are live-only: persistent stops/audio (which never expire) are
+  // admin/operator only. Guides can only create Live stops/audio, which
+  // auto-delete after their set TTL.
   if(_me && _me.role === "guide"){
     document.getElementById("btnModePers").style.display = "none";
     document.getElementById("btnModeLive").style.display = "none";
     document.getElementById("btnPub").style.display = "none";
     liveMode = true; // force live before updateModeUI
+  } else {
+    // Publish is now a safe merge (see doPublish), so it's always usable —
+    // no more "disabled until you record something new" confusion.
+    document.getElementById("btnPub").disabled = false;
+    // Admin/operator exiting a project should land back on the actual site
+    // homepage, not field recorder's own session list — guides keep going
+    // back to their "My Bookings" list, since they don't have a homepage.
+    const backLink = document.getElementById("backLink");
+    if(backLink){ backLink.href = "/"; backLink.textContent = "◀ Home"; }
   }
 
   updateModeUI();
+  // Selecting a project surfaces its QR code first — this tool needs GPS/mic,
+  // so the common path from the main menu (often a laptop) is: pick a project,
+  // scan the QR to continue on your phone. Dismissing it reveals Mark Stop/Record.
+  showFieldQr();
   updateQueueBadge();
   initConnectivity();
   initMap();
