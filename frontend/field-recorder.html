@@ -181,6 +181,11 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     ⚠ Couldn't load this project's existing stops
     <button onclick="retryBundleLoad()" style="background:rgba(255,255,255,.2);border:1px solid #fff;color:#fff;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer">Retry</button>
   </div>
+  <div id="staleWarn" style="flex-shrink:0;background:var(--amber);color:#1a0d07;display:none;align-items:center;justify-content:center;gap:10px;padding:6px 14px;font-size:13px;font-weight:700;text-align:center">
+    ⚠ This project was published elsewhere since you were last here
+    <button onclick="clearCurrentSession()" style="background:rgba(0,0,0,.15);border:1px solid #1a0d07;color:#1a0d07;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer">Clear local data</button>
+    <button onclick="document.getElementById('staleWarn').style.display='none'" style="background:none;border:none;color:#1a0d07;font-size:16px;cursor:pointer;padding:0 4px">✕</button>
+  </div>
   <div id="hdr">
     <a href="/field" id="backLink">◀ Sessions</a>
     <span id="roleBadge" title="" style="font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 6px;border-radius:5px;background:var(--slate2);color:var(--fog);flex-shrink:0"></span>
@@ -656,20 +661,21 @@ async function _fetchBundleOnce(){
 }
 async function loadPublishedBundle(){
   const warn = document.getElementById("bundleWarn");
-  let ref = null;
+  let ref = null, bundleVersion = null;
   try{
     let b;
     try{ b = await _fetchBundleOnce(); }
     catch(e){ await new Promise(r=>setTimeout(r,1500)); b = await _fetchBundleOnce(); }
     if(b.liveTtlMs>=30000) liveTtlMs=b.liveTtlMs;
     if(Array.isArray(b.ref)) ref=b.ref;
+    bundleVersion = b.bundleVersion!=null ? b.bundleVersion : null;
     publishedZones=Array.isArray(b.zones)?b.zones:[];
     refreshPublishedZones(); renderStopList();
     if(warn) warn.style.display="none";
   }catch(e){
     if(warn) warn.style.display="flex";
   }
-  return {ref};
+  return {ref, bundleVersion};
 }
 function retryBundleLoad(){ loadPublishedBundle(); }
 
@@ -1340,6 +1346,15 @@ async function doPublish(pid, pname, token){
     setProg("Publish failed ("+bp.status+"): "+msg.slice(0,80),0);
     return;
   }
+  // Record the version this device just published, so opening this project
+  // again doesn't falsely flag "changed elsewhere" for a change we made ourselves.
+  try{
+    const bpj = await bp.json();
+    if(bpj.version!=null && session && session.projId===pid){
+      session.lastSeenBundleVersion = bpj.version;
+      await dbPut("sessions", session);
+    }
+  }catch(e){}
   setProg("Done! "+myStops.length+" stops live",1);
   setTimeout(()=>{ closeSheet(); setStatus("✓ Published — "+myStops.length+" stops live"); renderStopList(); }, 800);
 }
@@ -1441,6 +1456,21 @@ async function init(){
   const displayName = projectName || session?.name || projId;
   if(!session || (projectName && session.name !== projectName)){
     session = {projId, name:displayName, updatedAt:new Date().toISOString()};
+    await dbPut("sessions", session);
+  }
+
+  // Someone editing the same project elsewhere (fence editor, another device)
+  // doesn't touch this browser's local IndexedDB stops at all — they just sit
+  // there looking like normal in-progress work even after being deleted or
+  // superseded server-side. Track the published bundle version we last saw
+  // for this project and flag it if it moved on without us, instead of
+  // letting stale local stops look identical to real unpublished work.
+  const _bundleVersion = _bundleRefBox.bundleVersion;
+  if(_bundleVersion!=null){
+    if(stops.length && session.lastSeenBundleVersion!=null && session.lastSeenBundleVersion!==_bundleVersion){
+      document.getElementById("staleWarn").style.display="flex";
+    }
+    session.lastSeenBundleVersion = _bundleVersion;
     await dbPut("sessions", session);
   }
 
