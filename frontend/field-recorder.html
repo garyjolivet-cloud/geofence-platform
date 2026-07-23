@@ -813,6 +813,37 @@ setInterval(()=>{
   if(changed){ renderStopList(); refreshMap(); }
 }, 1000);
 
+// iOS blocks .play() calls that don't originate from a direct user tap —
+// manual taps on the ▶ button work fine (the tap IS the gesture), but the
+// GPS-triggered auto-play in checkProximityAudio() below fires from an async
+// geolocation callback, which isn't one, and iOS silently refuses it. Same
+// fix already proven in geofence-engine.html: a real (unmuted) silent-WAV
+// <audio> loop, started from a genuine tap, keeps the page's audio-playback
+// permission active so later programmatic play() calls are allowed too.
+let _audioUnlocked = false;
+function _silentWavBlob(){
+  const sr=8000, n=sr; // 1s of silence @ 8kHz mono 16-bit
+  const buf=new ArrayBuffer(44+n*2), dv=new DataView(buf);
+  const str=(o,s)=>{ for(let i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); };
+  str(0,'RIFF'); dv.setUint32(4,36+n*2,true); str(8,'WAVE');
+  str(12,'fmt '); dv.setUint32(16,16,true); dv.setUint16(20,1,true);
+  dv.setUint16(22,1,true); dv.setUint32(24,sr,true); dv.setUint32(28,sr*2,true);
+  dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+  str(36,'data'); dv.setUint32(40,n*2,true);      // sample bytes stay zero = silence
+  return new Blob([buf],{type:'audio/wav'});
+}
+function unlockAudioPlayback(){
+  if(_audioUnlocked) return;
+  try{
+    const el=document.createElement('audio');
+    el.loop=true; el.volume=1; el.muted=false; el.setAttribute('playsinline','');
+    el.style.cssText='position:fixed;width:0;height:0;opacity:0;pointer-events:none';
+    el.src=URL.createObjectURL(_silentWavBlob());
+    document.body.appendChild(el); el.play().catch(()=>{});
+    _audioUnlocked = true;
+  }catch(e){}
+}
+
 let _playingAudio = null, _playingUrl = null;
 function playStopAudio(url){
   if(_playingAudio && _playingUrl === url){
@@ -1494,6 +1525,7 @@ async function init(){
 
   document.getElementById("screenSessions").style.display = "none";
   document.getElementById("screenField").style.display = "flex";
+  document.getElementById("screenField").addEventListener("pointerdown", unlockAudioPlayback, {once:true});
 
   session  = await dbGet("sessions", projId);
   stops    = (await dbGetAll("stops")).filter(s=>s.projId===projId);
