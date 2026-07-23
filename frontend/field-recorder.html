@@ -827,6 +827,53 @@ function playStopAudio(url){
   _playingAudio = a; _playingUrl = url;
 }
 
+function haversineM(lat1,lon1,lat2,lon2){
+  const R=6371000, toR=Math.PI/180;
+  const dLat=(lat2-lat1)*toR, dLon=(lon2-lon1)*toR;
+  const a=Math.sin(dLat/2)**2 + Math.cos(lat1*toR)*Math.cos(lat2*toR)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+// Field Recorder was recording-only — no way to hear a stop's audio just by
+// walking near it like the real walk engine does, so a project's own author
+// couldn't verify newly published content without a separate walk-test
+// session. Auto-play whichever stop (local, live, or already-published)
+// you're standing inside the trigger radius of; only re-fires on actually
+// entering/leaving/switching stops, not on every GPS tick.
+let _nearStopId = null;
+function checkProximityAudio(lat, lon){
+  const now = Date.now();
+  const candidates = [];
+  stops.forEach(s=>{
+    const url = clips.find(c=>c.id===s.clipId&&c.audioUrl)?.audioUrl;
+    if(url) candidates.push({id:"local:"+s.id, lat:s.lat, lon:s.lon, radiusM:s.radiusM||12, url});
+  });
+  liveStops.forEach(s=>{
+    if(s.expiresAt>now && s.audioUrl) candidates.push({id:"live:"+s.id, lat:s.lat, lon:s.lon, radiusM:s.radiusM||25, url:s.audioUrl});
+  });
+  publishedZones.forEach(z=>{
+    if(!z.center || !z.audioUrl) return;
+    const tgt=(z.layers||[]).find(l=>l.kind==="target");
+    const r = tgt && tgt.radiusM!=null ? tgt.radiusM : 12;
+    candidates.push({id:"pub:"+z.id, lat:z.center[0], lon:z.center[1], radiusM:r, url:z.audioUrl});
+  });
+
+  let nearest=null, nearestD=Infinity;
+  candidates.forEach(c=>{
+    const d = haversineM(lat, lon, c.lat, c.lon);
+    if(d<=c.radiusM && d<nearestD){ nearest=c; nearestD=d; }
+  });
+
+  if(nearest && nearest.id!==_nearStopId){
+    _nearStopId = nearest.id;
+    if(_playingAudio){ _playingAudio.pause(); _playingAudio=null; _playingUrl=null; }
+    playStopAudio(nearest.url);
+  } else if(!nearest && _nearStopId!==null){
+    _nearStopId = null;
+    if(_playingAudio){ _playingAudio.pause(); _playingAudio=null; _playingUrl=null; }
+  }
+}
+
 /* ── mode & activity ────────────────────────────────── */
 function setMode(mode){
   if(mode === "live"){
@@ -905,6 +952,7 @@ async function initPermissions(){
       // a weak trail signal) — piggyback on every GPS fix, same as refreshMap,
       // so it keeps retrying until it actually succeeds instead of just once.
       refreshPublishedZones();
+      checkProximityAudio(lat, lon);
       if(first){ map.flyTo({center:[lon,lat],zoom:17}); setStatus("Ready"); }
     },
     err => setStatus("GPS: "+err.message),
