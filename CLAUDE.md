@@ -183,6 +183,30 @@ GuidanceBot.targetBearing // current arrow bearing (toward waypoint in navigate,
 - Orange dotted ring shows `broadcastRadiusM` (tracker circles only)
 - Green arrow on sim avatar points toward current waypoint/target during guidance
 
+## Geofence Trigger Engine — Position Smoothing (fixed 2026-07-23)
+
+The enter/exit trigger state machine (`Geofencer` in `frontend/geofence-engine.html`, mirrored identically in `frontend/geofence-sim.html` and `frontend/fence-editor.html`'s `makeSimSmoother()`/`SIM_TUNING`) decides zone entry/exit from a **smoothed** GPS position (`Smoother`/`SimSmoother`), not the raw fix — raw GPS jitter would otherwise cause spurious enter/exit flicker.
+
+That smoothing is **speed-adaptive**, not a fixed coefficient:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `SMOOTH_TAU_MAX_S` | 2.3s | smoothing time constant at/below walking pace — matches the original field-validated (2026-06-23) walking behavior |
+| `SMOOTH_TAU_MIN_S` | 0.6s | time constant at/above bike/ski pace — keeps lag well under `EXIT_BUFFER_M` |
+| `SMOOTH_SPEED_LO_MPS` / `SMOOTH_SPEED_HI_MPS` | 2.0 / 8.0 | speed range the time constant interpolates across |
+| `SPEED_TAU_S` | 2.3s | separate smoothing applied to the *speed estimate itself*, computed from raw (pre-smoothing) fix deltas so the estimate isn't lagged by the filter it drives |
+
+**Why this exists**: a fixed-coefficient position filter lags a moving target by `speed × tau`. At walking speed that's a few meters — invisible next to the 20m `EXIT_BUFFER_M`. At bike/ski speed (7–15 m/s) a fixed `tau≈2.3s` produces 16–35m of lag, comparable to or larger than the exit buffer itself — zones stuck "in" past their real boundary, and new zone entries failing to confirm. If trigger behavior ever regresses again (stops staying "active" past their radius, or new stops failing to fire), check this first — and check **all three** copies of this logic, since they're a deliberate "verbatim mirror" (real extraction to a shared module is still pending, tracked as future work in `geofence-sim.html`'s own header comment) rather than one shared implementation.
+
+## iOS Audio Playback — Two Distinct Restrictions
+
+Two separate iOS Safari/WebKit rules block audio in different ways. Conflating them wastes a fix cycle — confirmed the hard way:
+
+1. **Hardware ring/silent-switch mutes raw `AudioContext` output.** Affects `SpatialVoice`/`AmbientVoice` in `geofence-engine.html` (WebAudio-routed spoken/ambient audio). Fixed in `Audio.unlock()`: play a real, unmuted, looping, silent-WAV `<audio>` **element** once inside a genuine tap — this shifts the page's audio session category so `AudioContext` output is heard regardless of the switch.
+2. **Plain `<audio>`-element playback requires a user gesture, per element.** A `new Audio(url)` created later from a non-gesture context (a `geolocation.watchPosition` callback, a timer) does **not** inherit permission just because a *different* element played successfully earlier — only that *same* element stays "activated." Affects `field-recorder.html`'s `playStopAudio()`/`checkProximityAudio()` (GPS-triggered proximity auto-play). Fixed by reusing **one** shared `<audio>` element for all playback (manual taps and auto-play alike) instead of instantiating a fresh one per call.
+
+**Diagnostic tell**: if a manual tap-triggered play works but an automatic/programmatic one is silent, it's restriction 2 (gesture requirement) — restriction 1's fix (a separate silent loop) will not help. If everything *looks* like it's playing (event log shows success, gain computed correctly) but nothing is audible regardless of trigger source, ask about the hardware mute switch first (restriction 1).
+
 ## Fence Editor — Map-Interactive Handles
 
 Every zone shows an amber bearing arrow at all times. When a zone is **selected** (click on map or in list), 7 draggable handles appear:

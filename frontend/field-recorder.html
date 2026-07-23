@@ -1013,9 +1013,17 @@ function startRec(){
   recChunks=[];
   const bCtx = new AudioContext({sampleRate:48000});
   const src  = bCtx.createMediaStreamSource(micStream);
+  // Phone mics are usually physically mono, but getUserMedia({channelCount:2})
+  // can still hand back a 2-channel stream with real content only on the left
+  // and silence on the right — recordings then sound "mono, left ear only."
+  // Force a true mono downmix first, then WebAudio's standard up-mix
+  // duplicates that single channel to both output channels below.
+  const mono = bCtx.createGain();
+  mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
   const gain = bCtx.createGain(); gain.gain.value = 4;
   const dest = bCtx.createMediaStreamDestination();
-  src.connect(gain); gain.connect(dest);
+  dest.channelCount=2; dest.channelCountMode='explicit'; dest.channelInterpretation='speakers';
+  src.connect(mono); mono.connect(gain); gain.connect(dest);
 
   mediaRec = new MediaRecorder(dest.stream,{mimeType:MIME,audioBitsPerSecond:192000});
   mediaRec.ondataavailable = e => { if(e.data.size>0) recChunks.push(e.data); };
@@ -1077,9 +1085,14 @@ async function startLiveStop(){
   recChunks = [];
   const bCtx = new AudioContext({sampleRate:48000});
   const src  = bCtx.createMediaStreamSource(micStream);
+  // Same "mono, left ear only" fix as startRec() — force true mono downmix,
+  // then let WebAudio's standard up-mix duplicate it to both channels.
+  const mono = bCtx.createGain();
+  mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
   const gain = bCtx.createGain(); gain.gain.value = 4;
   const dest = bCtx.createMediaStreamDestination();
-  src.connect(gain); gain.connect(dest);
+  dest.channelCount=2; dest.channelCountMode='explicit'; dest.channelInterpretation='speakers';
+  src.connect(mono); mono.connect(gain); gain.connect(dest);
 
   mediaRec = new MediaRecorder(dest.stream,{mimeType:MIME,audioBitsPerSecond:192000});
   mediaRec.ondataavailable = e => { if(e.data.size>0) recChunks.push(e.data); };

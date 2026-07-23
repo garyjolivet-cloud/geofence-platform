@@ -3034,7 +3034,14 @@ const SimVoice={
     const sentinel={_isElement:true,_objUrl:objUrl};
     this.buffers[url]=sentinel;return sentinel;},
   async playZone(zone){if(!zone||!zone.audioUrl||!simSoundOn)return;
-    const url=zone.audioUrl;if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
+    const url=zone.audioUrl;
+    // Keep currentVolume synced on every call (feedSim() calls playZone() on
+    // every simulated GPS tick), not just when starting a NEW clip below —
+    // otherwise dragging the volume slider while already standing in the
+    // zone (the normal way to test it) has no audible effect until you
+    // leave and re-enter to restart playback.
+    this.currentVolume=zone.volume!=null?zone.volume:1;
+    if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
     this.ensure();this.loadingUrl=url;
     let loaded;try{loaded=await this.load(url);}catch(e){
       this.loadingUrl=null;
@@ -3061,7 +3068,6 @@ const SimVoice={
       src.connect(this.nodes.mono);src.start();
     }
     this.src=src;this.currentUrl=url;this.playing=true;
-    this.currentVolume=zone.volume!=null?zone.volume:1;
     const g=this.nodes.fade.gain;g.cancelScheduledValues(this.ctx.currentTime);
     g.setValueAtTime(g.value,this.ctx.currentTime);g.linearRampToValueAtTime(1,this.ctx.currentTime+0.8);
     simLogEv("sev-sys","▶ "+zone.name);},
