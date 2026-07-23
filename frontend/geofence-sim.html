@@ -107,7 +107,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
       </div>
       <div class="row" style="margin-top:10px">
         <label class="fld">Speed <span class="val" id="spdVal">1.4 m/s</span>
-          <input type="range" id="spd" min="0.4" max="3" step="0.1" value="1.4"></label>
+          <input type="range" id="spd" min="0.4" max="20" step="0.2" value="1.4"></label>
       </div>
       <div class="row" style="margin-top:6px">
         <label class="fld">GPS jitter <span class="val" id="jitVal">±5 m</span>
@@ -245,7 +245,13 @@ const TUNING = {
   ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
   MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
   SHORT_VISIT_S: 12,
-  LOWPASS: 0.35,         // position smoothing (0..1, higher = less smoothing)
+  // Position smoothing is speed-adaptive (2026-07-23 fix) — see geofence-engine.html
+  // for the full derivation. Mirror kept identical per this file's own contract.
+  SMOOTH_TAU_MAX_S: 2.3,     // tau at/below SMOOTH_SPEED_LO_MPS — ≈ old LOWPASS=0.35 at ~1Hz (walking, unchanged)
+  SMOOTH_TAU_MIN_S: 0.6,     // tau at/above SMOOTH_SPEED_HI_MPS — 15 m/s * 0.6s ≈ 9m lag, well under EXIT_BUFFER_M
+  SMOOTH_SPEED_LO_MPS: 2.0,  // brisk-walk ceiling
+  SMOOTH_SPEED_HI_MPS: 8.0,  // ~29 km/h, solid bike/ski — full low-lag tau at/above this
+  SPEED_TAU_S: 2.3,          // dt-normalized tau for the internal speed estimate
   HEAD_WINDOW: 8         // compass readings used for heading-confidence variance
 };
 
@@ -322,24 +328,42 @@ function ambientCenterNow(zone, nowMs){
 }
 
 const Smoother = {
-  s:null, prev:null, spd:0, t0:null,
+  s:null, prev:null, rawPrev:null, spd:0, t0:null,
   push(fix){
-    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; this.spd=0; }
-    const a=TUNING.LOWPASS;
+    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; this.rawPrev=null; this.spd=0; }
+
+    // Speed estimate drives the adaptive tau below — computed from the last
+    // RAW fix, not the last smoothed point, so the estimate isn't itself
+    // lagged by the filter it's supposed to unlag.
+    let dt=null;
+    if(this.rawPrev){
+      dt=(fix.t-this.rawPrev.t)/1000;
+      let inst=this.spd;
+      if(dt>=0.4){                                    // ignore sub-0.4s gaps (GPS double-fix)
+        inst=Geo.hav([this.rawPrev.lat,this.rawPrev.lon],[fix.lat,fix.lon])/dt;
+        if(inst>25) inst=this.spd;                     // reject a lone >90 km/h spike
+      }
+      const spdA = dt>0 ? 1-Math.exp(-dt/TUNING.SPEED_TAU_S) : 0.35;
+      this.spd = this.spd + spdA*(inst-this.spd);      // dt-normalized low-pass the speed
+    }
+    this.rawPrev={lat:fix.lat,lon:fix.lon,t:fix.t};
+
+    // Position EMA: time-normalized + speed-adaptive time constant.
+    const lo=TUNING.SMOOTH_SPEED_LO_MPS, hi=TUNING.SMOOTH_SPEED_HI_MPS;
+    const f = hi>lo ? Math.max(0,Math.min(1,(this.spd-lo)/(hi-lo))) : 0;
+    const tau = TUNING.SMOOTH_TAU_MAX_S + f*(TUNING.SMOOTH_TAU_MIN_S-TUNING.SMOOTH_TAU_MAX_S);
+    const a = (dt!=null && dt>0) ? 1-Math.exp(-dt/tau) : 0.35;   // first fix: delta is 0 anyway
     this.s={ lat:this.s.lat+a*(fix.lat-this.s.lat), lon:this.s.lon+a*(fix.lon-this.s.lon) };
+
     let headingTravel=null;
     if(this.prev){
       const d=Geo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
-      const dt=(fix.t-this.prev.t)/1000;
-      let inst = (dt<0.4) ? this.spd : d/dt;        // ignore sub-0.4 s gaps (GPS double-fix)
-      if(inst>25) inst = this.spd;                  // reject a lone >90 km/h spike
-      this.spd = this.spd + 0.35*(inst-this.spd);   // low-pass the speed
       if(d>1) headingTravel=Geo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
     }
     this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
     return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed:this.spd, headingTravel };
   },
-  reset(){ this.s=null; this.prev=null; this.spd=0; }
+  reset(){ this.s=null; this.prev=null; this.rawPrev=null; this.spd=0; }
 };
 
 const Geofencer = {

@@ -2840,7 +2840,10 @@ function doXhrUpload(blob, key, mimeType, opts){
    Engine core is a mirror of geofence-sim.html. Audio is a mirror of
    geofence-engine.html (SpatialVoice + Clarity).
    ===================================================================== */
-const SIM_TUNING={EXIT_BUFFER_M:20,ENTER_DWELL_S:3,ACCURACY_CAP_M:40,MOVE_MIN_M:8,SHORT_VISIT_S:12,LOWPASS:0.35};
+// Position smoothing is speed-adaptive (2026-07-23 fix) — see geofence-engine.html
+// for the full derivation. Mirror kept identical per this file's own contract.
+const SIM_TUNING={EXIT_BUFFER_M:20,ENTER_DWELL_S:3,ACCURACY_CAP_M:40,MOVE_MIN_M:8,SHORT_VISIT_S:12,
+  SMOOTH_TAU_MAX_S:2.3,SMOOTH_TAU_MIN_S:0.6,SMOOTH_SPEED_LO_MPS:2.0,SMOOTH_SPEED_HI_MPS:8.0,SPEED_TAU_S:2.3};
 const SimGeo={
   R:6371000,
   hav(a,b){const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
@@ -2890,16 +2893,29 @@ function simAmbientCenterNow(zone,nowMs){
   else d=L<=0?0:elapsedM%L;
   return simPointAtDistance(zone.path,cum,d);
 }
-function makeSimSmoother(){return{s:null,prev:null,spd:0,lastHeading:null,
-  push(fix){if(!this.s){this.s={lat:fix.lat,lon:fix.lon};this.prev=null;this.spd=0;}
-    const a=SIM_TUNING.LOWPASS;this.s={lat:this.s.lat+a*(fix.lat-this.s.lat),lon:this.s.lon+a*(fix.lon-this.s.lon)};
+function makeSimSmoother(){return{s:null,prev:null,rawPrev:null,spd:0,lastHeading:null,
+  push(fix){if(!this.s){this.s={lat:fix.lat,lon:fix.lon};this.prev=null;this.rawPrev=null;this.spd=0;}
+    // Speed estimate from the last RAW fix (not the smoothed point) drives the
+    // adaptive tau below, so it isn't itself lagged by the filter it unlags.
+    let dt=null;
+    if(this.rawPrev){
+      dt=(fix.t-this.rawPrev.t)/1000; let inst=this.spd;
+      if(dt>=0.4){ inst=SimGeo.hav([this.rawPrev.lat,this.rawPrev.lon],[fix.lat,fix.lon])/dt; if(inst>25)inst=this.spd; }
+      const spdA=dt>0?1-Math.exp(-dt/SIM_TUNING.SPEED_TAU_S):0.35;
+      this.spd=this.spd+spdA*(inst-this.spd);
+    }
+    this.rawPrev={lat:fix.lat,lon:fix.lon,t:fix.t};
+    const lo=SIM_TUNING.SMOOTH_SPEED_LO_MPS,hi=SIM_TUNING.SMOOTH_SPEED_HI_MPS;
+    const f=hi>lo?Math.max(0,Math.min(1,(this.spd-lo)/(hi-lo))):0;
+    const tau=SIM_TUNING.SMOOTH_TAU_MAX_S+f*(SIM_TUNING.SMOOTH_TAU_MIN_S-SIM_TUNING.SMOOTH_TAU_MAX_S);
+    const a=(dt!=null&&dt>0)?1-Math.exp(-dt/tau):0.35;
+    this.s={lat:this.s.lat+a*(fix.lat-this.s.lat),lon:this.s.lon+a*(fix.lon-this.s.lon)};
     let headingTravel=null;
     if(this.prev){const d=SimGeo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
-      const dt=(fix.t-this.prev.t)/1000;let inst=(dt<0.4)?this.spd:d/dt;if(inst>25)inst=this.spd;
-      this.spd=this.spd+0.35*(inst-this.spd);if(d>1){headingTravel=SimGeo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);this.lastHeading=headingTravel;}}
+      if(d>1){headingTravel=SimGeo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);this.lastHeading=headingTravel;}}
     this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
     return{lat:this.s.lat,lon:this.s.lon,acc:fix.acc,t:fix.t,speed:this.spd,headingTravel};},
-  reset(){this.s=null;this.prev=null;this.spd=0;this.lastHeading=null;}};}
+  reset(){this.s=null;this.prev=null;this.rawPrev=null;this.spd=0;this.lastHeading=null;}};}
 const SimSmoother=makeSimSmoother();
 const _trackerSmoothers={};
 function trackerSmoother(id){return _trackerSmoothers[id]||(_trackerSmoothers[id]=makeSimSmoother());}
