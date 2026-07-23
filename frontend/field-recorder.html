@@ -813,14 +813,21 @@ setInterval(()=>{
   if(changed){ renderStopList(); refreshMap(); }
 }, 1000);
 
-// iOS blocks .play() calls that don't originate from a direct user tap —
-// manual taps on the ▶ button work fine (the tap IS the gesture), but the
-// GPS-triggered auto-play in checkProximityAudio() below fires from an async
-// geolocation callback, which isn't one, and iOS silently refuses it. Same
-// fix already proven in geofence-engine.html: a real (unmuted) silent-WAV
-// <audio> loop, started from a genuine tap, keeps the page's audio-playback
-// permission active so later programmatic play() calls are allowed too.
+// iOS blocks .play() calls that don't originate from a direct user tap.
+// First attempt at fixing this ("play a separate silent unmuted loop on
+// first tap") was the WRONG mechanism — that trick fixes iOS muting raw
+// WebAudio/AudioContext output when the hardware ring switch is on (a
+// different bug, already fixed in geofence-engine.html), not the plain
+// <audio>-element autoplay-gesture requirement that actually applies here.
+// A brand-new `new Audio(url)` created later from a non-gesture context
+// (the GPS watchPosition callback) does NOT inherit permission just because
+// some other element played successfully earlier — only that SAME element
+// stays "activated" for later programmatic play() calls. So: one shared
+// <audio> element, created/played once inside a real tap, then reused
+// (src swapped, play() called again) for every stop's clip — manual and
+// GPS-triggered alike — instead of a fresh Audio() object each time.
 let _audioUnlocked = false;
+let _contentEl = null;
 function _silentWavBlob(){
   const sr=8000, n=sr; // 1s of silence @ 8kHz mono 16-bit
   const buf=new ArrayBuffer(44+n*2), dv=new DataView(buf);
@@ -832,30 +839,34 @@ function _silentWavBlob(){
   str(36,'data'); dv.setUint32(40,n*2,true);      // sample bytes stay zero = silence
   return new Blob([buf],{type:'audio/wav'});
 }
+function _ensureContentEl(){
+  if(_contentEl) return _contentEl;
+  const el=document.createElement('audio');
+  el.setAttribute('playsinline','');
+  el.style.cssText='position:fixed;width:0;height:0;opacity:0;pointer-events:none';
+  document.body.appendChild(el);
+  _contentEl=el;
+  return el;
+}
 function unlockAudioPlayback(){
   if(_audioUnlocked) return;
   try{
-    const el=document.createElement('audio');
-    el.loop=true; el.volume=1; el.muted=false; el.setAttribute('playsinline','');
-    el.style.cssText='position:fixed;width:0;height:0;opacity:0;pointer-events:none';
+    const el=_ensureContentEl();
     el.src=URL.createObjectURL(_silentWavBlob());
-    document.body.appendChild(el); el.play().catch(()=>{});
-    _audioUnlocked = true;
+    el.play().then(()=>{ _audioUnlocked=true; }).catch(()=>{});
   }catch(e){}
 }
 
-let _playingAudio = null, _playingUrl = null;
+let _playingUrl = null;
 function playStopAudio(url){
-  if(_playingAudio && _playingUrl === url){
-    _playingAudio.pause();
-    _playingAudio = null; _playingUrl = null;
+  const el=_ensureContentEl();
+  if(_playingUrl===url && !el.paused){
+    el.pause();
+    _playingUrl=null;
     return;
   }
-  if(_playingAudio){ _playingAudio.pause(); }
-  const a = new Audio(url);
-  a.onended = () => { if(_playingAudio===a){ _playingAudio=null; _playingUrl=null; } };
-  a.play().catch(e => setStatus("Playback: "+e.message));
-  _playingAudio = a; _playingUrl = url;
+  el.src=url;
+  el.play().then(()=>{ _playingUrl=url; }).catch(e => setStatus("Playback: "+e.message));
 }
 
 function haversineM(lat1,lon1,lat2,lon2){
@@ -897,11 +908,11 @@ function checkProximityAudio(lat, lon){
 
   if(nearest && nearest.id!==_nearStopId){
     _nearStopId = nearest.id;
-    if(_playingAudio){ _playingAudio.pause(); _playingAudio=null; _playingUrl=null; }
+    if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
     playStopAudio(nearest.url);
   } else if(!nearest && _nearStopId!==null){
     _nearStopId = null;
-    if(_playingAudio){ _playingAudio.pause(); _playingAudio=null; _playingUrl=null; }
+    if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
   }
 }
 
