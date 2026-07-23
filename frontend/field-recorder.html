@@ -186,6 +186,9 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     <button onclick="clearCurrentSession()" style="background:rgba(0,0,0,.15);border:1px solid #1a0d07;color:#1a0d07;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer">Clear local data</button>
     <button onclick="document.getElementById('staleWarn').style.display='none'" style="background:none;border:none;color:#1a0d07;font-size:16px;cursor:pointer;padding:0 4px">✕</button>
   </div>
+  <div id="audioEnableBar" style="flex-shrink:0;background:var(--go);color:#062017;display:flex;align-items:center;justify-content:center;gap:10px;padding:6px 14px;font-size:13px;font-weight:700;text-align:center;cursor:pointer" onclick="unlockAudioPlayback()">
+    🔊 Tap to enable audio — needed once so stops can auto-play as you walk near them
+  </div>
   <div id="hdr">
     <a href="/field" id="backLink">◀ Sessions</a>
     <span id="roleBadge" title="" style="font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 6px;border-radius:5px;background:var(--slate2);color:var(--fog);flex-shrink:0"></span>
@@ -853,7 +856,10 @@ function unlockAudioPlayback(){
   try{
     const el=_ensureContentEl();
     el.src=URL.createObjectURL(_silentWavBlob());
-    el.play().then(()=>{ _audioUnlocked=true; }).catch(()=>{});
+    el.play().then(()=>{
+      _audioUnlocked=true;
+      const bar=document.getElementById('audioEnableBar'); if(bar) bar.style.display='none';
+    }).catch(()=>{});
   }catch(e){}
 }
 
