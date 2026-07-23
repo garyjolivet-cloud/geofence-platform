@@ -1754,7 +1754,13 @@ function pAudioTogglePlay(){
   const btn=document.getElementById("pAudioPlay");
   if(_paPlaying&&_paPlaying.url===url){ pAudioStopPlay(); return; }
   if(_paPlaying) pAudioStopPlay();
-  const audio=new Audio(url); audio.play();
+  const audio=new Audio(url);
+  // This preview never read the volume slider at all — always played at
+  // 100% regardless of what it said. HTMLMediaElement.volume only accepts
+  // 0-1, so the slider's 100-150% boost range (a WebAudio-only gain trick
+  // used by SimVoice/SpatialVoice) can't be replicated here; clamp to 1.
+  audio.volume=Math.max(0,Math.min(1,zones[sel].volume!=null?zones[sel].volume:1));
+  audio.play();
   audio.onended=()=>pAudioStopPlay();
   _paPlaying={url,audio};
   if(btn) btn.textContent="⏸";
@@ -1803,6 +1809,11 @@ document.getElementById("pVolume").addEventListener("input",()=>{
   if(simMode && simBundle && simBundle.zones){
     const simZone=simBundle.zones.find(z=>z.id===zones[sel].id);
     if(simZone) simZone.volume=zones[sel].volume;
+  }
+  // Live-adjust the simple preview player (pAudioPlay/▶) too, if it's the
+  // one currently playing this stop's clip.
+  if(_paPlaying && _paPlaying.url===zones[sel][zoneAudioField(zones[sel])]){
+    _paPlaying.audio.volume=Math.max(0,Math.min(1,zones[sel].volume));
   }
   autoSave();
 });
