@@ -850,6 +850,11 @@ const SpatialVoice = {
   async playZone(zone){
     if(!zone || !zone.audioUrl) return;
     const url=zone.audioUrl;
+    // Keep currentVolume synced every call, not just when starting a NEW
+    // clip below — otherwise a live volume change has no audible effect
+    // while already standing in the zone (the normal way to test it),
+    // since the early-return just below skips straight past that point.
+    this.currentVolume=zone.volume!=null?zone.volume:1;
     if(this.currentUrl===url && this.playing) return;     // already on this stop
     if(this.loadingUrl===url) return;                     // load in flight
     this.ensure();
@@ -878,7 +883,6 @@ const SpatialVoice = {
       src.connect(this.nodes.mono); src.start();
     }
     this.src=src; this.currentUrl=url; this.playing=true;
-    this.currentVolume=zone.volume!=null?zone.volume:1;
     // fade in
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
     g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);
