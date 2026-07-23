@@ -1,4 +1,4 @@
-import Toybox.Ble;
+using Toybox.BluetoothLowEnergy as Ble;
 import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.Math;
