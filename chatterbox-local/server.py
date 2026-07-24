@@ -85,7 +85,8 @@ class ChatterboxEngine:
         print(f"Chatterbox-Turbo ready in {time.time() - t0:.1f}s")
 
     def generate(self, text: str, reference_wav_path: str, exaggeration: float = 0.5,
-                 max_new_tokens: int = 1024, repetition_penalty: float = 1.2) -> tuple[np.ndarray, int]:
+                 max_new_tokens: int = 1024, repetition_penalty: float = 1.2,
+                 progress_cb=None) -> tuple[np.ndarray, int]:
         audio_values, _ = librosa.load(reference_wav_path, sr=SAMPLE_RATE)
         audio_values = audio_values[np.newaxis, :].astype(np.float32)
 
@@ -134,6 +135,8 @@ class ChatterboxEngine:
             next_token_logits = rep_penalty(generate_tokens, logits)
             input_ids = np.argmax(next_token_logits, axis=-1, keepdims=True).astype(np.int64)
             generate_tokens = np.concatenate((generate_tokens, input_ids), axis=-1)
+            if progress_cb is not None:
+                progress_cb(i + 1, max_new_tokens)
             if (input_ids.flatten() == STOP_SPEECH_TOKEN).all():
                 break
 
@@ -168,6 +171,13 @@ app.add_middleware(
 
 engine: ChatterboxEngine | None = None
 
+# In-memory generation-progress tracking, keyed by a client-chosen jobId —
+# the frontend polls GET /progress/{jobId} while the blocking POST /generate
+# call for that same jobId is in flight. FastAPI runs sync `def` endpoints
+# (like generate() below) in a thread pool, so polling requests are served
+# concurrently rather than queued behind the inference call.
+_progress: dict[str, dict] = {}
+
 
 @app.on_event("startup")
 def _load_engine():
@@ -178,6 +188,11 @@ def _load_engine():
 @app.get("/health")
 def health():
     return {"status": "ok", "engine_loaded": engine is not None}
+
+
+@app.get("/progress/{job_id}")
+def get_progress(job_id: str):
+    return _progress.get(job_id, {"step": 0, "total": 0, "done": False})
 
 
 @app.get("/voices")
@@ -213,7 +228,8 @@ def delete_voice(voice_id: str):
 
 
 @app.post("/generate")
-def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: float = Form(0.5)):
+def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: float = Form(0.5),
+             jobId: str = Form(None)):
     if engine is None:
         raise HTTPException(503, "engine still loading")
 
@@ -224,7 +240,18 @@ def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: floa
 
     reference_path = VOICES_DIR / match["file"]
     t0 = time.time()
-    wav, sr = engine.generate(text=text, reference_wav_path=str(reference_path), exaggeration=exaggeration)
+
+    def on_progress(step, total):
+        if jobId:
+            _progress[jobId] = {"step": step, "total": total, "done": False, "startedAt": t0}
+
+    try:
+        wav, sr = engine.generate(text=text, reference_wav_path=str(reference_path),
+                                   exaggeration=exaggeration, progress_cb=on_progress)
+    finally:
+        if jobId:
+            _progress[jobId] = {**_progress.get(jobId, {"step": 0, "total": 1024}), "done": True}
+
     elapsed = time.time() - t0
     print(f"Generated {len(wav) / sr:.1f}s of audio in {elapsed:.1f}s ({elapsed / max(len(wav) / sr, 0.01):.2f}x realtime)")
 

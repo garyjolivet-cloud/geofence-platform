@@ -64,6 +64,12 @@
          letter-spacing:.4px;color:var(--coral);white-space:nowrap;pointer-events:none}
   .vox-actions{display:inline-flex;gap:4px;margin-left:4px;vertical-align:middle}
   .vox-actions button{padding:2px 6px;font-size:9px}
+  .vox-progress{align-items:center;gap:6px;margin-left:4px;vertical-align:middle}
+  .vox-progress-track{display:inline-block;width:50px;height:6px;border-radius:3px;background:var(--rim);
+         position:relative;overflow:hidden;vertical-align:middle}
+  .vox-progress-bar{display:block;height:100%;width:0;background:var(--coral);border-radius:3px;
+         transition:width .4s linear}
+  .vox-progress-label{font-family:"Barlow Condensed";font-size:9px;color:var(--fog);white-space:nowrap}
   #genAllBar{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid var(--rim)}
   #genAllBar .hint{flex:1}
 </style>
@@ -76,6 +82,7 @@
   <nav id="clientNav" style="display:flex;align-items:center;gap:8px"></nav>
   <a href="/library">Library →</a>
   <a href="/editor">Editor →</a>
+  <a href="/">Home</a>
 </div>
 
 <div id="svcBanner"></div>
@@ -120,6 +127,18 @@ const LOCAL_SVC = "http://127.0.0.1:8799";
 function getToken(){ return localStorage.getItem("gp.session")||""; }
 function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
 function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
+
+/* The voice tag label and Generate/progress buttons are rendered as child
+   elements inside the same .vox-run span as the passage text, so a plain
+   span.textContent read would pull their text in too (e.g. "REALVOICE" or
+   "encoding mp3…" ending up spoken as part of the generated line). This
+   strips known injected-UI children before reading the text — used as a
+   fallback if dataset.text wasn't captured for some reason. */
+function _cleanSpanText(span){
+  const clone=span.cloneNode(true);
+  clone.querySelectorAll(".vox-tag,.vox-actions").forEach(el=>el.remove());
+  return clone.textContent.trim();
+}
 
 /* ---- mp3 encoding (same lamejs pipeline as audio-studio.html/library.html/
    fence-editor.html) — the local service returns wav; every clip in this
@@ -247,6 +266,7 @@ function importScript(){
     const span=document.createElement("span");
     span.className="vox-run"; span.dataset.lineId="ln"+(lineSeq++);
     span.textContent=line;
+    span.dataset.text=line; // captured now, before any voice tag/button UI gets injected into this span
     p.appendChild(span);
     body.appendChild(p);
   });
@@ -287,6 +307,11 @@ document.getElementById("scriptBody").addEventListener("mouseup",()=>{
     span.textContent=text;
     range.insertNode(span);
   }
+  // Capture the clean passage text now, before a voice tag label or
+  // Generate/progress UI gets injected as children of this same span —
+  // generateRun() must send only this to the model, never span.textContent
+  // (which would otherwise include that injected UI's text too).
+  span.dataset.text=_cleanSpanText(span);
   sel.removeAllRanges();
 });
 
@@ -323,26 +348,75 @@ function renderRunActions(span){
   const genBtn=document.createElement("button");
   genBtn.textContent="Generate"; genBtn.onclick=(e)=>{ e.stopPropagation(); generateRun(span); };
   actions.appendChild(genBtn);
+  const prog=document.createElement("span");
+  prog.className="vox-progress"; prog.style.display="none";
+  const progTrack=document.createElement("span"); progTrack.className="vox-progress-track";
+  const progBar=document.createElement("span"); progBar.className="vox-progress-bar";
+  progTrack.appendChild(progBar);
+  const progLabel=document.createElement("span"); progLabel.className="vox-progress-label";
+  prog.appendChild(progTrack); prog.appendChild(progLabel);
+  actions.appendChild(prog);
   span.appendChild(actions);
+}
+
+/* ---- generation progress: elapsed time + step-based bar + rough ETA.
+   The server tracks real autoregressive step count per jobId; we poll it
+   while the (long-running, blocking) POST /generate is in flight. Total
+   step budget (max_new_tokens=1024) is rarely reached — most generations
+   stop early via STOP_SPEECH_TOKEN — so the bar is capped visually and the
+   ETA is explicitly framed as approximate, self-correcting as it goes. ---- */
+function pollProgress(jobId, onTick){
+  const t0=Date.now();
+  const timer=setInterval(async()=>{
+    const elapsedS=(Date.now()-t0)/1000;
+    let step=0,total=1024;
+    try{
+      const r=await fetch(LOCAL_SVC+"/progress/"+jobId);
+      const j=await r.json();
+      step=j.step||0; total=j.total||1024;
+    }catch(e){ /* keep showing elapsed time even if a poll fails */ }
+    onTick(elapsedS, step, total);
+  },750);
+  return ()=>clearInterval(timer);
 }
 
 async function generateRun(span){
   if(!(await checkService())) return;
   const voiceId=span.dataset.voiceId;
-  const text=span.textContent.replace(/Generate|▶/g,"").trim();
+  const text=span.dataset.text || _cleanSpanText(span);
   if(!voiceId || !text) return;
 
   const actions=span.querySelector(".vox-actions");
   const genBtn=actions && actions.querySelector("button");
-  if(genBtn){ genBtn.textContent="…"; genBtn.disabled=true; }
+  const prog=actions && actions.querySelector(".vox-progress");
+  const progBar=prog && prog.querySelector(".vox-progress-bar");
+  const progLabel=prog && prog.querySelector(".vox-progress-label");
+  if(genBtn){ genBtn.style.display="none"; }
+  if(prog){ prog.style.display="inline-flex"; }
+
+  const jobId=(crypto.randomUUID?crypto.randomUUID():("job"+Date.now()+Math.random()));
+  const stopPolling=pollProgress(jobId,(elapsedS,step,total)=>{
+    if(!progLabel) return;
+    const pct=Math.min(96, Math.round((step/total)*100)); // capped — most runs stop well before `total`
+    if(progBar) progBar.style.width=pct+"%";
+    let etaTxt="";
+    if(step>3){
+      const secPerStep=elapsedS/step;
+      const stepsLeft=Math.max(0,total-step);
+      const etaS=Math.round(secPerStep*Math.min(stepsLeft, step*3)); // don't project wildly past what we've already seen
+      etaTxt=" · ~"+etaS+"s left";
+    }
+    progLabel.textContent=Math.round(elapsedS)+"s"+etaTxt;
+  });
 
   try{
     const fd=new FormData();
-    fd.append("voiceId",voiceId); fd.append("text",text);
+    fd.append("voiceId",voiceId); fd.append("text",text); fd.append("jobId",jobId);
     const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd});
     if(!r.ok) throw new Error("generation failed");
     const wavBlob=await r.blob();
-    if(genBtn) genBtn.textContent="mp3…";
+    if(progLabel) progLabel.textContent="encoding mp3…";
+    if(progBar) progBar.style.width="100%";
     const mp3Blob=await _wavBlobToMp3(wavBlob);
 
     const org=currentOrg();
@@ -360,10 +434,14 @@ async function generateRun(span){
 
     span.dataset.audioUrl = putJson.url || ("/api/audio/"+key);
     span.classList.add("generated");
-    if(genBtn){ genBtn.textContent="▶ Play"; genBtn.disabled=false; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(span.dataset.audioUrl).play(); }; }
+    if(prog) prog.style.display="none";
+    if(genBtn){ genBtn.style.display=""; genBtn.textContent="▶ Play"; genBtn.disabled=false; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(span.dataset.audioUrl).play(); }; }
   }catch(e){
-    if(genBtn){ genBtn.textContent="✕ retry"; genBtn.disabled=false; }
+    if(prog) prog.style.display="none";
+    if(genBtn){ genBtn.style.display=""; genBtn.textContent="✕ retry"; genBtn.disabled=false; }
     alert("Generation failed: "+e.message);
+  }finally{
+    stopPolling();
   }
   updateGenAllHint();
 }
