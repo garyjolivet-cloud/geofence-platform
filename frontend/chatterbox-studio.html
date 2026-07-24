@@ -91,7 +91,7 @@
   #scriptBody.dragover{background:rgba(255,106,61,.04)}
   .vox-run{border-radius:4px;padding:1px 2px;position:relative}
   .vox-run.tagged{background:rgba(255,106,61,.14);box-shadow:inset 0 -2px 0 var(--coral)}
-  .vox-run.generated{box-shadow:inset 0 -2px 0 var(--go)}
+  .vox-run.generated{background:rgba(56,224,166,.18);box-shadow:inset 0 -2px 0 var(--go)}
   .vox-tag{position:absolute;top:-16px;left:0;font-family:"Barlow Condensed";font-size:9px;text-transform:uppercase;
          letter-spacing:.4px;color:var(--coral);white-space:nowrap;pointer-events:none}
   .vox-actions{display:inline-flex;gap:4px;margin-left:4px;vertical-align:middle}
@@ -147,10 +147,13 @@
     <div id="scriptToolbar" style="display:none">
       <div class="hint">Highlight text, then drag a voice card onto the highlighted passage.</div>
       <button class="ghost" id="btnReimport">← New script</button>
+      <button class="danger ghost" id="btnClearScript" title="Wipe this script completely, including the saved copy">🗑 Clear Script</button>
     </div>
     <div id="scriptBody" style="display:none"></div>
     <div id="genAllBar" style="display:none">
-      <div class="hint" id="genAllHint"></div>
+      <div class="hint">Save to:</div>
+      <select id="targetFolderSelect"></select>
+      <div class="hint" id="genAllHint" style="flex:1"></div>
       <button id="btnGenerateAll">Generate All Tagged</button>
     </div>
   </div>
@@ -565,11 +568,107 @@ document.getElementById("btnBrowseLibrary").onclick=()=>{
    ============================================================ */
 let scriptSlug="";
 let lineSeq=0;
+let targetFolder=""; // destination Library folder for renders — see refreshFolderOptions()
+
+/* ---- persistence: the script you're working on survives navigating away
+   and coming back. Only the base line text + tagged/generated runs are
+   saved (not bare untagged highlights, which reset to "just the line" on
+   reload — a reasonable trade-off for a much simpler restore path). ---- */
+const SCRIPT_STORAGE_KEY="chatterbox.script.v1";
+
+function persistScript(){
+  const lineDivs=[...document.getElementById("scriptBody").children];
+  const lines=lineDivs.map(div=>{
+    const topSpan=div.querySelector(".vox-run");
+    return topSpan ? topSpan.dataset.text : div.textContent;
+  });
+  const assignments=[...document.querySelectorAll(".vox-run[data-voice-id]")].map(s=>({
+    lineIndex: lineDivs.findIndex(div=>div.contains(s)),
+    matchText: s.dataset.text,
+    voiceId: s.dataset.voiceId,
+    voiceName: s.dataset.voiceName,
+    audioUrl: s.dataset.audioUrl||null
+  })).filter(a=>a.lineIndex>=0);
+  try{
+    localStorage.setItem(SCRIPT_STORAGE_KEY, JSON.stringify({
+      scriptRaw: document.getElementById("scriptRaw").value,
+      scriptSlug, targetFolder, lines, assignments
+    }));
+  }catch(e){ /* localStorage full/unavailable — not worth interrupting the user over */ }
+}
+
+function clearPersistedScript(){
+  try{ localStorage.removeItem(SCRIPT_STORAGE_KEY); }catch(e){}
+}
+
+/* Rebuilds each line directly from text segments (plain text interleaved
+   with tagged .vox-run spans) rather than replaying live selection/Range
+   operations on a partially-built tree — far simpler and correctly
+   handles multiple non-overlapping assignments landing in the same line. */
+function restoreScript(data){
+  scriptSlug=data.scriptSlug||"";
+  targetFolder=data.targetFolder||"";
+  document.getElementById("scriptRaw").value=data.scriptRaw||"";
+  document.getElementById("scriptSlugInput").value=data.scriptSlug||"";
+
+  const body=document.getElementById("scriptBody");
+  body.innerHTML="";
+
+  (data.lines||[]).forEach((lineText,lineIndex)=>{
+    const p=document.createElement("div"); p.style.marginBottom="10px";
+    const lineAssignments=(data.assignments||[])
+      .filter(a=>a.lineIndex===lineIndex)
+      .map(a=>({...a, idx: lineText.indexOf(a.matchText)}))
+      .filter(a=>a.idx>=0)
+      .sort((a,b)=>a.idx-b.idx);
+
+    const topSpan=document.createElement("span");
+    topSpan.className="vox-run"; topSpan.dataset.lineId="ln"+(lineSeq++);
+    topSpan.dataset.text=lineText;
+
+    let cursor=0;
+    lineAssignments.forEach(a=>{
+      if(a.idx<cursor) return; // overlaps a previous assignment — skip rather than corrupt the DOM
+      if(a.idx>cursor) topSpan.appendChild(document.createTextNode(lineText.slice(cursor,a.idx)));
+      const runSpan=document.createElement("span");
+      runSpan.className="vox-run"; runSpan.dataset.lineId="ln"+(lineSeq++);
+      runSpan.dataset.text=a.matchText;
+      runSpan.dataset.voiceId=a.voiceId;
+      runSpan.dataset.voiceName=a.voiceName;
+      runSpan.appendChild(document.createTextNode(a.matchText));
+      const tagEl=document.createElement("span"); tagEl.className="vox-tag"; tagEl.textContent=a.voiceName;
+      runSpan.prepend(tagEl);
+      renderRunActions(runSpan);
+      if(a.audioUrl){
+        runSpan.dataset.audioUrl=a.audioUrl;
+        runSpan.classList.add("generated");
+        const genBtn=runSpan.querySelector(".vox-actions button");
+        if(genBtn){ genBtn.textContent="▶ Play"; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(runSpan.dataset.audioUrl).play(); }; }
+      }else{
+        runSpan.classList.add("tagged");
+      }
+      topSpan.appendChild(runSpan);
+      cursor=a.idx+a.matchText.length;
+    });
+    if(cursor<lineText.length) topSpan.appendChild(document.createTextNode(lineText.slice(cursor)));
+
+    p.appendChild(topSpan);
+    body.appendChild(p);
+  });
+
+  document.getElementById("scriptImport").style.display="none";
+  document.getElementById("scriptToolbar").style.display="flex";
+  body.style.display="block";
+  document.getElementById("genAllBar").style.display="flex";
+  updateGenAllHint();
+  refreshFolderOptions();
+}
 
 function importScript(){
   const raw=document.getElementById("scriptRaw").value.trim();
   if(!raw){ alert("Paste some script text first."); return; }
   scriptSlug=slug(document.getElementById("scriptSlugInput").value)||"script";
+  targetFolder=""; // recomputed to this script's default by refreshFolderOptions()
 
   const body=document.getElementById("scriptBody");
   body.innerHTML="";
@@ -589,7 +688,46 @@ function importScript(){
   body.style.display="block";
   document.getElementById("genAllBar").style.display="flex";
   updateGenAllHint();
+  refreshFolderOptions();
+  persistScript();
 }
+
+/* ---- destination folder picker (bottom of the Script Editor) — every
+   render's upload key uses whatever's selected here instead of always
+   deriving "chatterbox-<slug>", so existing folders (including ones from
+   past scripts) can be reused. ---- */
+async function refreshFolderOptions(){
+  const sel=document.getElementById("targetFolderSelect");
+  const defaultFolder="chatterbox-"+scriptSlug;
+  if(!targetFolder) targetFolder=defaultFolder;
+  let folders=[defaultFolder];
+  const org=currentOrg();
+  if(org){
+    try{
+      const r=await fetch("/api/audio-list?scope=library&org="+encodeURIComponent(org),{headers:{authorization:"Bearer "+getToken()}});
+      const j=r.ok?await r.json():{folders:[]};
+      folders=[...new Set([defaultFolder,...(j.folders||[])])].sort();
+    }catch(e){ /* fall back to just the default — picker still works */ }
+  }
+  sel.innerHTML="";
+  folders.forEach(f=>{
+    const opt=document.createElement("option"); opt.value=f; opt.textContent=f;
+    if(f===targetFolder) opt.selected=true;
+    sel.appendChild(opt);
+  });
+  const newOpt=document.createElement("option"); newOpt.value="__new__"; newOpt.textContent="+ New folder…";
+  sel.appendChild(newOpt);
+}
+document.getElementById("targetFolderSelect").onchange=(e)=>{
+  if(e.target.value==="__new__"){
+    const name=slug(prompt("New folder name:")||"");
+    if(name) targetFolder=name;
+    refreshFolderOptions();
+  }else{
+    targetFolder=e.target.value;
+  }
+  persistScript();
+};
 
 function updateGenAllHint(){
   const spans=[...document.querySelectorAll(".vox-run")];
@@ -656,6 +794,7 @@ scriptBody.addEventListener("drop",e=>{
   tag.textContent=voiceName;
   renderRunActions(target);
   updateGenAllHint();
+  persistScript();
 });
 
 function renderRunActions(span){
@@ -763,7 +902,8 @@ async function generateRun(span){
     const mp3Blob=await _wavBlobToMp3(wavBlob);
     if(span._genToken!==myToken) return; // superseded during mp3 encoding
 
-    const key="library/"+org+"/chatterbox-"+scriptSlug+"/"+slug(span.dataset.voiceName)+"-"+span.dataset.lineId+"-"+Date.now().toString(36)+".mp3";
+    const folder=targetFolder||("chatterbox-"+scriptSlug);
+    const key="library/"+org+"/"+folder+"/"+slug(span.dataset.voiceName)+"-"+span.dataset.lineId+"-"+Date.now().toString(36)+".mp3";
     const token=getToken();
     const putRes=await fetch("/api/audio/"+key,{
       method:"PUT",
@@ -778,6 +918,7 @@ async function generateRun(span){
     span.classList.add("generated");
     if(prog) prog.style.display="none";
     if(genBtn){ genBtn.style.display=""; genBtn.textContent="▶ Play"; genBtn.disabled=false; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(span.dataset.audioUrl).play(); }; }
+    persistScript();
   }catch(e){
     stopPolling();
     if(span._genToken!==myToken) return; // superseded — the newer generation owns error/retry UI now
@@ -807,6 +948,21 @@ async function generateAllTagged(){
 
 document.getElementById("btnImportScript").onclick=importScript;
 document.getElementById("btnReimport").onclick=()=>{
+  // Just switches back to the import view — deliberately does NOT touch
+  // the current script or its saved copy, so an accidental click doesn't
+  // lose work. Use "Clear Script" to actually wipe it.
+  document.getElementById("scriptImport").style.display="block";
+  document.getElementById("scriptToolbar").style.display="none";
+  document.getElementById("scriptBody").style.display="none";
+  document.getElementById("genAllBar").style.display="none";
+};
+document.getElementById("btnClearScript").onclick=()=>{
+  if(!confirm("Clear this script completely? This can't be undone — any tagging/generated clips already saved to the Library are unaffected, but the script itself and its progress will be gone.")) return;
+  clearPersistedScript();
+  scriptSlug=""; targetFolder="";
+  document.getElementById("scriptRaw").value="";
+  document.getElementById("scriptSlugInput").value="";
+  document.getElementById("scriptBody").innerHTML="";
   document.getElementById("scriptImport").style.display="block";
   document.getElementById("scriptToolbar").style.display="none";
   document.getElementById("scriptBody").style.display="none";
@@ -821,6 +977,13 @@ checkService();
 loadVoices();
 setInterval(checkService,15000);
 if(window.ClientPicker){ ClientPicker.init({navEl:document.getElementById("clientNav")}); }
+
+(function(){
+  try{
+    const saved=localStorage.getItem(SCRIPT_STORAGE_KEY);
+    if(saved) restoreScript(JSON.parse(saved));
+  }catch(e){ /* corrupt/old saved data — just start fresh at the import screen */ }
+})();
 </script>
 </body>
 </html>
