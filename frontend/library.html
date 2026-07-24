@@ -261,7 +261,9 @@ function deleteClip(o,row){
   }).catch(e=>alert("Delete failed: "+e.message));
 }
 function moveClip(o){
-  const dest=(prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', folder||"")||"").trim();
+  const raw=prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', folder||"");
+  if(raw===null) return; // cancelled — must not be treated the same as "" (a deliberate move to root)
+  const dest=raw.trim();
   if(dest===(folder||"")) return;
   if(dest.includes("/")){ alert('Library folders are flat — no "/".'); return; }
   const org=o.key.split("/")[1]; // library/<org>/<folder?>/<file> — move within the same company
