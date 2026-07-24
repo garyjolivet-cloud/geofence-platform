@@ -177,6 +177,18 @@ engine: ChatterboxEngine | None = None
 # (like generate() below) in a thread pool, so polling requests are served
 # concurrently rather than queued behind the inference call.
 _progress: dict[str, dict] = {}
+_PROGRESS_TTL_S = 300  # long enough for the frontend's slowest realistic poll gap
+
+
+def _prune_progress():
+    """Evicts finished job entries older than the TTL so this dict doesn't
+    grow unbounded over a long session — called once per /generate call,
+    which is plenty given jobs are minutes apart at best on this hardware."""
+    now = time.time()
+    stale = [jid for jid, p in _progress.items()
+             if p.get("done") and now - p.get("startedAt", now) > _PROGRESS_TTL_S]
+    for jid in stale:
+        del _progress[jid]
 
 
 @app.on_event("startup")
@@ -238,6 +250,8 @@ def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: floa
     if not match:
         raise HTTPException(404, "voice not found")
 
+    _prune_progress()
+
     reference_path = VOICES_DIR / match["file"]
     t0 = time.time()
 
@@ -250,7 +264,7 @@ def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: floa
                                    exaggeration=exaggeration, progress_cb=on_progress)
     finally:
         if jobId:
-            _progress[jobId] = {**_progress.get(jobId, {"step": 0, "total": 1024}), "done": True}
+            _progress.setdefault(jobId, {"step": 0, "total": 1024, "startedAt": t0})["done"] = True
 
     elapsed = time.time() - t0
     print(f"Generated {len(wav) / sr:.1f}s of audio in {elapsed:.1f}s ({elapsed / max(len(wav) / sr, 0.01):.2f}x realtime)")

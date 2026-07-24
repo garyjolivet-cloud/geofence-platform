@@ -140,6 +140,20 @@ function _cleanSpanText(span){
   return clone.textContent.trim();
 }
 
+/* Cancels any in-flight generation for this span and bumps its generation
+   token, so that call's completion handlers (which check the token after
+   every await) know to discard their result instead of racing whatever
+   happens to this span next. Must be called anywhere a span's tagged
+   voice/UI is about to be replaced or the span is about to be removed —
+   re-tagging (renderRunActions) and re-highlighting-over (mouseup handler)
+   both do this; without it the old generation keeps running against
+   detached/orphaned DOM nodes and can win a race to set dataset.audioUrl
+   with the wrong voice's audio. */
+function _invalidateSpanGeneration(span){
+  if(span._genAbort){ span._genAbort.abort(); span._genAbort=null; }
+  span._genToken=(span._genToken||0)+1;
+}
+
 /* ---- mp3 encoding (same lamejs pipeline as audio-studio.html/library.html/
    fence-editor.html) — the local service returns wav; every clip in this
    app's Library is stored as mp3, so re-encode client-side before upload. */
@@ -301,7 +315,12 @@ document.getElementById("scriptBody").addEventListener("mouseup",()=>{
     // Selection crosses existing span boundaries — rebuild from the
     // extracted fragment's text instead (loses any nested voice tags
     // within the reselected range, which is expected: re-highlighting
-    // re-assigns).
+    // re-assigns). Any of those spans might have a generation in flight —
+    // invalidate them before they're removed from the DOM, or they keep
+    // running against orphaned nodes.
+    document.querySelectorAll(".vox-run").forEach(el=>{
+      if(el!==span && range.intersectsNode(el)) _invalidateSpanGeneration(el);
+    });
     const text=range.toString();
     range.deleteContents();
     span.textContent=text;
@@ -341,6 +360,7 @@ scriptBody.addEventListener("drop",e=>{
 });
 
 function renderRunActions(span){
+  _invalidateSpanGeneration(span); // re-tagging cancels/orphans any prior generation on this span
   let actions=span.querySelector(".vox-actions");
   if(actions) actions.remove();
   actions=document.createElement("span");
@@ -385,17 +405,36 @@ async function generateRun(span){
   const voiceId=span.dataset.voiceId;
   const text=span.dataset.text || _cleanSpanText(span);
   if(!voiceId || !text) return;
+  // Checked before any UI state changes, so a missing client never leaves
+  // the busy/progress UI stuck on with no way to recover from it.
+  const org=currentOrg();
+  if(!org){ alert("Pick a client (top right) before generating — the clip needs an org to save under."); return; }
 
   const actions=span.querySelector(".vox-actions");
   const genBtn=actions && actions.querySelector("button");
   const prog=actions && actions.querySelector(".vox-progress");
   const progBar=prog && prog.querySelector(".vox-progress-bar");
   const progLabel=prog && prog.querySelector(".vox-progress-label");
+
+  // Cancel any generation already running for this span and mint a fresh
+  // token — every await below re-checks span._genToken===myToken so a
+  // superseded run (re-tagged or re-highlighted mid-flight) discards its
+  // result instead of racing whatever's current.
+  _invalidateSpanGeneration(span);
+  const controller=new AbortController();
+  span._genAbort=controller;
+  const myToken=span._genToken;
+
   if(genBtn){ genBtn.style.display="none"; }
-  if(prog){ prog.style.display="inline-flex"; }
+  if(prog){
+    if(progBar) progBar.style.width="0%";
+    if(progLabel) progLabel.textContent="0s";
+    prog.style.display="inline-flex";
+  }
 
   const jobId=(crypto.randomUUID?crypto.randomUUID():("job"+Date.now()+Math.random()));
   const stopPolling=pollProgress(jobId,(elapsedS,step,total)=>{
+    if(span._genToken!==myToken) return; // superseded — a newer generation owns this span's UI now
     if(!progLabel) return;
     const pct=Math.min(96, Math.round((step/total)*100)); // capped — most runs stop well before `total`
     if(progBar) progBar.style.width=pct+"%";
@@ -412,17 +451,20 @@ async function generateRun(span){
   try{
     const fd=new FormData();
     fd.append("voiceId",voiceId); fd.append("text",text); fd.append("jobId",jobId);
-    const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd});
+    const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd,signal:controller.signal});
+    // The generation phase is over the moment this settles (success or
+    // throw) — stop polling now rather than waiting for encode+upload too,
+    // or a late tick can flicker "encoding mp3…"/100% back to stale data.
+    stopPolling();
+    if(span._genToken!==myToken) return; // superseded while the request was in flight
     if(!r.ok) throw new Error("generation failed");
     const wavBlob=await r.blob();
     if(progLabel) progLabel.textContent="encoding mp3…";
     if(progBar) progBar.style.width="100%";
     const mp3Blob=await _wavBlobToMp3(wavBlob);
+    if(span._genToken!==myToken) return; // superseded during mp3 encoding
 
-    const org=currentOrg();
-    if(!org){ alert("Pick a client (top right) before generating — the clip needs an org to save under."); return; }
     const key="library/"+org+"/chatterbox-"+scriptSlug+"/"+slug(span.dataset.voiceName)+"-"+span.dataset.lineId+"-"+Date.now().toString(36)+".mp3";
-
     const token=getToken();
     const putRes=await fetch("/api/audio/"+key,{
       method:"PUT",
@@ -431,17 +473,22 @@ async function generateRun(span){
     });
     if(!putRes.ok) throw new Error("upload failed");
     const putJson=await putRes.json().catch(()=>({}));
+    if(span._genToken!==myToken) return; // superseded during upload — discard, don't overwrite a newer result
 
     span.dataset.audioUrl = putJson.url || ("/api/audio/"+key);
     span.classList.add("generated");
     if(prog) prog.style.display="none";
     if(genBtn){ genBtn.style.display=""; genBtn.textContent="▶ Play"; genBtn.disabled=false; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(span.dataset.audioUrl).play(); }; }
   }catch(e){
+    stopPolling();
+    if(span._genToken!==myToken) return; // superseded — the newer generation owns error/retry UI now
+    if(controller.signal.aborted) return; // cancelled intentionally by a re-tag, not a real failure
     if(prog) prog.style.display="none";
     if(genBtn){ genBtn.style.display=""; genBtn.textContent="✕ retry"; genBtn.disabled=false; }
     alert("Generation failed: "+e.message);
   }finally{
     stopPolling();
+    if(span._genAbort===controller) span._genAbort=null;
   }
   updateGenAllHint();
 }
