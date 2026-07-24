@@ -44,10 +44,23 @@
   #voiceUpload{border:1px dashed var(--rim);border-radius:9px;padding:12px;text-align:center;cursor:pointer;font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
   #voiceUpload.dragover{border-color:var(--coral);color:var(--coral);background:rgba(255,106,61,.06)}
   #voiceNameInput{width:100%;margin-top:6px}
-  .voice-card{border:1px solid var(--rim);border-radius:9px;padding:8px 10px;display:flex;align-items:center;gap:8px;cursor:grab;background:rgba(255,255,255,.02)}
+  .voice-card{border:1px solid var(--rim);border-radius:9px;padding:8px 10px;background:rgba(255,255,255,.02)}
   .voice-card.dragging{opacity:.4}
+  .vc-row{display:flex;align-items:center;gap:8px;cursor:grab}
   .voice-card .vc-name{flex:1;font-family:"Barlow Condensed";font-size:13px}
   .voice-card button{padding:3px 7px;font-size:10px}
+
+  /* ---- per-voice settings panel ---- */
+  .vc-settings{display:none;flex-direction:column;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--rim)}
+  .vc-settings.open{display:flex}
+  .vc-setting-row{display:flex;flex-direction:column;gap:2px}
+  .vc-setting-row label{font-family:"Barlow Condensed";font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--fog);display:flex;justify-content:space-between}
+  .vc-setting-row label .val{color:var(--ice);text-transform:none;letter-spacing:0}
+  .vc-setting-row input[type="range"]{width:100%;accent-color:var(--coral);background:none;border:none;padding:0}
+  .vc-seed-row{display:flex;gap:6px;align-items:center}
+  .vc-seed-row input[type="number"]{flex:1;width:0}
+  .vc-seed-row button{padding:5px 8px}
+  .vc-settings-save{align-self:flex-end}
 
   /* ---- script editor (main) ---- */
   #editorPane{flex:1;display:flex;flex-direction:column;min-height:0}
@@ -123,7 +136,13 @@
 </div>
 
 <script>
-const LOCAL_SVC = "http://127.0.0.1:8799";
+// Reaches the local Chatterbox service running on gary's laptop through a
+// Cloudflare Tunnel (cloudflared quick tunnel — see chatterbox-local/README.md),
+// so this page works from any origin, including production, not just
+// localhost. NOTE: quick tunnel URLs are ephemeral — they change any time
+// the tunnel process restarts. If generation stops working, get a fresh
+// URL from the cloudflared terminal output and update this constant.
+const LOCAL_SVC = "https://apparent-looks-above-meanwhile.trycloudflare.com";
 function getToken(){ return localStorage.getItem("gp.session")||""; }
 function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
 function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
@@ -185,18 +204,12 @@ async function _wavBlobToMp3(wavBlob){
 }
 
 /* ============================================================
-   Service health check — this page only works talking to the
-   local Chatterbox service, and only when opened via the local
-   dev server (browsers block an https page fetching http://localhost).
+   Service health check — LOCAL_SVC is reachable over real HTTPS (via a
+   Cloudflare Tunnel to gary's laptop), so this works from any origin,
+   production included, as long as the tunnel + local service are running.
    ============================================================ */
 async function checkService(){
   const banner=document.getElementById("svcBanner");
-  const isLocalPage = location.hostname==="127.0.0.1" || location.hostname==="localhost";
-  if(!isLocalPage){
-    banner.className="down";
-    banner.textContent="⚠ Chatterbox Studio needs the local generation service and only works when this page itself is opened at http://127.0.0.1:8787/chatterbox (run `npx wrangler dev`) — not the production URL.";
-    return false;
-  }
   try{
     const r=await fetch(LOCAL_SVC+"/health");
     const j=await r.json();
@@ -214,6 +227,8 @@ async function checkService(){
 /* ============================================================
    Voice Palette — backed entirely by the local service.
    ============================================================ */
+const VOICE_SETTINGS_DEFAULTS={repetitionPenalty:1.2, temperature:0, seed:null};
+
 async function loadVoices(){
   const list=document.getElementById("voiceList");
   try{
@@ -221,16 +236,71 @@ async function loadVoices(){
     const voices=await r.json();
     list.innerHTML="";
     voices.forEach(v=>{
+      const settings=Object.assign({},VOICE_SETTINGS_DEFAULTS,v.settings||{});
+
       const card=document.createElement("div");
-      card.className="voice-card"; card.draggable=true; card.dataset.voiceId=v.id;
-      card.innerHTML='<div class="vc-name">'+v.name+'</div><button class="danger" data-del="'+v.id+'">✕</button>';
-      card.ondragstart=e=>{ e.dataTransfer.setData("voiceid",v.id); e.dataTransfer.setData("voicename",v.name); card.classList.add("dragging"); };
-      card.ondragend=()=>card.classList.remove("dragging");
-      card.querySelector("[data-del]").onclick=async(ev)=>{
+      card.className="voice-card"; card.dataset.voiceId=v.id;
+
+      const row=document.createElement("div");
+      row.className="vc-row"; row.draggable=true;
+      row.innerHTML='<div class="vc-name">'+v.name+'</div>'+
+        '<button class="ghost" data-gear title="Voice settings">⚙</button>'+
+        '<button class="danger" data-del>✕</button>';
+      row.ondragstart=e=>{ e.dataTransfer.setData("voiceid",v.id); e.dataTransfer.setData("voicename",v.name); card.classList.add("dragging"); };
+      row.ondragend=()=>card.classList.remove("dragging");
+      card.appendChild(row);
+
+      const panel=document.createElement("div");
+      panel.className="vc-settings";
+      panel.innerHTML=
+        '<div class="vc-setting-row"><label>Repetition Penalty <span class="val" data-rpval></span></label>'+
+        '<input type="range" min="1.0" max="2.0" step="0.05" data-rp></div>'+
+        '<div class="vc-setting-row"><label>Temperature <span class="val" data-tval></span></label>'+
+        '<input type="range" min="0" max="1.5" step="0.05" data-temp>'+
+        '<span class="hint">0 = most stable delivery, higher = more varied (note: even at 0, tiny run-to-run variation is normal on this hardware)</span></div>'+
+        '<div class="vc-setting-row"><label>Seed <span class="hint">blank = random each time; a seed nudges similar results, not guaranteed identical</span></label>'+
+        '<div class="vc-seed-row"><input type="number" placeholder="random" data-seed>'+
+        '<button data-randseed title="Randomize seed">🎲</button></div></div>'+
+        '<button class="on vc-settings-save" data-save>Save</button>';
+      card.appendChild(panel);
+
+      const rpInput=panel.querySelector("[data-rp]"), rpVal=panel.querySelector("[data-rpval]");
+      const tempInput=panel.querySelector("[data-temp]"), tempVal=panel.querySelector("[data-tval]");
+      const seedInput=panel.querySelector("[data-seed]");
+      rpInput.value=settings.repetitionPenalty; rpVal.textContent=(+settings.repetitionPenalty).toFixed(2);
+      tempInput.value=settings.temperature; tempVal.textContent=(+settings.temperature).toFixed(2);
+      seedInput.value=settings.seed==null?"":settings.seed;
+      rpInput.oninput=()=>{ rpVal.textContent=parseFloat(rpInput.value).toFixed(2); };
+      tempInput.oninput=()=>{ tempVal.textContent=parseFloat(tempInput.value).toFixed(2); };
+      panel.querySelector("[data-randseed]").onclick=()=>{ seedInput.value=Math.floor(Math.random()*1e9); };
+
+      row.querySelector("[data-gear]").onclick=(ev)=>{ ev.stopPropagation(); panel.classList.toggle("open"); };
+      row.querySelector("[data-del]").onclick=async(ev)=>{
         ev.stopPropagation();
         await fetch(LOCAL_SVC+"/voices/"+v.id,{method:"DELETE"});
         loadVoices();
       };
+      panel.querySelector("[data-save]").onclick=async(ev)=>{
+        ev.stopPropagation();
+        const saveBtn=ev.currentTarget; saveBtn.textContent="Saving…"; saveBtn.disabled=true;
+        const seedVal=seedInput.value.trim();
+        try{
+          await fetch(LOCAL_SVC+"/voices/"+v.id+"/settings",{
+            method:"PUT",
+            headers:{"content-type":"application/json"},
+            body:JSON.stringify({
+              repetitionPenalty:parseFloat(rpInput.value),
+              temperature:parseFloat(tempInput.value),
+              seed:seedVal===""?null:parseInt(seedVal,10)
+            })
+          });
+          saveBtn.textContent="Saved ✓";
+        }catch(e){
+          saveBtn.textContent="✕ failed";
+        }
+        setTimeout(()=>{ saveBtn.textContent="Save"; saveBtn.disabled=false; },1500);
+      };
+
       list.appendChild(card);
     });
   }catch(e){ /* service down — banner already shows this */ }

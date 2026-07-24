@@ -24,6 +24,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from huggingface_hub import hf_hub_download
+from pydantic import BaseModel
 from transformers import AutoTokenizer
 
 MODEL_ID = "ResembleAI/chatterbox-turbo-ONNX"
@@ -40,6 +41,16 @@ MODELS_DIR = BASE_DIR / "models"
 VOICES_DIR = BASE_DIR / "voices"
 VOICES_DIR.mkdir(exist_ok=True)
 VOICES_INDEX = VOICES_DIR / "voices.json"
+
+
+DEFAULT_VOICE_SETTINGS = {"repetitionPenalty": 1.2, "temperature": 0.0, "seed": None}
+
+
+def _voice_settings(voice: dict) -> dict:
+    """Merges a voice's saved settings over the defaults — old voices
+    created before this feature existed have no "settings" key at all and
+    keep working unchanged."""
+    return {**DEFAULT_VOICE_SETTINGS, **(voice.get("settings") or {})}
 
 
 def _load_voices_index() -> list[dict]:
@@ -71,6 +82,33 @@ class RepetitionPenaltyLogitsProcessor:
         return scores_processed
 
 
+def _sample_token(logits: np.ndarray, temperature: float, rng: "np.random.Generator | None") -> np.ndarray:
+    """Greedy (argmax) at temperature<=0 — today's original behavior, the
+    most stable/consistent option available. NOTE: this is not bit-exact
+    reproducible run-to-run on this hardware — verified empirically that
+    even single-threaded execution with graph optimizations disabled still
+    produces different output across identical calls (root cause is deeper
+    than thread-order non-determinism, likely a genuinely non-deterministic
+    CPU kernel somewhere in this ONNX build; not worth chasing further).
+    Above 0, softmax-with-temperature + multinomial sampling via the given
+    Generator — the only real "expressiveness" knob this pipeline exposes,
+    since the ONNX graphs have no exaggeration/cfg_weight input to condition
+    on (confirmed by inspecting all four graphs' actual input signatures —
+    that concept doesn't survive Turbo's distillation). The seed makes the
+    *sampling step itself* reproducible, but since the underlying logits
+    already vary slightly run-to-run, it narrows variation rather than
+    guaranteeing an identical result. Assumes batch_size=1, which is all
+    this service ever does."""
+    if temperature <= 0 or rng is None:
+        return np.argmax(logits, axis=-1, keepdims=True).astype(np.int64)
+    scaled = logits[0] / temperature
+    scaled = scaled - scaled.max()
+    probs = np.exp(scaled)
+    probs /= probs.sum()
+    choice = rng.choice(probs.shape[-1], p=probs)
+    return np.array([[choice]], dtype=np.int64)
+
+
 class ChatterboxEngine:
     """Loads all four ONNX components once and keeps them resident."""
 
@@ -84,8 +122,9 @@ class ChatterboxEngine:
         self.cond_decoder = onnxruntime.InferenceSession(_download_component("conditional_decoder"))
         print(f"Chatterbox-Turbo ready in {time.time() - t0:.1f}s")
 
-    def generate(self, text: str, reference_wav_path: str, exaggeration: float = 0.5,
+    def generate(self, text: str, reference_wav_path: str,
                  max_new_tokens: int = 1024, repetition_penalty: float = 1.2,
+                 temperature: float = 0.0, seed: "int | None" = None,
                  progress_cb=None) -> tuple[np.ndarray, int]:
         audio_values, _ = librosa.load(reference_wav_path, sr=SAMPLE_RATE)
         audio_values = audio_values[np.newaxis, :].astype(np.float32)
@@ -93,6 +132,7 @@ class ChatterboxEngine:
         input_ids = self.tokenizer(text, return_tensors="np")["input_ids"].astype(np.int64)
 
         rep_penalty = RepetitionPenaltyLogitsProcessor(penalty=repetition_penalty)
+        rng = np.random.default_rng(seed) if temperature > 0 else None
         generate_tokens = np.array([[START_SPEECH_TOKEN]], dtype=np.int64)
 
         attention_mask = None
@@ -133,7 +173,7 @@ class ChatterboxEngine:
 
             logits = logits[:, -1, :]
             next_token_logits = rep_penalty(generate_tokens, logits)
-            input_ids = np.argmax(next_token_logits, axis=-1, keepdims=True).astype(np.int64)
+            input_ids = _sample_token(next_token_logits, temperature, rng)
             generate_tokens = np.concatenate((generate_tokens, input_ids), axis=-1)
             if progress_cb is not None:
                 progress_cb(i + 1, max_new_tokens)
@@ -164,7 +204,15 @@ class ChatterboxEngine:
 app = FastAPI(title="Chatterbox Studio local service")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8787", "http://localhost:8787"],
+    # Local dev origins plus the production site — the production page
+    # reaches this local service through a Cloudflare Tunnel (see
+    # README.md), so it needs to be an allowed CORS origin too, not just
+    # localhost.
+    allow_origins=[
+        "http://127.0.0.1:8787",
+        "http://localhost:8787",
+        "https://geofence-platform.gary-jolivet.workers.dev",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -239,9 +287,28 @@ def delete_voice(voice_id: str):
     return {"deleted": voice_id}
 
 
+class VoiceSettingsUpdate(BaseModel):
+    repetitionPenalty: "float | None" = None
+    temperature: "float | None" = None
+    seed: "int | None" = None
+
+
+@app.put("/voices/{voice_id}/settings")
+def update_voice_settings(voice_id: str, body: VoiceSettingsUpdate):
+    voices = _load_voices_index()
+    match = next((v for v in voices if v["id"] == voice_id), None)
+    if not match:
+        raise HTTPException(404, "voice not found")
+
+    current = _voice_settings(match)
+    updates = body.model_dump(exclude_unset=True)
+    match["settings"] = {**current, **updates}
+    _save_voices_index(voices)
+    return match["settings"]
+
+
 @app.post("/generate")
-def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: float = Form(0.5),
-             jobId: str = Form(None)):
+def generate(voiceId: str = Form(...), text: str = Form(...), jobId: str = Form(None)):
     if engine is None:
         raise HTTPException(503, "engine still loading")
 
@@ -253,6 +320,7 @@ def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: floa
     _prune_progress()
 
     reference_path = VOICES_DIR / match["file"]
+    settings = _voice_settings(match)
     t0 = time.time()
 
     def on_progress(step, total):
@@ -261,7 +329,9 @@ def generate(voiceId: str = Form(...), text: str = Form(...), exaggeration: floa
 
     try:
         wav, sr = engine.generate(text=text, reference_wav_path=str(reference_path),
-                                   exaggeration=exaggeration, progress_cb=on_progress)
+                                   repetition_penalty=settings["repetitionPenalty"],
+                                   temperature=settings["temperature"], seed=settings["seed"],
+                                   progress_cb=on_progress)
     finally:
         if jobId:
             _progress.setdefault(jobId, {"step": 0, "total": 1024, "startedAt": t0})["done"] = True
