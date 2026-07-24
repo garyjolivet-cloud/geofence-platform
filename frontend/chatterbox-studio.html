@@ -290,6 +290,7 @@ async function loadVoices(){
         '<input type="text" data-previewtext value="Testing this voice."></div>'+
         '<div class="vc-preview-row">'+
         '<button class="ghost" data-preview>▶ Preview</button>'+
+        '<button class="ghost" data-replay style="display:none">🔁 Replay</button>'+
         '<span class="vox-progress" data-previewprog style="display:none">'+
         '<span class="vox-progress-track"><span class="vox-progress-bar" data-previewbar></span></span>'+
         '<span class="vox-progress-label" data-previewlabel></span></span>'+
@@ -300,12 +301,21 @@ async function loadVoices(){
       const rpInput=panel.querySelector("[data-rp]"), rpVal=panel.querySelector("[data-rpval]");
       const tempInput=panel.querySelector("[data-temp]"), tempVal=panel.querySelector("[data-tval]");
       const seedInput=panel.querySelector("[data-seed]");
+      const previewTextInput=panel.querySelector("[data-previewtext]");
+      const replayBtn=panel.querySelector("[data-replay]");
       rpInput.value=settings.repetitionPenalty; rpVal.textContent=(+settings.repetitionPenalty).toFixed(2);
       tempInput.value=settings.temperature; tempVal.textContent=(+settings.temperature).toFixed(2);
       seedInput.value=settings.seed==null?"":settings.seed;
-      rpInput.oninput=()=>{ rpVal.textContent=parseFloat(rpInput.value).toFixed(2); };
-      tempInput.oninput=()=>{ tempVal.textContent=parseFloat(tempInput.value).toFixed(2); };
-      panel.querySelector("[data-randseed]").onclick=()=>{ seedInput.value=Math.floor(Math.random()*1e9); };
+      // A rendered preview stays replayable as-is until something that
+      // would actually change the audio is touched — only then is the
+      // cached clip stale and the Replay button hidden again.
+      const invalidateReplay=()=>{ replayBtn.style.display="none"; if(replayBtn._url){ URL.revokeObjectURL(replayBtn._url); replayBtn._url=null; } };
+      rpInput.oninput=()=>{ rpVal.textContent=parseFloat(rpInput.value).toFixed(2); invalidateReplay(); };
+      tempInput.oninput=()=>{ tempVal.textContent=parseFloat(tempInput.value).toFixed(2); invalidateReplay(); };
+      seedInput.oninput=invalidateReplay;
+      previewTextInput.oninput=invalidateReplay;
+      panel.querySelector("[data-randseed]").onclick=()=>{ seedInput.value=Math.floor(Math.random()*1e9); invalidateReplay(); };
+      replayBtn.onclick=(ev)=>{ ev.stopPropagation(); if(replayBtn._url) new Audio(replayBtn._url).play(); };
 
       row.querySelector("[data-gear]").onclick=(ev)=>{ ev.stopPropagation(); panel.classList.toggle("open"); };
       row.querySelector("[data-del]").onclick=async(ev)=>{
@@ -337,7 +347,8 @@ async function loadVoices(){
         ev.stopPropagation();
         previewVoice(v, {
           previewBtn: panel.querySelector("[data-preview]"),
-          textInput: panel.querySelector("[data-previewtext]"),
+          replayBtn,
+          textInput: previewTextInput,
           rpInput, tempInput, seedInput,
           prog: panel.querySelector("[data-previewprog]"),
           progBar: panel.querySelector("[data-previewbar]"),
@@ -406,10 +417,14 @@ async function previewVoice(v,els){
     stopPolling();
     if(!r.ok) throw new Error("preview failed");
     const wavBlob=await r.blob();
-    const url=URL.createObjectURL(wavBlob);
-    const audio=new Audio(url);
-    audio.onended=()=>URL.revokeObjectURL(url);
-    await audio.play();
+    // Cached on the Replay button (not revoked on end) so this exact
+    // render can be played again and again without re-generating —
+    // invalidated (see invalidateReplay()) only when a slider/text
+    // actually changes, since only then is it genuinely stale.
+    if(els.replayBtn._url) URL.revokeObjectURL(els.replayBtn._url);
+    els.replayBtn._url=URL.createObjectURL(wavBlob);
+    els.replayBtn.style.display="";
+    new Audio(els.replayBtn._url).play();
     els.previewBtn.textContent="▶ Preview";
   }catch(e){
     els.previewBtn.textContent="✕ failed";
