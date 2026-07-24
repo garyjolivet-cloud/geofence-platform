@@ -13,6 +13,7 @@ generated clips get uploaded to R2 by the frontend, via the app's existing
 import io
 import json
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -260,17 +261,73 @@ def list_voices():
     return _load_voices_index()
 
 
-@app.post("/voices")
-async def create_voice(name: str = Form(...), file: UploadFile = File(...)):
+def _save_new_voice(name: str, filename_hint: str, data: bytes) -> dict:
+    """Shared by both voice-creation paths (upload and from-library) — picks
+    a fresh id, writes the reference audio to VOICES_DIR, and appends the
+    voices.json entry."""
     voice_id = uuid.uuid4().hex[:12]
-    ext = Path(file.filename or "sample.wav").suffix or ".wav"
+    ext = Path(filename_hint or "sample.wav").suffix or ".wav"
     dest = VOICES_DIR / f"{voice_id}{ext}"
-    dest.write_bytes(await file.read())
+    dest.write_bytes(data)
 
     voices = _load_voices_index()
-    voices.append({"id": voice_id, "name": name, "file": dest.name})
+    entry = {"id": voice_id, "name": name, "file": dest.name}
+    voices.append(entry)
     _save_voices_index(voices)
-    return {"id": voice_id, "name": name}
+    return entry
+
+
+@app.post("/voices")
+async def create_voice(name: str = Form(...), file: UploadFile = File(...)):
+    entry = _save_new_voice(name, file.filename, await file.read())
+    return {"id": entry["id"], "name": entry["name"]}
+
+
+class VoiceFromLibrary(BaseModel):
+    name: str
+    url: str
+
+
+@app.post("/voices/from-library")
+def create_voice_from_library(body: VoiceFromLibrary):
+    # `url` is an absolute URL to a clip already sitting in this app's R2
+    # Library (e.g. https://.../api/audio/library/<org>/<folder>/<file>.mp3)
+    # — GET on that endpoint is public, so no auth header is needed here
+    # regardless of whether this page was opened locally or via the
+    # production tunnel. Lets a voice reuse an existing recording instead
+    # of requiring a fresh upload from disk every time.
+    #
+    # A plain urlopen(url) gets a bare 403 from Cloudflare here — it's
+    # bot-protection rejecting urllib's default "Python-urllib/x.y" User-
+    # Agent, not an actual auth requirement (confirmed: the same request
+    # succeeds with any normal-looking UA). Needs an explicit Request with
+    # a UA header, not just the bare URL string.
+    req = urllib.request.Request(body.url, headers={"User-Agent": "chatterbox-studio-local-service/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+    except Exception as e:
+        raise HTTPException(502, f"couldn't fetch that Library clip: {e}")
+    if not data:
+        raise HTTPException(502, "Library clip came back empty")
+
+    entry = _save_new_voice(body.name, body.url, data)
+    return {"id": entry["id"], "name": entry["name"]}
+
+
+class VoiceRename(BaseModel):
+    name: str
+
+
+@app.patch("/voices/{voice_id}")
+def rename_voice(voice_id: str, body: VoiceRename):
+    voices = _load_voices_index()
+    match = next((v for v in voices if v["id"] == voice_id), None)
+    if not match:
+        raise HTTPException(404, "voice not found")
+    match["name"] = body.name
+    _save_voices_index(voices)
+    return {"id": voice_id, "name": match["name"]}
 
 
 @app.delete("/voices/{voice_id}")
@@ -308,7 +365,9 @@ def update_voice_settings(voice_id: str, body: VoiceSettingsUpdate):
 
 
 @app.post("/generate")
-def generate(voiceId: str = Form(...), text: str = Form(...), jobId: str = Form(None)):
+def generate(voiceId: str = Form(...), text: str = Form(...), jobId: str = Form(None),
+             repetitionPenalty: "float | None" = Form(None), temperature: "float | None" = Form(None),
+             seed: "int | None" = Form(None), overrideSeed: bool = Form(False)):
     if engine is None:
         raise HTTPException(503, "engine still loading")
 
@@ -320,7 +379,25 @@ def generate(voiceId: str = Form(...), text: str = Form(...), jobId: str = Form(
     _prune_progress()
 
     reference_path = VOICES_DIR / match["file"]
-    settings = _voice_settings(match)
+    # repetitionPenalty/temperature/seed here are *previews* of unsaved
+    # slider values from the Studio settings panel — when present they
+    # override the voice's saved settings for this one call only, nothing
+    # is written back to voices.json. Omitted on every real generation
+    # call, which always just uses the saved settings.
+    #
+    # `seed` alone can't tell "not sent, use the saved seed" apart from
+    # "sent as blank, force random" — a bare Form(None) collapses both to
+    # None. `overrideSeed` disambiguates: only the preview UI ever sets
+    # it, explicitly, so it's safe to force seed=None (random) when it's
+    # true but the field was left blank, rather than silently falling
+    # back to whatever seed happens to already be saved.
+    settings = {**_voice_settings(match)}
+    if repetitionPenalty is not None:
+        settings["repetitionPenalty"] = repetitionPenalty
+    if temperature is not None:
+        settings["temperature"] = temperature
+    if overrideSeed:
+        settings["seed"] = seed
     t0 = time.time()
 
     def on_progress(step, total):

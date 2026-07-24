@@ -44,6 +44,22 @@
   #voiceUpload{border:1px dashed var(--rim);border-radius:9px;padding:12px;text-align:center;cursor:pointer;font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
   #voiceUpload.dragover{border-color:var(--coral);color:var(--coral);background:rgba(255,106,61,.06)}
   #voiceNameInput{width:100%;margin-top:6px}
+  /* ---- Library palette (pick-from-library, adapted from audio-studio.html's rail) ---- */
+  #libraryPalette{display:flex;flex-direction:column;gap:8px;padding:8px;border:1px solid var(--rim);border-radius:9px;background:rgba(255,255,255,.01)}
+  .crumb-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px}
+  .folder-tile{border:1px solid var(--rim);border-radius:9px;padding:8px 6px;text-align:center;cursor:pointer;background:rgba(255,255,255,.02);
+         font-family:'Barlow Condensed';font-size:11px;color:var(--ice);display:flex;flex-direction:column;align-items:center;gap:4px}
+  .folder-tile .fi{font-size:18px}
+  .folder-tile:hover,.folder-tile.dragover{border-color:var(--coral);background:rgba(255,106,61,.08)}
+  .folder-tile.current{border-color:var(--coral);color:var(--snow)}
+  .clip-list{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
+  .clip-tile{display:flex;align-items:center;gap:6px;padding:6px 7px;border:1px solid #26344a;border-radius:8px;cursor:grab;background:rgba(255,255,255,.02)}
+  .clip-tile:hover{border-color:var(--ice)}
+  .clip-tile .ct-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'Barlow Condensed';font-size:12px}
+  .clip-tile button{flex:0 0 auto;padding:3px 7px;font-size:11px}
+  .rail-empty{font-family:'Barlow Condensed';font-size:12px;color:var(--fog);padding:6px 2px}
+
   .voice-card{border:1px solid var(--rim);border-radius:9px;padding:8px 10px;background:rgba(255,255,255,.02)}
   .voice-card.dragging{opacity:.4}
   .vc-row{display:flex;align-items:center;gap:8px;cursor:grab}
@@ -61,6 +77,9 @@
   .vc-seed-row input[type="number"]{flex:1;width:0}
   .vc-seed-row button{padding:5px 8px}
   .vc-settings-save{align-self:flex-end}
+  .vc-preview-row{display:flex;align-items:center;gap:8px}
+  .vc-name[data-name]{cursor:text}
+  .vc-name input{width:100%}
 
   /* ---- script editor (main) ---- */
   #editorPane{flex:1;display:flex;flex-direction:column;min-height:0}
@@ -109,6 +128,8 @@
         <input type="text" id="voiceNameInput" placeholder="Voice name (e.g. Witch #1)">
         <input type="file" id="voiceFileInput" accept="audio/*" style="display:none">
       </div>
+      <button class="ghost" id="btnBrowseLibrary" style="width:100%">📁 Browse Library</button>
+      <div id="libraryPalette" style="display:none"></div>
       <div id="voiceList"></div>
     </div>
   </div>
@@ -146,6 +167,7 @@ const LOCAL_SVC = "https://mediterranean-duck-chan-tests.trycloudflare.com";
 function getToken(){ return localStorage.getItem("gp.session")||""; }
 function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
 function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 /* The voice tag label and Generate/progress buttons are rendered as child
    elements inside the same .vox-run span as the passage text, so a plain
@@ -243,12 +265,15 @@ async function loadVoices(){
 
       const row=document.createElement("div");
       row.className="vc-row"; row.draggable=true;
-      row.innerHTML='<div class="vc-name">'+v.name+'</div>'+
+      row.innerHTML='<div class="vc-name" data-name title="Click to rename">'+esc(v.name)+'</div>'+
         '<button class="ghost" data-gear title="Voice settings">⚙</button>'+
         '<button class="danger" data-del>✕</button>';
       row.ondragstart=e=>{ e.dataTransfer.setData("voiceid",v.id); e.dataTransfer.setData("voicename",v.name); card.classList.add("dragging"); };
       row.ondragend=()=>card.classList.remove("dragging");
       card.appendChild(row);
+
+      const nameEl=row.querySelector("[data-name]");
+      nameEl.onclick=(ev)=>{ ev.stopPropagation(); startVoiceRename(v,nameEl); };
 
       const panel=document.createElement("div");
       panel.className="vc-settings";
@@ -261,6 +286,14 @@ async function loadVoices(){
         '<div class="vc-setting-row"><label>Seed <span class="hint">blank = random each time; a seed nudges similar results, not guaranteed identical</span></label>'+
         '<div class="vc-seed-row"><input type="number" placeholder="random" data-seed>'+
         '<button data-randseed title="Randomize seed">🎲</button></div></div>'+
+        '<div class="vc-setting-row"><label>Preview text</label>'+
+        '<input type="text" data-previewtext value="Testing this voice."></div>'+
+        '<div class="vc-preview-row">'+
+        '<button class="ghost" data-preview>▶ Preview</button>'+
+        '<span class="vox-progress" data-previewprog style="display:none">'+
+        '<span class="vox-progress-track"><span class="vox-progress-bar" data-previewbar></span></span>'+
+        '<span class="vox-progress-label" data-previewlabel></span></span>'+
+        '</div>'+
         '<button class="on vc-settings-save" data-save>Save</button>';
       card.appendChild(panel);
 
@@ -300,10 +333,92 @@ async function loadVoices(){
         }
         setTimeout(()=>{ saveBtn.textContent="Save"; saveBtn.disabled=false; },1500);
       };
+      panel.querySelector("[data-preview]").onclick=(ev)=>{
+        ev.stopPropagation();
+        previewVoice(v, {
+          previewBtn: panel.querySelector("[data-preview]"),
+          textInput: panel.querySelector("[data-previewtext]"),
+          rpInput, tempInput, seedInput,
+          prog: panel.querySelector("[data-previewprog]"),
+          progBar: panel.querySelector("[data-previewbar]"),
+          progLabel: panel.querySelector("[data-previewlabel]")
+        });
+      };
 
       list.appendChild(card);
     });
   }catch(e){ /* service down — banner already shows this */ }
+}
+
+function startVoiceRename(v,nameEl){
+  if(nameEl.querySelector("input")) return; // already renaming this card
+  const oldName=v.name;
+  nameEl.innerHTML='<input type="text" maxlength="60">';
+  const inp=nameEl.querySelector("input"); inp.value=oldName; inp.focus(); inp.select();
+  let done=false;
+  const commit=async()=>{
+    if(done) return; done=true;
+    const newName=inp.value.trim();
+    if(!newName || newName===oldName){ loadVoices(); return; }
+    try{
+      await fetch(LOCAL_SVC+"/voices/"+v.id,{
+        method:"PATCH", headers:{"content-type":"application/json"},
+        body:JSON.stringify({name:newName})
+      });
+    }catch(e){ /* reload shows whatever actually got saved either way */ }
+    loadVoices();
+  };
+  inp.addEventListener("keydown",e=>{
+    if(e.key==="Enter") commit();
+    if(e.key==="Escape"){ done=true; loadVoices(); }
+  });
+  inp.addEventListener("blur",commit);
+}
+
+async function previewVoice(v,els){
+  if(!(await checkService())) return;
+  const text=els.textInput.value.trim();
+  if(!text) return;
+
+  els.previewBtn.disabled=true; els.previewBtn.textContent="…";
+  els.prog.style.display="inline-flex";
+  els.progBar.style.width="0%"; els.progLabel.textContent="0s";
+
+  const jobId=(crypto.randomUUID?crypto.randomUUID():("prev"+Date.now()+Math.random()));
+  const stopPolling=pollProgress(jobId,(elapsedS,step,total)=>{
+    const pct=Math.min(96,Math.round((step/total)*100));
+    els.progBar.style.width=pct+"%";
+    els.progLabel.textContent=Math.round(elapsedS)+"s";
+  });
+
+  try{
+    const fd=new FormData();
+    fd.append("voiceId",v.id); fd.append("text",text); fd.append("jobId",jobId);
+    fd.append("repetitionPenalty",els.rpInput.value);
+    fd.append("temperature",els.tempInput.value);
+    // overrideSeed=true always, even when the field is blank — a blank
+    // seed here means "use random for this preview", not "fall back to
+    // whatever this voice's saved seed happens to be".
+    fd.append("overrideSeed","true");
+    const seedVal=els.seedInput.value.trim();
+    if(seedVal!=="") fd.append("seed",seedVal);
+    const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd});
+    stopPolling();
+    if(!r.ok) throw new Error("preview failed");
+    const wavBlob=await r.blob();
+    const url=URL.createObjectURL(wavBlob);
+    const audio=new Audio(url);
+    audio.onended=()=>URL.revokeObjectURL(url);
+    await audio.play();
+    els.previewBtn.textContent="▶ Preview";
+  }catch(e){
+    els.previewBtn.textContent="✕ failed";
+    setTimeout(()=>{ els.previewBtn.textContent="▶ Preview"; },1500);
+  }finally{
+    stopPolling();
+    els.prog.style.display="none";
+    els.previewBtn.disabled=false;
+  }
 }
 
 async function uploadVoice(file){
@@ -317,15 +432,114 @@ async function uploadVoice(file){
   loadVoices();
 }
 
+async function createVoiceFromLibrary(name,absoluteUrl){
+  const r=await fetch(LOCAL_SVC+"/voices/from-library",{
+    method:"POST", headers:{"content-type":"application/json"},
+    body:JSON.stringify({name,url:absoluteUrl})
+  });
+  if(!r.ok){ alert("Couldn't create voice from that clip: "+(await r.text().catch(()=>r.statusText))); return; }
+  loadVoices();
+}
+
+/* ============================================================
+   Library palette — browse this org's Library to pick an existing
+   recording as a voice reference, instead of only uploading fresh
+   files. Folder browsing adapted from audio-studio.html's rail
+   (refreshRail/renderRail/buildFolderTile — same /api/audio-list call,
+   same crumb+folder-tile+clip-list shape), Library-only since Chatterbox
+   Studio has no "current project" concept to offer a second tab for.
+   ============================================================ */
+let libFolder="", libKnownFolders=new Set();
+
+async function refreshLibraryPalette(){
+  const pal=document.getElementById("libraryPalette");
+  const org=currentOrg();
+  if(!org){ pal.innerHTML='<div class="rail-empty">pick a client (top right) first</div>'; return; }
+  pal.innerHTML='<div class="rail-empty">loading…</div>';
+  try{
+    const qs="scope=library&org="+encodeURIComponent(org)+(libFolder?"&folder="+encodeURIComponent(libFolder):"");
+    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
+    const j=r.ok?await r.json():{objects:[],folders:[]};
+    if(!libFolder) libKnownFolders=new Set(j.folders||[]);
+    renderLibraryPalette(j.objects||[]);
+  }catch(e){ pal.innerHTML='<div class="rail-empty">error: '+esc(e.message)+'</div>'; }
+}
+
+function renderLibraryPalette(objects){
+  const pal=document.getElementById("libraryPalette");
+  pal.innerHTML="";
+
+  const crumb=document.createElement("div"); crumb.className="crumb-row";
+  const lbl=document.createElement("span"); lbl.className="hint";
+  lbl.textContent=libFolder?("📁 "+libFolder):"📁 Library (root)";
+  crumb.appendChild(lbl);
+  pal.appendChild(crumb);
+
+  const grid=document.createElement("div"); grid.className="tile-grid";
+  grid.appendChild(buildLibFolderTile("","Root"));
+  [...libKnownFolders].sort().forEach(f=>grid.appendChild(buildLibFolderTile(f)));
+  pal.appendChild(grid);
+
+  const list=document.createElement("div"); list.className="clip-list";
+  if(!objects.length){ list.innerHTML='<div class="rail-empty">no clips in this folder</div>'; }
+  else objects.forEach(o=>list.appendChild(buildLibClipTile(o)));
+  pal.appendChild(list);
+}
+
+function buildLibFolderTile(name,label){
+  const t=document.createElement("div"); t.className="folder-tile"+(name===libFolder?" current":"");
+  t.innerHTML='<span class="fi">📁</span><span>'+esc(label!=null?label:name)+'</span>';
+  t.onclick=()=>{ libFolder=name; refreshLibraryPalette(); };
+  return t;
+}
+
+function buildLibClipTile(o){
+  const row=document.createElement("div"); row.className="clip-tile"; row.draggable=true;
+  row.addEventListener("dragstart",e=>{ e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key); });
+  const nm=document.createElement("span"); nm.className="ct-name"; nm.textContent=o.key.split("/").pop();
+  const useBtn=document.createElement("button"); useBtn.textContent="+ Use"; useBtn.title="Create a voice from this clip";
+  useBtn.onclick=()=>{
+    const defaultName=o.key.split("/").pop().replace(/\.[^.]+$/,"").replace(/-[a-z0-9]{6,}$/i,"");
+    const name=(prompt("Name this voice:",defaultName)||"").trim();
+    if(!name) return; // covers both Cancel (prompt returns null) and an empty typed name — a blank name is never valid here, unlike library.html's folder-move prompt where blank is a real destination
+    createVoiceFromLibrary(name,location.origin+o.url);
+  };
+  row.appendChild(nm); row.appendChild(useBtn);
+  return row;
+}
+
+document.getElementById("btnBrowseLibrary").onclick=()=>{
+  const pal=document.getElementById("libraryPalette");
+  const showing=pal.style.display!=="none";
+  pal.style.display=showing?"none":"flex";
+  pal.style.flexDirection="column";
+  if(!showing) refreshLibraryPalette();
+};
+
 (function(){
   const drop=document.getElementById("voiceUpload");
   const fileInput=document.getElementById("voiceFileInput");
   drop.addEventListener("click",(e)=>{ if(e.target!==document.getElementById("voiceNameInput")) fileInput.click(); });
   fileInput.addEventListener("change",()=>{ if(fileInput.files[0]) uploadVoice(fileInput.files[0]); });
-  drop.addEventListener("dragover",e=>{ e.preventDefault(); drop.classList.add("dragover"); });
+  drop.addEventListener("dragover",e=>{
+    if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("Files")){ e.preventDefault(); drop.classList.add("dragover"); }
+  });
   drop.addEventListener("dragleave",()=>drop.classList.remove("dragover"));
   drop.addEventListener("drop",e=>{
     e.preventDefault(); drop.classList.remove("dragover");
+    const audioUrl=e.dataTransfer.getData("audiourl");
+    if(audioUrl){
+      // Dropped from the in-page Library palette rather than the OS —
+      // same drop target, second drag source, distinguished by the typed
+      // dataTransfer key this app uses everywhere else for in-app drags.
+      const key=e.dataTransfer.getData("audiokey")||audioUrl;
+      const defaultName=key.split("/").pop().replace(/\.[^.]+$/,"").replace(/-[a-z0-9]{6,}$/i,"");
+      const name=(document.getElementById("voiceNameInput").value||prompt("Name this voice:",defaultName)||"").trim();
+      if(!name) return;
+      createVoiceFromLibrary(name,audioUrl.startsWith("http")?audioUrl:location.origin+audioUrl);
+      document.getElementById("voiceNameInput").value="";
+      return;
+    }
     const f=e.dataTransfer.files && e.dataTransfer.files[0];
     if(f) uploadVoice(f);
   });
