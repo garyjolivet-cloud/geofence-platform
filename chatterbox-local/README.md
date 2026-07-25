@@ -1,26 +1,40 @@
 # Chatterbox Studio — local voice-cloning service
 
-Runs `ResembleAI/chatterbox-turbo-ONNX` (350M params, q4-quantized) entirely
-on this machine via `onnxruntime` — no cloud API, no per-generation cost.
-Voice samples and the voice palette live only in `./voices` on this laptop.
-Only the *finished* generated clips get uploaded to the app's cloud Library
-by the frontend (`frontend/chatterbox-studio.html`).
+FastAPI service backing `frontend/chatterbox-studio.html`. Voice samples and
+the voice palette live only in `./voices` on this machine. Only the
+*finished* generated clips get uploaded to the app's cloud Library by the
+frontend.
 
-## Why local, not a cloud API
+Each voice uses one of two backends, picked per-voice automatically:
 
-This machine (Intel N100, 3.68GB RAM, no discrete GPU) can't run the
-standard PyTorch build of Chatterbox — community-reported minimums are
-4-8GB RAM. The q4-quantized ONNX export fits comfortably (~1-1.5GB peak),
-but expect generation to be slow (tens of seconds to a couple minutes per
-line) since there's no GPU acceleration. That's fine for this use case —
-time isn't the constraint, RAM headroom is.
+- **Local ONNX** (`ResembleAI/chatterbox-turbo-ONNX`, 350M params,
+  q4-quantized) — voices with a local reference audio file. Runs entirely on
+  this machine via `onnxruntime`, no cloud API, no per-generation cost, but
+  slow on CPU-only hardware (this laptop: Intel N100, 3.68GB RAM, no
+  discrete GPU) and can't honor paralinguistic tags or exaggeration control
+  — that capability didn't survive the ONNX distillation.
+- **Resemble AI hosted API** — voices with a `resembleVoiceUuid` instead of
+  a local file. Runs on Resemble's GPU infrastructure; dramatically faster
+  and supports paralinguistic tags (`[laugh]`, `[sigh]`, etc.) directly in
+  the text. Requires `RESEMBLE_API_TOKEN` in a local `.env` file (gitignored,
+  never committed) — get a token from an account at app.resemble.ai.
 
 ## Setup (one-time)
 
 ```bash
 python -m venv venv
 ./venv/Scripts/pip install -r requirements.txt
-./venv/Scripts/python download_model.py   # downloads ~500MB-1GB of q4 weights
+```
+
+No manual model download step — the local ONNX engine downloads and loads
+itself automatically (and lazily, only once actually needed) the first time
+a local-reference-file voice is generated. If you're only using
+Resemble-backed voices, nothing local ever gets downloaded at all.
+
+If using the Resemble AI backend, create `chatterbox-local/.env`:
+
+```
+RESEMBLE_API_TOKEN=your-token-here
 ```
 
 ## Running
@@ -29,32 +43,49 @@ python -m venv venv
 ./venv/Scripts/python server.py
 ```
 
-Starts on `http://127.0.0.1:8799`. First request after startup will be slow
-while the four ONNX sessions load into memory; after that, `/generate`
-calls reuse the already-loaded model.
+Starts on `http://127.0.0.1:8799`. Startup is instant — the local ONNX
+engine only loads (and downloads its ~700MB of weights, if not already
+cached) on the first `/generate` call for a local-reference-file voice.
 
-**Important**: `frontend/chatterbox-studio.html` must be opened via the
-local Cloudflare dev server — `http://127.0.0.1:8787/chatterbox` (run
-`npx wrangler dev` from the repo root) — not the production HTTPS URL.
-Browsers block an HTTPS page from calling `http://localhost`, so voice
-cloning only works when the Studio page itself is also served locally.
+**Reaching this service from the browser**: `frontend/chatterbox-studio.html`
+talks to whatever `LOCAL_SVC` is set to in that file. For local dev, open the
+Studio page via `http://127.0.0.1:8787/chatterbox` (run `npx wrangler dev`
+from the repo root) with `LOCAL_SVC` pointed at `http://127.0.0.1:8799`. To
+reach it from the production HTTPS page, expose this service over a
+Cloudflare Tunnel (`cloudflared tunnel --url http://127.0.0.1:8799`) and
+point `LOCAL_SVC` at the tunnel's HTTPS URL — quick tunnels are ephemeral,
+so that URL (and `LOCAL_SVC`) needs updating whenever the tunnel restarts.
 
 ## API
 
-- `GET /health` — liveness + whether the model has finished loading.
+- `GET /health` — liveness + whether the local ONNX engine has been loaded
+  yet (irrelevant to Resemble-backed voices, which need no local engine).
 - `GET /voices` — list saved voices.
-- `POST /voices` (multipart: `name`, `file`) — save a new voice sample.
+- `POST /voices` (multipart: `name`, `file`) — save a new voice from an
+  uploaded audio sample (local-engine backend).
+- `POST /voices/from-library` (json: `name`, `url`) — save a new voice from
+  an existing clip already in the app's Library (local-engine backend).
+- `POST /voices/from-resemble` (json: `name`, `resembleVoiceUuid`) —
+  register one of the account's existing Resemble AI voices.
+- `PATCH /voices/{id}` (json: `name`) — rename a voice.
+- `PUT /voices/{id}/settings` (json: `repetitionPenalty?`, `temperature?`,
+  `seed?`) — local-engine-only; no-op for Resemble-backed voices.
 - `DELETE /voices/{id}` — remove a saved voice.
-- `POST /generate` (form: `voiceId`, `text`, `exaggeration?`) — returns a
-  WAV file generated in that voice.
+- `POST /generate` (form: `voiceId`, `text`, `jobId?`, `repetitionPenalty?`,
+  `temperature?`, `seed?`, `overrideSeed?`) — returns a WAV file generated
+  in that voice. The `repetitionPenalty`/`temperature`/`seed`/`overrideSeed`
+  fields only apply to local-engine voices.
+- `GET /progress/{jobId}` — per-token progress for an in-flight local-engine
+  generation; always reads as complete-on-finish for Resemble generations
+  (no per-token progress exists for a single hosted API call).
 
 ## Notes
 
 - Model weights and voice samples are gitignored (`models/`, `voices/`) —
-  they're multi-hundred-MB binaries that don't belong in the repo, and
-  voices are meant to stay local to this machine anyway.
-- Chatterbox can optionally watermark output audio (`perth` package,
-  imperceptible, survives MP3 re-encoding) — not enabled here by default
-  since this is a fully local/offline workflow; add `perth` to
-  requirements.txt and wire it into `ChatterboxEngine.generate()` if
-  wanted later.
+  multi-hundred-MB binaries that don't belong in the repo.
+- `.env` (holding `RESEMBLE_API_TOKEN`) is gitignored via the repo's
+  top-level `.env` pattern — never commit it.
+- Chatterbox can optionally watermark local-engine output audio (`perth`
+  package, imperceptible, survives MP3 re-encoding) — not enabled here by
+  default; add `perth` to requirements.txt and wire it into
+  `ChatterboxEngine.generate()` if wanted later.

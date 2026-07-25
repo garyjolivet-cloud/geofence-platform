@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -286,16 +287,24 @@ def _prune_progress():
         del _progress[jid]
 
 
+_engine_lock = threading.Lock()
+
+
 def _get_engine() -> ChatterboxEngine:
     """Lazy-loaded, not started at app startup — Resemble-backed voices are
     the default path now and need no local model at all, so there's no
     reason to eagerly download/load the ~700MB local ONNX engine (and its
     cache in ./models) every time this service starts. Falls back to
     downloading+loading it on first request that actually needs it (i.e. a
-    voice with a local reference file instead of a resembleVoiceUuid)."""
+    voice with a local reference file instead of a resembleVoiceUuid).
+    Locked because FastAPI runs sync endpoints in a thread pool — without
+    this, two concurrent first-requests (e.g. "Generate All" with
+    CONCURRENCY=2) would each construct and load a full ChatterboxEngine."""
     global engine
     if engine is None:
-        engine = ChatterboxEngine()
+        with _engine_lock:
+            if engine is None:
+                engine = ChatterboxEngine()
     return engine
 
 
@@ -463,8 +472,12 @@ def generate(voiceId: str = Form(...), text: str = Form(...), jobId: str = Form(
             # unlike the local ONNX build.
             wav, sr = _synthesize_resemble(text=text, voice_uuid=resemble_uuid)
         else:
-            local_engine = _get_engine()  # downloads/loads on first use, not at startup
+            if not match.get("file"):
+                raise HTTPException(422, "voice has no reference audio or Resemble voice ID — it may be corrupted")
             reference_path = VOICES_DIR / match["file"]
+            if not reference_path.exists():
+                raise HTTPException(422, f"reference audio missing on disk: {match['file']}")
+            local_engine = _get_engine()  # downloads/loads on first use, not at startup
             # repetitionPenalty/temperature/seed here are *previews* of unsaved
             # slider values from the Studio settings panel — when present they
             # override the voice's saved settings for this one call only, nothing

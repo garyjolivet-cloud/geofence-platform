@@ -17,8 +17,8 @@
   .hdr{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rim);background:rgba(10,16,24,.95);flex:0 0 auto}
   .hdr h1{font-family:"Black Han Sans";font-size:17px;margin:0;flex:0 0 auto}
   .hdr .crumb{font-family:"Barlow Condensed";font-size:13px;color:var(--fog);flex:1;min-width:0}
-  .hdr a,.hdr button.linklike{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:6px 12px;white-space:nowrap;background:none;cursor:pointer}
-  .hdr a:hover,.hdr button.linklike:hover{border-color:var(--ice)}
+  .hdr a{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:6px 12px;white-space:nowrap;background:none;cursor:pointer}
+  .hdr a:hover{border-color:var(--ice)}
   button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
          font-size:12px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:8px;
          padding:7px 12px;cursor:pointer}
@@ -51,7 +51,7 @@
   .folder-tile{border:1px solid var(--rim);border-radius:9px;padding:8px 6px;text-align:center;cursor:pointer;background:rgba(255,255,255,.02);
          font-family:'Barlow Condensed';font-size:11px;color:var(--ice);display:flex;flex-direction:column;align-items:center;gap:4px}
   .folder-tile .fi{font-size:18px}
-  .folder-tile:hover,.folder-tile.dragover{border-color:var(--coral);background:rgba(255,106,61,.08)}
+  .folder-tile:hover{border-color:var(--coral);background:rgba(255,106,61,.08)}
   .folder-tile.current{border-color:var(--coral);color:var(--snow)}
   .clip-list{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
   .clip-tile{display:flex;align-items:center;gap:6px;padding:6px 7px;border:1px solid #26344a;border-radius:8px;cursor:grab;background:rgba(255,255,255,.02)}
@@ -171,6 +171,13 @@ function getToken(){ return localStorage.getItem("gp.session")||""; }
 function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
 function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+async function errDetail(r){
+  // FastAPI's HTTPException body is {"detail": "..."} — surface that
+  // instead of a generic "failed" so the user can actually act on it
+  // (e.g. "RESEMBLE_API_TOKEN not set" vs. an opaque network error).
+  try{ const j=await r.json(); return j.detail || JSON.stringify(j); }
+  catch(e){ return r.statusText || ("HTTP "+r.status); }
+}
 
 /* The voice tag label and Generate/progress buttons are rendered as child
    elements inside the same .vox-run span as the passage text, so a plain
@@ -238,9 +245,13 @@ async function checkService(){
   try{
     const r=await fetch(LOCAL_SVC+"/health");
     const j=await r.json();
-    if(j.engine_loaded){ banner.className="ok"; return true; }
+    // engine_loaded only describes the LOCAL ONNX engine, which now lazy-
+    // loads on first use (see server.py's _get_engine()) rather than at
+    // startup — it says nothing about whether Resemble-backed voices are
+    // usable, so it must not gate the whole service as "not ready".
+    if(j.status==="ok"){ banner.className="ok"; return true; }
     banner.className="down";
-    banner.textContent="⏳ Local Chatterbox service is up but still loading the model — try again in a moment.";
+    banner.textContent="⏳ Local Chatterbox service isn't responding normally — try again in a moment.";
     return false;
   }catch(e){
     banner.className="down";
@@ -253,12 +264,22 @@ async function checkService(){
    Voice Palette — backed entirely by the local service.
    ============================================================ */
 const VOICE_SETTINGS_DEFAULTS={repetitionPenalty:1.2, temperature:0, seed:null};
+let _voiceCache=[]; // refreshed on every loadVoices() — lets generateRun/previewVoice tell whether a voice is Resemble-backed without a second fetch
+function isResembleVoice(voiceId){ return _voiceCache.some(v=>v.id===voiceId && v.resembleVoiceUuid); }
 
 async function loadVoices(){
   const list=document.getElementById("voiceList");
   try{
     const r=await fetch(LOCAL_SVC+"/voices");
     const voices=await r.json();
+    _voiceCache=voices;
+    // Revoke any preview blob URLs cached on the cards about to be
+    // discarded — invalidateReplay() only fires on slider/text edits, so
+    // without this every loadVoices() rebuild (rename/delete/create/etc.)
+    // would leak one blob URL per voice that had an active preview.
+    list.querySelectorAll("[data-replay]").forEach(btn=>{
+      if(btn._url) URL.revokeObjectURL(btn._url);
+    });
     list.innerHTML="";
     voices.forEach(v=>{
       const settings=Object.assign({},VOICE_SETTINGS_DEFAULTS,v.settings||{});
@@ -281,6 +302,8 @@ async function loadVoices(){
       const panel=document.createElement("div");
       panel.className="vc-settings";
       panel.innerHTML=
+        (v.resembleVoiceUuid ? '<div class="hint">This is a Resemble AI voice — the controls below are local-ONNX-only and don\'t apply here.</div>' : '')+
+        '<div'+(v.resembleVoiceUuid?' style="display:none"':'')+'>'+
         '<div class="vc-setting-row"><label>Repetition Penalty <span class="val" data-rpval></span></label>'+
         '<input type="range" min="1.0" max="2.0" step="0.05" data-rp></div>'+
         '<div class="vc-setting-row"><label>Temperature <span class="val" data-tval></span></label>'+
@@ -289,6 +312,7 @@ async function loadVoices(){
         '<div class="vc-setting-row"><label>Seed <span class="hint">blank = random each time; a seed nudges similar results, not guaranteed identical</span></label>'+
         '<div class="vc-seed-row"><input type="number" placeholder="random" data-seed>'+
         '<button data-randseed title="Randomize seed">🎲</button></div></div>'+
+        '</div>'+
         '<div class="vc-setting-row"><label>Preview text</label>'+
         '<input type="text" data-previewtext value="Testing this voice."></div>'+
         '<div class="vc-preview-row">'+
@@ -399,7 +423,15 @@ async function previewVoice(v,els){
   els.progBar.style.width="0%"; els.progLabel.textContent="0s";
 
   const jobId=(crypto.randomUUID?crypto.randomUUID():("prev"+Date.now()+Math.random()));
+  // Resemble's hosted API is one blocking call with no per-token progress
+  // to poll for — a bar stuck at 0% until it suddenly completes reads as
+  // hung, so show elapsed time only instead of a percentage that can't move.
   const stopPolling=pollProgress(jobId,(elapsedS,step,total)=>{
+    if(v.resembleVoiceUuid){
+      els.progBar.style.width="100%";
+      els.progLabel.textContent="generating via Resemble AI… "+Math.round(elapsedS)+"s";
+      return;
+    }
     const pct=Math.min(96,Math.round((step/total)*100));
     els.progBar.style.width=pct+"%";
     els.progLabel.textContent=Math.round(elapsedS)+"s";
@@ -418,7 +450,7 @@ async function previewVoice(v,els){
     if(seedVal!=="") fd.append("seed",seedVal);
     const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd});
     stopPolling();
-    if(!r.ok) throw new Error("preview failed");
+    if(!r.ok) throw new Error(await errDetail(r));
     const wavBlob=await r.blob();
     // Cached on the Replay button (not revoked on end) so this exact
     // render can be played again and again without re-generating —
@@ -431,6 +463,8 @@ async function previewVoice(v,els){
     els.previewBtn.textContent="▶ Preview";
   }catch(e){
     els.previewBtn.textContent="✕ failed";
+    els.previewBtn.title=e.message;
+    console.error("Preview failed:",e.message);
     setTimeout(()=>{ els.previewBtn.textContent="▶ Preview"; },1500);
   }finally{
     stopPolling();
@@ -582,13 +616,29 @@ function persistScript(){
     const topSpan=div.querySelector(".vox-run");
     return topSpan ? topSpan.dataset.text : div.textContent;
   });
-  const assignments=[...document.querySelectorAll(".vox-run[data-voice-id]")].map(s=>({
-    lineIndex: lineDivs.findIndex(div=>div.contains(s)),
-    matchText: s.dataset.text,
-    voiceId: s.dataset.voiceId,
-    voiceName: s.dataset.voiceName,
-    audioUrl: s.dataset.audioUrl||null
-  })).filter(a=>a.lineIndex>=0);
+  const assignments=[...document.querySelectorAll(".vox-run[data-voice-id]")].map(s=>{
+    const lineDiv=lineDivs.find(div=>div.contains(s));
+    const topSpan=lineDiv&&lineDiv.querySelector(".vox-run");
+    // Character offset within the line's plain text, walked directly from
+    // the DOM rather than re-derived via indexOf() on restore — matchText
+    // alone can't disambiguate two identical phrases tagged to different
+    // voices in the same line (indexOf always finds the first).
+    let idx=-1;
+    if(topSpan){
+      let offset=0;
+      for(const node of topSpan.childNodes){
+        if(node===s){ idx=offset; break; }
+        offset += (node.dataset&&node.dataset.text!=null ? node.dataset.text : node.textContent||"").length;
+      }
+    }
+    return {
+      lineIndex: lineDiv?lineDivs.indexOf(lineDiv):-1,
+      matchText: s.dataset.text, idx,
+      voiceId: s.dataset.voiceId,
+      voiceName: s.dataset.voiceName,
+      audioUrl: s.dataset.audioUrl||null
+    };
+  }).filter(a=>a.lineIndex>=0);
   try{
     localStorage.setItem(SCRIPT_STORAGE_KEY, JSON.stringify({
       scriptRaw: document.getElementById("scriptRaw").value,
@@ -618,7 +668,10 @@ function restoreScript(data){
     const p=document.createElement("div"); p.style.marginBottom="10px";
     const lineAssignments=(data.assignments||[])
       .filter(a=>a.lineIndex===lineIndex)
-      .map(a=>({...a, idx: lineText.indexOf(a.matchText)}))
+      // Prefer the persisted character offset (disambiguates duplicate
+      // matchText within a line); fall back to indexOf for scripts saved
+      // before that offset existed.
+      .map(a=>({...a, idx: a.idx!=null&&a.idx>=0 ? a.idx : lineText.indexOf(a.matchText)}))
       .filter(a=>a.idx>=0)
       .sort((a,b)=>a.idx-b.idx);
 
@@ -871,9 +924,18 @@ async function generateRun(span){
   }
 
   const jobId=(crypto.randomUUID?crypto.randomUUID():("job"+Date.now()+Math.random()));
+  const isResemble=isResembleVoice(voiceId);
   const stopPolling=pollProgress(jobId,(elapsedS,step,total)=>{
     if(span._genToken!==myToken) return; // superseded — a newer generation owns this span's UI now
     if(!progLabel) return;
+    // Resemble's hosted API has no per-token progress to poll for — a bar
+    // stuck at 0% until it suddenly completes reads as hung, so show
+    // elapsed time only instead of a percentage that can never move.
+    if(isResemble){
+      if(progBar) progBar.style.width="100%";
+      progLabel.textContent="via Resemble AI… "+Math.round(elapsedS)+"s";
+      return;
+    }
     const pct=Math.min(96, Math.round((step/total)*100)); // capped — most runs stop well before `total`
     if(progBar) progBar.style.width=pct+"%";
     let etaTxt="";
@@ -895,7 +957,7 @@ async function generateRun(span){
     // or a late tick can flicker "encoding mp3…"/100% back to stale data.
     stopPolling();
     if(span._genToken!==myToken) return; // superseded while the request was in flight
-    if(!r.ok) throw new Error("generation failed");
+    if(!r.ok) throw new Error(await errDetail(r));
     const wavBlob=await r.blob();
     if(progLabel) progLabel.textContent="encoding mp3…";
     if(progBar) progBar.style.width="100%";
