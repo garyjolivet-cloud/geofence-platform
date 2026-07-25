@@ -8,3 +8,4 @@ python-multipart
 transformers
 librosa
 tqdm
+python-dotenv

@@ -15,3 +15,4 @@ chatterbox-local/voices/
 chatterbox-local/__pycache__/
 chatterbox-local/*.wav
 chatterbox-local/*.mp3
+chatterbox-local/*.log
