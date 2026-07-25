@@ -286,10 +286,17 @@ def _prune_progress():
         del _progress[jid]
 
 
-@app.on_event("startup")
-def _load_engine():
+def _get_engine() -> ChatterboxEngine:
+    """Lazy-loaded, not started at app startup — Resemble-backed voices are
+    the default path now and need no local model at all, so there's no
+    reason to eagerly download/load the ~700MB local ONNX engine (and its
+    cache in ./models) every time this service starts. Falls back to
+    downloading+loading it on first request that actually needs it (i.e. a
+    voice with a local reference file instead of a resembleVoiceUuid)."""
     global engine
-    engine = ChatterboxEngine()
+    if engine is None:
+        engine = ChatterboxEngine()
+    return engine
 
 
 @app.get("/health")
@@ -456,8 +463,7 @@ def generate(voiceId: str = Form(...), text: str = Form(...), jobId: str = Form(
             # unlike the local ONNX build.
             wav, sr = _synthesize_resemble(text=text, voice_uuid=resemble_uuid)
         else:
-            if engine is None:
-                raise HTTPException(503, "engine still loading")
+            local_engine = _get_engine()  # downloads/loads on first use, not at startup
             reference_path = VOICES_DIR / match["file"]
             # repetitionPenalty/temperature/seed here are *previews* of unsaved
             # slider values from the Studio settings panel — when present they
@@ -478,10 +484,10 @@ def generate(voiceId: str = Form(...), text: str = Form(...), jobId: str = Form(
                 settings["temperature"] = temperature
             if overrideSeed:
                 settings["seed"] = seed
-            wav, sr = engine.generate(text=text, reference_wav_path=str(reference_path),
-                                       repetition_penalty=settings["repetitionPenalty"],
-                                       temperature=settings["temperature"], seed=settings["seed"],
-                                       progress_cb=on_progress)
+            wav, sr = local_engine.generate(text=text, reference_wav_path=str(reference_path),
+                                             repetition_penalty=settings["repetitionPenalty"],
+                                             temperature=settings["temperature"], seed=settings["seed"],
+                                             progress_cb=on_progress)
     finally:
         if jobId:
             _progress.setdefault(jobId, {"step": 0, "total": 1024, "startedAt": t0})["done"] = True
