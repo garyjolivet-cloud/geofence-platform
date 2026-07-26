@@ -1,11 +1,6 @@
 fastapi
 uvicorn[standard]
-onnxruntime
-huggingface_hub
 numpy
 soundfile
 python-multipart
-transformers
-librosa
-tqdm
 python-dotenv

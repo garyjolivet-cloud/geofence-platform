@@ -41,24 +41,9 @@
   .rail{width:260px;flex:0 0 260px;border-right:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;background:rgba(255,255,255,.01)}
   .rail h2{font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:12px 12px 6px}
   .rail-body{flex:1;overflow-y:auto;padding:0 10px 10px;display:flex;flex-direction:column;gap:8px;min-height:0}
-  #voiceUpload{border:1px dashed var(--rim);border-radius:9px;padding:12px;text-align:center;cursor:pointer;font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
-  #voiceUpload.dragover{border-color:var(--coral);color:var(--coral);background:rgba(255,106,61,.06)}
-  #voiceNameInput{width:100%;margin-top:6px}
-  /* ---- Library palette (pick-from-library, adapted from audio-studio.html's rail) ---- */
-  #libraryPalette{display:flex;flex-direction:column;gap:8px;padding:8px;border:1px solid var(--rim);border-radius:9px;background:rgba(255,255,255,.01)}
-  .crumb-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  .tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px}
-  .folder-tile{border:1px solid var(--rim);border-radius:9px;padding:8px 6px;text-align:center;cursor:pointer;background:rgba(255,255,255,.02);
-         font-family:'Barlow Condensed';font-size:11px;color:var(--ice);display:flex;flex-direction:column;align-items:center;gap:4px}
-  .folder-tile .fi{font-size:18px}
-  .folder-tile:hover{border-color:var(--coral);background:rgba(255,106,61,.08)}
-  .folder-tile.current{border-color:var(--coral);color:var(--snow)}
-  .clip-list{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
-  .clip-tile{display:flex;align-items:center;gap:6px;padding:6px 7px;border:1px solid #26344a;border-radius:8px;cursor:grab;background:rgba(255,255,255,.02)}
-  .clip-tile:hover{border-color:var(--ice)}
-  .clip-tile .ct-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'Barlow Condensed';font-size:12px}
-  .clip-tile button{flex:0 0 auto;padding:3px 7px;font-size:11px}
-  .rail-empty{font-family:'Barlow Condensed';font-size:12px;color:var(--fog);padding:6px 2px}
+  /* ---- Resemble-voice registration panel (paste an existing Resemble AI voice UUID — the only way voices are created now) ---- */
+  #resemblePanel{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--rim);border-radius:9px;background:rgba(255,255,255,.01)}
+  #resemblePanel input{width:100%}
 
   .voice-card{border:1px solid var(--rim);border-radius:9px;padding:8px 10px;background:rgba(255,255,255,.02)}
   .voice-card.dragging{opacity:.4}
@@ -66,17 +51,9 @@
   .voice-card .vc-name{flex:1;font-family:"Barlow Condensed";font-size:13px}
   .voice-card button{padding:3px 7px;font-size:10px}
 
-  /* ---- per-voice settings panel ---- */
+  /* ---- per-voice preview panel ---- */
   .vc-settings{display:none;flex-direction:column;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--rim)}
   .vc-settings.open{display:flex}
-  .vc-setting-row{display:flex;flex-direction:column;gap:2px}
-  .vc-setting-row label{font-family:"Barlow Condensed";font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--fog);display:flex;justify-content:space-between}
-  .vc-setting-row label .val{color:var(--ice);text-transform:none;letter-spacing:0}
-  .vc-setting-row input[type="range"]{width:100%;accent-color:var(--coral);background:none;border:none;padding:0}
-  .vc-seed-row{display:flex;gap:6px;align-items:center}
-  .vc-seed-row input[type="number"]{flex:1;width:0}
-  .vc-seed-row button{padding:5px 8px}
-  .vc-settings-save{align-self:flex-end}
   .vc-preview-row{display:flex;align-items:center;gap:8px}
   .vc-name[data-name]{cursor:text}
   .vc-name input{width:100%}
@@ -123,13 +100,13 @@
   <div class="rail">
     <h2>Voice Palette</h2>
     <div class="rail-body">
-      <div id="voiceUpload">
-        Drop an audio sample here<br>or click to choose a file
-        <input type="text" id="voiceNameInput" placeholder="Voice name (e.g. Witch #1)">
-        <input type="file" id="voiceFileInput" accept="audio/*" style="display:none">
+      <button class="ghost" id="btnAddResemble" style="width:100%">☁ Add Resemble voice</button>
+      <div id="resemblePanel" style="display:none">
+        <div class="hint">Build/clone the voice at app.resemble.ai first (Voice Cloning there requires a Business plan or higher), then paste its voice UUID here.</div>
+        <input type="text" id="resembleNameInput" placeholder="Voice name (e.g. Witch #1)">
+        <input type="text" id="resembleUuidInput" placeholder="Resemble voice UUID">
+        <button class="on" id="btnResembleSubmit" style="width:100%">Add voice</button>
       </div>
-      <button class="ghost" id="btnBrowseLibrary" style="width:100%">📁 Browse Library</button>
-      <div id="libraryPalette" style="display:none"></div>
       <div id="voiceList"></div>
     </div>
   </div>
@@ -166,7 +143,7 @@
 // localhost. NOTE: quick tunnel URLs are ephemeral — they change any time
 // the tunnel process restarts. If generation stops working, get a fresh
 // URL from the cloudflared terminal output and update this constant.
-const LOCAL_SVC = "https://accompanying-homeless-lines-fragrance.trycloudflare.com";
+const LOCAL_SVC = "https://ericsson-default-connecting-banana.trycloudflare.com";
 function getToken(){ return localStorage.getItem("gp.session")||""; }
 function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
 function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
@@ -245,10 +222,6 @@ async function checkService(){
   try{
     const r=await fetch(LOCAL_SVC+"/health");
     const j=await r.json();
-    // engine_loaded only describes the LOCAL ONNX engine, which now lazy-
-    // loads on first use (see server.py's _get_engine()) rather than at
-    // startup — it says nothing about whether Resemble-backed voices are
-    // usable, so it must not gate the whole service as "not ready".
     if(j.status==="ok"){ banner.className="ok"; return true; }
     banner.className="down";
     banner.textContent="⏳ Local Chatterbox service isn't responding normally — try again in a moment.";
@@ -263,18 +236,13 @@ async function checkService(){
 /* ============================================================
    Voice Palette — backed entirely by the local service.
    ============================================================ */
-const VOICE_SETTINGS_DEFAULTS={repetitionPenalty:1.2, temperature:0, seed:null};
-let _voiceCache=[]; // refreshed on every loadVoices() — lets generateRun/previewVoice tell whether a voice is Resemble-backed without a second fetch
-function isResembleVoice(voiceId){ return _voiceCache.some(v=>v.id===voiceId && v.resembleVoiceUuid); }
-
 async function loadVoices(){
   const list=document.getElementById("voiceList");
   try{
     const r=await fetch(LOCAL_SVC+"/voices");
     const voices=await r.json();
-    _voiceCache=voices;
     // Revoke any preview blob URLs cached on the cards about to be
-    // discarded — invalidateReplay() only fires on slider/text edits, so
+    // discarded — invalidateReplay() only fires on a text edit, so
     // without this every loadVoices() rebuild (rename/delete/create/etc.)
     // would leak one blob URL per voice that had an active preview.
     list.querySelectorAll("[data-replay]").forEach(btn=>{
@@ -282,15 +250,13 @@ async function loadVoices(){
     });
     list.innerHTML="";
     voices.forEach(v=>{
-      const settings=Object.assign({},VOICE_SETTINGS_DEFAULTS,v.settings||{});
-
       const card=document.createElement("div");
       card.className="voice-card"; card.dataset.voiceId=v.id;
 
       const row=document.createElement("div");
       row.className="vc-row"; row.draggable=true;
       row.innerHTML='<div class="vc-name" data-name title="Click to rename">'+esc(v.name)+'</div>'+
-        '<button class="ghost" data-gear title="Voice settings">⚙</button>'+
+        '<button class="ghost" data-gear title="Preview">▶</button>'+
         '<button class="danger" data-del>✕</button>';
       row.ondragstart=e=>{ e.dataTransfer.setData("voiceid",v.id); e.dataTransfer.setData("voicename",v.name); card.classList.add("dragging"); };
       row.ondragend=()=>card.classList.remove("dragging");
@@ -302,46 +268,23 @@ async function loadVoices(){
       const panel=document.createElement("div");
       panel.className="vc-settings";
       panel.innerHTML=
-        (v.resembleVoiceUuid ? '<div class="hint">This is a Resemble AI voice — the controls below are local-ONNX-only and don\'t apply here.</div>' : '')+
-        '<div'+(v.resembleVoiceUuid?' style="display:none"':'')+'>'+
-        '<div class="vc-setting-row"><label>Repetition Penalty <span class="val" data-rpval></span></label>'+
-        '<input type="range" min="1.0" max="2.0" step="0.05" data-rp></div>'+
-        '<div class="vc-setting-row"><label>Temperature <span class="val" data-tval></span></label>'+
-        '<input type="range" min="0" max="1.5" step="0.05" data-temp>'+
-        '<span class="hint">0 = most stable delivery, higher = more varied (note: even at 0, tiny run-to-run variation is normal on this hardware)</span></div>'+
-        '<div class="vc-setting-row"><label>Seed <span class="hint">blank = random each time; a seed nudges similar results, not guaranteed identical</span></label>'+
-        '<div class="vc-seed-row"><input type="number" placeholder="random" data-seed>'+
-        '<button data-randseed title="Randomize seed">🎲</button></div></div>'+
-        '</div>'+
-        '<div class="vc-setting-row"><label>Preview text</label>'+
-        '<input type="text" data-previewtext value="Testing this voice."></div>'+
         '<div class="vc-preview-row">'+
+        '<input type="text" data-previewtext value="Testing this voice." style="flex:1">'+
         '<button class="ghost" data-preview>▶ Preview</button>'+
         '<button class="ghost" data-replay style="display:none">🔁 Replay</button>'+
+        '</div>'+
         '<span class="vox-progress" data-previewprog style="display:none">'+
         '<span class="vox-progress-track"><span class="vox-progress-bar" data-previewbar></span></span>'+
-        '<span class="vox-progress-label" data-previewlabel></span></span>'+
-        '</div>'+
-        '<button class="on vc-settings-save" data-save>Save</button>';
+        '<span class="vox-progress-label" data-previewlabel></span></span>';
       card.appendChild(panel);
 
-      const rpInput=panel.querySelector("[data-rp]"), rpVal=panel.querySelector("[data-rpval]");
-      const tempInput=panel.querySelector("[data-temp]"), tempVal=panel.querySelector("[data-tval]");
-      const seedInput=panel.querySelector("[data-seed]");
       const previewTextInput=panel.querySelector("[data-previewtext]");
       const replayBtn=panel.querySelector("[data-replay]");
-      rpInput.value=settings.repetitionPenalty; rpVal.textContent=(+settings.repetitionPenalty).toFixed(2);
-      tempInput.value=settings.temperature; tempVal.textContent=(+settings.temperature).toFixed(2);
-      seedInput.value=settings.seed==null?"":settings.seed;
-      // A rendered preview stays replayable as-is until something that
-      // would actually change the audio is touched — only then is the
-      // cached clip stale and the Replay button hidden again.
+      // A rendered preview stays replayable as-is until the preview text
+      // actually changes — only then is the cached clip stale and the
+      // Replay button hidden again.
       const invalidateReplay=()=>{ replayBtn.style.display="none"; if(replayBtn._url){ URL.revokeObjectURL(replayBtn._url); replayBtn._url=null; } };
-      rpInput.oninput=()=>{ rpVal.textContent=parseFloat(rpInput.value).toFixed(2); invalidateReplay(); };
-      tempInput.oninput=()=>{ tempVal.textContent=parseFloat(tempInput.value).toFixed(2); invalidateReplay(); };
-      seedInput.oninput=invalidateReplay;
       previewTextInput.oninput=invalidateReplay;
-      panel.querySelector("[data-randseed]").onclick=()=>{ seedInput.value=Math.floor(Math.random()*1e9); invalidateReplay(); };
       replayBtn.onclick=(ev)=>{ ev.stopPropagation(); if(replayBtn._url) new Audio(replayBtn._url).play(); };
 
       row.querySelector("[data-gear]").onclick=(ev)=>{ ev.stopPropagation(); panel.classList.toggle("open"); };
@@ -350,33 +293,12 @@ async function loadVoices(){
         await fetch(LOCAL_SVC+"/voices/"+v.id,{method:"DELETE"});
         loadVoices();
       };
-      panel.querySelector("[data-save]").onclick=async(ev)=>{
-        ev.stopPropagation();
-        const saveBtn=ev.currentTarget; saveBtn.textContent="Saving…"; saveBtn.disabled=true;
-        const seedVal=seedInput.value.trim();
-        try{
-          await fetch(LOCAL_SVC+"/voices/"+v.id+"/settings",{
-            method:"PUT",
-            headers:{"content-type":"application/json"},
-            body:JSON.stringify({
-              repetitionPenalty:parseFloat(rpInput.value),
-              temperature:parseFloat(tempInput.value),
-              seed:seedVal===""?null:parseInt(seedVal,10)
-            })
-          });
-          saveBtn.textContent="Saved ✓";
-        }catch(e){
-          saveBtn.textContent="✕ failed";
-        }
-        setTimeout(()=>{ saveBtn.textContent="Save"; saveBtn.disabled=false; },1500);
-      };
       panel.querySelector("[data-preview]").onclick=(ev)=>{
         ev.stopPropagation();
         previewVoice(v, {
           previewBtn: panel.querySelector("[data-preview]"),
           replayBtn,
           textInput: previewTextInput,
-          rpInput, tempInput, seedInput,
           prog: panel.querySelector("[data-previewprog]"),
           progBar: panel.querySelector("[data-previewbar]"),
           progLabel: panel.querySelector("[data-previewlabel]")
@@ -420,34 +342,17 @@ async function previewVoice(v,els){
 
   els.previewBtn.disabled=true; els.previewBtn.textContent="…";
   els.prog.style.display="inline-flex";
-  els.progBar.style.width="0%"; els.progLabel.textContent="0s";
+  els.progBar.style.width="100%"; els.progLabel.textContent="0s";
 
-  const jobId=(crypto.randomUUID?crypto.randomUUID():("prev"+Date.now()+Math.random()));
   // Resemble's hosted API is one blocking call with no per-token progress
-  // to poll for — a bar stuck at 0% until it suddenly completes reads as
-  // hung, so show elapsed time only instead of a percentage that can't move.
-  const stopPolling=pollProgress(jobId,(elapsedS,step,total)=>{
-    if(v.resembleVoiceUuid){
-      els.progBar.style.width="100%";
-      els.progLabel.textContent="generating via Resemble AI… "+Math.round(elapsedS)+"s";
-      return;
-    }
-    const pct=Math.min(96,Math.round((step/total)*100));
-    els.progBar.style.width=pct+"%";
-    els.progLabel.textContent=Math.round(elapsedS)+"s";
+  // to report — show elapsed time only instead of a bar that can't move.
+  const stopPolling=pollProgress((elapsedS)=>{
+    els.progLabel.textContent="generating via Resemble AI… "+Math.round(elapsedS)+"s";
   });
 
   try{
     const fd=new FormData();
-    fd.append("voiceId",v.id); fd.append("text",text); fd.append("jobId",jobId);
-    fd.append("repetitionPenalty",els.rpInput.value);
-    fd.append("temperature",els.tempInput.value);
-    // overrideSeed=true always, even when the field is blank — a blank
-    // seed here means "use random for this preview", not "fall back to
-    // whatever this voice's saved seed happens to be".
-    fd.append("overrideSeed","true");
-    const seedVal=els.seedInput.value.trim();
-    if(seedVal!=="") fd.append("seed",seedVal);
+    fd.append("voiceId",v.id); fd.append("text",text);
     const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd});
     stopPolling();
     if(!r.ok) throw new Error(await errDetail(r));
@@ -473,129 +378,29 @@ async function previewVoice(v,els){
   }
 }
 
-async function uploadVoice(file){
-  const name=(document.getElementById("voiceNameInput").value||file.name).trim();
-  if(!name){ alert("Give the voice a name first."); return; }
-  const fd=new FormData();
-  fd.append("name",name); fd.append("file",file);
-  const r=await fetch(LOCAL_SVC+"/voices",{method:"POST",body:fd});
-  if(!r.ok){ alert("Voice upload failed."); return; }
-  document.getElementById("voiceNameInput").value="";
-  loadVoices();
-}
-
-async function createVoiceFromLibrary(name,absoluteUrl){
-  const r=await fetch(LOCAL_SVC+"/voices/from-library",{
+async function createVoiceFromResemble(name,resembleVoiceUuid){
+  const r=await fetch(LOCAL_SVC+"/voices/from-resemble",{
     method:"POST", headers:{"content-type":"application/json"},
-    body:JSON.stringify({name,url:absoluteUrl})
+    body:JSON.stringify({name,resembleVoiceUuid})
   });
-  if(!r.ok){ alert("Couldn't create voice from that clip: "+(await r.text().catch(()=>r.statusText))); return; }
+  if(!r.ok){ alert("Couldn't add that Resemble voice: "+(await r.text().catch(()=>r.statusText))); return; }
   loadVoices();
 }
 
-/* ============================================================
-   Library palette — browse this org's Library to pick an existing
-   recording as a voice reference, instead of only uploading fresh
-   files. Folder browsing adapted from audio-studio.html's rail
-   (refreshRail/renderRail/buildFolderTile — same /api/audio-list call,
-   same crumb+folder-tile+clip-list shape), Library-only since Chatterbox
-   Studio has no "current project" concept to offer a second tab for.
-   ============================================================ */
-let libFolder="", libKnownFolders=new Set();
-
-async function refreshLibraryPalette(){
-  const pal=document.getElementById("libraryPalette");
-  const org=currentOrg();
-  if(!org){ pal.innerHTML='<div class="rail-empty">pick a client (top right) first</div>'; return; }
-  pal.innerHTML='<div class="rail-empty">loading…</div>';
-  try{
-    const qs="scope=library&org="+encodeURIComponent(org)+(libFolder?"&folder="+encodeURIComponent(libFolder):"");
-    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
-    const j=r.ok?await r.json():{objects:[],folders:[]};
-    if(!libFolder) libKnownFolders=new Set(j.folders||[]);
-    renderLibraryPalette(j.objects||[]);
-  }catch(e){ pal.innerHTML='<div class="rail-empty">error: '+esc(e.message)+'</div>'; }
-}
-
-function renderLibraryPalette(objects){
-  const pal=document.getElementById("libraryPalette");
-  pal.innerHTML="";
-
-  const crumb=document.createElement("div"); crumb.className="crumb-row";
-  const lbl=document.createElement("span"); lbl.className="hint";
-  lbl.textContent=libFolder?("📁 "+libFolder):"📁 Library (root)";
-  crumb.appendChild(lbl);
-  pal.appendChild(crumb);
-
-  const grid=document.createElement("div"); grid.className="tile-grid";
-  grid.appendChild(buildLibFolderTile("","Root"));
-  [...libKnownFolders].sort().forEach(f=>grid.appendChild(buildLibFolderTile(f)));
-  pal.appendChild(grid);
-
-  const list=document.createElement("div"); list.className="clip-list";
-  if(!objects.length){ list.innerHTML='<div class="rail-empty">no clips in this folder</div>'; }
-  else objects.forEach(o=>list.appendChild(buildLibClipTile(o)));
-  pal.appendChild(list);
-}
-
-function buildLibFolderTile(name,label){
-  const t=document.createElement("div"); t.className="folder-tile"+(name===libFolder?" current":"");
-  t.innerHTML='<span class="fi">📁</span><span>'+esc(label!=null?label:name)+'</span>';
-  t.onclick=()=>{ libFolder=name; refreshLibraryPalette(); };
-  return t;
-}
-
-function buildLibClipTile(o){
-  const row=document.createElement("div"); row.className="clip-tile"; row.draggable=true;
-  row.addEventListener("dragstart",e=>{ e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key); });
-  const nm=document.createElement("span"); nm.className="ct-name"; nm.textContent=o.key.split("/").pop();
-  const useBtn=document.createElement("button"); useBtn.textContent="+ Use"; useBtn.title="Create a voice from this clip";
-  useBtn.onclick=()=>{
-    const defaultName=o.key.split("/").pop().replace(/\.[^.]+$/,"").replace(/-[a-z0-9]{6,}$/i,"");
-    const name=(prompt("Name this voice:",defaultName)||"").trim();
-    if(!name) return; // covers both Cancel (prompt returns null) and an empty typed name — a blank name is never valid here, unlike library.html's folder-move prompt where blank is a real destination
-    createVoiceFromLibrary(name,location.origin+o.url);
-  };
-  row.appendChild(nm); row.appendChild(useBtn);
-  return row;
-}
-
-document.getElementById("btnBrowseLibrary").onclick=()=>{
-  const pal=document.getElementById("libraryPalette");
-  const showing=pal.style.display!=="none";
-  pal.style.display=showing?"none":"flex";
-  pal.style.flexDirection="column";
-  if(!showing) refreshLibraryPalette();
+document.getElementById("btnAddResemble").onclick=()=>{
+  const panel=document.getElementById("resemblePanel");
+  panel.style.display=panel.style.display!=="none"?"none":"flex";
 };
-
-(function(){
-  const drop=document.getElementById("voiceUpload");
-  const fileInput=document.getElementById("voiceFileInput");
-  drop.addEventListener("click",(e)=>{ if(e.target!==document.getElementById("voiceNameInput")) fileInput.click(); });
-  fileInput.addEventListener("change",()=>{ if(fileInput.files[0]) uploadVoice(fileInput.files[0]); });
-  drop.addEventListener("dragover",e=>{
-    if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("Files")){ e.preventDefault(); drop.classList.add("dragover"); }
-  });
-  drop.addEventListener("dragleave",()=>drop.classList.remove("dragover"));
-  drop.addEventListener("drop",e=>{
-    e.preventDefault(); drop.classList.remove("dragover");
-    const audioUrl=e.dataTransfer.getData("audiourl");
-    if(audioUrl){
-      // Dropped from the in-page Library palette rather than the OS —
-      // same drop target, second drag source, distinguished by the typed
-      // dataTransfer key this app uses everywhere else for in-app drags.
-      const key=e.dataTransfer.getData("audiokey")||audioUrl;
-      const defaultName=key.split("/").pop().replace(/\.[^.]+$/,"").replace(/-[a-z0-9]{6,}$/i,"");
-      const name=(document.getElementById("voiceNameInput").value||prompt("Name this voice:",defaultName)||"").trim();
-      if(!name) return;
-      createVoiceFromLibrary(name,audioUrl.startsWith("http")?audioUrl:location.origin+audioUrl);
-      document.getElementById("voiceNameInput").value="";
-      return;
-    }
-    const f=e.dataTransfer.files && e.dataTransfer.files[0];
-    if(f) uploadVoice(f);
-  });
-})();
+document.getElementById("btnResembleSubmit").onclick=()=>{
+  const nameInput=document.getElementById("resembleNameInput");
+  const uuidInput=document.getElementById("resembleUuidInput");
+  const name=nameInput.value.trim(), uuid=uuidInput.value.trim();
+  if(!name){ alert("Give the voice a name first."); return; }
+  if(!uuid){ alert("Paste the voice's Resemble UUID first."); return; }
+  createVoiceFromResemble(name,uuid);
+  nameInput.value=""; uuidInput.value="";
+  document.getElementById("resemblePanel").style.display="none";
+};
 
 /* ============================================================
    Script Editor — import, highlight, drag-drop voice, generate.
@@ -870,24 +675,13 @@ function renderRunActions(span){
   span.appendChild(actions);
 }
 
-/* ---- generation progress: elapsed time + step-based bar + rough ETA.
-   The server tracks real autoregressive step count per jobId; we poll it
-   while the (long-running, blocking) POST /generate is in flight. Total
-   step budget (max_new_tokens=1024) is rarely reached — most generations
-   stop early via STOP_SPEECH_TOKEN — so the bar is capped visually and the
-   ETA is explicitly framed as approximate, self-correcting as it goes. ---- */
-function pollProgress(jobId, onTick){
+/* ---- generation progress: elapsed time only. Resemble's hosted API is one
+   blocking call with no per-token progress to report, so there's nothing
+   to poll the server for — just tick a local clock while the (long-running)
+   POST /generate is in flight. ---- */
+function pollProgress(onTick){
   const t0=Date.now();
-  const timer=setInterval(async()=>{
-    const elapsedS=(Date.now()-t0)/1000;
-    let step=0,total=1024;
-    try{
-      const r=await fetch(LOCAL_SVC+"/progress/"+jobId);
-      const j=await r.json();
-      step=j.step||0; total=j.total||1024;
-    }catch(e){ /* keep showing elapsed time even if a poll fails */ }
-    onTick(elapsedS, step, total);
-  },750);
+  const timer=setInterval(()=>{ onTick((Date.now()-t0)/1000); },250);
   return ()=>clearInterval(timer);
 }
 
@@ -923,34 +717,16 @@ async function generateRun(span){
     prog.style.display="inline-flex";
   }
 
-  const jobId=(crypto.randomUUID?crypto.randomUUID():("job"+Date.now()+Math.random()));
-  const isResemble=isResembleVoice(voiceId);
-  const stopPolling=pollProgress(jobId,(elapsedS,step,total)=>{
+  const stopPolling=pollProgress((elapsedS)=>{
     if(span._genToken!==myToken) return; // superseded — a newer generation owns this span's UI now
     if(!progLabel) return;
-    // Resemble's hosted API has no per-token progress to poll for — a bar
-    // stuck at 0% until it suddenly completes reads as hung, so show
-    // elapsed time only instead of a percentage that can never move.
-    if(isResemble){
-      if(progBar) progBar.style.width="100%";
-      progLabel.textContent="via Resemble AI… "+Math.round(elapsedS)+"s";
-      return;
-    }
-    const pct=Math.min(96, Math.round((step/total)*100)); // capped — most runs stop well before `total`
-    if(progBar) progBar.style.width=pct+"%";
-    let etaTxt="";
-    if(step>3){
-      const secPerStep=elapsedS/step;
-      const stepsLeft=Math.max(0,total-step);
-      const etaS=Math.round(secPerStep*Math.min(stepsLeft, step*3)); // don't project wildly past what we've already seen
-      etaTxt=" · ~"+etaS+"s left";
-    }
-    progLabel.textContent=Math.round(elapsedS)+"s"+etaTxt;
+    if(progBar) progBar.style.width="100%";
+    progLabel.textContent="via Resemble AI… "+Math.round(elapsedS)+"s";
   });
 
   try{
     const fd=new FormData();
-    fd.append("voiceId",voiceId); fd.append("text",text); fd.append("jobId",jobId);
+    fd.append("voiceId",voiceId); fd.append("text",text);
     const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd,signal:controller.signal});
     // The generation phase is over the moment this settles (success or
     // throw) — stop polling now rather than waiting for encode+upload too,
