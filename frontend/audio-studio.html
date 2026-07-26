@@ -123,6 +123,7 @@
   .segment.loop{background:repeating-linear-gradient(135deg,#1e2b40,#1e2b40 8px,#223250 8px,#223250 16px)}
   .segment canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
   .segment .seg-fades{position:absolute;inset:0;pointer-events:none}
+  .seg-fade-shape{position:absolute;top:0;bottom:0;background:rgba(10,16,24,.6)}
   .segment .seg-label{position:absolute;top:1px;left:4px;font-family:'Barlow Condensed';font-size:10px;color:var(--ice);
                        text-shadow:0 1px 2px #000;pointer-events:none;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}
   .seg-handle{position:absolute;top:0;bottom:0;width:7px;cursor:ew-resize;background:rgba(255,255,255,.14)}
@@ -177,6 +178,7 @@
   <span class="crumb" id="hdrCrumb"></span>
   <a class="linklike" id="btnBackToEditor" href="/editor" style="display:none">&larr; Back to Editor</a>
   <button class="linklike" id="btnBackToProjects" style="display:none">&larr; Projects</button>
+  <a href="/chatterbox">Chatterbox →</a>
   <a href="/">Home</a>
 </div>
 
@@ -531,9 +533,15 @@ function uploadBlob(blob,key,mimeType){
    ============================================================ */
 function initFromUrl(){
   const qs=new URLSearchParams(location.search);
-  studio.projectId=qs.get("project")||null;
+  // Falls back to the last project worked on when there's no ?project= in
+  // the URL (e.g. arriving via a plain nav link from Chatterbox rather than
+  // a deep link) — so leaving Studio and coming back resumes where you left
+  // off instead of always landing on the picker. Explicitly clearing this
+  // (see btnBackToProjects below) is what actually means "I'm done here."
+  studio.projectId=qs.get("project")||localStorage.getItem("audioStudio.lastProject")||null;
   studio.deepZone=qs.get("zone")||null;
   studio.deepBearing=qs.has("bearing")?Number(qs.get("bearing")):null;
+  if(studio.projectId){ try{ localStorage.setItem("audioStudio.lastProject",studio.projectId); }catch(e){} }
 }
 function showPicker(){
   document.getElementById("pickerScreen").style.display="block";
@@ -585,6 +593,7 @@ async function enterProject(){
   refreshRail();
 }
 document.getElementById("btnBackToProjects").onclick=()=>{
+  try{ localStorage.removeItem("audioStudio.lastProject"); }catch(e){}
   const u=new URLSearchParams(location.search); u.delete("project"); u.delete("zone"); u.delete("bearing");
   location.search=u.toString();
 };
@@ -913,6 +922,64 @@ function newTrack(name){
   const t={ id:nextTrackId++, name:name||("Track "+(timeline.tracks.length+1)), muted:false, solo:false, gainDb:0, segments:[] };
   timeline.tracks.push(t); return t;
 }
+/* ---- Draft persistence — the timeline (tracks/segments) otherwise lives
+   only in the `timeline` JS variable and is rebuilt from scratch on every
+   page load, so navigating away (e.g. to Chatterbox) and back used to wipe
+   out anything not already rendered/uploaded. Segments hold a decoded
+   AudioBuffer (`buf`), which can't be JSON-stored, so what's persisted is
+   just enough to rebuild each segment — sourceUrl gets re-fetched and
+   re-decoded on restore via the same getBufAndPeaks() used when a clip is
+   first dropped onto the timeline. Scoped per-project (studio.projectId)
+   since that's already the unique key used elsewhere (e.g. the Fence
+   Editor back-link). ---- */
+let _persistDraftTimer=null;
+function persistTimelineDraft(){
+  if(!studio.projectId) return;
+  clearTimeout(_persistDraftTimer);
+  _persistDraftTimer=setTimeout(()=>{
+    try{
+      const data={
+        tracks:timeline.tracks.map(t=>({
+          id:t.id, name:t.name, muted:t.muted, solo:t.solo, gainDb:t.gainDb,
+          segments:t.segments.map(s=>({
+            id:s.id, sourceKey:s.sourceKey, sourceUrl:s.sourceUrl,
+            f0:s.f0, f1:s.f1, trackOffsetSec:s.trackOffsetSec,
+            fadeInSec:s.fadeInSec, fadeOutSec:s.fadeOutSec, gainDb:s.gainDb,
+            loopToFill:s.loopToFill, spatialFilter:s.spatialFilter, label:s.label
+          }))
+        })),
+        nextTrackId, nextSegId
+      };
+      localStorage.setItem("audioStudio.draft."+studio.projectId, JSON.stringify(data));
+    }catch(e){ /* localStorage full/unavailable — not worth interrupting the user over */ }
+  },400);
+}
+/* Returns true if a draft existed (even a valid-but-empty one) so the
+   caller knows not to fall back to the normal blank-project newTrack(). */
+async function restoreTimelineDraft(){
+  let raw;
+  try{ raw=localStorage.getItem("audioStudio.draft."+studio.projectId); }catch(e){ return false; }
+  if(!raw) return false;
+  let data;
+  try{ data=JSON.parse(raw); }catch(e){ return false; }
+  if(!data||!Array.isArray(data.tracks)) return false;
+
+  for(const td of data.tracks){
+    const t={ id:td.id, name:td.name, muted:!!td.muted, solo:!!td.solo, gainDb:td.gainDb||0, segments:[] };
+    for(const sd of td.segments||[]){
+      try{
+        const {buf,peaks}=await getBufAndPeaks(sd.sourceUrl);
+        t.segments.push({ ...sd, buf, peaks });
+      }catch(e){
+        console.error("Couldn't restore clip",sd.sourceKey,"— skipping:",e.message);
+      }
+    }
+    timeline.tracks.push(t);
+  }
+  nextTrackId=Math.max(nextTrackId,data.nextTrackId||1);
+  nextSegId=Math.max(nextSegId,data.nextSegId||1);
+  return true;
+}
 async function getBufAndPeaks(url){
   const buf=await _decodeUrl(url);
   return { buf, peaks:_buildPeaks(buf) };
@@ -950,6 +1017,7 @@ function renderTimelineUI(){
   document.getElementById("tlBody").style.width=(170+laneW)+"px";
   updatePlayheadUI();
   updateSelBar();
+  persistTimelineDraft();
 }
 function renderRuler(laneW){
   const marks=document.getElementById("tlRulerMarks");
@@ -1006,6 +1074,19 @@ function buildSegmentEl(s,t){
   const label=document.createElement("div"); label.className="seg-label"; label.textContent=s.label||"clip";
   const cv=document.createElement("canvas"); el.appendChild(cv); el.appendChild(label);
   paintSegmentWaveform(cv,s);
+  // Shaded wedges over the fade regions — dims the waveform underneath,
+  // tapering to nothing at the fade's inner edge, so the ramp the amber
+  // handles below control is actually visible instead of just two dots.
+  const segWidth=parseFloat(el.style.width);
+  const fades=document.createElement("div"); fades.className="seg-fades";
+  const fadeInShape=document.createElement("div"); fadeInShape.className="seg-fade-shape";
+  fadeInShape.style.left="0"; fadeInShape.style.width=Math.min(timeToPx(s.fadeInSec),segWidth)+"px";
+  fadeInShape.style.clipPath="polygon(0% 0%, 0% 100%, 100% 0%)";
+  const fadeOutShape=document.createElement("div"); fadeOutShape.className="seg-fade-shape";
+  fadeOutShape.style.right="0"; fadeOutShape.style.width=Math.min(timeToPx(s.fadeOutSec),segWidth)+"px";
+  fadeOutShape.style.clipPath="polygon(100% 0%, 100% 100%, 0% 0%)";
+  fades.appendChild(fadeInShape); fades.appendChild(fadeOutShape);
+  el.appendChild(fades);
   const hl=document.createElement("div"); hl.className="seg-handle l";
   const hr=document.createElement("div"); hr.className="seg-handle r";
   const fadeInH=document.createElement("div"); fadeInH.className="seg-fade-handle";
@@ -1163,10 +1244,33 @@ function startPreview(){
       if(segEnd<=startSec && !s.loopToFill) return;
       const into=Math.max(0,startSec-segStart);
       const src=previewCtx.createBufferSource(); src.buffer=s.buf;
-      const g=previewCtx.createGain(); g.gain.value=dbToLin(s.gainDb);
+      const g=previewCtx.createGain();
       src.connect(g); g.connect(bus);
       const when=previewCtx.currentTime+Math.max(0,segStart-startSec);
       const playDur=Math.max(0,dur-into);
+      // Live preview can start mid-segment (scrubbed playhead), unlike the
+      // offline bake in scheduleSegment() which always starts a segment from
+      // its own beginning — so the fade ramps here have to account for
+      // possibly resuming partway through the fade-in or fade-out region,
+      // not just replaying the same "start at 0" schedule.
+      const gv=dbToLin(s.gainDb);
+      const fadeIn=Math.max(s.fadeInSec||0,0.005), fadeOut=Math.max(s.fadeOutSec||0,0.005);
+      if(into<fadeIn){
+        g.gain.setValueAtTime(gv*Math.max(0,into/fadeIn),when);
+        g.gain.linearRampToValueAtTime(gv,when+(fadeIn-into));
+      }else{
+        g.gain.setValueAtTime(gv,when);
+      }
+      const fadeOutStartLocal=dur-fadeOut;
+      if(playDur>0){
+        if(into<fadeOutStartLocal){
+          g.gain.setValueAtTime(gv,when+(fadeOutStartLocal-into));
+          g.gain.linearRampToValueAtTime(0,when+playDur);
+        }else{
+          g.gain.setValueAtTime(gv*Math.max(0,(dur-into)/fadeOut),when);
+          g.gain.linearRampToValueAtTime(0,when+playDur);
+        }
+      }
       if(playDur>0) src.start(when, s.f0*s.buf.duration+into, playDur);
       previewSources.push(src);
     });
@@ -1492,8 +1596,13 @@ ClientPicker.init({ navEl: document.getElementById("clientPickerNav"), onChange:
   railKnownFolders=new Set(); railPendingFolders.clear();
   if(studio.projectId) enterProject(); else { showPicker(); loadProjectPicker(); }
 }});
-if(studio.projectId){ newTrack(); enterProject(); renderTimelineUI(); }
-else { showPicker(); loadProjectPicker(); }
+if(studio.projectId){
+  enterProject();
+  restoreTimelineDraft().then(restored=>{
+    if(!restored) newTrack();
+    renderTimelineUI();
+  });
+}else{ showPicker(); loadProjectPicker(); }
 </script>
 </body>
 </html>
