@@ -64,7 +64,7 @@
   #scriptToolbar input{flex:1}
   #scriptImport{flex:0 0 auto;padding:14px 16px}
   #scriptImport textarea{width:100%;height:140px;font-family:"Barlow";font-size:13px}
-  #scriptBody{flex:1;overflow-y:auto;padding:16px 24px;font-family:"Barlow";font-size:15px;line-height:1.7;white-space:pre-wrap}
+  #scriptBody{flex:1;overflow-y:auto;padding:16px 24px;font-family:"Barlow";font-size:15px;line-height:1.7;white-space:pre-wrap;outline:none;cursor:text}
   #scriptBody.dragover{background:rgba(255,106,61,.04)}
   .vox-run{border-radius:4px;padding:1px 2px;position:relative}
   .vox-run.tagged{background:rgba(255,106,61,.14);box-shadow:inset 0 -2px 0 var(--coral)}
@@ -90,6 +90,7 @@
   <span class="crumb" id="hdrCrumb">local voice cloning — Macbeth-to-park-tour narration</span>
   <nav id="clientNav" style="display:flex;align-items:center;gap:8px"></nav>
   <a href="/library">Library →</a>
+  <a href="/studio">Audio Studio →</a>
   <a href="/editor">Editor →</a>
   <a href="/">Home</a>
 </div>
@@ -126,7 +127,7 @@
       <button class="ghost" id="btnReimport">← New script</button>
       <button class="danger ghost" id="btnClearScript" title="Wipe this script completely, including the saved copy">🗑 Clear Script</button>
     </div>
-    <div id="scriptBody" style="display:none"></div>
+    <div id="scriptBody" contenteditable="true" style="display:none"></div>
     <div id="genAllBar" style="display:none">
       <div class="hint">Save to:</div>
       <select id="targetFolderSelect"></select>
@@ -441,7 +442,8 @@ function persistScript(){
       matchText: s.dataset.text, idx,
       voiceId: s.dataset.voiceId,
       voiceName: s.dataset.voiceName,
-      audioUrl: s.dataset.audioUrl||null
+      audioUrl: s.dataset.audioUrl||null,
+      generatedText: s.dataset.generatedText||null
     };
   }).filter(a=>a.lineIndex>=0);
   try{
@@ -494,11 +496,12 @@ function restoreScript(data){
       runSpan.dataset.voiceId=a.voiceId;
       runSpan.dataset.voiceName=a.voiceName;
       runSpan.appendChild(document.createTextNode(a.matchText));
-      const tagEl=document.createElement("span"); tagEl.className="vox-tag"; tagEl.textContent=a.voiceName;
+      const tagEl=document.createElement("span"); tagEl.className="vox-tag"; tagEl.contentEditable="false"; tagEl.textContent=a.voiceName;
       runSpan.prepend(tagEl);
       renderRunActions(runSpan);
       if(a.audioUrl){
         runSpan.dataset.audioUrl=a.audioUrl;
+        if(a.generatedText) runSpan.dataset.generatedText=a.generatedText;
         runSpan.classList.add("generated");
         const genBtn=runSpan.querySelector(".vox-actions button");
         if(genBtn){ genBtn.textContent="▶ Play"; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(runSpan.dataset.audioUrl).play(); }; }
@@ -558,15 +561,21 @@ async function refreshFolderOptions(){
   const sel=document.getElementById("targetFolderSelect");
   const defaultFolder="chatterbox-"+scriptSlug;
   if(!targetFolder) targetFolder=defaultFolder;
-  let folders=[defaultFolder];
+  // Always include targetFolder itself, not just defaultFolder — a folder
+  // just created via "+ New folder…" doesn't exist as a real object in R2
+  // yet (no file uploaded into it, and R2 has no empty-folder concept), so
+  // it wouldn't otherwise appear in the server's folder list and would
+  // silently drop out of this dropdown right after being "created".
+  let folders=[defaultFolder,targetFolder];
   const org=currentOrg();
   if(org){
     try{
       const r=await fetch("/api/audio-list?scope=library&org="+encodeURIComponent(org),{headers:{authorization:"Bearer "+getToken()}});
       const j=r.ok?await r.json():{folders:[]};
-      folders=[...new Set([defaultFolder,...(j.folders||[])])].sort();
-    }catch(e){ /* fall back to just the default — picker still works */ }
+      folders=[defaultFolder,targetFolder,...(j.folders||[])];
+    }catch(e){ /* fall back to just default+current — picker still works */ }
   }
+  folders=[...new Set(folders)].sort();
   sel.innerHTML="";
   folders.forEach(f=>{
     const opt=document.createElement("option"); opt.value=f; opt.textContent=f;
@@ -646,13 +655,164 @@ scriptBody.addEventListener("drop",e=>{
   target.dataset.voiceId=voiceId;
   target.dataset.voiceName=voiceName;
   delete target.dataset.audioUrl;
+  delete target.dataset.generatedText;
   target.classList.add("tagged"); target.classList.remove("generated");
   let tag=target.querySelector(".vox-tag");
-  if(!tag){ tag=document.createElement("span"); tag.className="vox-tag"; target.prepend(tag); }
+  if(!tag){ tag=document.createElement("span"); tag.className="vox-tag"; tag.contentEditable="false"; target.prepend(tag); }
   tag.textContent=voiceName;
   renderRunActions(target);
   updateGenAllHint();
   persistScript();
+});
+
+/* ============================================================
+   Free-form editing of #scriptBody (contenteditable) — typing, cut, copy,
+   paste, delete, Enter-for-new-line — layered on top of the existing
+   voice-tagging model. The tricky part isn't inserting text (the browser
+   already does that for plain typing/cut/delete once contenteditable is
+   on); it's keeping each .vox-run's dataset.text in sync with whatever the
+   user actually typed, and knowing when an edit has invalidated a clip
+   that was already generated for that run.
+   ============================================================ */
+
+/* A generated run's dataset.generatedText is the exact text that was sent
+   to /generate for it — set in generateRun()'s success path, persisted/
+   restored alongside audioUrl. Only invalidate when that baseline exists
+   AND disagrees with the live text: treating "no baseline" as "assume
+   stale" would falsely invalidate every already-generated run the first
+   time the user types anywhere in the document after this feature ships
+   (scripts saved before generatedText existed have no baseline at all). */
+function _syncSpanText(span){
+  const live=_cleanSpanText(span);
+  if(span.dataset.voiceId && span.dataset.audioUrl && span.dataset.generatedText!=null && span.dataset.generatedText!==live){
+    delete span.dataset.audioUrl;
+    delete span.dataset.generatedText;
+    span.classList.remove("generated"); span.classList.add("tagged");
+    const actions=span.querySelector(".vox-actions");
+    const btn=actions&&actions.querySelector("button");
+    if(btn){ btn.textContent="Generate"; btn.disabled=false; btn.onclick=(e)=>{ e.stopPropagation(); generateRun(span); }; }
+  }
+  span.dataset.text=live;
+}
+
+function normalizeScriptBody(){
+  [...scriptBody.children].forEach(lineDiv=>{
+    const topSpan=lineDiv.querySelector(".vox-run");
+    if(!topSpan) return;
+    topSpan.querySelectorAll(".vox-run[data-voice-id]").forEach(_syncSpanText);
+    _syncSpanText(topSpan);
+  });
+  updateGenAllHint();
+  persistScript();
+}
+scriptBody.addEventListener("input",normalizeScriptBody);
+
+/* Splits the line the caret is in at the caret position, moving everything
+   from the caret to the end of that line into a brand-new line directly
+   below it — used by the Enter handler below. If the caret lands inside an
+   already-tagged/generated run, that one run is flattened to plain text
+   first (a single voice assignment can't be represented split across two
+   lines); anything else in the line — including other tagged runs entirely
+   before or after the caret — is untouched and keeps working, since it's
+   only ever moved (preserving its listeners), never cloned. */
+function splitLineAtCaret(range){
+  let lineDiv=range.startContainer.nodeType===3?range.startContainer.parentElement:range.startContainer;
+  while(lineDiv && lineDiv.parentElement!==scriptBody) lineDiv=lineDiv.parentElement;
+  if(!lineDiv) return null;
+  const topSpan=lineDiv.querySelector(".vox-run");
+  if(!topSpan) return null;
+
+  let startContainer=range.startContainer, startOffset=range.startOffset;
+  const container=startContainer.nodeType===3?startContainer.parentElement:startContainer;
+  const taggedAncestor=container.closest&&container.closest(".vox-run[data-voice-id]");
+  if(taggedAncestor===topSpan){
+    // The whole line is itself one tagged run (dropped a voice straight onto
+    // an untouched line, never sub-highlighted) — a single voice assignment
+    // can't be represented split across two lines, so strip the tag/
+    // generation from the line in place; Node.contains() would otherwise
+    // report topSpan as its own "tagged ancestor" and this needs different
+    // handling than the nested-span case below (there's no separate element
+    // to replace — topSpan itself must keep existing as the line wrapper).
+    _invalidateSpanGeneration(topSpan);
+    delete topSpan.dataset.voiceId; delete topSpan.dataset.voiceName;
+    delete topSpan.dataset.audioUrl; delete topSpan.dataset.generatedText;
+    topSpan.classList.remove("tagged","generated");
+    const tagEl=topSpan.querySelector(".vox-tag"); if(tagEl) tagEl.remove();
+    const actionsEl=topSpan.querySelector(".vox-actions"); if(actionsEl) actionsEl.remove();
+  }else if(taggedAncestor && startContainer.nodeType===3 && startContainer.parentElement===taggedAncestor){
+    _invalidateSpanGeneration(taggedAncestor);
+    const before=startContainer.data.slice(0,startOffset), after=startContainer.data.slice(startOffset);
+    const afterNode=document.createTextNode(after);
+    taggedAncestor.replaceWith(document.createTextNode(before), afterNode);
+    startContainer=afterNode; startOffset=0;
+  }
+
+  const splitRange=document.createRange();
+  splitRange.setStart(startContainer,startOffset);
+  splitRange.setEndAfter(topSpan.lastChild||topSpan);
+  const afterFrag=splitRange.extractContents();
+
+  const newTopSpan=document.createElement("span");
+  newTopSpan.className="vox-run"; newTopSpan.dataset.lineId="ln"+(lineSeq++);
+  newTopSpan.appendChild(afterFrag);
+  newTopSpan.dataset.text=_cleanSpanText(newTopSpan);
+
+  const newLineDiv=document.createElement("div");
+  newLineDiv.style.marginBottom="10px";
+  newLineDiv.appendChild(newTopSpan);
+  lineDiv.after(newLineDiv);
+
+  topSpan.dataset.text=_cleanSpanText(topSpan);
+  return newTopSpan;
+}
+
+function insertPlainTextAtCaret(range,text){
+  if(!text) return range;
+  range.deleteContents();
+  const tn=document.createTextNode(text);
+  range.insertNode(tn);
+  const after=document.createRange();
+  after.setStartAfter(tn); after.setEndAfter(tn);
+  return after;
+}
+
+scriptBody.addEventListener("keydown",e=>{
+  if(e.key!=="Enter"||e.shiftKey) return; // Shift+Enter falls through to a plain in-line <br>, not a new taggable line
+  const sel=window.getSelection();
+  if(!sel||sel.rangeCount===0||!scriptBody.contains(sel.anchorNode)) return;
+  e.preventDefault();
+  try{
+    let range=sel.getRangeAt(0);
+    if(!range.collapsed) range=insertPlainTextAtCaret(range,"");
+    const newTopSpan=splitLineAtCaret(range);
+    if(!newTopSpan) return;
+    const caret=document.createRange();
+    caret.selectNodeContents(newTopSpan); caret.collapse(true);
+    sel.removeAllRanges(); sel.addRange(caret);
+    normalizeScriptBody();
+  }catch(err){ console.error("Enter/split failed:",err); }
+});
+
+scriptBody.addEventListener("paste",e=>{
+  e.preventDefault();
+  const text=(e.clipboardData||window.clipboardData).getData("text/plain");
+  if(!text) return;
+  const sel=window.getSelection();
+  if(!sel||sel.rangeCount===0||!scriptBody.contains(sel.anchorNode)) return;
+  try{
+    let range=sel.getRangeAt(0);
+    const chunks=text.split(/\r\n|\r|\n/);
+    range=insertPlainTextAtCaret(range,chunks[0]);
+    for(let i=1;i<chunks.length;i++){
+      const newTopSpan=splitLineAtCaret(range);
+      if(!newTopSpan) break;
+      range=document.createRange();
+      range.selectNodeContents(newTopSpan); range.collapse(true);
+      range=insertPlainTextAtCaret(range,chunks[i]);
+    }
+    sel.removeAllRanges(); sel.addRange(range);
+    normalizeScriptBody();
+  }catch(err){ console.error("Paste failed:",err); }
 });
 
 function renderRunActions(span){
@@ -753,6 +913,7 @@ async function generateRun(span){
     if(span._genToken!==myToken) return; // superseded during upload — discard, don't overwrite a newer result
 
     span.dataset.audioUrl = putJson.url || ("/api/audio/"+key);
+    span.dataset.generatedText = text; // baseline for detecting a later edit staling this clip out
     span.classList.add("generated");
     if(prog) prog.style.display="none";
     if(genBtn){ genBtn.style.display=""; genBtn.textContent="▶ Play"; genBtn.disabled=false; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(span.dataset.audioUrl).play(); }; }
