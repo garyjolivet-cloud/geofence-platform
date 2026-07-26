@@ -3102,7 +3102,14 @@ const SimVoice={
       if(s&&s._el){s._el.pause();s._el.src='';try{s.disconnect();}catch(e){}}
       else{try{s.stop();}catch(e){}};},650);
     this.playing=false;this.currentUrl=null;this.src=null;},
-  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;}
+  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;
+    // Reset per-zone loop/once-per-trigger history too — otherwise clicking
+    // "Reset" to start a fresh test walk doesn't actually give you a fresh
+    // walk: a stop already played in the previous pass stays inside its
+    // real replay-delay cooldown (or stays "played once" forever if its
+    // loop-audio checkbox is off), even though nothing about a real fresh
+    // visitor session would carry that history over.
+    this._lastPlayedAt={}; this._playedOnce={};}
 };
 
 // Ambient (path stop) clip playback in Test Mode — separate channel from
