@@ -3065,12 +3065,16 @@ const SimVoice={
       else{try{this.src.stop();}catch(e){}}
     }
     let src;
+    // loop=false to match the real engine's SpatialVoice (geofence-engine.html)
+    // — a recorded stop clip plays once through, it doesn't loop continuously
+    // while you linger. This sim previously set loop=true, so testing a stop
+    // here didn't match what a real visitor would actually hear.
     if(loaded._isElement){
-      const el=new Audio(loaded._objUrl);el.loop=true;
+      const el=new Audio(loaded._objUrl);el.loop=false;
       src=this.ctx.createMediaElementSource(el);src._el=el;
       src.connect(this.nodes.mono);el.play().catch(()=>{});
     }else{
-      src=this.ctx.createBufferSource();src.buffer=loaded;src.loop=true;
+      src=this.ctx.createBufferSource();src.buffer=loaded;src.loop=false;
       src.connect(this.nodes.mono);src.start();
     }
     this.src=src;this.currentUrl=url;this.playing=true;
