@@ -840,6 +840,14 @@ const SpatialVoice = {
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
     g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);
     HUD.log('ev-sys','▶ spatial voice — '+zone.name);
+    // Recorded clips play via this distance-based pick, entirely independent
+    // of the Geofencer trigger/event system — Analytics.delivery()/bearing()
+    // were only ever called from the 'say' (TTS) trigger path, so a stop
+    // with a real recorded clip (the common case) generated zero
+    // AUDIO_ENGAGEMENT analytics no matter how many times a visitor actually
+    // heard it. This is the one place a new clip is confirmed to have
+    // actually started, so it's the right spot to fire that event from.
+    if(typeof Analytics!=='undefined'){ Analytics.delivery(zone); Analytics.bearing(zone); }
   },
   update(az, distM, headingOk){
     if(!this.nodes || !this.playing) return;
