@@ -9,10 +9,3 @@ connect-iq/external-mir/
 connect-iq/internal-mir/
 connect-iq/*.prg
 connect-iq/*.iq
-chatterbox-local/venv/
-chatterbox-local/models/
-chatterbox-local/voices/
-chatterbox-local/__pycache__/
-chatterbox-local/*.wav
-chatterbox-local/*.mp3
-chatterbox-local/*.log

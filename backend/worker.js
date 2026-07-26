@@ -11,6 +11,8 @@
      env.ASSETS         static assets
      env.AUDIO          R2 bucket for audio clips
      env.ADMIN_TOKEN    bearer secret for write endpoints  (wrangler secret)
+     env.GROQ_API_KEY   Groq API key for /api/chat  (wrangler secret)
+     env.RESEMBLE_API_TOKEN  Resemble AI token for /api/chatterbox/generate  (wrangler secret)
      env.ORG_ID         organisation slug, e.g. "chase-life"  (var)
      env.ALLOWED_ORIGIN browser origin allowed on write endpoints, e.g.
                         "https://geofence-platform.gary-jolivet.workers.dev"
@@ -1915,6 +1917,87 @@ async function api(request, env, url) {
       });
     } catch(e) {
       return json({ error: e.message }, 502, CORS_PUBLIC);
+    }
+  }
+
+  // --- Chatterbox Studio: org-scoped voice palette + Resemble AI proxy.
+  // Moved here from a local FastAPI service tunneled off one laptop — that
+  // service used to also run a local ONNX voice-cloning model, which is why
+  // it existed outside the Worker at all; once that was removed for being
+  // unusable on the laptop's hardware (RAM), every voice became Resemble-
+  // hosted only, and there was no remaining reason this needed to live
+  // outside the Worker. Scoped by org (client id) exactly like the Library,
+  // since voices are meant to be reusable across every project belonging to
+  // one company — reuses libraryScopeOk() rather than inventing a new scope.
+  if (path === "/api/chatterbox/voices" && method === "GET") {
+    const A = await auth(request, env);
+    const orgId = url.searchParams.get("org");
+    if (!orgId) return json({ error: "?org=<clientId> required" }, 400, AC);
+    if (!(await libraryScopeOk(env, A, orgId))) return json({ error: "unauthorized" }, 401, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,name,resemble_voice_uuid AS resembleVoiceUuid FROM chatterbox_voice WHERE org_id=? ORDER BY name"
+    ).bind(orgId).all();
+    return json(results || [], 200, AC);
+  }
+
+  if (path === "/api/chatterbox/voices" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    if (!b.org || !b.name || !b.resembleVoiceUuid) return json({ error: "org, name, and resembleVoiceUuid required" }, 400, AC);
+    if (!(await libraryScopeOk(env, A, b.org))) return json({ error: "unauthorized" }, 401, AC);
+    const id = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO chatterbox_voice (id,org_id,name,resemble_voice_uuid,created_at,updated_at) VALUES (?,?,?,?,?,?)"
+    ).bind(id, b.org, b.name, b.resembleVoiceUuid, now, now).run();
+    return json({ id, name: b.name }, 201, AC);
+  }
+
+  const mcv = path.match(/^\/api\/chatterbox\/voices\/([^/]+)$/);
+  if (mcv && (method === "PATCH" || method === "DELETE")) {
+    const voiceId = decodeURIComponent(mcv[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT org_id FROM chatterbox_voice WHERE id=?").bind(voiceId).first();
+    if (!row) return json({ error: "voice not found" }, 404, AC);
+    if (!(await libraryScopeOk(env, A, row.org_id))) return json({ error: "unauthorized" }, 401, AC);
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM chatterbox_voice WHERE id=?").bind(voiceId).run();
+      return json({ deleted: voiceId }, 200, AC);
+    }
+    const b = await request.json().catch(() => ({}));
+    if (!b.name) return json({ error: "name required" }, 400, AC);
+    await env.DB.prepare("UPDATE chatterbox_voice SET name=?, updated_at=? WHERE id=?")
+      .bind(b.name, new Date().toISOString(), voiceId).run();
+    return json({ id: voiceId, name: b.name }, 200, AC);
+  }
+
+  if (path === "/api/chatterbox/generate" && method === "POST") {
+    if (!env.RESEMBLE_API_TOKEN) return json({ error: "RESEMBLE_API_TOKEN not configured" }, 503, AC);
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    if (!b.voiceId || !b.text) return json({ error: "voiceId and text required" }, 400, AC);
+    const voice = await env.DB.prepare("SELECT org_id,resemble_voice_uuid FROM chatterbox_voice WHERE id=?").bind(b.voiceId).first();
+    if (!voice) return json({ error: "voice not found" }, 404, AC);
+    if (!(await libraryScopeOk(env, A, voice.org_id))) return json({ error: "unauthorized" }, 401, AC);
+    try {
+      const r = await fetch("https://f.cluster.resemble.ai/synthesize", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + env.RESEMBLE_API_TOKEN, "Content-Type": "application/json" },
+        body: JSON.stringify({ voice_uuid: voice.resemble_voice_uuid, data: b.text, output_format: "wav", use_hd: false })
+      });
+      const result = await r.json().catch(() => null);
+      if (!result || !result.success) {
+        return json({ error: "Resemble synthesis failed: " + ((result && (result.message || JSON.stringify(result))) || ("HTTP " + r.status)) }, 502, AC);
+      }
+      // Resemble already returns a ready-to-play WAV — just base64-decode it,
+      // no re-encoding needed (unlike the old local-ONNX path, which produced
+      // raw PCM float32 that had to be WAV-encoded before it could be served).
+      const bin = atob(result.audio_content);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new Response(bytes, { status: 200, headers: { "content-type": "audio/wav", ...AC } });
+    } catch (e) {
+      return json({ error: e.message }, 502, AC);
     }
   }
 

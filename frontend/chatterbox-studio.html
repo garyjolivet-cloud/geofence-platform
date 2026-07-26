@@ -30,11 +30,6 @@
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:6px 9px}
   .hint{font-family:"Barlow";font-size:12px;color:var(--fog)}
 
-  #svcBanner{flex:0 0 auto;padding:8px 16px;font-family:"Barlow Condensed";font-size:12px;
-         background:rgba(255,47,78,.12);color:var(--hazard);border-bottom:1px solid var(--hazard);display:none}
-  #svcBanner.ok{display:none}
-  #svcBanner.down{display:block}
-
   #main{flex:1;display:flex;min-height:0}
 
   /* ---- voice palette (left rail) ---- */
@@ -87,15 +82,13 @@
 
 <div class="hdr">
   <h1>🎙️ Chatterbox Studio</h1>
-  <span class="crumb" id="hdrCrumb">local voice cloning — Macbeth-to-park-tour narration</span>
+  <span class="crumb" id="hdrCrumb">voice cloning — Macbeth-to-park-tour narration</span>
   <nav id="clientNav" style="display:flex;align-items:center;gap:8px"></nav>
   <a href="/library">Library →</a>
   <a href="/studio">Audio Studio →</a>
   <a href="/editor">Editor →</a>
   <a href="/">Home</a>
 </div>
-
-<div id="svcBanner"></div>
 
 <div id="main">
   <div class="rail">
@@ -138,22 +131,16 @@
 </div>
 
 <script>
-// Reaches the local Chatterbox service running on gary's laptop through a
-// Cloudflare Tunnel (cloudflared quick tunnel — see chatterbox-local/README.md),
-// so this page works from any origin, including production, not just
-// localhost. NOTE: quick tunnel URLs are ephemeral — they change any time
-// the tunnel process restarts. If generation stops working, get a fresh
-// URL from the cloudflared terminal output and update this constant.
-const LOCAL_SVC = "https://ericsson-default-connecting-banana.trycloudflare.com";
 function getToken(){ return localStorage.getItem("gp.session")||""; }
+function authHeaders(){ return {authorization:"Bearer "+getToken()}; }
 function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
 function slug(s){ return (s||"").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 async function errDetail(r){
-  // FastAPI's HTTPException body is {"detail": "..."} — surface that
+  // worker.js's json() error responses are {"error": "..."} — surface that
   // instead of a generic "failed" so the user can actually act on it
-  // (e.g. "RESEMBLE_API_TOKEN not set" vs. an opaque network error).
-  try{ const j=await r.json(); return j.detail || JSON.stringify(j); }
+  // (e.g. "RESEMBLE_API_TOKEN not configured" vs. an opaque network error).
+  try{ const j=await r.json(); return j.error || j.detail || JSON.stringify(j); }
   catch(e){ return r.statusText || ("HTTP "+r.status); }
 }
 
@@ -214,33 +201,16 @@ async function _wavBlobToMp3(wavBlob){
 }
 
 /* ============================================================
-   Service health check — LOCAL_SVC is reachable over real HTTPS (via a
-   Cloudflare Tunnel to gary's laptop), so this works from any origin,
-   production included, as long as the tunnel + local service are running.
-   ============================================================ */
-async function checkService(){
-  const banner=document.getElementById("svcBanner");
-  try{
-    const r=await fetch(LOCAL_SVC+"/health");
-    const j=await r.json();
-    if(j.status==="ok"){ banner.className="ok"; return true; }
-    banner.className="down";
-    banner.textContent="⏳ Local Chatterbox service isn't responding normally — try again in a moment.";
-    return false;
-  }catch(e){
-    banner.className="down";
-    banner.textContent="⚠ Can't reach the local Chatterbox service at "+LOCAL_SVC+" — run `python server.py` from chatterbox-local/ first.";
-    return false;
-  }
-}
-
-/* ============================================================
-   Voice Palette — backed entirely by the local service.
+   Voice Palette — backed by /api/chatterbox/* (org-scoped, same origin —
+   see worker.js). Every voice is Resemble-hosted; there's no local service
+   involved at all anymore.
    ============================================================ */
 async function loadVoices(){
   const list=document.getElementById("voiceList");
+  const org=currentOrg();
+  if(!org){ list.innerHTML='<div class="hint">pick a client (top right) first</div>'; return; }
   try{
-    const r=await fetch(LOCAL_SVC+"/voices");
+    const r=await fetch("/api/chatterbox/voices?org="+encodeURIComponent(org),{headers:authHeaders()});
     const voices=await r.json();
     // Revoke any preview blob URLs cached on the cards about to be
     // discarded — invalidateReplay() only fires on a text edit, so
@@ -291,7 +261,7 @@ async function loadVoices(){
       row.querySelector("[data-gear]").onclick=(ev)=>{ ev.stopPropagation(); panel.classList.toggle("open"); };
       row.querySelector("[data-del]").onclick=async(ev)=>{
         ev.stopPropagation();
-        await fetch(LOCAL_SVC+"/voices/"+v.id,{method:"DELETE"});
+        await fetch("/api/chatterbox/voices/"+v.id,{method:"DELETE",headers:authHeaders()});
         loadVoices();
       };
       panel.querySelector("[data-preview]").onclick=(ev)=>{
@@ -308,7 +278,7 @@ async function loadVoices(){
 
       list.appendChild(card);
     });
-  }catch(e){ /* service down — banner already shows this */ }
+  }catch(e){ list.innerHTML='<div class="hint">error loading voices: '+esc(e.message)+'</div>'; }
 }
 
 function startVoiceRename(v,nameEl){
@@ -322,8 +292,8 @@ function startVoiceRename(v,nameEl){
     const newName=inp.value.trim();
     if(!newName || newName===oldName){ loadVoices(); return; }
     try{
-      await fetch(LOCAL_SVC+"/voices/"+v.id,{
-        method:"PATCH", headers:{"content-type":"application/json"},
+      await fetch("/api/chatterbox/voices/"+v.id,{
+        method:"PATCH", headers:{"content-type":"application/json",...authHeaders()},
         body:JSON.stringify({name:newName})
       });
     }catch(e){ /* reload shows whatever actually got saved either way */ }
@@ -337,7 +307,6 @@ function startVoiceRename(v,nameEl){
 }
 
 async function previewVoice(v,els){
-  if(!(await checkService())) return;
   const text=els.textInput.value.trim();
   if(!text) return;
 
@@ -352,9 +321,10 @@ async function previewVoice(v,els){
   });
 
   try{
-    const fd=new FormData();
-    fd.append("voiceId",v.id); fd.append("text",text);
-    const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd});
+    const r=await fetch("/api/chatterbox/generate",{
+      method:"POST", headers:{"content-type":"application/json",...authHeaders()},
+      body:JSON.stringify({voiceId:v.id,text})
+    });
     stopPolling();
     if(!r.ok) throw new Error(await errDetail(r));
     const wavBlob=await r.blob();
@@ -380,11 +350,13 @@ async function previewVoice(v,els){
 }
 
 async function createVoiceFromResemble(name,resembleVoiceUuid){
-  const r=await fetch(LOCAL_SVC+"/voices/from-resemble",{
-    method:"POST", headers:{"content-type":"application/json"},
-    body:JSON.stringify({name,resembleVoiceUuid})
+  const org=currentOrg();
+  if(!org){ alert("Pick a client (top right) first — voices are saved per client."); return; }
+  const r=await fetch("/api/chatterbox/voices",{
+    method:"POST", headers:{"content-type":"application/json",...authHeaders()},
+    body:JSON.stringify({org,name,resembleVoiceUuid})
   });
-  if(!r.ok){ alert("Couldn't add that Resemble voice: "+(await r.text().catch(()=>r.statusText))); return; }
+  if(!r.ok){ alert("Couldn't add that Resemble voice: "+(await errDetail(r))); return; }
   loadVoices();
 }
 
@@ -846,7 +818,6 @@ function pollProgress(onTick){
 }
 
 async function generateRun(span){
-  if(!(await checkService())) return;
   const voiceId=span.dataset.voiceId;
   const text=span.dataset.text || _cleanSpanText(span);
   if(!voiceId || !text) return;
@@ -885,9 +856,10 @@ async function generateRun(span){
   });
 
   try{
-    const fd=new FormData();
-    fd.append("voiceId",voiceId); fd.append("text",text);
-    const r=await fetch(LOCAL_SVC+"/generate",{method:"POST",body:fd,signal:controller.signal});
+    const r=await fetch("/api/chatterbox/generate",{
+      method:"POST", headers:{"content-type":"application/json",...authHeaders()},
+      body:JSON.stringify({voiceId,text}), signal:controller.signal
+    });
     // The generation phase is over the moment this settles (success or
     // throw) — stop polling now rather than waiting for encode+upload too,
     // or a late tick can flicker "encoding mp3…"/100% back to stale data.
@@ -972,10 +944,8 @@ document.getElementById("btnGenerateAll").onclick=generateAllTagged;
 /* ============================================================
    Init
    ============================================================ */
-checkService();
 loadVoices();
-setInterval(checkService,15000);
-if(window.ClientPicker){ ClientPicker.init({navEl:document.getElementById("clientNav")}); }
+if(window.ClientPicker){ ClientPicker.init({navEl:document.getElementById("clientNav"),onChange:loadVoices}); }
 
 (function(){
   try{

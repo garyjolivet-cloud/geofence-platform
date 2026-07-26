@@ -21,6 +21,8 @@ geofence-platform/
 │   ├── geofence-sim.html    ← Geofence simulator (tests zones without live GPS)
 │   ├── audio-bench.html     ← Audio upload/playback sandbox (local-only, never touches R2)
 │   ├── library.html         ← Shared audio Library (/library route) — folders, trim, move, combine/blend
+│   ├── audio-studio.html    ← Multi-track audio editor (/studio route) — timeline, fades, spatial filter, drafts persist per-project in localStorage
+│   ├── chatterbox-studio.html ← AI voice-cloning script editor (/chatterbox route) — org-scoped voices via /api/chatterbox/*, generation via Resemble AI
 │   ├── bot-library.html     ← Bot library manager (/bots route)
 │   ├── share.html           ← Shareable project link page
 │   └── sw.js                ← Service worker (network-first offline, cache-first for audio)
@@ -69,6 +71,7 @@ Create a `.dev.vars` file at the project root (gitignored) to set secrets for `n
 ```ini
 ADMIN_TOKEN=your-secret-token-here
 GROQ_API_KEY=your-groq-key-here
+RESEMBLE_API_TOKEN=your-resemble-token-here
 # ALLOWED_ORIGIN not needed locally (defaults to *, all origins allowed)
 # ORG_ID=chase-life
 ```
@@ -101,6 +104,7 @@ This file is never committed. In production, secrets are set via `npx wrangler s
 | `bot` | Reusable AI personas (region bots + visitor/client bots) |
 | `weather_cache` | Rolling hourly weather readings from Kicking Horse Resort (last 48) |
 | `snow_history` | Daily 8am MST snow snapshots (last 14 days) |
+| `chatterbox_voice` | Org-scoped Chatterbox Studio voice palette (name + Resemble AI voice UUID) |
 
 ## Audio Storage
 
@@ -273,6 +277,9 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | GET/POST | `/api/bots` | GET public, POST scoped (`publish`) |
 | PUT/DELETE | `/api/bots/:id` | PUT scoped (`publish`), DELETE master |
 | POST | `/api/chat` | public (Groq SSE stream) |
+| GET/POST | `/api/chatterbox/voices` | GET/POST scoped like Library (`audio`/`publish`) + same-org, requires `?org=`/body `org` |
+| PATCH/DELETE | `/api/chatterbox/voices/:id` | scoped like Library + same-org (org looked up from the voice row) |
+| POST | `/api/chatterbox/generate` | scoped like Library + same-org; proxies Resemble AI (`RESEMBLE_API_TOKEN` secret), returns a WAV |
 | DELETE | `/api/nuke` | master (wipes all rows, keeps schema) |
 
 **Size guards:** bundles rejected over 1 MB; event payloads over 500 KB.
