@@ -740,7 +740,7 @@ const Clarity = {
 const SpatialVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
   tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
-  _playedOnce:{}, _lastPlayedAt:{},   // per-zone-id — see the loop/once-per-trigger gating in playZone()
+  _lastPlayedAt:{},   // per-zone-id — see the loop/once-per-trigger replay-delay gating in playZone()
   // spatialRangeM is a path-stop-only override (the "voice range" handle);
   // audibleFromM is the per-stop blue "audio fade" ring, settable on every
   // stop type — previously exported into the bundle but never actually read
@@ -803,17 +803,15 @@ const SpatialVoice = {
     if(this.currentUrl===url && this.playing) return;     // already on this stop
     if(this.loadingUrl===url) return;                     // load in flight
     // "Loop audio" (default on) replays this stop's clip on every fresh
-    // entry, but not more often than the project's replay-delay setting
-    // (default 5 min) — avoids an annoying instant re-trigger from GPS
-    // jitter at a zone boundary or a visitor briefly backtracking. Turning
-    // it off makes the clip a true one-shot: once played, never again for
-    // the rest of this session, no matter how many times the visitor
-    // re-enters.
+    // entry, always, no restriction — that's what "loop" means. Turning it
+    // off makes it "once per trigger": the project's replay-delay setting
+    // (default 1 min) gates how soon THAT specific stop can play again
+    // after it already has — avoids an annoying instant re-trigger from GPS
+    // jitter at a zone boundary or a visitor briefly backtracking, while
+    // still allowing a genuine later re-visit once the delay has passed.
     const loop=zone.loopAudio!==false;
     if(!loop){
-      if(this._playedOnce[zone.id]) return;
-    }else{
-      const cooldownS=(BUNDLE && BUNDLE.audioRetriggerDelayS!=null) ? BUNDLE.audioRetriggerDelayS : 300;
+      const cooldownS=(BUNDLE && BUNDLE.audioRetriggerDelayS!=null) ? BUNDLE.audioRetriggerDelayS : 60;
       const last=this._lastPlayedAt[zone.id];
       if(last!=null && (Date.now()-last)<cooldownS*1000) return;
     }
@@ -852,7 +850,7 @@ const SpatialVoice = {
       src.connect(this.nodes.mono); src.start();
     }
     this.src=src; this.currentUrl=url; this.playing=true;
-    this._lastPlayedAt[zone.id]=Date.now(); this._playedOnce[zone.id]=true;
+    this._lastPlayedAt[zone.id]=Date.now();
     // fade in
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
     g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);

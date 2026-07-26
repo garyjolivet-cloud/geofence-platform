@@ -562,11 +562,11 @@
           <option value="1800000">30 min</option>
           <option value="3600000">60 min</option>
         </select>
-        <label class="k" style="margin-top:6px">audio replay delay — how long before a "loop audio" stop can play again</label>
+        <label class="k" style="margin-top:6px">audio replay delay — how long before a "loop audio: off" stop can play again</label>
         <select id="audioRetriggerDelayS">
           <option value="0">no delay (always replay)</option>
-          <option value="60">1 min</option>
-          <option value="300" selected>5 min (default)</option>
+          <option value="60" selected>1 min (default)</option>
+          <option value="300">5 min</option>
           <option value="600">10 min</option>
           <option value="1800">30 min</option>
         </select>
@@ -705,7 +705,7 @@
         <input type="range" id="pVolume" min="0" max="150" step="5" value="100" style="flex:1;accent-color:var(--coral)">
         <span id="pVolumeV" style="font-family:'Barlow Condensed';font-size:13px;color:var(--ice);flex:0 0 40px">100%</span>
       </div>
-      <label class="chk"><input type="checkbox" id="pLoopAudio" checked> loop audio (replay each time visited — off plays once, ever)</label>
+      <label class="chk"><input type="checkbox" id="pLoopAudio" checked> loop audio (replay freely, every visit — off applies the project's replay delay instead)</label>
       <div id="pAudioBar" style="display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:2px 0 2px">
         <div id="pAudioFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
       </div>
@@ -3036,14 +3036,13 @@ const SimVoice={
     this.currentVolume=zone.volume!=null?zone.volume:1;
     if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
     // Mirrors the real engine's SpatialVoice.playZone() loop/once-per-trigger
-    // gating (geofence-engine.html) — a zone with "loop audio" off never
-    // replays once played this session; a looping zone won't replay within
-    // the project's configured replay-delay of its last play.
+    // gating (geofence-engine.html) — a looping zone always replays freely;
+    // a "once per trigger" zone (loop off) is gated by the project's replay
+    // delay, so it can still play again after enough time passes, just not
+    // instantly re-trigger from GPS jitter/backtracking.
     const loop=zone.loopAudio!==false;
-    if(!this._playedOnce)this._playedOnce={};
     if(!this._lastPlayedAt)this._lastPlayedAt={};
-    if(!loop){ if(this._playedOnce[zone.id]) return; }
-    else{
+    if(!loop){
       const cooldownS=+(document.getElementById("audioRetriggerDelayS")?.value)||0;
       const last=this._lastPlayedAt[zone.id];
       if(last!=null && (Date.now()-last)<cooldownS*1000) return;
@@ -3078,7 +3077,7 @@ const SimVoice={
       src.connect(this.nodes.mono);src.start();
     }
     this.src=src;this.currentUrl=url;this.playing=true;
-    this._lastPlayedAt[zone.id]=Date.now(); this._playedOnce[zone.id]=true;
+    this._lastPlayedAt[zone.id]=Date.now();
     const g=this.nodes.fade.gain;g.cancelScheduledValues(this.ctx.currentTime);
     g.setValueAtTime(g.value,this.ctx.currentTime);g.linearRampToValueAtTime(1,this.ctx.currentTime+0.8);
     simLogEv("sev-sys","▶ "+zone.name);},
@@ -3103,13 +3102,12 @@ const SimVoice={
       else{try{s.stop();}catch(e){}};},650);
     this.playing=false;this.currentUrl=null;this.src=null;},
   stop(){this.fadeOut();this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;
-    // Reset per-zone loop/once-per-trigger history too — otherwise clicking
-    // "Reset" to start a fresh test walk doesn't actually give you a fresh
-    // walk: a stop already played in the previous pass stays inside its
-    // real replay-delay cooldown (or stays "played once" forever if its
-    // loop-audio checkbox is off), even though nothing about a real fresh
-    // visitor session would carry that history over.
-    this._lastPlayedAt={}; this._playedOnce={};}
+    // Reset per-zone replay-delay history too — otherwise clicking "Reset"
+    // to start a fresh test walk doesn't actually give you a fresh walk: a
+    // "once per trigger" stop already played in the previous pass stays
+    // inside its cooldown, even though a real fresh visitor session would
+    // never carry that history over.
+    this._lastPlayedAt={};}
 };
 
 // Ambient (path stop) clip playback in Test Mode — separate channel from
