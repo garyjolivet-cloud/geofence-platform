@@ -562,6 +562,14 @@
           <option value="1800000">30 min</option>
           <option value="3600000">60 min</option>
         </select>
+        <label class="k" style="margin-top:6px">audio replay delay — how long before a "loop audio" stop can play again</label>
+        <select id="audioRetriggerDelayS">
+          <option value="0">no delay (always replay)</option>
+          <option value="60">1 min</option>
+          <option value="300" selected>5 min (default)</option>
+          <option value="600">10 min</option>
+          <option value="1800">30 min</option>
+        </select>
       </div>
     </div>
   </div>
@@ -697,6 +705,7 @@
         <input type="range" id="pVolume" min="0" max="150" step="5" value="100" style="flex:1;accent-color:var(--coral)">
         <span id="pVolumeV" style="font-family:'Barlow Condensed';font-size:13px;color:var(--ice);flex:0 0 40px">100%</span>
       </div>
+      <label class="chk"><input type="checkbox" id="pLoopAudio" checked> loop audio (replay each time visited — off plays once, ever)</label>
       <div id="pAudioBar" style="display:none;height:5px;background:#1a2433;border-radius:3px;overflow:hidden;margin:2px 0 2px">
         <div id="pAudioFill" style="height:100%;width:0%;background:var(--coral);transition:width .08s linear"></div>
       </div>
@@ -1128,7 +1137,7 @@ function makeZone(name,shape){
   // system too) plus their own movement + independent ambient-bed fields.
   const base={ id:slug(name), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS,
-           approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1,
+           approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1, loopAudio:true,
            bearingDeg:90, isHazard:false };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
@@ -1636,6 +1645,7 @@ function refreshProps(){
   { const vPct=Math.round((z.volume??1)*100);
     document.getElementById("pVolume").value=vPct;
     document.getElementById("pVolumeV").textContent=vPct+"%"; }
+  document.getElementById("pLoopAudio").checked = z.loopAudio!==false;
 
   document.getElementById("pSay").value=z.say||"";
   const isTrip=z.shape.type==="tripline";
@@ -1787,6 +1797,7 @@ document.getElementById("pVolume").addEventListener("input",()=>{
 });
 bindProp("pBearing",z=>{ const v=document.getElementById("pBearing").value; z.bearingDeg=(v!==""&&v!==null)?(+v+360)%360:null; });
 document.getElementById("pIsHazard").addEventListener("change",()=>{ if(sel<0)return; zones[sel].isHazard=document.getElementById("pIsHazard").checked; render(); });
+document.getElementById("pLoopAudio").addEventListener("change",()=>{ if(sel<0)return; zones[sel].loopAudio=document.getElementById("pLoopAudio").checked; autoSave(); });
 bindProp("pBotId",z=>{ z.botId=document.getElementById("pBotId").value||null; });
 (function(){ const el=document.getElementById("pClientBotIdAdv");
   if(el) el.addEventListener("input",()=>{ if(sel<0)return; zones[sel].clientBotId=el.value||null; render(); }); })();
@@ -2334,6 +2345,7 @@ function zoneToEngine(z){
   if(Array.isArray(z.actions) && z.actions.length) zo.actions=z.actions;
   if(z.audioUrl) zo.audioUrl=z.audioUrl;
   if(z.volume!=null && Math.abs(z.volume-1)>0.001) zo.volume=z.volume;
+  if(z.loopAudio===false) zo.loopAudio=false;
   if(z.botGreetingDelayS) zo.botGreetingDelayS=z.botGreetingDelayS;
   if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
   if(z.isHazard) zo.isHazard=true;
@@ -2367,6 +2379,7 @@ function exportBundle(){
               visitorBotId:document.getElementById("visitorBotSel").value||null,
               guideId:null,
               liveTtlMs:+document.getElementById("liveTtlMs").value,
+              audioRetriggerDelayS:+document.getElementById("audioRetriggerDelayS").value,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -2392,6 +2405,7 @@ function engineToZone(zo){
   const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
   z.audioM = zo.audibleFromM!=null?zo.audibleFromM:DEFAULTS.audioM;
   z.volume = zo.volume!=null?zo.volume:1;
+  z.loopAudio = zo.loopAudio!==false;
   const gen=(zo.layers||[]).find(l=>l.kind==="general");
   if(gen&&gen.radiusM!=null) z.approachM=gen.radiusM;
   (zo.triggers||[]).forEach(t=>{
@@ -2439,6 +2453,7 @@ document.getElementById("importBtn").onclick=()=>{
     refreshBotDropdowns();
     if(b.visitorBotId) document.getElementById("visitorBotSel").value=b.visitorBotId;
     if(b.liveTtlMs) document.getElementById("liveTtlMs").value=String(b.liveTtlMs);
+    if(b.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=String(b.audioRetriggerDelayS);
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
@@ -3020,6 +3035,19 @@ const SimVoice={
     // leave and re-enter to restart playback.
     this.currentVolume=zone.volume!=null?zone.volume:1;
     if(this.currentUrl===url&&this.playing)return;if(this.loadingUrl===url)return;
+    // Mirrors the real engine's SpatialVoice.playZone() loop/once-per-trigger
+    // gating (geofence-engine.html) — a zone with "loop audio" off never
+    // replays once played this session; a looping zone won't replay within
+    // the project's configured replay-delay of its last play.
+    const loop=zone.loopAudio!==false;
+    if(!this._playedOnce)this._playedOnce={};
+    if(!this._lastPlayedAt)this._lastPlayedAt={};
+    if(!loop){ if(this._playedOnce[zone.id]) return; }
+    else{
+      const cooldownS=+(document.getElementById("audioRetriggerDelayS")?.value)||0;
+      const last=this._lastPlayedAt[zone.id];
+      if(last!=null && (Date.now()-last)<cooldownS*1000) return;
+    }
     this.ensure();this.loadingUrl=url;
     let loaded;try{loaded=await this.load(url);}catch(e){
       this.loadingUrl=null;
@@ -3046,6 +3074,7 @@ const SimVoice={
       src.connect(this.nodes.mono);src.start();
     }
     this.src=src;this.currentUrl=url;this.playing=true;
+    this._lastPlayedAt[zone.id]=Date.now(); this._playedOnce[zone.id]=true;
     const g=this.nodes.fade.gain;g.cancelScheduledValues(this.ctx.currentTime);
     g.setValueAtTime(g.value,this.ctx.currentTime);g.linearRampToValueAtTime(1,this.ctx.currentTime+0.8);
     simLogEv("sev-sys","▶ "+zone.name);},
@@ -3200,6 +3229,7 @@ function editorToSimBundle(){
       else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
     const out={id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
       audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,volume:z.volume!=null?z.volume:1,
+      loopAudio:z.loopAudio!==false,
       spatialRangeM:z.spatialRangeM||farM,spatialClearM:z.spatialClearM||clearM,
       layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       chatPersona:z.chatPersona||null,chatKnowledge:z.chatKnowledge||null,chatGreeting:z.chatGreeting||null,
