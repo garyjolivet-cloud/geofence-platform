@@ -239,7 +239,6 @@
           white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s;z-index:10}
   .map-handle:hover .mh-lbl,.map-handle.mh-active .mh-lbl{opacity:1}
   .map-handle.mh-bearing{background:#ffc24d;width:16px;height:16px}
-  .map-handle.mh-approach{background:#8fb6d4}
   .map-handle.mh-radius{background:#27d67b}
   .map-handle.mh-audio{background:#6fbfff}
   .map-handle.mh-broadcast{background:#ff9900}
@@ -438,10 +437,6 @@
       <div class="key-row-text"><b>Bearing (amber) — arrow tip</b><span>Drag in a circle to set the direction the visitor should face on arrival. Default east (90°).</span></div>
     </div>
     <div class="key-row">
-      <div class="key-dot" style="background:#8fb6d4"></div>
-      <div class="key-row-text"><b>Approach ring (white-blue) — north</b><span>Drag outward or inward to set how far away the zone starts to activate.</span></div>
-    </div>
-    <div class="key-row">
       <div class="key-dot" style="background:#27d67b"></div>
       <div class="key-row-text"><b>Reveal radius (green) — east</b><span>Circle zones only. Drag to resize the filled zone circle.</span></div>
     </div>
@@ -483,7 +478,7 @@
     </div>
     <div class="key-move-row">
       <div class="key-icon" style="color:var(--fog)">↔</div>
-      <div class="key-row-text"><b>While dragging</b><span>The label updates live (e.g. "approach: 45 m"). The panel number box updates too.</span></div>
+      <div class="key-row-text"><b>While dragging</b><span>The label updates live (e.g. "radius: 45 m"). The panel number box updates too.</span></div>
     </div>
   </div>
 </div>
@@ -665,7 +660,7 @@
     <input id="pName" placeholder="Mountain Flower Garden">
     <!-- ── Path movement (path stops only) — plus the full trigger system below,
          same as every other stop: hazard flag, Voices & Audio, Bots & Chat,
-         speak-when/dwell, and Advanced (needle/approach/tracker/webhook/bearing) ── -->
+         speak-when/dwell, and Advanced (tracker/webhook/bearing) ── -->
     <div class="va-section" id="pPathSection" style="display:none">
       <div class="va-label">Movement</div>
       <label class="k">movement mode</label>
@@ -759,11 +754,7 @@
       <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
       <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
       <hr>
-      <label class="chk"><input type="checkbox" id="pNeedle" checked> point the arrow here on approach</label>
-      <div class="half">
-        <div><label class="k">approach ring m</label><input id="pApproach" type="number" value="30" min="8"></div>
-        <div id="revealWrap"><label class="k">reveal radius m</label><input id="pReveal" type="number" min="3"></div>
-      </div>
+      <div id="revealWrap"><label class="k">reveal radius m</label><input id="pReveal" type="number" min="3"></div>
       <div id="trackerRow">
         <label class="k">tracker ID — zone follows this device's GPS</label>
         <input id="pTrackerId" placeholder="guide-1  (leave blank for static zone)">
@@ -776,7 +767,7 @@
         <label class="k">client bot (tracker zones)</label>
         <select id="pClientBotIdAdv" style="width:100%"><option value="">— none —</option></select>
       </div>
-      <label class="k">audio fades in from (m)</label>
+      <label class="k">audio fades in from (m) — how far away this stop's clip starts fading in</label>
       <input id="pAudio" type="number" value="40" min="0">
       <hr>
       <label class="k">webhook (fires on event)</label>
@@ -785,7 +776,6 @@
           <option value="enter">on enter</option>
           <option value="reveal">on reveal</option>
           <option value="exit">on exit</option>
-          <option value="approach">on approach</option>
         </select>
         <input id="pActUrl" placeholder="https://your-system/hook" style="flex:1">
       </div>
@@ -994,12 +984,12 @@
    CHASE LIFE — FENCE EDITOR v2
    Draw circle / polygon / tripline stops, author triggers + spoken lines
    + ring settings in a properties panel, and export the engine's rich
-   BUNDLE (general approach ring + target reveal + needle + audio).
+   BUNDLE (general approach ring + target reveal + audio).
    MapLibre uses [lon,lat]; the engine uses [lat,lon] — we convert.
    ===================================================================== */
 
 const REF=[-117.0547,51.3027];           // [lon,lat] near the village — initial view
-const DEFAULTS={ approachM:30, audioM:40, revealRadiusM:12, dwellS:20, needle:true, fires:"enter" };
+const DEFAULTS={ approachM:30, audioM:40, revealRadiusM:12, dwellS:20, fires:"enter" };
 // Path (moving ambient) stops: default speed km/h per movement mode, and
 // loop-mode/timing are the only other stop-specific settings — timing is
 // always the shared real-world clock (not a per-stop choice), so there's no
@@ -1137,7 +1127,7 @@ function makeZone(name,shape){
   // Path stops get every field a normal stop has (they fire the full trigger
   // system too) plus their own movement + independent ambient-bed fields.
   const base={ id:slug(name), name, shape, say:"",
-           fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS, needle:DEFAULTS.needle,
+           fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1,
            bearingDeg:90, isHazard:false };
   if(shape.type==="path"){
@@ -1168,12 +1158,9 @@ function renderSources(){
         c=[live[1],live[0]];
       }
     }
-    const gr=zoneGenR(z);
-    // approach ring + audio fade ring — trigger-system rings, shown for every
-    // zone type including path stops (path stops fire triggers too now, at
-    // whatever point along the route they currently occupy at runtime)
-    feats.push({type:"Feature",properties:{kind:"approach",sel:selected},
-      geometry:{type:"Polygon",coordinates:[circleRing(c,gr,48)]}});
+    // audio fade ring — trigger-system ring, shown for every zone type
+    // including path stops (path stops fire triggers too now, at whatever
+    // point along the route they currently occupy at runtime)
     if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
       geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
     if(isPath){
@@ -1272,8 +1259,6 @@ function render(){
 map.on("load",()=>{
   map.addSource("fences",{type:"geojson",data:fc([])});
   map.addSource("draft",{type:"geojson",data:fc([])});
-  map.addLayer({id:"approach",type:"line",source:"fences",filter:["==","kind","approach"],
-     paint:{"line-color":["case",["get","sel"],"#38e0a6","#8fb6d4"],"line-width":1.2,"line-dasharray":[2,2],"line-opacity":0.7}});
   map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==","kind","fill"],
      paint:{"fill-color":["case",["get","sel"],"#38e0a6",["get","isHazard"],"rgba(255,47,78,0.5)","#ff6a3d"],"fill-opacity":0.22}});
   map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==","kind","fill"],
@@ -1510,20 +1495,6 @@ function refreshHandles(z){
     _handles.push(mk);
   }
 
-  // ---- 2: approach ring handle (white, north) ----
-  {
-    const el=_mkHandle("mh-approach","approach: "+z.approachM+" m");
-    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,z.approachM,0)).addTo(map);
-    mk.on("dragstart",()=>el.classList.add("mh-active"));
-    mk.on("drag",()=>{
-      const ll=mk.getLngLat(); z.approachM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pApproach").value=z.approachM;
-      _setLbl(el,"approach: "+z.approachM+" m"); renderSources();
-    });
-    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-    _handles.push(mk);
-  }
-
   // ---- 3: circle radius handle (green, east) ----
   if(z.shape.type==="circle"){
     const el=_mkHandle("mh-radius","radius: "+z.shape.radiusM+" m");
@@ -1673,8 +1644,6 @@ function refreshProps(){
   fires.disabled = isTrip;
   document.getElementById("dwellRow").style.display=(!isTrip && z.fires==="dwell")?"flex":"none";
   document.getElementById("pDwell").value=z.dwellS;
-  document.getElementById("pNeedle").checked=z.needle;
-  document.getElementById("pApproach").value=z.approachM;
   document.getElementById("revealWrap").style.display=z.shape.type==="circle"?"block":"none";
   if(z.shape.type==="circle") document.getElementById("pReveal").value=z.shape.radiusM;
   document.getElementById("trackerRow").style.display=z.shape.type==="circle"?"block":"none";
@@ -1770,7 +1739,6 @@ function bindProp(id,fn){ document.getElementById(id).addEventListener("input",(
 bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
 bindProp("pSay",z=>{ z.say=document.getElementById("pSay").value; });
 bindProp("pDwell",z=>{ z.dwellS=+document.getElementById("pDwell").value||20; });
-bindProp("pApproach",z=>{ z.approachM=+document.getElementById("pApproach").value||30; });
 bindProp("pReveal",z=>{ if(z.shape.type==="circle") z.shape.radiusM=+document.getElementById("pReveal").value||12; });
 bindProp("pAudio",z=>{ z.audioM=+document.getElementById("pAudio").value||0; });
 bindProp("pTrackerId",z=>{ z.trackerId=document.getElementById("pTrackerId").value.trim()||null;
@@ -2305,8 +2273,6 @@ document.getElementById("pActDev").addEventListener("change",()=>{ if(sel<0)retu
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
   document.getElementById("dwellRow").style.display=zones[sel].fires==="dwell"?"flex":"none"; });
-document.getElementById("pNeedle").addEventListener("change",()=>{ if(sel<0)return;
-  zones[sel].needle=document.getElementById("pNeedle").checked; render(); });
 document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById("pSay").value.trim();
   if(!t)return; try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(t)); }catch(e){} };
 document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
@@ -2340,15 +2306,14 @@ function zoneToEngine(z){
   // Path stops fire the same trigger system as every other stop, evaluated
   // at runtime against wherever the stop currently is on its route (the
   // engine resolves this via centerNow()) — a path has no natural drawn
-  // shape of its own, so both the general (needle-arrival) and target
-  // (say/dwell) layers reuse the approach radius as a plain circle.
+  // shape of its own, so both the general and target (say/dwell) layers
+  // reuse the approach radius as a plain circle.
   const genR=zoneGenR(z);
   if(s.type==="circle")        zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM}];
   else if(s.type==="polygon")  zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"polygon",coords:s.coords.map(LL)}}];
   else if(s.type==="tripline") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}];
   else if(isPath)              zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:genR}];
   const trig=[];
-  if(z.needle) trig.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true});
   const rev={ oncePerVisit:true, layer:"target" };
   if(s.type==="tripline") rev.fires_on="enter";              // crossing
   else if(z.fires==="dwell"){ rev.fires_on="dwell"; rev.delayS=z.dwellS; }
@@ -2430,11 +2395,9 @@ function engineToZone(zo){
   const gen=(zo.layers||[]).find(l=>l.kind==="general");
   if(gen&&gen.radiusM!=null) z.approachM=gen.radiusM;
   (zo.triggers||[]).forEach(t=>{
-    if(t.needle) z.needle=true;
     if(t.say) z.say=t.say;
     if(t.fires_on==="dwell"){ z.fires="dwell"; if(t.delayS) z.dwellS=t.delayS; }
   });
-  if(!(zo.triggers||[]).some(t=>t.needle)) z.needle=false;
   if(Array.isArray(zo.actions) && zo.actions.length) z.actions=zo.actions;
   if(zo.audioUrl) z.audioUrl=zo.audioUrl;
   if(zo.bearingDeg!=null) z.bearingDeg=zo.bearingDeg;
@@ -3003,7 +2966,6 @@ const SimFencer={state:{},onEvent:null,
   _deliver(zone,t,subj="visitor"){
     const ts=t.subject||"any";
     if(ts!=="any"&&ts!==subj)return;
-    if(t.needle&&simSoundOn)try{simDing();}catch(e){}
     if(t.say){if(!zone.audioUrl&&simSoundOn)try{const u=new SpeechSynthesisUtterance(t.say);speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
       if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
   reset(){this.state={};}
@@ -3011,10 +2973,6 @@ const SimFencer={state:{},onEvent:null,
 
 /* ---- spatial audio (mirror of engine's SpatialVoice + minimal Clarity) ---- */
 let simSoundOn=true;
-function simDing(){try{const ac=SimVoice.ctx||new (window.AudioContext||window.webkitAudioContext)();if(!SimVoice.ctx)SimVoice.ctx=ac;
-  const t=ac.currentTime;[784,1175].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain(),s=t+i*0.09;
-    o.type="sine";o.frequency.value=f;g.gain.setValueAtTime(0.0001,s);g.gain.exponentialRampToValueAtTime(0.22,s+0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001,s+0.25);o.connect(g);g.connect(ac.destination);o.start(s);o.stop(s+0.3);});}catch(e){}}
 
 const SimVoice={
   ctx:null,nodes:null,src:null,buffers:{},currentUrl:null,playing:false,loadingUrl:null,
@@ -3228,7 +3186,7 @@ function editorToSimBundle(){
     // Path stops fire triggers too now, against a circle centered on their
     // *current* live position (resolved at eval-time in SimFencer.sd via
     // simAmbientCenterNow) — same approachM ring used for both general
-    // (needle) and target (say/dwell) layers since a path has no natural
+    // and target (say/dwell) layers since a path has no natural
     // drawn radius of its own.
     const generalLayer={kind:"general",radiusM:z.approachM||30};
     let targetLayer;
@@ -3238,7 +3196,6 @@ function editorToSimBundle(){
     else if(isPath) targetLayer={kind:"target",radiusM:z.approachM||30};
     const subj=z.triggerSubject||"any";
     const triggers=[];
-    if(z.needle) triggers.push({fires_on:"enter",layer:"general",needle:true,oncePerVisit:true,subject:subj});
     if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
       else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
     const out={id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,

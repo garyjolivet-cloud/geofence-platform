@@ -38,19 +38,6 @@
   .pill.sim{color:var(--amber); border-color:var(--amber)}
   .pill.idle{background:var(--coral); color:#1a0d07; border-color:var(--coral); cursor:pointer}
 
-  /* Needle / compass — trimmed to just the arrow, shown at the bottom of the panel;
-     the readout grid and target name/state text are hidden, not deleted, so the JS
-     that writes into them (diagnostics, HUD.log data) keeps working untouched */
-  .needle-card{background:var(--slate); border:1px solid var(--rim); border-radius:18px;
-               padding:8px; text-align:center; margin-bottom:0}
-  svg.compass{width:110px; height:110px; touch-action:none}
-  .ring{fill:none; stroke:var(--slate-2); stroke-width:10}
-  .tick{stroke:var(--fog); stroke-width:2}
-  .card-N{stroke:var(--ice)}
-  .needle{fill:var(--coral)}
-  .needle.low{fill:var(--fog)}
-  .target-name, .target-sub, .state-line{display:none}
-
   /* Readout grid — hidden: raw GPS diagnostics aren't useful to someone testing a geofence design */
   .grid{display:none; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:12px}
   .cell{background:var(--slate); border:1px solid var(--rim); border-radius:12px; padding:9px 10px}
@@ -175,7 +162,7 @@
     <div class="cell"><div class="k">Fixes</div><div class="v" id="vFix">0</div></div>
   </div>
 
-  <!-- Tools drawer — Start GPS/Compass/Sim/Audio controls + the event log live here now,
+  <!-- Tools drawer — Start GPS/Sim/Audio controls + the event log live here now,
        closed by default; opened via the header's 🛠 button, closed via the ✕ below -->
   <div id="toolsDrawer" style="display:none">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
@@ -185,14 +172,9 @@
 
     <div class="controls">
       <button id="btnStart" class="primary">Start GPS</button>
-      <button id="btnCompass">Compass</button>
       <button id="btnSim">Sim</button>
       <button id="btnAudio">Audio</button>
       <button id="btnOffline" title="download tour for use with no signal">⬇ Offline</button>
-    </div>
-
-    <div id="calBanner" style="display:none;background:rgba(255,194,77,.12);border:1px solid var(--amber);color:var(--amber);border-radius:9px;padding:9px 12px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:13.5px;text-align:center;line-height:1.4">
-      🧭 Compass needs calibrating — wave the phone in a slow figure-8 a few times. Until it's steady, the voice plays centred (no direction).
     </div>
 
     <div id="simPanel" class="sim">
@@ -214,23 +196,7 @@
       <p class="k">Event log</p>
       <div id="log" class="log"></div>
     </div>
-    <div class="hint" id="srcHint">bundle: built-in sample · open over https on your phone for GPS + compass</div>
-  </div>
-
-  <!-- directional arrow — the only always-visible readout kept, shrunk and pinned
-       to the bottom of the panel; target name/sub/state text stay hidden (see CSS) -->
-  <div class="needle-card">
-    <svg class="compass" viewBox="-110 -110 220 220" aria-label="direction to next stop">
-      <circle class="ring" r="92"></circle>
-      <g id="ticks"></g>
-      <text id="northN" class="card-N cond" x="0" y="-78" text-anchor="middle"
-            dominant-baseline="central" font-size="13" fill="#8fb6d4">N</text>
-      <polygon id="needle" class="needle" points="0,-66 9,16 0,6 -9,16"></polygon>
-      <circle r="5" fill="#26344a"></circle>
-    </svg>
-    <div id="targetName" class="target-name">—</div>
-    <div id="targetSub" class="target-sub">no fix yet</div>
-    <div id="stateLine" class="state-line state-out">standby</div>
+    <div class="hint" id="srcHint">bundle: built-in sample · open over https on your phone for GPS</div>
   </div>
 </div>
 
@@ -265,13 +231,6 @@
     <div id="bleBox" class="ble-box" style="display:none">
       <button id="btnBleConnect" class="ble-btn">Connect Garmin / BLE GPS</button>
       <div id="bleStatus" class="ble-status off">Not connected</div>
-      <label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px;cursor:pointer">
-        <input type="checkbox" id="bleCompass" style="width:17px;height:17px;accent-color:var(--coral);flex:0 0 auto;margin-top:2px">
-        <span>
-          <span style="font-family:'Barlow Condensed';font-weight:600;font-size:15px;display:block;color:var(--snow)">Use watch compass</span>
-          <span style="font-family:'Barlow Condensed';font-size:12px;color:var(--fog);line-height:1.4;display:block">Uses the Instinct's ABC compass for the direction needle instead of your phone's sensor. More accurate outdoors. Requires GPS Bridge v1.1+.</span>
-        </span>
-      </label>
       <div class="ble-note">
         <b>Garmin Instinct 2 / Crossover / 2X Solar</b> — install the
         <b>GPS Bridge</b> Connect IQ app on the watch, start it before connecting here.
@@ -538,7 +497,6 @@ const Geofencer = {
   },
   _deliver(zone,t,info){
     // once-per-visit handled by caller's delivered map for dwell; enter handled here
-    if(t.needle){ Audio.approach(); if(this.onEvent) this.onEvent({zone,kind:"arm-needle"}); }
     if(t.say){
       const lowAcc = window.__lastAcc>(t.requires?.accuracyM ?? TUNING.ACCURACY_CAP_M);
       const mode = t.requires?.onLowAccuracy || "suppress";
@@ -606,18 +564,6 @@ const Audio = {
         g.gain.exponentialRampToValueAtTime(0.0001,s+0.28);
         o.connect(g); g.connect(ac.destination); o.start(s); o.stop(s+0.3);
       });
-    }catch(e){}
-  },
-  approach(){                                          // the "approaching" cue — one gentle rising note
-    try{
-      let ac=(typeof Clarity!=='undefined' && Clarity.ctx)?Clarity.ctx:this.ctx;
-      if(!ac){ ac=this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }
-      if(ac.state==='suspended') ac.resume();
-      const t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
-      o.type='sine'; o.frequency.setValueAtTime(440,t); o.frequency.exponentialRampToValueAtTime(587,t+0.18);
-      g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.22,t+0.03);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+0.5);
-      o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.55);
     }catch(e){}
   },
   say(text, warn, zoneOrDist){
@@ -713,34 +659,26 @@ const EngineTTSVoice={
   }
 };
 
-/* ============================ COMPASS ============================ */
-const Compass = {
-  heading:null, samples:[], confidence:0, on:false,
-  enable(){
-    const start=()=>{ window.addEventListener('deviceorientationabsolute', e=>this._read(e), true);
-                      window.addEventListener('deviceorientation', e=>this._read(e), true);
-                      this.on=true; };
-    if(typeof DeviceOrientationEvent!=='undefined' && DeviceOrientationEvent.requestPermission){
-      DeviceOrientationEvent.requestPermission().then(s=>{ if(s==='granted') start(); }).catch(()=>{});
-    } else start();
+/* ======================= TRAVEL HEADING =======================
+   Replaces the old device-magnetometer Compass (removed along with the
+   needle-arrow UI it powered — device compass in a pocket was unreliable
+   anyway, per guidance-bot.js's own reasoning for not using it there).
+   Powers spatial-audio panning instead, sourced the same way GuidanceBot
+   already sources its turn instructions: bearing between consecutive
+   *smoothed* GPS fixes (Smoother.push()'s headingTravel), circular-EMA
+   smoothed so it doesn't jitter, and only trusted above a minimum walking
+   speed (a stationary or very-slow fix's bearing is noise, not direction). */
+const TravelHeading = {
+  heading:null,
+  MIN_SPEED:0.5, ALPHA:0.15,
+  update(speed, headingTravel){
+    if(speed>=this.MIN_SPEED && headingTravel!=null){
+      this.heading = this.heading==null ? headingTravel : this._ema(headingTravel, this.heading);
+    }
   },
-  _read(e){
-    if(BleGPS.useWatchCompass) return;   // watch compass takes priority; ignore device sensor
-    let h=null, accDeg=null;
-    if(e.webkitCompassHeading!=null){ h=e.webkitCompassHeading; accDeg=e.webkitCompassAccuracy; }  // iOS
-    else if(e.alpha!=null){ h=(360-e.alpha)%360; }                                                  // Android
-    if(h==null) return;
-    this.heading=h;
-    // confidence from sensor accuracy (degrees), NOT from how fast you turn.
-    // iOS reports webkitCompassAccuracy; negative or large = needs calibration.
-    if(accDeg!=null) this.confidence = (accDeg<0)?1 : (accDeg<=15?3 : accDeg<=30?2 : 1);
-    else this.confidence = 2;                          // Android: no accuracy reported, assume usable
-    this._updateCal();
-    if(typeof HUD!=='undefined' && HUD.paintCompass) HUD.paintCompass();  // live repaint as you turn
-  },
-  _updateCal(){
-    const b=document.getElementById('calBanner'); if(!b) return;
-    b.style.display = (this.on && this.heading!=null && this.confidence<2) ? 'block' : 'none';
+  _ema(raw, prev){
+    let diff=raw-prev; diff=((diff+540)%360)-180;
+    return (prev+this.ALPHA*diff+360)%360;
   }
 };
 
@@ -802,7 +740,13 @@ const Clarity = {
 const SpatialVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
   tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
-  spatialRange(zone){ return (zone && zone.spatialRangeM) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },   // per-project; full at centre → silent here
+  // spatialRangeM is a path-stop-only override (the "voice range" handle);
+  // audibleFromM is the per-stop blue "audio fade" ring, settable on every
+  // stop type — previously exported into the bundle but never actually read
+  // here, so it looked like a real per-stop fade control but silently did
+  // nothing once a stop had a real clip. Now used as the fallback for any
+  // stop that doesn't have the path-only override set.
+  spatialRange(zone){ return (zone && (zone.spatialRangeM||zone.audibleFromM)) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },   // per-project; full at centre → silent here
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
@@ -925,7 +869,8 @@ const SpatialVoice = {
 const AmbientVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
   tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
-  spatialRange(zone){ return (zone && zone.spatialRangeM) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },
+  // See SpatialVoice.spatialRange() above — same fix, kept as a mirrored copy.
+  spatialRange(zone){ return (zone && (zone.spatialRangeM||zone.audibleFromM)) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
@@ -1043,8 +988,8 @@ const AmbientVoice = {
     if(nearest && nearestD<this.spatialRange(nearest.zone)){
       this.playZone(nearest.zone);
       const brg=Geo.bearing([p.lat,p.lon], nearest.center);
-      const headingOk=(typeof Compass!=='undefined' && Compass.heading!=null && Compass.confidence>=2);
-      const az=((brg-((typeof Compass!=='undefined'&&Compass.heading)||0))*Math.PI/180);
+      const headingOk=(typeof TravelHeading!=='undefined' && TravelHeading.heading!=null);
+      const az=((brg-((typeof TravelHeading!=='undefined'&&TravelHeading.heading)||0))*Math.PI/180);
       this.update(az, nearestD, headingOk);
     } else if(this.playing){ this.fadeOut(); }
   }
@@ -1052,7 +997,7 @@ const AmbientVoice = {
 
 /* ============================== HUD ============================== */
 const HUD = {
-  pos:null, prev:null, fixes:0, needleZone:null, needleTarget:null,
+  pos:null, prev:null, fixes:0,
   el(id){ return document.getElementById(id); },
   log(cls,msg){ const l=this.el('log'); const t=new Date().toLocaleTimeString();
                 const d=document.createElement('div'); d.className=cls;
@@ -1061,10 +1006,8 @@ const HUD = {
 
   onFix(fix){               // fix = {lat,lon,acc,t[,heading]}
     window.__lastAcc=fix.acc;
-    if(fix.heading!=null && BleGPS.useWatchCompass){
-      Compass.heading=fix.heading; Compass.confidence=2; Compass._updateCal();
-    }
     const sm=Smoother.push(fix);
+    TravelHeading.update(sm.speed, sm.headingTravel);
     this.fixes++;
     const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
     const active=Geofencer.update(p,this.prev,fix.t);
@@ -1099,8 +1042,8 @@ const HUD = {
       if(dv<range){
         SpatialVoice.playZone(pick.zone);
         const brg=Geo.bearing([p.lat,p.lon],pc);
-        const headingOk=(Compass.heading!=null && Compass.confidence>=2);   // poor/uncalibrated → centred, not wrong-way
-        const az=((brg-(Compass.heading||0))*Math.PI/180);
+        const headingOk=(TravelHeading.heading!=null);   // not moving yet / no fix history → centred, not wrong-way
+        const az=((brg-(TravelHeading.heading||0))*Math.PI/180);
         SpatialVoice.update(az, dv, headingOk);
       } else SpatialVoice.fadeOut();
     } else if(SpatialVoice.playing){ SpatialVoice.fadeOut(); }
@@ -1116,33 +1059,15 @@ const HUD = {
     // ---- render ----
     this.el('vAcc').innerHTML = fix.acc.toFixed(0)+' <small>m</small>';
     this.el('vSpd').innerHTML = sm.speed.toFixed(1)+' <small>m/s</small>';
-    this.el('vHdg').innerHTML = (Compass.heading==null?'—':Compass.heading.toFixed(0))+' <small>°</small>';
+    this.el('vHdg').innerHTML = (TravelHeading.heading==null?'—':TravelHeading.heading.toFixed(0))+' <small>°</small>';
     this.el('vFix').textContent = this.fixes;
 
-    this.pos = p;                 // remember position so the compass can repaint live
+    this.pos = p;
     this.el('coord').textContent='📍 '+p.lat.toFixed(6)+', '+p.lon.toFixed(6)+'  ·  tap to copy';
-    this.needleTarget = null;     // cleared here; set below when there is a target
 
     let R = pick && pick.layer ? pick.layer.radiusM : null;
     const pc=this.posConf(fix.acc,R);
     this.el('vPC').innerHTML='<span class="conf-'+pc+'">'+['','low','med','high'][pc]+'</span>';
-    const hc=Compass.confidence;
-    this.el('vHC').innerHTML = hc?('<span class="conf-'+hc+'">'+['','low','med','high'][hc]+'</span>'):'—';
-
-    // needle + state (pick.zone may be a path stop — centerNow() resolves its live position)
-    if(pick){
-      const tgt=pick.center || centerNow(pick.zone, fix.t);
-      this.el('targetName').textContent=pick.zone.name;
-      const dist=Math.max(0, (pick.layer? Geo.hav([p.lat,p.lon],centerNow(pick.zone,fix.t)): pick.d));
-      const inside = pick.layer && pick.d<0;
-      this.el('targetSub').textContent = inside? 'inside' : (dist.toFixed(0)+' m away');
-      const sl=this.el('stateLine');
-      if(inside){ sl.textContent='inside '+pick.layer.kind; sl.className='state-line state-in'; }
-      else if(dist<60){ sl.textContent='approaching'; sl.className='state-line state-near'; }
-      else { sl.textContent='walking'; sl.className='state-line state-out'; }
-      this.needleTarget = tgt;       // the arrow aims here; paintCompass draws it live
-    }
-    this.paintCompass();             // draw red arrow + true-north marker now
 
     // feed guidance module (phone in pocket — uses GPS travel heading only)
     if(typeof GuidanceBot!=='undefined'&&GuidanceBot.active){
@@ -1150,26 +1075,6 @@ const HUD = {
                           headingTravel:sm.headingTravel,acc:sm.acc,t:fix.t});
     }
   },
-
-  paintCompass(){
-    // N marker tracks true north whenever a heading exists (NOT gated on turn speed)
-    const nN=this.el('northN');
-    if(Compass.heading!=null){
-      const a=(-Compass.heading)*Math.PI/180, R=78;
-      nN.setAttribute('x',(Math.sin(a)*R).toFixed(1));
-      nN.setAttribute('y',(-Math.cos(a)*R).toFixed(1));
-      nN.style.opacity='1';
-    } else { nN.setAttribute('x','0'); nN.setAttribute('y','-78'); nN.style.opacity='0.3'; }
-    this.el('vHdg').innerHTML=(Compass.heading==null?'—':Compass.heading.toFixed(0))+' <small>°</small>';
-    // red arrow points at the NEXT STOP, relative to the way you're facing
-    const n=this.el('needle');
-    if(this.needleTarget && this.pos){
-      const brg=Geo.bearing([this.pos.lat,this.pos.lon],this.needleTarget);
-      const rot=(brg-(Compass.heading||0)+360)%360;
-      n.setAttribute('transform','rotate('+rot+')');
-      n.classList.toggle('low', Compass.heading!=null && Compass.confidence<2);
-    } else { n.setAttribute('transform','rotate(0)'); }
-  }
 };
 
 /* ========================== LIVE MAP ==========================
@@ -1301,15 +1206,6 @@ const MapView = {
 };
 MapView.init();
 
-/* compass ticks */
-(function(){ const g=document.getElementById('ticks');
-  for(let a=0;a<360;a+=30){ const r1=84,r2=92, rad=a*Math.PI/180;
-    const l=document.createElementNS('http://www.w3.org/2000/svg','line');
-    l.setAttribute('class','tick');
-    l.setAttribute('x1',(Math.sin(rad)*r1).toFixed(1)); l.setAttribute('y1',(-Math.cos(rad)*r1).toFixed(1));
-    l.setAttribute('x2',(Math.sin(rad)*r2).toFixed(1)); l.setAttribute('y2',(-Math.cos(rad)*r2).toFixed(1));
-    g.appendChild(l);} })();
-
 /* ---- analytics: capture → IndexedDB buffer → idempotent sync ----
    off unless hasConsent('store-history'); never blocks UI/audio; foreground-only (PWA honest) */
 const Analytics = {
@@ -1344,17 +1240,16 @@ const Analytics = {
   },
   spatial(state, zone){ this.enqueue('SPATIAL_TRANSITION',
     { zone_id:zone.id, state, accuracy_m:(window.__lastAcc!=null?window.__lastAcc:null),
-      heading:(typeof Compass!=='undefined'&&Compass.heading!=null?Compass.heading:null) }); },
+      heading:(typeof TravelHeading!=='undefined'&&TravelHeading.heading!=null?TravelHeading.heading:null) }); },
   delivery(zone){ const lat=this.enterT[zone.id]?(Date.now()-this.enterT[zone.id]):null;
     this.enqueue('AUDIO_ENGAGEMENT',
     { zone_id:zone.id, trigger_latency_ms:lat, accuracy_m:(window.__lastAcc!=null?window.__lastAcc:null) }); },
   bearing(zone){
-    if(!HUD.pos || !zone.center || typeof Compass==='undefined' || Compass.heading==null) return;
+    if(!HUD.pos || !zone.center || typeof TravelHeading==='undefined' || TravelHeading.heading==null) return;
     const brg=Geo.bearing([HUD.pos.lat,HUD.pos.lon], zone.center);
-    const delta=Math.abs(((brg-Compass.heading+540)%360)-180);   // 0 = facing it, 180 = away
+    const delta=Math.abs(((brg-TravelHeading.heading+540)%360)-180);   // 0 = facing it, 180 = away
     this.enqueue('BEARING_MATCH', { zone_id:zone.id, target_bearing:Math.round(brg),
-      user_heading:Math.round(Compass.heading), angle_delta:Math.round(delta),
-      heading_conf:(Compass.confidence!=null?Compass.confidence:null) }); },
+      user_heading:Math.round(TravelHeading.heading), angle_delta:Math.round(delta) }); },
   async sync(){
     if(this._syncing || !this.enabled()) return;
     if(typeof navigator!=='undefined' && navigator.onLine===false) return;
@@ -1382,7 +1277,7 @@ try{ window.addEventListener('online', ()=>Analytics.sync());
    lives outside the shared core (sim never fires real actions);
    every action is consent-gated and failures never interrupt the walk */
 const Actions = {
-  ON: { enter:'enter', exit:'exit', say:'reveal', 'arm-needle':'approach' },
+  ON: { enter:'enter', exit:'exit', say:'reveal' },
   run(kind, zone){
     const on = this.ON[kind];
     if(!on || !zone || !Array.isArray(zone.actions)) return;
@@ -1426,7 +1321,6 @@ Geofencer.onEvent=(e)=>{
          setTimeout(()=>{ wrap.style.transition='box-shadow .6s ease-out';
            wrap.style.boxShadow='inset 0 0 0 0 rgba(255,106,61,0)'; },60); } }
   else if(e.kind==='suppressed') HUD.log('ev-flick','HOLD   reveal suppressed (fix too loose)');
-  else if(e.kind==='arm-needle') HUD.log('ev-sys','NEEDLE armed → '+e.zone.name);
   Actions.run(e.kind, e.zone);
 
   // Guidance bot trigger: fire when visitor enters the target layer of a zone with a guidance bot
@@ -1489,7 +1383,7 @@ let gpsSource='device';   // 'device' | 'ble'
    Connection flow: scan for both service UUIDs at once → try LNS → fall back to NUS.
    ------------------------------------------------------------------ */
 const BleGPS = {
-  device:null, char:null, active:false, protocol:null, useWatchCompass:false,
+  device:null, char:null, active:false, protocol:null,
 
   // LNS
   LNS_SERVICE: 0x1819,
@@ -1697,12 +1591,6 @@ document.getElementById('btnBleConnect').onclick=()=>{
   if(BleGPS.active) BleGPS.disconnect();
   else BleGPS.connect();
 };
-document.getElementById('bleCompass').onchange=function(){
-  BleGPS.useWatchCompass=this.checked;
-  if(!this.checked){ Compass.heading=null; Compass.confidence=0; }
-  HUD.log('ev-sys','watch compass '+(this.checked?'ON — using Garmin bearing':'OFF — using device sensor'));
-};
-
 function startGPS(){
   Audio.unlock(); Audio.unlocked=true;
   Clarity.init(); if(Clarity.ctx && Clarity.ctx.state==='suspended') Clarity.ctx.resume();
@@ -1736,9 +1624,6 @@ document.getElementById('guidanceStopBtn').onclick=()=>{
   if(hud) hud.style.display='none';
   HUD.log('ev-sys','Guidance stopped by user');
 };
-document.getElementById('btnCompass').onclick=(e)=>{ Compass.enable(); Audio.unlock();
-  e.target.classList.add('on'); e.target.textContent='Compass on';
-  HUD.log('ev-sys','compass enabled (tilt-calibrate by moving in a figure-8)'); };
 document.getElementById('coord').onclick=()=>{
   if(!HUD.pos){ HUD.log('ev-warn','no GPS fix yet — tap Start GPS first'); return; }
   const s=HUD.pos.lat.toFixed(6)+', '+HUD.pos.lon.toFixed(6);
@@ -1762,8 +1647,7 @@ document.getElementById('btnSim').onclick=toggleSim;
 document.getElementById('btnAudio').onclick=function(){
   if(Clarity.on){ Clarity.disable(); this.classList.remove('on'); HUD.log('ev-sys','clarity audio OFF'); }
   else { Clarity.enable(); this.classList.add('on');
-    HUD.log('ev-sys','audio ON — move toward a stop to hear the voice');
-    if(!Compass.on) HUD.log('ev-warn','tip: turn Compass on for directional audio — without it the voice plays centred'); }
+    HUD.log('ev-sys','audio ON — move toward a stop to hear the voice'); }
 };
 
 document.querySelectorAll('.sim .pad [data-dir]').forEach(b=>{
@@ -1824,7 +1708,7 @@ EngineKokoro.tryLoad();
     if(!b || !Array.isArray(b.zones) || !b.zones.length){
       try{ localStorage.removeItem(LKEY); }catch(_){}
       HUD.log('ev-warn','no stops published for this project yet'); return; }
-    BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+    BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
     if(!HUD.pos) MapView.recenter(b.ref);
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
       ['hiHz','loHz','minGain','reverbMax','tau','curve'].forEach(k=>{ if(st[k]!=null) t[k]=st[k]; }); }
@@ -1837,7 +1721,7 @@ EngineKokoro.tryLoad();
   }catch(e){
     let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
     if(cached){ try{ const b=JSON.parse(cached);
-      BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null; HUD.needleTarget=null;
+      BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
       if(!HUD.pos) MapView.recenter(b.ref);
       if(document.getElementById('simZones')) buildSimZones();
       HUD.log('ev-sys','offline — loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' from saved copy');

@@ -153,12 +153,6 @@ const Audio = {
             if(this.ctx && this.ctx.state==='suspended') this.ctx.resume();
             if(this.ctx && !this.keepAlive){ try{ const o=this.ctx.createOscillator(),g=this.ctx.createGain();
               g.gain.value=0.0001; o.frequency.value=30; o.connect(g); g.connect(this.ctx.destination); o.start(); this.keepAlive=o; }catch(e){} } },
-  approach(){ if(!this.on) return; try{ this.unlock(); const ac=this.ctx; if(!ac) return; const t=ac.currentTime;
-            const o=ac.createOscillator(),g=ac.createGain(); o.type='sine';
-            o.frequency.setValueAtTime(440,t); o.frequency.exponentialRampToValueAtTime(587,t+0.18);
-            g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.22,t+0.03);
-            g.gain.exponentialRampToValueAtTime(0.0001,t+0.5);
-            o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.55); }catch(e){} },
   ding(){ if(!this.on) return; try{ this.unlock(); const t=this.ctx.currentTime;
             [784,1175].forEach((f,i)=>{ const o=this.ctx.createOscillator(),g=this.ctx.createGain(),s=t+i*0.09;
               o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(0.0001,s);
@@ -457,7 +451,6 @@ const Geofencer = {
   },
   _deliver(zone,t,info){
     // once-per-visit handled by caller's delivered map for dwell; enter handled here
-    if(t.needle){ Audio.approach(); if(this.onEvent) this.onEvent({zone,kind:"arm-needle"}); }
     if(t.say){
       const lowAcc = window.__lastAcc>(t.requires?.accuracyM ?? TUNING.ACCURACY_CAP_M);
       const mode = t.requires?.onLowAccuracy || "suppress";
@@ -692,7 +685,6 @@ Geofencer.onEvent=(e)=>{
        if(e.info.flick) log("ev-flick","       ^ flicker (barely moved) — would be ignored"); }
   else if(e.kind==="say") log(e.warn?"ev-warn":"ev-say",'SAY    "'+e.text+'"'+(e.warn?" [approx]":""));
   else if(e.kind==="suppressed") log("ev-flick","HOLD   reveal suppressed (fix too loose)");
-  else if(e.kind==="arm-needle") log("ev-sys","NEEDLE → "+e.zone.name);
 };
 
 /* =============================== BUNDLES =============================== */

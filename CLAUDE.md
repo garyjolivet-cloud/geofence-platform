@@ -213,17 +213,18 @@ Two separate iOS Safari/WebKit rules block audio in different ways. Conflating t
 
 ## Fence Editor — Map-Interactive Handles
 
-Every zone shows an amber bearing arrow at all times. When a zone is **selected** (click on map or in list), 7 draggable handles appear:
+Every zone shows an amber bearing arrow at all times. When a zone is **selected** (click on map or in list), 6 draggable handles appear:
 
 | Handle | Color | Position | Controls |
 |--------|-------|----------|---------|
 | Bearing tip | Amber | Arrow end | `bearingDeg` — swing in circle |
-| Approach ring | White-blue | North | `approachM` — resize dashed ring |
 | Circle radius | Green | East | `shape.radiusM` — resize fill |
-| Audio fade | Blue | South | `audioM` — resize dotted ring |
+| Audio fade | Blue | South | `audioM` — resize dotted ring; also the real per-stop fade-in distance used by `SpatialVoice`/`AmbientVoice` for a recorded clip (fixed 2026-07-26 — previously exported but silently ignored once a stop had a clip) |
 | Broadcast | Orange | West | `broadcastRadiusM` (tracker only) |
 | Polygon vertex | White square | Each corner | `shape.coords[i]` |
 | Tripline endpoint | Cyan | Each end | `shape.from` / `shape.to` |
+
+`approachM` (the old "approach ring") still exists internally as the zone's broader trigger-detection radius, but is no longer user-adjustable — its only adjustable purpose was arming the compass-needle direction arrow, which was removed (2026-07-26) along with the whole device-compass subsystem. Spatial audio panning still works, now sourced from GPS travel heading (`TravelHeading` in `geofence-engine.html`, same technique as Guidance Bot's heading) instead of the device magnetometer.
 
 Each handle shows a floating label on hover that updates live while dragging (e.g. `approach: 45 m`).
 
