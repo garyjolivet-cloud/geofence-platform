@@ -805,7 +805,16 @@ const SpatialVoice = {
     // map the falloff onto the project's carry + full-volume distances
     const range=this.spatialRange(zone);
     this.tuning.farM=range;
-    this.tuning.clearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
+    const desiredClearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
+    // The project-wide "full volume" distance can be bigger than THIS stop's
+    // own audio-fade ring (farM/range) — e.g. a 32m project default on a
+    // stop whose ring is only 14m. update()'s fade math assumes clearM<farM;
+    // left unclamped, clearM>=farM makes the denominator go non-positive,
+    // which collapses the whole fade into a constant (gain pinned to 100%
+    // for every distance inside the ring — audio snaps to full volume the
+    // instant it starts instead of fading in at all). Always leave at least
+    // 10% of the ring as an actual fade zone.
+    this.tuning.clearM=Math.min(desiredClearM, range*0.9);
     this.loadingUrl=url;
     let loaded; try{ loaded=await this.load(url); }
     catch(e){ this.loadingUrl=null; HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); return; }
@@ -922,7 +931,9 @@ const AmbientVoice = {
     this.ensure();
     const range=this.spatialRange(zone);
     this.tuning.farM=range;
-    this.tuning.clearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
+    // See SpatialVoice's own version of this clamp above — same fix, mirrored copy.
+    const desiredClearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
+    this.tuning.clearM=Math.min(desiredClearM, range*0.9);
     this.loadingUrl=url;
     let loaded; try{ loaded=await this.load(url); }
     catch(e){ this.loadingUrl=null; HUD.log('ev-warn','ambient audio load failed ('+zone.name+'): '+e.message); return; }

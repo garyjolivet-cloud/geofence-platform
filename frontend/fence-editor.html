@@ -3238,7 +3238,14 @@ function feedSim(lat,lon,acc,t){
   let nearest=null,nearestD=Infinity;
   simBundle.zones.forEach(z=>{if(!z.center)return;const d=SimGeo.hav([p.lat,p.lon],z.center);if(d<nearestD){nearestD=d;nearest=z;}});
   if(nearest){
-    const range=nearest.spatialRangeM||64,clearM=nearest.spatialClearM||8;
+    // Mirrors the real engine's SpatialVoice.playZone() (geofence-engine.html) —
+    // audibleFromM (the per-stop blue ring) is the real fade-start distance for
+    // any non-path stop; clearM is clamped below it so the fade math can't
+    // invert when the project's "full volume" default is bigger than this
+    // particular stop's ring.
+    const range=nearest.spatialRangeM||nearest.audibleFromM||64;
+    const desiredClearM=nearest.spatialClearM||8;
+    const clearM=Math.min(desiredClearM, range*0.9);
     SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
     if(nearestD<range&&nearest.audioUrl&&simSoundOn&&!simChatZone){
       SimVoice.playZone(nearest);
