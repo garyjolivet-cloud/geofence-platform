@@ -1204,9 +1204,12 @@ function circleRing(centerLonLat, radiusM, n){   // centerLonLat=[lon,lat] -> ri
   return out;
 }
 // Stop marker: a grey "speaker cone" gradient disc (0 to clearM) + a blue
-// ring (farM) — same visual language and constants as the Fence Editor's
-// speakerConeFeatures()/audio-fade ring (frontend/fence-editor.html).
+// gradient band (clearM to farM, opacity driven by the same fadeGain()
+// curve that drives real playback — clear at the trigger ring, solid near
+// full volume) + a thin blue ring at farM — same visual language and
+// constants as the Fence Editor's speakerConeFeatures()/fadeBandFeatures().
 const SPEAKER_BANDS=16, SPEAKER_LIGHT=[235,235,235], SPEAKER_DARK=[55,55,55], SPEAKER_OPACITY=0.65;
+const FADE_BANDS=24, FADE_MAX_OPACITY=0.5;
 function stopAudioFeatures(centerLonLat, farM, clearM){
   const feats=[];
   for(let i=0;i<SPEAKER_BANDS;i++){
@@ -1215,6 +1218,14 @@ function stopAudioFeatures(centerLonLat, farM, clearM){
     const t=(r0+r1)/2/clearM; // 0 at center, 1 at edge
     const rgb=SPEAKER_LIGHT.map((v,k)=>Math.round(v+(SPEAKER_DARK[k]-v)*t));
     feats.push({type:'Feature',properties:{kind:'cone',col:`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`},
+      geometry:{type:'Polygon',coordinates:[circleRing(centerLonLat,r1,48),circleRing(centerLonLat,r0,48)]}});
+  }
+  for(let i=0;i<FADE_BANDS;i++){
+    const r0=clearM+(farM-clearM)*i/FADE_BANDS;
+    const r1=clearM+(farM-clearM)*(i+1)/FADE_BANDS;
+    const mid=(r0+r1)/2;
+    const f=Math.max(0,Math.min(1,(mid-clearM)/Math.max(1,farM-clearM)));
+    feats.push({type:'Feature',properties:{kind:'fadeband',op:fadeGain(f)*FADE_MAX_OPACITY},
       geometry:{type:'Polygon',coordinates:[circleRing(centerLonLat,r1,48),circleRing(centerLonLat,r0,48)]}});
   }
   feats.push({type:'Feature',properties:{kind:'ring'},
@@ -1261,6 +1272,8 @@ const MapView = {
       this.map.addSource('stop-audio',{type:'geojson',data:fc([])});
       this.map.addLayer({id:'stop-cone',type:'fill',source:'stop-audio',filter:['==','kind','cone'],
         paint:{'fill-color':['get','col'],'fill-opacity':SPEAKER_OPACITY}});
+      this.map.addLayer({id:'stop-fadeband',type:'fill',source:'stop-audio',filter:['==','kind','fadeband'],
+        paint:{'fill-color':'#6fbfff','fill-opacity':['get','op']}});
       this.map.addLayer({id:'stop-ring',type:'line',source:'stop-audio',filter:['==','kind','ring'],
         paint:{'line-color':'#6fbfff','line-width':1.5}});
     });
