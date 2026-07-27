@@ -653,7 +653,7 @@ const EngineTTSVoice={
     const t=SpatialVoice.tuning;
     const f=Math.max(0,Math.min(1,(distM-t.clearM)/Math.max(1,t.farM-t.clearM)));
     this.nodes.lpf.frequency.setValueAtTime(t.hiHz*Math.pow(t.loHz/t.hiHz,f),c.currentTime);
-    this.nodes.vol.gain.setValueAtTime(t.minGain+(1-t.minGain)*Math.pow(1-f,t.curve),c.currentTime);
+    this.nodes.vol.gain.setValueAtTime(fadeGain(f),c.currentTime);
     this.nodes.wet.gain.setValueAtTime(t.reverbMax*Math.pow(f,0.6),c.currentTime);
     this.nodes.pan.pan.setValueAtTime(0,c.currentTime);
   }
@@ -733,13 +733,25 @@ const Clarity = {
     this.master.gain.setTargetAtTime(0.85*Math.pow(10,this.gainDbFor(d)/20),now,tc); }
 };
 
+// Perceptually-even (dB-linear) distance fade, shared by TTSVoice,
+// SpatialVoice, and AmbientVoice below — equal steps of f (0 at the
+// full-volume radius, 1 at the trigger radius) correspond to equal
+// perceived-loudness steps, unlike a raw linear-amplitude power curve,
+// which either stays near-silent for most of the approach or near-full
+// volume for most of it. Reaches exactly 1 at f=0 and exactly 0 at f=1.
+const FADE_DB_RANGE=30;
+function fadeGain(f){
+  const floor=Math.pow(10,-FADE_DB_RANGE/20);
+  return (Math.pow(10,-FADE_DB_RANGE*f/20)-floor)/(1-floor);
+}
+
 /* ===================== SpatialVoice =====================
    plays a stop's recorded audioUrl spatially — direction → pan,
    distance → low-pass cutoff + volume + reverb. Shares Clarity's
    AudioContext. Tuning matches the audio bench. */
 const SpatialVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
-  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0, reverbMax:0.5, tau:0.12, curve:0.5 },
   _lastPlayedAt:{},   // per-zone-id — see the loop/once-per-trigger replay-delay gating in playZone()
   // spatialRangeM is a path-stop-only override (the "voice range" handle);
   // audibleFromM is the per-stop blue "audio fade" ring, settable on every
@@ -845,9 +857,17 @@ const SpatialVoice = {
       src=c.createMediaElementSource(el);
       src._el=el; src.connect(this.nodes.mono);
       el.play().catch(()=>{});
+      // Reset playing state when the clip finishes on its own (not via an
+      // explicit stop()/fadeOut()) — without this, `playing` stayed true
+      // forever after a one-shot clip ended, so a lingering visitor never
+      // got a retrigger even with loopAudio on, and a later exit had no
+      // live source left for update() to actually fade out. Guarded so a
+      // stale event from a superseded source can't clobber newer playback.
+      el.onended=()=>{ if(this.src!==src) return; this.playing=false; this.currentUrl=null; this.src=null; };
     } else {
       src=c.createBufferSource(); src.buffer=loaded; src.loop=false;
       src.connect(this.nodes.mono); src.start();
+      src.onended=()=>{ if(this.src!==src) return; this.playing=false; this.currentUrl=null; this.src=null; };
     }
     this.src=src; this.currentUrl=url; this.playing=true;
     this._lastPlayedAt[zone.id]=Date.now();
@@ -869,7 +889,7 @@ const SpatialVoice = {
     const c=this.ctx, t=this.tuning, tau=t.tau;
     const f=Math.max(0, Math.min(1, (distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
     const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz, f);
-    const gain=(t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2))*(this.currentVolume!=null?this.currentVolume:1);   // steep: loud near, drops fast
+    const gain=fadeGain(f)*(this.currentVolume!=null?this.currentVolume:1);
     const wet=t.reverbMax*Math.pow(f, 0.6);                            // reverb blooms a touch sooner
     const pan=headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
     this.nodes.lowpass.frequency.setTargetAtTime(cutoff, c.currentTime, tau);
@@ -900,7 +920,7 @@ const SpatialVoice = {
    itself off centerNow() instead of a fixed zone.center. */
 const AmbientVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
-  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0.05, reverbMax:0.5, tau:0.12, curve:1.1 },
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0, reverbMax:0.5, tau:0.12, curve:0.5 },
   // See SpatialVoice.spatialRange() above — same fix, kept as a mirrored copy.
   spatialRange(zone){ return (zone && (zone.spatialRangeM||zone.audibleFromM)) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },
   ensure(){
@@ -987,7 +1007,7 @@ const AmbientVoice = {
     const c=this.ctx, t=this.tuning, tau=t.tau;
     const f=Math.max(0, Math.min(1, (distM-t.clearM)/Math.max(1,(t.farM-t.clearM))));
     const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz, f);
-    const gain=(t.minGain + (1-t.minGain)*Math.pow(1-f, t.curve||2))*(this.currentVolume!=null?this.currentVolume:1);
+    const gain=fadeGain(f)*(this.currentVolume!=null?this.currentVolume:1);
     const wet=t.reverbMax*Math.pow(f, 0.6);
     const pan=headingOk ? Math.max(-1, Math.min(1, Math.sin(az))) : 0;
     this.nodes.lowpass.frequency.setTargetAtTime(cutoff, c.currentTime, tau);
@@ -1019,12 +1039,20 @@ const AmbientVoice = {
       const d=Geo.hav([p.lat,p.lon], c);
       if(d<nearestD){ nearestD=d; nearest={zone:z, center:c, d}; }
     });
-    if(nearest && nearestD<this.spatialRange(nearest.zone)){
-      this.playZone(nearest.zone);
-      const brg=Geo.bearing([p.lat,p.lon], nearest.center);
-      const headingOk=(typeof TravelHeading!=='undefined' && TravelHeading.heading!=null);
-      const az=((brg-((typeof TravelHeading!=='undefined'&&TravelHeading.heading)||0))*Math.PI/180);
-      this.update(az, nearestD, headingOk);
+    if(nearest){
+      const range=this.spatialRange(nearest.zone);
+      if(nearestD<range) this.playZone(nearest.zone);
+      // See SpatialVoice's mirrored version of this fix above — keep
+      // driving update() off the real (possibly beyond-range) distance
+      // instead of freezing at the last in-range gain and coasting down
+      // a flat real-time fadeOut() tail.
+      if(this.playing){
+        const brg=Geo.bearing([p.lat,p.lon], nearest.center);
+        const headingOk=(typeof TravelHeading!=='undefined' && TravelHeading.heading!=null);
+        const az=((brg-((typeof TravelHeading!=='undefined'&&TravelHeading.heading)||0))*Math.PI/180);
+        this.update(az, nearestD, headingOk);
+      }
+      if(nearestD>=range*1.3) this.fadeOut();
     } else if(this.playing){ this.fadeOut(); }
   }
 };
@@ -1073,13 +1101,25 @@ const HUD = {
     if(pick && pick.zone && pick.zone.audioUrl){
       const pc=centerNow(pick.zone, fix.t);
       const dv=Geo.hav([p.lat,p.lon],pc), range=SpatialVoice.spatialRange(pick.zone);
-      if(dv<range){
-        SpatialVoice.playZone(pick.zone);
+      if(dv<range) SpatialVoice.playZone(pick.zone);
+      // Keep feeding the real (possibly beyond-range) distance to update()
+      // for as long as something is actually playing, instead of jumping
+      // straight to a fixed real-time fadeOut() ramp the moment dv crosses
+      // range — update()'s own f clamp already pins gain at 0 once
+      // dv>=range, so this is what actually reaches (and holds) true
+      // silence right at the ring's edge rather than coasting a stale
+      // in-range gain value down over a flat 0.6s tail while the visitor
+      // keeps moving further away (noticeable at bike/ski speed).
+      if(SpatialVoice.playing){
         const brg=Geo.bearing([p.lat,p.lon],pc);
         const headingOk=(TravelHeading.heading!=null);   // not moving yet / no fix history → centred, not wrong-way
         const az=((brg-(TravelHeading.heading||0))*Math.PI/180);
         SpatialVoice.update(az, dv, headingOk);
-      } else SpatialVoice.fadeOut();
+      }
+      // Once comfortably past the ring — gain has had room to actually
+      // reach zero above — release the now-silent source instead of
+      // leaving it parked indefinitely.
+      if(dv>=range*1.3) SpatialVoice.fadeOut();
     } else if(SpatialVoice.playing){ SpatialVoice.fadeOut(); }
 
     // ambient (path/moving) audio: independent of the pick system above, so
