@@ -749,6 +749,26 @@ function fadeGain(f){
 // the range boundary itself, this just gives the exponential smoother a
 // little room to settle before fadeOut() tears the node down.
 const FADE_RELEASE_MULT=1.3;
+// Trigger (farM) + full-volume (clearM) radii for a zone's audio fade —
+// shared by SpatialVoice/AmbientVoice's playZone()/spatialRange() and by
+// MapView's stop-ring/stop-cone map markers, so all three stay truthful to
+// the same math instead of three independent copies of this chain.
+// != null (not ||) so an explicitly-set 0 survives instead of being
+// treated as unset. The clearM<farM clamp matters: update()'s fade math
+// assumes clearM<farM — left unclamped, a project "full volume" default
+// bigger than a stop's own ring makes the denominator go non-positive,
+// collapsing the fade into a constant (gain pinned to 100% everywhere
+// inside the ring). Always leave at least 10% of the ring as a real fade zone.
+function zoneAudioFadeRadii(zone){
+  const farM=(zone && zone.spatialRangeM!=null) ? zone.spatialRangeM
+    : (zone && zone.audibleFromM!=null) ? zone.audibleFromM
+    : (BUNDLE && BUNDLE.spatialRangeM!=null) ? BUNDLE.spatialRangeM
+    : 64;
+  const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
+    : (BUNDLE && BUNDLE.spatialClearM!=null) ? BUNDLE.spatialClearM
+    : Math.max(5, farM*0.12);
+  return {farM, clearM:Math.min(desiredClearM, farM*0.9)};
+}
 
 /* ===================== SpatialVoice =====================
    plays a stop's recorded audioUrl spatially — direction → pan,
@@ -767,14 +787,7 @@ const SpatialVoice = {
   // here, so it looked like a real per-stop fade control but silently did
   // nothing once a stop had a real clip. Now used as the fallback for any
   // stop that doesn't have the path-only override set.
-  // != null (not ||) so an explicitly-set 0 — "never audible" — isn't
-  // silently overridden by falling through to the next fallback.
-  spatialRange(zone){
-    if(zone && zone.spatialRangeM!=null) return zone.spatialRangeM;
-    if(zone && zone.audibleFromM!=null) return zone.audibleFromM;
-    if(BUNDLE && BUNDLE.spatialRangeM!=null) return BUNDLE.spatialRangeM;
-    return 64;
-  },   // per-project; full at centre → silent here
+  spatialRange(zone){ return zoneAudioFadeRadii(zone).farM; },   // per-project; full at centre → silent here
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
@@ -844,20 +857,9 @@ const SpatialVoice = {
     }
     this.ensure();
     // map the falloff onto the project's carry + full-volume distances
-    const range=this.spatialRange(zone);
+    const {farM:range, clearM}=zoneAudioFadeRadii(zone);
     this.tuning.farM=range;
-    const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
-      : (BUNDLE && BUNDLE.spatialClearM!=null) ? BUNDLE.spatialClearM
-      : Math.max(5, range*0.12);
-    // The project-wide "full volume" distance can be bigger than THIS stop's
-    // own audio-fade ring (farM/range) — e.g. a 32m project default on a
-    // stop whose ring is only 14m. update()'s fade math assumes clearM<farM;
-    // left unclamped, clearM>=farM makes the denominator go non-positive,
-    // which collapses the whole fade into a constant (gain pinned to 100%
-    // for every distance inside the ring — audio snaps to full volume the
-    // instant it starts instead of fading in at all). Always leave at least
-    // 10% of the ring as an actual fade zone.
-    this.tuning.clearM=Math.min(desiredClearM, range*0.9);
+    this.tuning.clearM=clearM;
     this.loadingUrl=url;
     let loaded; try{ loaded=await this.load(url); }
     catch(e){ this.loadingUrl=null; HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); return; }
@@ -938,13 +940,7 @@ const SpatialVoice = {
 const AmbientVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, currentZoneId:null, playing:false, loadingUrl:null,
   tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, reverbMax:0.5, tau:0.12 },
-  // See SpatialVoice.spatialRange() above — same fix, kept as a mirrored copy.
-  spatialRange(zone){
-    if(zone && zone.spatialRangeM!=null) return zone.spatialRangeM;
-    if(zone && zone.audibleFromM!=null) return zone.audibleFromM;
-    if(BUNDLE && BUNDLE.spatialRangeM!=null) return BUNDLE.spatialRangeM;
-    return 64;
-  },
+  spatialRange(zone){ return zoneAudioFadeRadii(zone).farM; },
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
@@ -994,13 +990,9 @@ const AmbientVoice = {
     if(this.currentUrl===url && this.playing) return;
     if(this.loadingUrl===url) return;
     this.ensure();
-    const range=this.spatialRange(zone);
+    const {farM:range, clearM}=zoneAudioFadeRadii(zone);
     this.tuning.farM=range;
-    // See SpatialVoice's own version of this clamp above — same fix, mirrored copy.
-    const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
-      : (BUNDLE && BUNDLE.spatialClearM!=null) ? BUNDLE.spatialClearM
-      : Math.max(5, range*0.12);
-    this.tuning.clearM=Math.min(desiredClearM, range*0.9);
+    this.tuning.clearM=clearM;
     this.loadingUrl=url;
     let loaded; try{ loaded=await this.load(url); }
     catch(e){ this.loadingUrl=null; HUD.log('ev-warn','ambient audio load failed ('+zone.name+'): '+e.message); return; }
@@ -1211,6 +1203,38 @@ function circleRing(centerLonLat, radiusM, n){   // centerLonLat=[lon,lat] -> ri
   for(let i=0;i<=n;i++){ const a=2*Math.PI*i/n; out.push([lon+dLon*Math.cos(a), lat+dLat*Math.sin(a)]); }
   return out;
 }
+// Stop marker: a grey "speaker cone" gradient disc (0 to clearM) + a blue
+// ring (farM) — same visual language and constants as the Fence Editor's
+// speakerConeFeatures()/audio-fade ring (frontend/fence-editor.html).
+const SPEAKER_BANDS=16, SPEAKER_LIGHT=[235,235,235], SPEAKER_DARK=[55,55,55], SPEAKER_OPACITY=0.65;
+function stopAudioFeatures(centerLonLat, farM, clearM){
+  const feats=[];
+  for(let i=0;i<SPEAKER_BANDS;i++){
+    const r0=clearM*i/SPEAKER_BANDS;
+    const r1=clearM*(i+1)/SPEAKER_BANDS;
+    const t=(r0+r1)/2/clearM; // 0 at center, 1 at edge
+    const rgb=SPEAKER_LIGHT.map((v,k)=>Math.round(v+(SPEAKER_DARK[k]-v)*t));
+    feats.push({type:'Feature',properties:{kind:'cone',col:`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`},
+      geometry:{type:'Polygon',coordinates:[circleRing(centerLonLat,r1,48),circleRing(centerLonLat,r0,48)]}});
+  }
+  feats.push({type:'Feature',properties:{kind:'ring'},
+    geometry:{type:'Polygon',coordinates:[circleRing(centerLonLat,farM,48)]}});
+  return feats;
+}
+// MapView.onFix() runs on every GPS fix — without this cache, every nearby
+// zone's 16 bands got regenerated from scratch on every single fix, real
+// measurable jank on a phone with more than a couple of nearby stops.
+// Keyed by zone id; only recomputes when this zone's own
+// center/farM/clearM actually changed since the last call.
+const _stopAudioCache=new Map();
+function cachedStopAudioFeatures(zoneId,centerLonLat,farM,clearM){
+  const key=centerLonLat[0]+','+centerLonLat[1]+','+farM+','+clearM;
+  const hit=_stopAudioCache.get(zoneId);
+  if(hit&&hit.key===key) return hit.feats;
+  const feats=stopAudioFeatures(centerLonLat,farM,clearM);
+  _stopAudioCache.set(zoneId,{key,feats});
+  return feats;
+}
 
 const MapView = {
   map:null, centered:false,
@@ -1230,39 +1254,15 @@ const MapView = {
       this.map.addLayer({id:'self-dot',type:'circle',source:'self',
         paint:{'circle-radius':8,'circle-color':'#8fb6d4','circle-stroke-color':'#0a1018','circle-stroke-width':2.5}});
 
-      // trigger circle — the actual to-scale geometry that fires a zone's content
-      // (its "target" layer), drawn under the stop marker for every nearby zone
-      this.map.addSource('trigger-zones',{type:'geojson',data:fc([])});
-      this.map.addLayer({id:'trigger-fill',type:'fill',source:'trigger-zones',
-        filter:['==',['geometry-type'],'Polygon'],
-        paint:{'fill-color':'#ff6a3d','fill-opacity':.16}});
-      this.map.addLayer({id:'trigger-line',type:'line',source:'trigger-zones',
-        paint:{'line-color':'#ff6a3d','line-width':2}});
-
-      this.map.addSource('nearby-stops',{type:'geojson',data:fc([])});
-      this.map.addLayer({id:'stop-pts',type:'circle',source:'nearby-stops',
-        paint:{'circle-radius':6,'circle-color':'#ff6a3d','circle-stroke-color':'#0a1018','circle-stroke-width':2}});
-      this.map.addLayer({id:'stop-lbl',type:'symbol',source:'nearby-stops',
-        layout:{'text-field':['get','name'],'text-size':11,'text-offset':[0,1.2],'text-font':['Open Sans Regular']},
-        paint:{'text-color':'#eef4fb','text-halo-color':'#0a1018','text-halo-width':1.4}});
-
-      // crosshair — painted after nearby-stop markers, before the bearing arrow
-      this.map.addSource('crosshair',{type:'geojson',data:fc([])});
-      this.map.addLayer({id:'crosshair-cross',type:'symbol',source:'crosshair',
-        layout:{'text-field':'+','text-size':34,'text-font':['Open Sans Regular'],
-                'text-allow-overlap':true,'text-ignore-placement':true},
-        paint:{'text-color':'#ffffff','text-halo-color':'#000000','text-halo-width':3}});
-      this.map.addLayer({id:'crosshair-dot',type:'circle',source:'crosshair',
-        paint:{'circle-radius':5,'circle-color':'#ff6a3d','circle-stroke-color':'#000000','circle-stroke-width':1.5}});
-
-      // bearing line + arrowhead — topmost layer, on top of the crosshair
-      this.map.addSource('bearing-arrow',{type:'geojson',data:fc([])});
-      this.map.addLayer({id:'bearing-arrow-line',type:'line',source:'bearing-arrow',
-        filter:['==','$type','LineString'],
-        paint:{'line-color':'#ffc24d','line-width':3}});
-      this.map.addLayer({id:'bearing-arrow-head',type:'circle',source:'bearing-arrow',
-        filter:['==','$type','Point'],
-        paint:{'circle-radius':5,'circle-color':'#ffc24d','circle-stroke-color':'#0a1018','circle-stroke-width':2}});
+      // Every stop's marker, simplified to just two elements: a grey
+      // "speaker cone" gradient disc (full-volume radius) and a blue ring
+      // (trigger radius) — same visual language as the Fence Editor's map,
+      // computed from the same zoneAudioFadeRadii() used for real playback.
+      this.map.addSource('stop-audio',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'stop-cone',type:'fill',source:'stop-audio',filter:['==','kind','cone'],
+        paint:{'fill-color':['get','col'],'fill-opacity':SPEAKER_OPACITY}});
+      this.map.addLayer({id:'stop-ring',type:'line',source:'stop-audio',filter:['==','kind','ring'],
+        paint:{'line-color':'#6fbfff','line-width':1.5}});
     });
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
@@ -1272,48 +1272,16 @@ const MapView = {
     if(!this.centered){ this.map.jumpTo({center:[p.lon,p.lat], zoom:17}); this.centered=true; }
 
     const R=(BUNDLE && BUNDLE.stopVisibilityRadiusM) || 150;
-    const nearFeats=[];
-    const triggerFeats=[];
+    const audioFeats=[];
     (BUNDLE.zones||[]).forEach(z=>{
       if(!z.center) return;
       const zc=z.path?centerNow(z, nowMs):z.center;
       if(Geo.hav([p.lat,p.lon], zc)<=R){
-        nearFeats.push({type:'Feature',properties:{name:z.name},geometry:{type:'Point',coordinates:LonLat(zc)}});
-
-        const tgt=(z.layers||[]).find(l=>l.kind==='target');
-        if(tgt){
-          if(tgt.radiusM!=null){
-            triggerFeats.push({type:'Feature',properties:{name:z.name},
-              geometry:{type:'Polygon',coordinates:[circleRing(LonLat(zc), tgt.radiusM)]}});
-          } else if(tgt.geometry && tgt.geometry.type==='polygon'){
-            triggerFeats.push({type:'Feature',properties:{name:z.name},
-              geometry:{type:'Polygon',coordinates:[tgt.geometry.coords.map(LonLat)]}});
-          } else if(tgt.geometry && tgt.geometry.type==='tripline'){
-            triggerFeats.push({type:'Feature',properties:{name:z.name},
-              geometry:{type:'LineString',coordinates:[LonLat(tgt.geometry.from),LonLat(tgt.geometry.to)]}});
-          } else if(tgt.geometry && tgt.geometry.type==='corridor'){
-            triggerFeats.push({type:'Feature',properties:{name:z.name},
-              geometry:{type:'LineString',coordinates:tgt.geometry.path.map(LonLat)}});
-          }
-        }
+        const {farM,clearM}=zoneAudioFadeRadii(z);
+        audioFeats.push(...cachedStopAudioFeatures(z.id, LonLat(zc), farM, clearM));
       }
     });
-    this.map.getSource('nearby-stops')?.setData(fc(nearFeats));
-    this.map.getSource('trigger-zones')?.setData(fc(triggerFeats));
-
-    if(pick && pick.zone){
-      const zc=pick.center || centerNow(pick.zone, nowMs);
-      const ctrLL=LonLat(zc);
-      this.map.getSource('crosshair')?.setData({type:'Feature',geometry:{type:'Point',coordinates:ctrLL}});
-      const tip=destPoint(ctrLL, 20, pick.zone.bearingDeg ?? 90);
-      this.map.getSource('bearing-arrow')?.setData(fc([
-        {type:'Feature',properties:{},geometry:{type:'LineString',coordinates:[ctrLL,tip]}},
-        {type:'Feature',properties:{},geometry:{type:'Point',coordinates:tip}}
-      ]));
-    } else {
-      this.map.getSource('crosshair')?.setData(fc([]));
-      this.map.getSource('bearing-arrow')?.setData(fc([]));
-    }
+    this.map.getSource('stop-audio')?.setData(fc(audioFeats));
   }
 };
 MapView.init();

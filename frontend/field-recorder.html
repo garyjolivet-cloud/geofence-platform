@@ -352,6 +352,7 @@ let liveRecState  = "idle"; // "idle" | "recording" | "uploading"
 let liveStops     = [];     // successfully published live stops (in-memory for this session)
 let liveNum       = 0;      // auto-increment counter for live stop names
 let publishedZones = [];    // the project's real published tour stops (fence-editor zones) — reference layer, not editable here
+let projSpatialRangeM = null, projSpatialClearM = null;  // project-wide audio-fade defaults, for the blue-ring/grey-cone stop marker
 let signalOk      = true;
 let db, map;
 
@@ -592,6 +593,54 @@ function circleRing(lat,lon,rM,n=48){
   }
   return pts;
 }
+// Trigger (farM) + full-volume (clearM) radii for a published zone's audio
+// fade — same fallback/clamp chain geofence-engine.html's SpatialVoice uses,
+// so the marker stays truthful to actual playback. != null (not ||) so an
+// explicitly-set 0 survives instead of being treated as unset.
+function zoneAudioFadeRadii(zone){
+  const farM=(zone && zone.spatialRangeM!=null) ? zone.spatialRangeM
+    : (zone && zone.audibleFromM!=null) ? zone.audibleFromM
+    : (projSpatialRangeM!=null) ? projSpatialRangeM
+    : 64;
+  const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
+    : (projSpatialClearM!=null) ? projSpatialClearM
+    : Math.max(5, farM*0.12);
+  return {farM, clearM:Math.min(desiredClearM, farM*0.9)};
+}
+// Stop marker overlay: a grey "speaker cone" gradient disc (0 to clearM) +
+// a blue ring (farM) — same visual language and constants as the Fence
+// Editor's speakerConeFeatures()/audio-fade ring, layered alongside (not
+// replacing) the existing published/local status-color layers below.
+const SPEAKER_BANDS=16, SPEAKER_LIGHT=[235,235,235], SPEAKER_DARK=[55,55,55], SPEAKER_OPACITY=0.65;
+function stopAudioFeatures(lat,lon,farM,clearM){
+  const feats=[];
+  for(let i=0;i<SPEAKER_BANDS;i++){
+    const r0=clearM*i/SPEAKER_BANDS;
+    const r1=clearM*(i+1)/SPEAKER_BANDS;
+    const t=(r0+r1)/2/clearM; // 0 at center, 1 at edge
+    const rgb=SPEAKER_LIGHT.map((v,k)=>Math.round(v+(SPEAKER_DARK[k]-v)*t));
+    feats.push({type:"Feature",properties:{kind:"cone",col:`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`},
+      geometry:{type:"Polygon",coordinates:[circleRing(lat,lon,r1),circleRing(lat,lon,r0)]}});
+  }
+  feats.push({type:"Feature",properties:{kind:"ring"},
+    geometry:{type:"Polygon",coordinates:[circleRing(lat,lon,farM)]}});
+  return feats;
+}
+// refreshPublishedZones() re-runs on every GPS fix (see its own comment —
+// deliberately retries in case the map wasn't ready the first time), so
+// without this cache every published zone's 16 bands got regenerated from
+// scratch on every single fix — real, measurable jank/freeze on a phone
+// with more than a couple of stops. Keyed by zone id; only recomputes when
+// this zone's own center/farM/clearM actually changed since the last call.
+const _stopAudioCache=new Map();
+function cachedStopAudioFeatures(zoneId,lat,lon,farM,clearM){
+  const key=lat+","+lon+","+farM+","+clearM;
+  const hit=_stopAudioCache.get(zoneId);
+  if(hit&&hit.key===key) return hit.feats;
+  const feats=stopAudioFeatures(lat,lon,farM,clearM);
+  _stopAudioCache.set(zoneId,{key,feats});
+  return feats;
+}
 
 function initMap(){
   map = new maplibregl.Map({
@@ -617,6 +666,14 @@ function initMap(){
     map.addLayer({id:"published-lbl",type:"symbol",source:"published-zones",
       layout:{"text-field":["get","name"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-0.6]},
       paint:{"text-color":"#8fb6d4","text-halo-color":"#0a1018","text-halo-width":1.5}});
+
+    // blue ring + grey speaker-cone marker, additive on top of published-fill
+    // but under published-line so that dashed outline stays crisp
+    map.addSource("stop-audio",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addLayer({id:"stop-cone",type:"fill",source:"stop-audio",filter:["==","kind","cone"],
+      paint:{"fill-color":["get","col"],"fill-opacity":SPEAKER_OPACITY}}, "published-line");
+    map.addLayer({id:"stop-ring",type:"line",source:"stop-audio",filter:["==","kind","ring"],
+      paint:{"line-color":"#6fbfff","line-width":1.5}}, "published-line");
 
     map.addSource("zones",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
     map.addSource("dot",  {type:"geojson",data:{type:"Feature",geometry:{type:"Point",coordinates:[0,0]}}});
@@ -673,6 +730,8 @@ async function loadPublishedBundle(){
     if(Array.isArray(b.ref)) ref=b.ref;
     bundleVersion = b.bundleVersion!=null ? b.bundleVersion : null;
     publishedZones=Array.isArray(b.zones)?b.zones:[];
+    projSpatialRangeM = b.spatialRangeM!=null ? b.spatialRangeM : null;
+    projSpatialClearM = b.spatialClearM!=null ? b.spatialClearM : null;
     refreshPublishedZones(); renderStopList();
     if(warn) warn.style.display="none";
   }catch(e){
@@ -685,8 +744,11 @@ function retryBundleLoad(){ loadPublishedBundle(); }
 function refreshPublishedZones(){
   if(!map||!map.isStyleLoaded()) return;
   const feats=[];
+  const audioFeats=[];
   publishedZones.forEach(z=>{
     if(!z.center) return;
+    const {farM,clearM}=zoneAudioFadeRadii(z);
+    audioFeats.push(...cachedStopAudioFeatures(z.id,z.center[0],z.center[1],farM,clearM));
     const tgt=(z.layers||[]).find(l=>l.kind==="target");
     if(!tgt) return;
     if(tgt.radiusM!=null){
@@ -701,6 +763,7 @@ function refreshPublishedZones(){
     }
   });
   map.getSource("published-zones")?.setData({type:"FeatureCollection",features:feats});
+  map.getSource("stop-audio")?.setData({type:"FeatureCollection",features:audioFeats});
   renderStopList();
 }
 
