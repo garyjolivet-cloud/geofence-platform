@@ -3358,9 +3358,14 @@ function feedSim(lat,lon,acc,t){
   (simBundle.zones||[]).filter(z=>z.trackerId&&z.center).forEach(z=>{
     trackerSmoother(z.trackerId).push({lat:z.center[0],lon:z.center[1],t});
   });
-  // find nearest zone for spatial audio
+  // find nearest zone for spatial audio — raw position, same reason as
+  // SimFencer above: the smoothed position can lag well behind raw at high
+  // sim-test speeds (a fast simulated walk/teleport-style jump followed by
+  // standing still can leave the smoothed point 20m+ short of the real
+  // position for a couple seconds), which silently blocked the next stop
+  // from ever starting since nearestD stayed above its range the whole time.
   let nearest=null,nearestD=Infinity;
-  simBundle.zones.forEach(z=>{if(!z.center)return;const d=SimGeo.hav([p.lat,p.lon],z.center);if(d<nearestD){nearestD=d;nearest=z;}});
+  simBundle.zones.forEach(z=>{if(!z.center)return;const d=SimGeo.hav([raw.lat,raw.lon],z.center);if(d<nearestD){nearestD=d;nearest=z;}});
   if(nearest){
     // Mirrors the real engine's SpatialVoice.playZone() (geofence-engine.html) —
     // audibleFromM (the per-stop blue ring) is the real fade-start distance for
@@ -3386,7 +3391,7 @@ function feedSim(lat,lon,acc,t){
       // (several more ticks' worth of meters) while that stale volume
       // coasted down — audio audible well outside the ring.
       if(SimVoice.playing){
-        const brg=SimGeo.bearing([p.lat,p.lon],nearest.center);
+        const brg=SimGeo.bearing([raw.lat,raw.lon],nearest.center);
         SimVoice.update(nearestD,brg,sm.headingTravel);
       }
       // Once comfortably past the ring — gain has had room to actually
