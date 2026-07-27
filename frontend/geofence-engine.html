@@ -744,14 +744,22 @@ function fadeGain(f){
   const floor=Math.pow(10,-FADE_DB_RANGE/20);
   return (Math.pow(10,-FADE_DB_RANGE*f/20)-floor)/(1-floor);
 }
+// How far past a zone's own range (as a multiple of it) to keep the source
+// alive before releasing it — fadeGain() already reaches exact silence at
+// the range boundary itself, this just gives the exponential smoother a
+// little room to settle before fadeOut() tears the node down.
+const FADE_RELEASE_MULT=1.3;
 
 /* ===================== SpatialVoice =====================
    plays a stop's recorded audioUrl spatially — direction → pan,
    distance → low-pass cutoff + volume + reverb. Shares Clarity's
-   AudioContext. Tuning matches the audio bench. */
+   AudioContext. Fade curve is the fixed, shared fadeGain()/FADE_DB_RANGE
+   above — audio-bench.html's tunable minGain/curve sliders are stale
+   (that file is on the pending-removal list per CLAUDE.md; not ported here
+   to avoid investing in a tool already slated for deletion). */
 const SpatialVoice = {
-  ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
-  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0, reverbMax:0.5, tau:0.12, curve:0.5 },
+  ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, currentZoneId:null, playing:false, loadingUrl:null,
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, reverbMax:0.5, tau:0.12 },
   _lastPlayedAt:{},   // per-zone-id — see the loop/once-per-trigger replay-delay gating in playZone()
   // spatialRangeM is a path-stop-only override (the "voice range" handle);
   // audibleFromM is the per-stop blue "audio fade" ring, settable on every
@@ -759,7 +767,14 @@ const SpatialVoice = {
   // here, so it looked like a real per-stop fade control but silently did
   // nothing once a stop had a real clip. Now used as the fallback for any
   // stop that doesn't have the path-only override set.
-  spatialRange(zone){ return (zone && (zone.spatialRangeM||zone.audibleFromM)) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },   // per-project; full at centre → silent here
+  // != null (not ||) so an explicitly-set 0 — "never audible" — isn't
+  // silently overridden by falling through to the next fallback.
+  spatialRange(zone){
+    if(zone && zone.spatialRangeM!=null) return zone.spatialRangeM;
+    if(zone && zone.audibleFromM!=null) return zone.audibleFromM;
+    if(BUNDLE && BUNDLE.spatialRangeM!=null) return BUNDLE.spatialRangeM;
+    return 64;
+  },   // per-project; full at centre → silent here
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
@@ -831,7 +846,9 @@ const SpatialVoice = {
     // map the falloff onto the project's carry + full-volume distances
     const range=this.spatialRange(zone);
     this.tuning.farM=range;
-    const desiredClearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
+    const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
+      : (BUNDLE && BUNDLE.spatialClearM!=null) ? BUNDLE.spatialClearM
+      : Math.max(5, range*0.12);
     // The project-wide "full volume" distance can be bigger than THIS stop's
     // own audio-fade ring (farM/range) — e.g. a 32m project default on a
     // stop whose ring is only 14m. update()'s fade math assumes clearM<farM;
@@ -863,13 +880,13 @@ const SpatialVoice = {
       // got a retrigger even with loopAudio on, and a later exit had no
       // live source left for update() to actually fade out. Guarded so a
       // stale event from a superseded source can't clobber newer playback.
-      el.onended=()=>{ if(this.src!==src) return; this.playing=false; this.currentUrl=null; this.src=null; };
+      el.onended=()=>{ if(this.src!==src) return; this.playing=false; this.currentUrl=null; this.currentZoneId=null; this.src=null; };
     } else {
       src=c.createBufferSource(); src.buffer=loaded; src.loop=false;
       src.connect(this.nodes.mono); src.start();
-      src.onended=()=>{ if(this.src!==src) return; this.playing=false; this.currentUrl=null; this.src=null; };
+      src.onended=()=>{ if(this.src!==src) return; this.playing=false; this.currentUrl=null; this.currentZoneId=null; this.src=null; };
     }
-    this.src=src; this.currentUrl=url; this.playing=true;
+    this.src=src; this.currentUrl=url; this.currentZoneId=zone.id; this.playing=true;
     this._lastPlayedAt[zone.id]=Date.now();
     // fade in
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
@@ -907,7 +924,7 @@ const SpatialVoice = {
       if(s&&s._el){ s._el.pause(); s._el.src=''; try{s.disconnect();}catch(e){} }
       else{ try{ s.stop(); }catch(e){} }
     }, 650);
-    this.playing=false; this.currentUrl=null; this.src=null;
+    this.playing=false; this.currentUrl=null; this.currentZoneId=null; this.src=null;
   }
 };
 
@@ -919,10 +936,15 @@ const SpatialVoice = {
    clone of SpatialVoice; the only real difference is tick(), which drives
    itself off centerNow() instead of a fixed zone.center. */
 const AmbientVoice = {
-  ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, playing:false, loadingUrl:null,
-  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0, reverbMax:0.5, tau:0.12, curve:0.5 },
+  ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, currentZoneId:null, playing:false, loadingUrl:null,
+  tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, reverbMax:0.5, tau:0.12 },
   // See SpatialVoice.spatialRange() above — same fix, kept as a mirrored copy.
-  spatialRange(zone){ return (zone && (zone.spatialRangeM||zone.audibleFromM)) || (BUNDLE && BUNDLE.spatialRangeM) || 64; },
+  spatialRange(zone){
+    if(zone && zone.spatialRangeM!=null) return zone.spatialRangeM;
+    if(zone && zone.audibleFromM!=null) return zone.audibleFromM;
+    if(BUNDLE && BUNDLE.spatialRangeM!=null) return BUNDLE.spatialRangeM;
+    return 64;
+  },
   ensure(){
     if(this.ctx) return true;
     if(!Clarity.ready) Clarity.init();
@@ -975,7 +997,9 @@ const AmbientVoice = {
     const range=this.spatialRange(zone);
     this.tuning.farM=range;
     // See SpatialVoice's own version of this clamp above — same fix, mirrored copy.
-    const desiredClearM=(zone && zone.spatialClearM) || (BUNDLE && BUNDLE.spatialClearM) || Math.max(5, range*0.12);
+    const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
+      : (BUNDLE && BUNDLE.spatialClearM!=null) ? BUNDLE.spatialClearM
+      : Math.max(5, range*0.12);
     this.tuning.clearM=Math.min(desiredClearM, range*0.9);
     this.loadingUrl=url;
     let loaded; try{ loaded=await this.load(url); }
@@ -996,7 +1020,7 @@ const AmbientVoice = {
       src=c.createBufferSource(); src.buffer=loaded; src.loop=true;
       src.connect(this.nodes.mono); src.start();
     }
-    this.src=src; this.currentUrl=url; this.playing=true;
+    this.src=src; this.currentUrl=url; this.currentZoneId=zone.id; this.playing=true;
     this.currentVolume=zone.volume!=null?zone.volume:1;
     const g=this.nodes.fade.gain; g.cancelScheduledValues(c.currentTime);
     g.setValueAtTime(g.value, c.currentTime); g.linearRampToValueAtTime(1, c.currentTime+0.8);
@@ -1025,12 +1049,17 @@ const AmbientVoice = {
       if(s&&s._el){ s._el.pause(); s._el.src=''; try{s.disconnect();}catch(e){} }
       else{ try{ s.stop(); }catch(e){} }
     }, 650);
-    this.playing=false; this.currentUrl=null; this.src=null;
+    this.playing=false; this.currentUrl=null; this.currentZoneId=null; this.src=null;
   },
   // Called once per GPS fix. Picks the single nearest in-range path stop
   // (only one ambient bed plays at a time, same one-clip-at-a-time
-  // simplicity as SpatialVoice) and drives play/update/fadeOut off its
-  // live, moving position.
+  // simplicity as SpatialVoice) to decide whether to START a new clip, but
+  // drives update()/fadeOut() off whichever zone is ACTUALLY playing
+  // (this.currentZoneId), not off "nearest" — nearest can flip to a
+  // different, still-out-of-range zone while a previous zone's ambient bed
+  // is still sounding, and using nearest's distance/range there fed the
+  // wrong zone's gain/pan into the source that's actually loaded, and could
+  // fade it out early based on unrelated nearby-zone geometry.
   tick(zones, p, nowMs){
     let nearest=null, nearestD=Infinity;
     zones.forEach(z=>{
@@ -1039,20 +1068,18 @@ const AmbientVoice = {
       const d=Geo.hav([p.lat,p.lon], c);
       if(d<nearestD){ nearestD=d; nearest={zone:z, center:c, d}; }
     });
-    if(nearest){
-      const range=this.spatialRange(nearest.zone);
-      if(nearestD<range) this.playZone(nearest.zone);
-      // See SpatialVoice's mirrored version of this fix above — keep
-      // driving update() off the real (possibly beyond-range) distance
-      // instead of freezing at the last in-range gain and coasting down
-      // a flat real-time fadeOut() tail.
-      if(this.playing){
-        const brg=Geo.bearing([p.lat,p.lon], nearest.center);
+    if(nearest && nearestD<this.spatialRange(nearest.zone)) this.playZone(nearest.zone);
+    if(this.playing && this.currentZoneId){
+      const playingZone=zones.find(z=>z.id===this.currentZoneId);
+      if(playingZone){
+        const pc=centerNow(playingZone, nowMs);
+        const pd=Geo.hav([p.lat,p.lon], pc);
+        const brg=Geo.bearing([p.lat,p.lon], pc);
         const headingOk=(typeof TravelHeading!=='undefined' && TravelHeading.heading!=null);
         const az=((brg-((typeof TravelHeading!=='undefined'&&TravelHeading.heading)||0))*Math.PI/180);
-        this.update(az, nearestD, headingOk);
-      }
-      if(nearestD>=range*1.3) this.fadeOut();
+        this.update(az, pd, headingOk);
+        if(pd>=this.tuning.farM*FADE_RELEASE_MULT) this.fadeOut();
+      } else { this.fadeOut(); } // playing zone no longer exists in this bundle
     } else if(this.playing){ this.fadeOut(); }
   }
 };
@@ -1102,24 +1129,35 @@ const HUD = {
       const pc=centerNow(pick.zone, fix.t);
       const dv=Geo.hav([p.lat,p.lon],pc), range=SpatialVoice.spatialRange(pick.zone);
       if(dv<range) SpatialVoice.playZone(pick.zone);
-      // Keep feeding the real (possibly beyond-range) distance to update()
-      // for as long as something is actually playing, instead of jumping
-      // straight to a fixed real-time fadeOut() ramp the moment dv crosses
-      // range — update()'s own f clamp already pins gain at 0 once
-      // dv>=range, so this is what actually reaches (and holds) true
-      // silence right at the ring's edge rather than coasting a stale
-      // in-range gain value down over a flat 0.6s tail while the visitor
-      // keeps moving further away (noticeable at bike/ski speed).
-      if(SpatialVoice.playing){
-        const brg=Geo.bearing([p.lat,p.lon],pc);
+    }
+    // Drive update()/fadeOut() off whichever zone is ACTUALLY playing
+    // (SpatialVoice.currentZoneId), not off `pick` — pick can flip to a
+    // different, still-out-of-range zone while a previous zone's clip is
+    // still sounding, and using pick's distance/range there fed the wrong
+    // zone's gain/pan into the source that's actually loaded, and could
+    // fade it out early (or late) based on unrelated nearby-zone geometry.
+    // Keep feeding the real (possibly beyond-range) distance to update()
+    // for as long as something is actually playing, instead of jumping
+    // straight to a fixed real-time fadeOut() ramp the moment distance
+    // crosses range — update()'s own f clamp already pins gain at 0 once
+    // dist>=farM, so this is what actually reaches (and holds) true
+    // silence right at the ring's edge rather than coasting a stale
+    // in-range gain value down over a flat 0.6s tail while the visitor
+    // keeps moving further away (noticeable at bike/ski speed).
+    if(SpatialVoice.playing && SpatialVoice.currentZoneId){
+      const playingZone=BUNDLE.zones.find(z=>z.id===SpatialVoice.currentZoneId);
+      if(playingZone){
+        const ppc=centerNow(playingZone, fix.t);
+        const pdv=Geo.hav([p.lat,p.lon],ppc);
+        const brg=Geo.bearing([p.lat,p.lon],ppc);
         const headingOk=(TravelHeading.heading!=null);   // not moving yet / no fix history → centred, not wrong-way
         const az=((brg-(TravelHeading.heading||0))*Math.PI/180);
-        SpatialVoice.update(az, dv, headingOk);
-      }
-      // Once comfortably past the ring — gain has had room to actually
-      // reach zero above — release the now-silent source instead of
-      // leaving it parked indefinitely.
-      if(dv>=range*1.3) SpatialVoice.fadeOut();
+        SpatialVoice.update(az, pdv, headingOk);
+        // Once comfortably past the ring — gain has had room to actually
+        // reach zero above — release the now-silent source instead of
+        // leaving it parked indefinitely.
+        if(pdv>=SpatialVoice.tuning.farM*FADE_RELEASE_MULT) SpatialVoice.fadeOut();
+      } else { SpatialVoice.fadeOut(); } // playing zone no longer exists in this bundle
     } else if(SpatialVoice.playing){ SpatialVoice.fadeOut(); }
 
     // ambient (path/moving) audio: independent of the pick system above, so
@@ -1785,7 +1823,9 @@ EngineKokoro.tryLoad();
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
     if(!HUD.pos) MapView.recenter(b.ref);
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
-      ['hiHz','loHz','minGain','reverbMax','tau','curve'].forEach(k=>{ if(st[k]!=null) t[k]=st[k]; }); }
+      // minGain/curve dropped: the fade curve is now the fixed, shared
+      // fadeGain()/FADE_DB_RANGE, not a per-project tunable.
+      ['hiHz','loHz','reverbMax','tau'].forEach(k=>{ if(st[k]!=null) t[k]=st[k]; }); }
     try{ localStorage.setItem(LKEY, JSON.stringify(b)); }catch(e){}   // keep a copy for offline
     if(document.getElementById('simZones')) buildSimZones();
     HUD.log('ev-sys','loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' · '+b.zones.length+' stops (from platform)');

@@ -873,16 +873,6 @@
           <input type="range" id="alRevMax" min="0" max="100" value="40" step="5" style="flex:1;accent-color:var(--coral)">
           <span id="alRevMaxV" style="width:52px;text-align:right;color:var(--ice)">0.40</span>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-          <span style="width:72px">min vol</span>
-          <input type="range" id="alMinGain" min="0" max="50" value="5" step="1" style="flex:1;accent-color:var(--coral)">
-          <span id="alMinGainV" style="width:52px;text-align:right;color:var(--ice)">0.05</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-          <span style="width:72px">falloff</span>
-          <input type="range" id="alCurve" min="50" max="300" value="110" step="10" style="flex:1;accent-color:var(--coral)">
-          <span id="alCurveV" style="width:52px;text-align:right;color:var(--ice)">1.1&times;</span>
-        </div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:'Barlow Condensed';font-size:12px;color:var(--ice);background:rgba(14,22,34,.6);border:1px solid var(--rim);border-radius:8px;padding:7px 10px">
         <span>cut <b id="alHz" style="color:var(--snow)">&#8212;</b></span>
@@ -1095,9 +1085,11 @@ function circleRing(center,radiusM,n){
 function zoneFadeGeom(z){
   const projFar=(+document.getElementById("audioRange").value)||64;
   const projClear=(+document.getElementById("audioClear").value)||8;
-  const farM=z.spatialRangeM||z.audioM||projFar;
+  // != null (not ||) so an explicitly-set 0 survives instead of being
+  // treated as unset and falling through to the next fallback.
+  const farM=z.spatialRangeM!=null?z.spatialRangeM:(z.audioM!=null?z.audioM:projFar);
   if(!(farM>0)) return null;
-  const clearM=Math.min(z.spatialClearM||projClear, farM*0.9);
+  const clearM=Math.min(z.spatialClearM!=null?z.spatialClearM:projClear, farM*0.9);
   return {farM,clearM};
 }
 // Stepped annulus bands between clearM (full volume) and farM (trigger),
@@ -1116,6 +1108,11 @@ function fadeGain(f){
   const floor=Math.pow(10,-FADE_DB_RANGE/20);
   return (Math.pow(10,-FADE_DB_RANGE*f/20)-floor)/(1-floor);
 }
+// How far past a zone's own range (as a multiple of it) to keep the source
+// alive before releasing it — fadeGain() already reaches exact silence at
+// the range boundary itself, this just gives the exponential smoother a
+// little room to settle before fadeOut() tears the node down.
+const FADE_RELEASE_MULT=1.3;
 function fadeBandFeatures(center,farM,clearM){
   const feats=[];
   for(let i=0;i<FADE_BANDS;i++){
@@ -1127,6 +1124,21 @@ function fadeBandFeatures(center,farM,clearM){
     feats.push({type:"Feature",properties:{kind:"fadegrad",op:gain*FADE_MAX_OPACITY},
       geometry:{type:"Polygon",coordinates:[circleRing(center,r1,48),circleRing(center,r0,48)]}});
   }
+  return feats;
+}
+// renderSources() runs on every drag-frame mousemove for every zone, not
+// just the one being dragged — without this cache, every other zone's 24
+// annulus bands (2 circleRing(...,48) calls each) got regenerated from
+// scratch on every frame even though nothing about them had changed.
+// Keyed by zone id; only recomputes when this zone's own center/farM/clearM
+// actually changed since the last call.
+const _fadeBandCache=new Map();
+function cachedFadeBandFeatures(zoneId,center,farM,clearM){
+  const key=center[0]+","+center[1]+","+farM+","+clearM;
+  const hit=_fadeBandCache.get(zoneId);
+  if(hit&&hit.key===key) return hit.feats;
+  const feats=fadeBandFeatures(center,farM,clearM);
+  _fadeBandCache.set(zoneId,{key,feats});
   return feats;
 }
 function haversineM(a,b){ const R=6371000, toR=Math.PI/180;
@@ -1232,7 +1244,7 @@ function renderSources(){
     // — plus the gradient band between the two.
     const fg=zoneFadeGeom(z);
     if(fg){
-      feats.push(...fadeBandFeatures(c,fg.farM,fg.clearM));
+      feats.push(...cachedFadeBandFeatures(z.id,c,fg.farM,fg.clearM));
       feats.push({type:"Feature",properties:{kind:"prange",sel:selected},
         geometry:{type:"Polygon",coordinates:[circleRing(c,fg.farM,48)]}});
       feats.push({type:"Feature",properties:{kind:"pclear",sel:selected},
@@ -1633,8 +1645,13 @@ function refreshHandles(z){
 
   // ---- 8: every stop's own hearing-range handles (voice range / full vol) ----
   {
-    const rM=z.spatialRangeM||(+document.getElementById("audioRange").value)||64;
-    const cM=z.spatialClearM||(+document.getElementById("audioClear").value)||8;
+    // zoneFadeGeom(z) — same helper renderSources() uses to draw the actual
+    // ring/gradient — so the handle can never sit at a different radius
+    // than what's rendered (it used to re-derive its own fallback chain
+    // here, which skipped the z.audioM fallback and the farM*0.9 clamp).
+    const fg=zoneFadeGeom(z);
+    const rM=fg?fg.farM:((+document.getElementById("audioRange").value)||64);
+    const cM=fg?fg.clearM:((+document.getElementById("audioClear").value)||8);
     {
       const el=_mkHandle("mh-projrange","voice range: "+rM+" m");
       const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,rM,0)).addTo(map);
@@ -3057,8 +3074,8 @@ const SimFencer={state:{},onEvent:null,
 let simSoundOn=true;
 
 const SimVoice={
-  ctx:null,nodes:null,src:null,buffers:{},currentUrl:null,playing:false,loadingUrl:null,
-  tuning:{clearM:8,farM:64,hiHz:7000,loHz:600,minGain:0,reverbMax:0.5,tau:0.12,curve:0.5},
+  ctx:null,nodes:null,src:null,buffers:{},currentUrl:null,currentZoneId:null,playing:false,loadingUrl:null,
+  tuning:{clearM:8,farM:64,hiHz:7000,loHz:600,reverbMax:0.5,tau:0.12},
   _ir(sec,decay){const r=this.ctx.sampleRate,n=Math.floor(r*sec),b=this.ctx.createBuffer(2,n,r);
     for(let ch=0;ch<2;ch++){const d=b.getChannelData(ch);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,decay);}return b;},
   ensure(){if(this.ctx)return;const C=window.AudioContext||window.webkitAudioContext;this.ctx=new C();
@@ -3146,13 +3163,13 @@ const SimVoice={
       // they later walked back out, update() had no live source left to
       // actually fade (looked like no fade on exit). Guarded so a stale
       // event from a superseded source can't clobber newer playback.
-      el.onended=()=>{ if(this.src!==src) return; this.playing=false;this.currentUrl=null;this.src=null; };
+      el.onended=()=>{ if(this.src!==src) return; this.playing=false;this.currentUrl=null;this.currentZoneId=null;this.src=null; };
     }else{
       src=this.ctx.createBufferSource();src.buffer=loaded;src.loop=false;
       src.connect(this.nodes.mono);src.start();
-      src.onended=()=>{ if(this.src!==src) return; this.playing=false;this.currentUrl=null;this.src=null; };
+      src.onended=()=>{ if(this.src!==src) return; this.playing=false;this.currentUrl=null;this.currentZoneId=null;this.src=null; };
     }
-    this.src=src;this.currentUrl=url;this.playing=true;
+    this.src=src;this.currentUrl=url;this.currentZoneId=zone.id;this.playing=true;
     this._lastPlayedAt[zone.id]=Date.now();
     const g=this.nodes.fade.gain;g.cancelScheduledValues(this.ctx.currentTime);
     g.setValueAtTime(g.value,this.ctx.currentTime);g.linearRampToValueAtTime(1,this.ctx.currentTime+0.8);
@@ -3176,7 +3193,7 @@ const SimVoice={
     const s=this.src;setTimeout(()=>{
       if(s&&s._el){s._el.pause();s._el.src='';try{s.disconnect();}catch(e){}}
       else{try{s.stop();}catch(e){}};},650);
-    this.playing=false;this.currentUrl=null;this.src=null;},
+    this.playing=false;this.currentUrl=null;this.currentZoneId=null;this.src=null;},
   stop(){this.fadeOut();this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;
     // Reset per-zone replay-delay history too — otherwise clicking "Reset"
     // to start a fresh test walk doesn't actually give you a fresh walk: a
@@ -3315,16 +3332,16 @@ function editorToSimBundle(){
     const out={id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
       audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,volume:z.volume!=null?z.volume:1,
       loopAudio:z.loopAudio!==false,
-      // spatialRangeM is a path-stop-only override (mirrors the publish path's
-      // own conditional export at "if(z.spatialRangeM!=null) zo.spatialRangeM=…"
-      // below) — exporting it unconditionally with the *project* farM default
-      // made every non-path zone's real (per-stop) audioM ring get shadowed by
-      // the much larger project default in feedSim()'s/spatialRange()'s
+      // spatialRangeM/spatialClearM are per-stop hearing-range overrides for
+      // every zone type now (mirrors the publish path's own conditional
+      // export at "if(z.spatialRangeM!=null) zo.spatialRangeM=…" below) —
+      // exporting it unconditionally with the *project* farM default used to
+      // make every zone's real (per-stop) audioM ring get shadowed by the
+      // much larger project default in feedSim()'s/spatialRange()'s
       // `spatialRangeM||audibleFromM` fallback chain, since spatialRangeM was
-      // never actually absent. That's why testing here faded audio out at the
-      // project's 64m default instead of this stop's own (often much smaller)
-      // blue trigger ring.
-      spatialRangeM:z.spatialRangeM||null,spatialClearM:z.spatialClearM||null,
+      // never actually absent. `??null` (not `||null`) so an explicitly-set
+      // 0 survives instead of being treated as unset.
+      spatialRangeM:z.spatialRangeM??null,spatialClearM:z.spatialClearM??null,
       layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       chatPersona:z.chatPersona||null,chatKnowledge:z.chatKnowledge||null,chatGreeting:z.chatGreeting||null,
       botId:z.botId||null,bots:z.bots||[],clientBotId:z.clientBotId||null,
@@ -3343,6 +3360,17 @@ function editorToSimBundle(){
   return{name:slug(projName())||"project",ref,zones:simZones,
     bots:editorBots,visitorBotId:document.getElementById("visitorBotSel").value||null,
     spatialRangeM:farM,spatialClearM:clearM,spatialTuning:AudioLab.getTuning()};
+}
+
+// Trigger (farM) + full-volume (clearM) radii for a sim-bundle zone (which
+// uses audibleFromM, not audioM — the exported-zone schema built by
+// editorToSimBundle(), distinct from zoneFadeGeom()'s editor-zone schema).
+// != null (not ||) so an explicitly-set 0 survives instead of being treated
+// as unset and falling through to the next fallback.
+function simZoneRangeClear(z){
+  const range=z.spatialRangeM!=null?z.spatialRangeM:(z.audibleFromM!=null?z.audibleFromM:64);
+  const desiredClearM=z.spatialClearM!=null?z.spatialClearM:8;
+  return {range, clearM:Math.min(desiredClearM, range*0.9)};
 }
 
 function feedSim(lat,lon,acc,t){
@@ -3367,22 +3395,29 @@ function feedSim(lat,lon,acc,t){
   let nearest=null,nearestD=Infinity;
   simBundle.zones.forEach(z=>{if(!z.center)return;const d=SimGeo.hav([raw.lat,raw.lon],z.center);if(d<nearestD){nearestD=d;nearest=z;}});
   if(nearest){
-    // Mirrors the real engine's SpatialVoice.playZone() (geofence-engine.html) —
-    // audibleFromM (the per-stop blue ring) is the real fade-start distance for
-    // any non-path stop; clearM is clamped below it so the fade math can't
-    // invert when the project's "full volume" default is bigger than this
-    // particular stop's ring.
-    const range=nearest.spatialRangeM||nearest.audibleFromM||64;
-    const desiredClearM=nearest.spatialClearM||8;
-    const clearM=Math.min(desiredClearM, range*0.9);
-    SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
+    const {range,clearM}=simZoneRangeClear(nearest);
     if(!nearest.audioUrl||!simSoundOn||simChatZone){
       SimVoice.fadeOut();
-    }else{
-      if(nearestD<range) SimVoice.playZone(nearest);
+    }else if(nearestD<range){
+      SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
+      SimVoice.playZone(nearest);
+    }
+  }
+  // Drive update()/fadeOut() off whichever zone is ACTUALLY playing
+  // (SimVoice.currentZoneId), not off `nearest` — nearest can flip to a
+  // different, still-out-of-range zone while a previous zone's clip is
+  // still sounding, and using nearest's distance/range there fed the wrong
+  // zone's gain/pan into the source that's actually loaded, and could fade
+  // it out early (or late) based on unrelated nearby-zone geometry.
+  if(SimVoice.playing && SimVoice.currentZoneId){
+    const playingZone=simBundle.zones.find(z=>z.id===SimVoice.currentZoneId);
+    if(playingZone){
+      const {range,clearM}=simZoneRangeClear(playingZone);
+      SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
+      const pd=SimGeo.hav([raw.lat,raw.lon],playingZone.center);
       // Keep feeding the *real* (possibly beyond-range) distance to update()
       // for as long as something is actually playing, instead of switching
-      // to a fixed real-time fadeOut() ramp the instant nearestD crosses
+      // to a fixed real-time fadeOut() ramp the instant distance crosses
       // range. update()'s own f clamp already pins gain at 0 once
       // distM>=farM, so this is what actually reaches — and holds — true
       // silence right at the ring's edge. The old cutover left whatever
@@ -3390,20 +3425,19 @@ function feedSim(lat,lon,acc,t){
       // real-time tail, so a fast simulated walk kept moving further away
       // (several more ticks' worth of meters) while that stale volume
       // coasted down — audio audible well outside the ring.
-      if(SimVoice.playing){
-        const brg=SimGeo.bearing([raw.lat,raw.lon],nearest.center);
-        SimVoice.update(nearestD,brg,sm.headingTravel);
-      }
+      const brg=SimGeo.bearing([raw.lat,raw.lon],playingZone.center);
+      SimVoice.update(pd,brg,sm.headingTravel);
       // Once comfortably past the ring — gain has had room to actually
       // reach zero above — release the now-silent source instead of
       // leaving it parked indefinitely.
-      if(nearestD>=range*1.3) SimVoice.fadeOut();
-    }
-  }
+      if(pd>=range*FADE_RELEASE_MULT) SimVoice.fadeOut();
+    } else { SimVoice.fadeOut(); } // playing zone no longer exists in this bundle
+  } else if(SimVoice.playing){ SimVoice.fadeOut(); }
   // ambient (path/moving) audio — independent of the nearest-zone pick
   // above, so it can layer under a nearby spoken stop instead of fighting
-  // it for the one SimVoice channel.
-  SimAmbient.update(p, t, simBundle.zones);
+  // it for the one SimVoice channel. Raw position too, same reason as the
+  // nearest-zone pick above.
+  SimAmbient.update(raw, t, simBundle.zones);
   refreshSimAmbientMarker(t);
   refreshSimChips();
   // feed guidance module
@@ -4166,7 +4200,7 @@ const TTSVoice = {
     const t = SimVoice.tuning;
     const f = Math.max(0, Math.min(1, (distM - t.clearM) / Math.max(1, t.farM - t.clearM)));
     this.nodes.lpf.frequency.setValueAtTime(t.hiHz * Math.pow(t.loHz/t.hiHz, f), c.currentTime);
-    this.nodes.vol.gain.setValueAtTime(t.minGain + (1-t.minGain) * Math.pow(1-f, t.curve), c.currentTime);
+    this.nodes.vol.gain.setValueAtTime(fadeGain(f), c.currentTime);
     this.nodes.wet.gain.setValueAtTime(t.reverbMax * Math.pow(f, 0.6), c.currentTime);
     this.nodes.pan.pan.setValueAtTime(0, c.currentTime);
     s.onended = () => { if (onEnd) onEnd(); };
@@ -4517,7 +4551,7 @@ map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspen
 const AudioLab = {
   _SA: {
     ctx:null, buffer:null, src:null, nodes:null, playing:false,
-    tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, minGain:0, reverbMax:0.4, tau:0.09, curve:0.5, mode:"stereo" },
+    tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, reverbMax:0.4, tau:0.09, mode:"stereo" },
     ensureCtx(){ if(this.ctx)return this.ctx; const AC=window.AudioContext||window.webkitAudioContext; this.ctx=new AC(); return this.ctx; },
     build(){
       const ctx=this.ensureCtx();
@@ -4611,14 +4645,15 @@ const AudioLab = {
     if(typeof SimVoice==="undefined") return;
     const t=this._SA.tuning;
     SimVoice.tuning.hiHz=t.hiHz; SimVoice.tuning.loHz=t.loHz;
-    SimVoice.tuning.minGain=t.minGain; SimVoice.tuning.reverbMax=t.reverbMax;
-    SimVoice.tuning.tau=t.tau; SimVoice.tuning.curve=t.curve;
+    SimVoice.tuning.reverbMax=t.reverbMax; SimVoice.tuning.tau=t.tau;
   },
 
-  // return plain object of EQ constants (persisted in bundle)
+  // return plain object of EQ constants (persisted in bundle) — minGain/curve
+  // dropped: the fade curve is now the fixed, shared fadeGain()/FADE_DB_RANGE
+  // (see top of file), not a per-project tunable.
   getTuning(){
     const t=this._SA.tuning;
-    return{hiHz:t.hiHz,loHz:t.loHz,minGain:t.minGain,reverbMax:t.reverbMax,tau:t.tau,curve:t.curve};
+    return{hiHz:t.hiHz,loHz:t.loHz,reverbMax:t.reverbMax,tau:t.tau};
   },
 
   // restore tuning from saved object, update sliders
@@ -4628,8 +4663,6 @@ const AudioLab = {
     const $=id=>document.getElementById(id);
     if(obj.loHz!=null){    t.loHz=obj.loHz;     $("alLoHz").value=obj.loHz;     $("alLoHzV").textContent=obj.loHz+" Hz"; }
     if(obj.reverbMax!=null){t.reverbMax=obj.reverbMax; $("alRevMax").value=Math.round(obj.reverbMax*100); $("alRevMaxV").textContent=obj.reverbMax.toFixed(2); }
-    if(obj.minGain!=null){ t.minGain=obj.minGain; $("alMinGain").value=Math.round(obj.minGain*100); $("alMinGainV").textContent=obj.minGain.toFixed(2); }
-    if(obj.curve!=null){   t.curve=obj.curve;   $("alCurve").value=Math.round(obj.curve*100); $("alCurveV").textContent=obj.curve.toFixed(1)+"×"; }
     if(obj.hiHz!=null)    t.hiHz=obj.hiHz;
     if(obj.tau!=null)     t.tau=obj.tau;
     this.syncToSimVoice();
@@ -4712,17 +4745,6 @@ const AudioLab = {
       $("alRevMaxV").textContent=(+$("alRevMax").value/100).toFixed(2);
       this.syncToSimVoice(); this.refresh();
     };
-    $("alMinGain").oninput=()=>{
-      this._SA.tuning.minGain=+$("alMinGain").value/100;
-      $("alMinGainV").textContent=(+$("alMinGain").value/100).toFixed(2);
-      this.syncToSimVoice(); this.refresh();
-    };
-    $("alCurve").oninput=()=>{
-      this._SA.tuning.curve=+$("alCurve").value/100;
-      $("alCurveV").textContent=(+$("alCurve").value/100).toFixed(1)+"×";
-      this.syncToSimVoice(); this.refresh();
-    };
-
     // populate browser voice picker (voices may load async)
     function _populateBrowserVoices(){
       const sel=$("alVoice"); if(!sel) return;
