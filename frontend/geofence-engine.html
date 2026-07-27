@@ -751,8 +751,8 @@ function fadeGain(f){
 const FADE_RELEASE_MULT=1.3;
 // Trigger (farM) + full-volume (clearM) radii for a zone's audio fade —
 // shared by SpatialVoice/AmbientVoice's playZone()/spatialRange() and by
-// MapView's stop-ring/stop-cone map markers, so all three stay truthful to
-// the same math instead of three independent copies of this chain.
+// MapView's stop-fadeband/stop-cone map markers, so all three stay
+// truthful to the same math instead of three independent copies of this chain.
 // != null (not ||) so an explicitly-set 0 survives instead of being
 // treated as unset. The clearM<farM clamp matters: update()'s fade math
 // assumes clearM<farM — left unclamped, a project "full volume" default
@@ -1205,8 +1205,9 @@ function circleRing(centerLonLat, radiusM, n){   // centerLonLat=[lon,lat] -> ri
 }
 // Stop marker: a grey "speaker cone" gradient disc (0 to clearM) + a blue
 // gradient band (clearM to farM, opacity driven by the same fadeGain()
-// curve that drives real playback — clear at the trigger ring, solid near
-// full volume) + a thin blue ring at farM — same visual language and
+// curve that drives real playback — clear at the trigger radius, solid near
+// full volume). No separate ring outline — the band's own fade-to-nothing
+// edge at farM already marks the trigger boundary. Same visual language and
 // constants as the Fence Editor's speakerConeFeatures()/fadeBandFeatures().
 const SPEAKER_BANDS=16, SPEAKER_LIGHT=[235,235,235], SPEAKER_DARK=[55,55,55], SPEAKER_OPACITY=0.65;
 const FADE_BANDS=24, FADE_MAX_OPACITY=0.5;
@@ -1228,8 +1229,6 @@ function stopAudioFeatures(centerLonLat, farM, clearM){
     feats.push({type:'Feature',properties:{kind:'fadeband',op:fadeGain(f)*FADE_MAX_OPACITY},
       geometry:{type:'Polygon',coordinates:[circleRing(centerLonLat,r1,48),circleRing(centerLonLat,r0,48)]}});
   }
-  feats.push({type:'Feature',properties:{kind:'ring'},
-    geometry:{type:'Polygon',coordinates:[circleRing(centerLonLat,farM,48)]}});
   return feats;
 }
 // MapView.onFix() runs on every GPS fix — without this cache, every nearby
@@ -1274,8 +1273,6 @@ const MapView = {
         paint:{'fill-color':['get','col'],'fill-opacity':SPEAKER_OPACITY}});
       this.map.addLayer({id:'stop-fadeband',type:'fill',source:'stop-audio',filter:['==','kind','fadeband'],
         paint:{'fill-color':'#6fbfff','fill-opacity':['get','op']}});
-      this.map.addLayer({id:'stop-ring',type:'line',source:'stop-audio',filter:['==','kind','ring'],
-        paint:{'line-color':'#6fbfff','line-width':1.5}});
     });
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
