@@ -1271,15 +1271,14 @@ const MapView = {
     this.map.getSource('self')?.setData({type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]}});
     if(!this.centered){ this.map.jumpTo({center:[p.lon,p.lat], zoom:17}); this.centered=true; }
 
-    const R=(BUNDLE && BUNDLE.stopVisibilityRadiusM) || 150;
+    // Every stop's marker shows regardless of distance from the visitor —
+    // no stopVisibilityRadiusM proximity gate.
     const audioFeats=[];
     (BUNDLE.zones||[]).forEach(z=>{
       if(!z.center) return;
       const zc=z.path?centerNow(z, nowMs):z.center;
-      if(Geo.hav([p.lat,p.lon], zc)<=R){
-        const {farM,clearM}=zoneAudioFadeRadii(z);
-        audioFeats.push(...cachedStopAudioFeatures(z.id, LonLat(zc), farM, clearM));
-      }
+      const {farM,clearM}=zoneAudioFadeRadii(z);
+      audioFeats.push(...cachedStopAudioFeatures(z.id, LonLat(zc), farM, clearM));
     });
     this.map.getSource('stop-audio')?.setData(fc(audioFeats));
   }
