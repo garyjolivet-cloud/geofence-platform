@@ -238,7 +238,6 @@
   .map-handle.mh-audio{background:#6fbfff}
   .map-handle.mh-vertex{background:#fff;border-radius:3px;width:12px;height:12px}
   .map-handle.mh-tripend{background:#00e5ff}
-  .map-handle.mh-projrange{background:#b96fff}
   .map-handle.mh-projclear{background:#9b3fd4}
   .map-handle.mh-visitor{background:#00e5ff;border-style:dashed}
   /* advanced section */
@@ -345,16 +344,12 @@
       <div class="key-row-text"><b>Audio fade (blue) — south</b><span>Drag to set the distance at which zone audio starts fading in. Shown as a blue dotted ring.</span></div>
     </div>
     <div class="key-row">
-      <div class="key-dot" style="background:#b96fff"></div>
-      <div class="key-row-text"><b>Voice range (purple) — north</b><span>Drag to set how far this stop's audio carries. Leave untouched to use the project default. Shown as a purple dashed ring.</span></div>
+      <div class="key-dot" style="background:#9b3fd4"></div>
+      <div class="key-row-text"><b>Full volume radius (dark purple) — SE</b><span>Drag to set this stop's inner radius where audio plays at full volume. Always smaller than the audio fade distance. Leave untouched to use the project default.</span></div>
     </div>
     <div class="key-row">
       <div class="key-dot" style="background:#9b3fd4"></div>
-      <div class="key-row-text"><b>Full volume radius (dark purple) — SE</b><span>Drag to set this stop's inner radius where audio plays at full volume. Always smaller than voice range. Leave untouched to use the project default.</span></div>
-    </div>
-    <div class="key-row">
-      <div class="key-dot" style="background:#9b3fd4"></div>
-      <div class="key-row-text"><b>Fade gradient (purple haze)</b><span>Fills the space between voice range and full volume. Solid = 100% volume, fading to clear = where audio starts.</span></div>
+      <div class="key-row-text"><b>Fade gradient (purple haze)</b><span>Fills the space between the audio fade ring and full volume. Solid = 100% volume, fading to clear = where audio starts.</span></div>
     </div>
     <div class="key-row">
       <div class="key-dot sq" style="background:#fff"></div>
@@ -578,14 +573,14 @@
       <div class="hint" style="margin:4px 0 0">Position is always on a shared real-world clock — visitors near the route at the same moment hear it in the same place.</div>
     </div>
 
-    <!-- ── Hearing range — every stop gets its own voice range / full volume
-         override now, not just path stops; leave blank to fall back to the
-         project's shared default (Project Settings dot-badges) ── -->
+    <!-- ── Hearing range — every stop gets its own full-volume override,
+         not just path stops; leave blank to fall back to the project's
+         shared default (Project Settings dot-badges). The fade-start
+         distance itself is "audio fades in from (m)" in Advanced, backed
+         by the map's blue drag handle — not duplicated here. ── -->
     <div class="va-section" id="pHearingSection">
       <div class="va-label">Hearing range — overrides this project's defaults for this stop</div>
-      <label class="k">voice range (m) — leave blank to use the project default</label>
-      <input id="pRangeVoice" type="number" min="0" placeholder="project default">
-      <label class="k" style="margin-top:6px">full volume within (m) — leave blank to use the project default</label>
+      <label class="k">full volume within (m) — leave blank to use the project default</label>
       <input id="pRangeClear" type="number" min="0" placeholder="project default">
     </div>
 
@@ -843,7 +838,7 @@ function zoneFadeGeom(z){
   const projClear=(+document.getElementById("audioClear").value)||8;
   // != null (not ||) so an explicitly-set 0 survives instead of being
   // treated as unset and falling through to the next fallback.
-  const farM=z.spatialRangeM!=null?z.spatialRangeM:(z.audioM!=null?z.audioM:projFar);
+  const farM=z.audioM!=null?z.audioM:projFar;
   if(!(farM>0)) return null;
   const clearM=Math.min(z.spatialClearM!=null?z.spatialClearM:projClear, farM*0.9);
   return {farM,clearM};
@@ -983,10 +978,10 @@ function makeZone(name,shape){
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1, loopAudio:true,
            bearingDeg:90, isHazard:false,
-           // Per-stop hearing-range override — every stop gets its own voice
-           // range/full-volume ring now, not just path stops. null means
-           // "use the project default" (unchanged behavior until set).
-           spatialRangeM:null, spatialClearM:null };
+           // Per-stop full-volume override — every stop gets its own ring
+           // now, not just path stops. null means "use the project
+           // default" (unchanged behavior until set).
+           spatialClearM:null };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
@@ -1020,11 +1015,11 @@ function renderSources(){
     // point along the route they currently occupy at runtime)
     if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
       geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
-    // hearing-range rings (voice range / full volume) — every stop now, not
-    // just path stops. Falls back from this stop's own override, through
-    // its audio-fade ring, to the project defaults — exactly like actual
-    // playback (zoneFadeGeom mirrors SpatialVoice.spatialRange()'s chain)
-    // — plus the gradient band between the two.
+    // hearing-range rings (audio fade / full volume) — every stop now, not
+    // just path stops. Falls back from this stop's own audio-fade ring to
+    // the project defaults — exactly like actual playback (zoneFadeGeom
+    // mirrors SpatialVoice.spatialRange()'s chain) — plus the gradient
+    // band between the two.
     const fg=zoneFadeGeom(z);
     if(fg){
       feats.push(...cachedFadeBandFeatures(z.id,c,fg.farM,fg.clearM));
@@ -1390,27 +1385,13 @@ function refreshHandles(z){
     });
   }
 
-  // ---- 8: every stop's own hearing-range handles (voice range / full vol) ----
+  // ---- 8: every stop's own full-volume handle ----
   {
     // zoneFadeGeom(z) — same helper renderSources() uses to draw the actual
     // ring/gradient — so the handle can never sit at a different radius
-    // than what's rendered (it used to re-derive its own fallback chain
-    // here, which skipped the z.audioM fallback and the farM*0.9 clamp).
+    // than what's rendered.
     const fg=zoneFadeGeom(z);
-    const rM=fg?fg.farM:((+document.getElementById("audioRange").value)||64);
     const cM=fg?fg.clearM:((+document.getElementById("audioClear").value)||8);
-    {
-      const el=_mkHandle("mh-projrange","voice range: "+rM+" m");
-      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,rM,0)).addTo(map);
-      mk.on("dragstart",()=>el.classList.add("mh-active"));
-      mk.on("drag",()=>{
-        const ll=mk.getLngLat(); z.spatialRangeM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
-        document.getElementById("pRangeVoice").value=z.spatialRangeM;
-        _setLbl(el,"voice range: "+z.spatialRangeM+" m"); renderSources();
-      });
-      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-      _handles.push(mk);
-    }
     {
       const el=_mkHandle("mh-projclear","full vol: "+cM+" m");
       const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,cM,135)).addTo(map);
@@ -1468,7 +1449,6 @@ function refreshProps(){
     // fall through — path zones also populate the normal trigger fields below
   }
   // Hearing-range override — every stop type now, not just path.
-  document.getElementById("pRangeVoice").value=z.spatialRangeM??"";
   document.getElementById("pRangeClear").value=z.spatialClearM??"";
   document.getElementById("vaSummary").style.display="block";
   { const vPct=Math.round((z.volume??1)*100);
@@ -1624,7 +1604,6 @@ document.getElementById("pMoveMode").addEventListener("input",()=>{
 });
 bindProp("pSpeed",z=>{ z.speedKmh=Math.max(0,+document.getElementById("pSpeed").value||0); });
 bindProp("pLoopMode",z=>{ z.loopMode=document.getElementById("pLoopMode").value; });
-bindProp("pRangeVoice",z=>{ const v=document.getElementById("pRangeVoice").value; z.spatialRangeM=v===""?null:Math.max(0,+v||0); });
 bindProp("pRangeClear",z=>{ const v=document.getElementById("pRangeClear").value; z.spatialClearM=v===""?null:Math.max(0,+v||0); });
 document.getElementById("pVolume").addEventListener("input",()=>{
   if(sel<0) return;
@@ -2178,7 +2157,6 @@ function zoneToEngine(z){
   if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
   if(z.isHazard) zo.isHazard=true;
   // Per-stop hearing-range override — every stop, not just path stops.
-  if(z.spatialRangeM!=null) zo.spatialRangeM=z.spatialRangeM;
   if(z.spatialClearM!=null) zo.spatialClearM=z.spatialClearM;
   if(isPath){
     zo.path=s.coords.map(LL);
@@ -2244,7 +2222,6 @@ function engineToZone(zo){
   if(zo.isHazard) z.isHazard=true;
   if(zo.pipeline&&Array.isArray(zo.pipeline.nodes)) z.pipeline=zo.pipeline;
   // Per-stop hearing-range override — every stop, not just path stops.
-  z.spatialRangeM=zo.spatialRangeM??null;
   z.spatialClearM=zo.spatialClearM??null;
   if(isPath){
     z.movementMode=zo.movementMode||"walk";
@@ -2985,10 +2962,15 @@ const SimAmbient={
       const d=SimGeo.hav([visitorPos.lat,visitorPos.lon], c);
       if(d<nearestD){ nearestD=d; nearest=z; }
     });
-    const range=nearest?(nearest.spatialRangeM||64):0, clear=nearest?(nearest.spatialClearM||8):0;
-    if(!nearest || nearestD>=range){ this.stop(); return; }
+    // Same audibleFromM-based fallback used everywhere else (simZoneRangeClear)
+    // — this used to have its own divergent spatialRangeM-only calc with no
+    // audioM fallback, which meant the simulator's ambient-bed range didn't
+    // actually match production's AmbientVoice (which always went through
+    // the unified zoneAudioFadeRadii chain).
+    const rc=nearest?simZoneRangeClear(nearest):null;
+    if(!nearest || !rc || nearestD>=rc.range){ this.stop(); return; }
     if(this.zoneId!==nearest.id){ this.zoneId=nearest.id; this.play(nearest); }
-    const f=Math.max(0,Math.min(1,(nearestD-clear)/Math.max(1,(range-clear))));
+    const f=Math.max(0,Math.min(1,(nearestD-rc.clearM)/Math.max(1,(rc.range-rc.clearM))));
     const vol=nearest.volume!=null?nearest.volume:1;
     if(this.gain) this.gain.gain.setTargetAtTime(Math.max(0.05,1-f)*vol, this.ctx.currentTime, 0.15);
   },
@@ -3060,16 +3042,11 @@ function editorToSimBundle(){
     const out={id:z.id,name:z.name,center,
       audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,volume:z.volume!=null?z.volume:1,
       loopAudio:z.loopAudio!==false,
-      // spatialRangeM/spatialClearM are per-stop hearing-range overrides for
-      // every zone type now (mirrors the publish path's own conditional
-      // export at "if(z.spatialRangeM!=null) zo.spatialRangeM=…" below) —
-      // exporting it unconditionally with the *project* farM default used to
-      // make every zone's real (per-stop) audioM ring get shadowed by the
-      // much larger project default in feedSim()'s/spatialRange()'s
-      // `spatialRangeM||audibleFromM` fallback chain, since spatialRangeM was
-      // never actually absent. `??null` (not `||null`) so an explicitly-set
-      // 0 survives instead of being treated as unset.
-      spatialRangeM:z.spatialRangeM??null,spatialClearM:z.spatialClearM??null,
+      // spatialClearM is a per-stop full-volume override, every zone type
+      // now, not just path stops (mirrors the publish path's own conditional
+      // export). `??null` (not `||null`) so an explicitly-set 0 survives
+      // instead of being treated as unset.
+      spatialClearM:z.spatialClearM??null,
       layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       pipeline:(z.pipeline&&Array.isArray(z.pipeline.nodes)&&z.pipeline.nodes.length)?z.pipeline:null,
       bearingDeg:z.bearingDeg!=null?z.bearingDeg:null,isHazard:!!z.isHazard};
@@ -3094,7 +3071,7 @@ function editorToSimBundle(){
 // != null (not ||) so an explicitly-set 0 survives instead of being treated
 // as unset and falling through to the next fallback.
 function simZoneRangeClear(z){
-  const range=z.spatialRangeM!=null?z.spatialRangeM:(z.audibleFromM!=null?z.audibleFromM:64);
+  const range=z.audibleFromM!=null?z.audibleFromM:64;
   const desiredClearM=z.spatialClearM!=null?z.spatialClearM:8;
   return {range, clearM:Math.min(desiredClearM, range*0.9)};
 }

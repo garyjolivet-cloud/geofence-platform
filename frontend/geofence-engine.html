@@ -764,8 +764,7 @@ const FADE_RELEASE_MULT=1.3;
 // collapsing the fade into a constant (gain pinned to 100% everywhere
 // inside the ring). Always leave at least 10% of the ring as a real fade zone.
 function zoneAudioFadeRadii(zone){
-  const farM=(zone && zone.spatialRangeM!=null) ? zone.spatialRangeM
-    : (zone && zone.audibleFromM!=null) ? zone.audibleFromM
+  const farM=(zone && zone.audibleFromM!=null) ? zone.audibleFromM
     : (BUNDLE && BUNDLE.spatialRangeM!=null) ? BUNDLE.spatialRangeM
     : 64;
   const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
@@ -785,12 +784,13 @@ const SpatialVoice = {
   ctx:null, nodes:null, src:null, buffers:{}, currentUrl:null, currentZoneId:null, playing:false, loadingUrl:null,
   tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, reverbMax:0.5, tau:0.12 },
   _lastPlayedAt:{},   // per-zone-id — see the loop/once-per-trigger replay-delay gating in playZone()
-  // spatialRangeM is a path-stop-only override (the "voice range" handle);
   // audibleFromM is the per-stop blue "audio fade" ring, settable on every
   // stop type — previously exported into the bundle but never actually read
   // here, so it looked like a real per-stop fade control but silently did
-  // nothing once a stop had a real clip. Now used as the fallback for any
-  // stop that doesn't have the path-only override set.
+  // nothing once a stop had a real clip. Now the sole per-zone override
+  // (the redundant zone.spatialRangeM "voice range" tier was removed
+  // 2026-07-28 — it silently overrode this one, confusing operators with
+  // two controls for the same thing).
   spatialRange(zone){ return zoneAudioFadeRadii(zone).farM; },   // per-project; full at centre → silent here
   ensure(){
     if(this.ctx) return true;
