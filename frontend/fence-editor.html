@@ -702,64 +702,6 @@
     </div>
   </div>
 
-  <!-- Advanced (project-level): Audio Lab — secondary/rarely-touched project
-       config, tucked behind one toggle. -->
-  <div style="margin-top:6px">
-    <div class="adv-toggle" id="advProjToggle"><span class="arr">▶</span> Advanced</div>
-    <div id="advProjBody" class="adv-body" style="padding-top:6px">
-      <label class="k" style="margin:0 0 4px">&#128266; Audio Lab</label>
-      <div class="row" style="margin:0;gap:6px">
-        <label id="alFileLabel" style="flex:1;text-align:center;font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;border:1px solid var(--rim);border-radius:8px;padding:7px;cursor:pointer;color:var(--ice)">Load file<input type="file" id="alFile" accept="audio/*" style="display:none"></label>
-        <button id="alZoneClip" class="ghost" style="flex:1;font-size:12px;padding:7px">Zone clip</button>
-        <button id="alTone" class="ghost" style="flex:0 0 auto;font-size:12px;padding:7px">Tone</button>
-      </div>
-      <div class="row" style="margin:0;gap:6px">
-        <button id="alPlay" style="flex:1;font-size:13px;padding:9px">&#9654; Play</button>
-        <div style="display:flex;border:1px solid var(--rim);border-radius:8px;overflow:hidden;flex:0 0 auto">
-          <button data-m="stereo" class="alMode" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;background:var(--coral);color:#1a0d07;cursor:pointer;font-family:'Barlow Condensed';font-weight:700">Stereo</button>
-          <button data-m="hrtf" class="alMode ghost" style="border:none;border-radius:0;font-size:11px;padding:6px 9px;cursor:pointer;font-family:'Barlow Condensed';font-weight:700;color:var(--ice)">3D</button>
-        </div>
-      </div>
-      <span class="k" style="margin:2px 0 0">pan test</span>
-      <div class="row" style="margin:0;gap:6px">
-        <button id="alPanL" class="ghost" style="flex:1;font-size:12px">&#9664; Left</button>
-        <button id="alPanC" class="ghost" style="flex:1;font-size:12px">&#9679; Center</button>
-        <button id="alPanR" class="ghost" style="flex:1;font-size:12px">Right &#9654;</button>
-      </div>
-      <span class="k" style="margin:2px 0 0">distance &mdash; <span id="alDistV">0</span> m</span>
-      <input type="range" id="alDist" min="0" max="80" value="0" step="1" style="width:100%;accent-color:var(--coral);margin-bottom:2px">
-
-      <span class="k" style="margin:6px 0 0">eq &amp; reverb</span>
-      <div style="display:flex;flex-direction:column;gap:4px">
-        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-          <span style="width:72px">muffling</span>
-          <input type="range" id="alLoHz" min="100" max="3000" value="600" step="50" style="flex:1;accent-color:var(--coral)">
-          <span id="alLoHzV" style="width:52px;text-align:right;color:var(--ice)">600 Hz</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)">
-          <span style="width:72px">reverb</span>
-          <input type="range" id="alRevMax" min="0" max="100" value="40" step="5" style="flex:1;accent-color:var(--coral)">
-          <span id="alRevMaxV" style="width:52px;text-align:right;color:var(--ice)">0.40</span>
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;font-family:'Barlow Condensed';font-size:12px;color:var(--ice);background:rgba(14,22,34,.6);border:1px solid var(--rim);border-radius:8px;padding:7px 10px">
-        <span>cut <b id="alHz" style="color:var(--snow)">&#8212;</b></span>
-        <span>gain <b id="alGain" style="color:var(--snow)">&#8212;</b></span>
-        <span>rev <b id="alRev" style="color:var(--snow)">&#8212;</b></span>
-        <span>pan <b id="alPan" style="color:var(--snow)">&#8212;</b></span>
-      </div>
-
-      <span class="k" style="margin:6px 0 0">voice</span>
-      <div style="display:flex;gap:6px;align-items:center">
-        <select id="alVoice" style="flex:1;background:var(--slate);border:1px solid var(--rim);color:var(--ice);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:12px">
-          <option value="">— loading voices —</option>
-        </select>
-        <button id="alVoiceTest" class="ghost" style="flex:0 0 auto;font-size:11px;padding:5px 10px">▶ Test</button>
-      </div>
-      <div id="alModelStatus" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);margin-top:2px">primary: cloud TTS &mdash; fallback: browser voice above</div>
-    </div>
-  </div>
-
   <hr>
   <label class="k">stops (<span id="zcount">0</span>) — click to edit</label>
   <div id="zlist"></div>
@@ -3653,13 +3595,6 @@ document.getElementById("advToggle").onclick=()=>{
   document.getElementById("advBody").classList.toggle("open");
 };
 
-/* ---- project-level advanced toggle (Audio Lab) ---- */
-document.getElementById("advProjToggle").onclick=()=>{
-  document.getElementById("advProjToggle").classList.toggle("open");
-  document.getElementById("advProjBody").classList.toggle("open");
-};
-
-
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
@@ -3708,255 +3643,33 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
 map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspended"&&SimVoice.ctx.resume();
   const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());});
 
-/* ============================================================
-   Audio Lab — embedded spatial audio tester
-   ============================================================ */
+// Plain per-project spatial-EQ tuning store. Used to be backed by a live
+// preview panel ("Audio Lab") with its own WebAudio graph for auditioning —
+// that panel was removed as redundant with Audio Studio's own spatial
+// preview (StudioSpatialPreview). getTuning()/setTuning() are still real
+// data plumbing: exportBundle() persists this into published bundles'
+// spatialTuning (read by geofence-engine.html's SpatialVoice in production),
+// and syncToSimVoice() is the only thing that keeps this editor's own
+// built-in Test Mode simulator (SimVoice) using the same EQ/reverb/tau
+// constants as the real project, so removing it would silently make Test
+// Mode's audio stop matching what a real visitor hears.
 const AudioLab = {
-  _SA: {
-    ctx:null, buffer:null, src:null, nodes:null, playing:false,
-    tuning:{ clearM:8, farM:64, hiHz:7000, loHz:600, reverbMax:0.4, tau:0.09, mode:"stereo" },
-    ensureCtx(){ if(this.ctx)return this.ctx; const AC=window.AudioContext||window.webkitAudioContext; this.ctx=new AC(); return this.ctx; },
-    build(){
-      const ctx=this.ensureCtx();
-      const mono=ctx.createGain(); mono.channelCount=1; mono.channelCountMode="explicit"; mono.channelInterpretation="speakers";
-      const lp=ctx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=this.tuning.hiHz; lp.Q.value=0.7;
-      mono.connect(lp);
-      const stereo=ctx.createStereoPanner();
-      let panner=null;
-      if(ctx.createPanner){ panner=ctx.createPanner(); panner.panningModel="HRTF"; panner.distanceModel="linear"; panner.refDistance=1; panner.maxDistance=10000; panner.rolloffFactor=0; }
-      const dry=ctx.createGain(); dry.gain.value=1;
-      const conv=ctx.createConvolver(); const rlen=Math.floor(ctx.sampleRate*1.6); const rbuf=ctx.createBuffer(2,rlen,ctx.sampleRate);
-      for(let ch=0;ch<2;ch++){ const d=rbuf.getChannelData(ch); for(let i=0;i<rlen;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/rlen,2.6); }
-      conv.buffer=rbuf;
-      const wet=ctx.createGain(); wet.gain.value=0;
-      const fade=ctx.createGain(); fade.gain.value=0;
-      const vol=ctx.createGain(); vol.gain.value=1;
-      lp.connect(stereo); stereo.connect(vol); vol.connect(dry); dry.connect(fade); vol.connect(conv); conv.connect(wet); wet.connect(fade); fade.connect(ctx.destination);
-      this.nodes={mono,lp,stereo,panner,dry,conv,wet,fade,vol};
-      this.setMode(this.tuning.mode);
-    },
-    setMode(mode){
-      this.tuning.mode=mode;
-      if(!this.nodes)return;
-      const{lp,stereo,panner,vol}=this.nodes;
-      try{lp.disconnect();}catch(e){} try{stereo.disconnect();}catch(e){} if(panner){try{panner.disconnect();}catch(e){}}
-      if(mode==="hrtf"&&panner){lp.connect(panner);panner.connect(vol);}else{lp.connect(stereo);stereo.connect(vol);}
-    },
-    setBuffer(buf){
-      if(!buf||buf.numberOfChannels<=1){this.buffer=buf;return;}
-      const c=this.ensureCtx(),len=buf.length,out=c.createBuffer(1,len,buf.sampleRate),o=out.getChannelData(0);
-      for(let ch=0;ch<buf.numberOfChannels;ch++){const d=buf.getChannelData(ch);for(let i=0;i<len;i++)o[i]+=d[i];}
-      let peak=0;for(let i=0;i<len;i++){const a=Math.abs(o[i]);if(a>peak)peak=a;}
-      if(peak>1)for(let i=0;i<len;i++)o[i]/=peak;
-      this.buffer=out;
-    },
-    play(){
-      if(!this.buffer)return false;
-      const ctx=this.ensureCtx(); if(ctx.state==="suspended")ctx.resume();
-      if(!this.nodes)this.build();
-      if(this.src){try{this.src.stop();}catch(e){}}
-      const s=ctx.createBufferSource(); s.buffer=this.buffer; s.loop=true;
-      s.connect(this.nodes.mono); s.start();
-      this.src=s; this.playing=true;
-      const g=this.nodes.fade.gain; g.cancelScheduledValues(ctx.currentTime); g.setValueAtTime(g.value,ctx.currentTime); g.linearRampToValueAtTime(1,ctx.currentTime+0.6);
-      return true;
-    },
-    stop(){
-      if(!this.nodes||!this.src)return;
-      const ctx=this.ctx,g=this.nodes.fade.gain;
-      g.cancelScheduledValues(ctx.currentTime); g.setValueAtTime(g.value,ctx.currentTime); g.linearRampToValueAtTime(0,ctx.currentTime+0.4);
-      const s=this.src; setTimeout(()=>{try{s.stop();}catch(e){}},450); this.playing=false;
-    },
-    update(az,distM){
-      if(!this.nodes)return null;
-      const ctx=this.ctx,t=this.tuning,tau=t.tau;
-      const f=Math.max(0,Math.min(1,(distM-t.clearM)/Math.max(1,t.farM-t.clearM)));
-      const cutoff=t.hiHz*Math.pow(t.loHz/t.hiHz,f);
-      const gain=fadeGain(f);
-      const wet=t.reverbMax*Math.pow(f,0.6);
-      const pan=Math.max(-1,Math.min(1,Math.sin(az)));
-      this.nodes.lp.frequency.setTargetAtTime(cutoff,ctx.currentTime,tau);
-      this.nodes.vol.gain.setTargetAtTime(gain,ctx.currentTime,tau);
-      this.nodes.wet.gain.setTargetAtTime(wet,ctx.currentTime,tau);
-      if(t.mode==="hrtf"&&this.nodes.panner){
-        const r=2,X=Math.sin(az)*r,Z=-Math.cos(az)*r,p=this.nodes.panner;
-        if(p.positionX){p.positionX.setTargetAtTime(X,ctx.currentTime,tau);p.positionY.setTargetAtTime(0,ctx.currentTime,tau);p.positionZ.setTargetAtTime(Z,ctx.currentTime,tau);}
-        else p.setPosition(X,0,Z);
-      }else{
-        this.nodes.stereo.pan.setTargetAtTime(pan,ctx.currentTime,tau);
-      }
-      return{cutoff,gain,wet,pan};
-    },
-    forcePan(p){
-      this.setMode("stereo");
-      if(this.nodes&&this.nodes.stereo)this.nodes.stereo.pan.setValueAtTime(p,this.ensureCtx().currentTime);
-    }
-  },
-
-  async ensureTone(){
-    const ctx=this._SA.ensureCtx();
-    const dur=2,rate=ctx.sampleRate,len=Math.floor(rate*dur),buf=ctx.createBuffer(1,len,rate),d=buf.getChannelData(0);
-    for(let i=0;i<len;i++){const t=i/rate;const pulse=Math.exp(-((t%0.5))*7);const tone=Math.sin(2*Math.PI*440*t)*0.3+Math.sin(2*Math.PI*660*t)*0.2;const noise=(Math.random()*2-1)*0.5;d[i]=(tone+noise*pulse)*0.4;}
-    this._SA.setBuffer(buf);
-  },
-
-  _az: 0,
-  _distM: 0,
-
-  // copy current tuning to SimVoice so sim test uses the same constants
-  syncToSimVoice(){
-    if(typeof SimVoice==="undefined") return;
-    const t=this._SA.tuning;
-    SimVoice.tuning.hiHz=t.hiHz; SimVoice.tuning.loHz=t.loHz;
-    SimVoice.tuning.reverbMax=t.reverbMax; SimVoice.tuning.tau=t.tau;
-  },
-
-  // return plain object of EQ constants (persisted in bundle) — minGain/curve
-  // dropped: the fade curve is now the fixed, shared fadeGain()/FADE_DB_RANGE
-  // (see top of file), not a per-project tunable.
-  getTuning(){
-    const t=this._SA.tuning;
-    return{hiHz:t.hiHz,loHz:t.loHz,reverbMax:t.reverbMax,tau:t.tau};
-  },
-
-  // restore tuning from saved object, update sliders
+  tuning: { hiHz:7000, loHz:600, reverbMax:0.4, tau:0.09 },
+  getTuning(){ return {...this.tuning}; },
   setTuning(obj){
     if(!obj) return;
-    const t=this._SA.tuning;
-    const $=id=>document.getElementById(id);
-    if(obj.loHz!=null){    t.loHz=obj.loHz;     $("alLoHz").value=obj.loHz;     $("alLoHzV").textContent=obj.loHz+" Hz"; }
-    if(obj.reverbMax!=null){t.reverbMax=obj.reverbMax; $("alRevMax").value=Math.round(obj.reverbMax*100); $("alRevMaxV").textContent=obj.reverbMax.toFixed(2); }
-    if(obj.hiHz!=null)    t.hiHz=obj.hiHz;
-    if(obj.tau!=null)     t.tau=obj.tau;
+    if(obj.loHz!=null)     this.tuning.loHz=obj.loHz;
+    if(obj.reverbMax!=null) this.tuning.reverbMax=obj.reverbMax;
+    if(obj.hiHz!=null)     this.tuning.hiHz=obj.hiHz;
+    if(obj.tau!=null)      this.tuning.tau=obj.tau;
     this.syncToSimVoice();
   },
-
-  refresh(){
-    const out=this._SA.update(this._az,this._distM);
-    const $=id=>document.getElementById(id);
-    $("alDistV").textContent=Math.round(this._distM);
-    if(out){
-      $("alHz").textContent=Math.round(out.cutoff)+" Hz";
-      $("alGain").textContent=out.gain.toFixed(2);
-      $("alRev").textContent=out.wet.toFixed(2);
-      $("alPan").textContent=out.pan.toFixed(2);
-    }
-  },
-
-  init(){
-    const $=id=>document.getElementById(id);
-    // Audio Lab now lives inside the project-level "Advanced" section
-    // (advProjToggle/advProjBody) — no separate toggle of its own.
-
-    // file load
-    $("alFile").onchange=async e=>{
-      const f=e.target.files[0]; if(!f)return;
-      const ctx=this._SA.ensureCtx(); const ab=await f.arrayBuffer();
-      ctx.decodeAudioData(ab,b=>{this._SA.setBuffer(b); if(this._SA.playing)this._SA.play();},()=>alert("Couldn't decode audio."));
-    };
-
-    // zone clip
-    $("alZoneClip").onclick=async()=>{
-      const z=selectedZone; if(!z||!z.audioUrl){alert("Select a zone with an audio clip first.");return;}
-      try{
-        const r=await fetch(z.audioUrl); const ab=await r.arrayBuffer();
-        const ctx=this._SA.ensureCtx();
-        ctx.decodeAudioData(ab,b=>{this._SA.setBuffer(b); if(this._SA.playing)this._SA.play();},()=>alert("Couldn't decode zone clip."));
-      }catch(e){alert("Couldn't load zone clip: "+e.message);}
-    };
-
-    // tone
-    $("alTone").onclick=async()=>{ await this.ensureTone(); if(this._SA.playing)this._SA.play(); };
-
-    // play/stop
-    const playBtn=$("alPlay");
-    playBtn.onclick=()=>{
-      if(this._SA.playing){
-        this._SA.stop();
-        playBtn.textContent="▶ Play";
-        playBtn.className="ghost";
-        return;
-      }
-      const go=()=>{ const ok=this._SA.play(); if(ok){playBtn.textContent="■ Stop";playBtn.className="";this.refresh();} };
-      if(!this._SA.buffer){ this.ensureTone().then(go); return; }
-      go();
-    };
-
-    // mode
-    document.querySelectorAll(".alMode").forEach(b=>b.onclick=()=>{
-      document.querySelectorAll(".alMode").forEach(x=>{x.style.background="transparent";x.style.color="var(--ice)";});
-      b.style.background="var(--coral)"; b.style.color="#1a0d07";
-      this._SA.setMode(b.dataset.m); this.refresh();
-    });
-
-    // pan test
-    $("alPanL").onclick=()=>{this._SA.forcePan(-1); $("alPan").textContent="-1.00";};
-    $("alPanC").onclick=()=>{this._SA.forcePan(0);  $("alPan").textContent="0.00";};
-    $("alPanR").onclick=()=>{this._SA.forcePan(1);  $("alPan").textContent="1.00";};
-
-    // distance slider
-    $("alDist").oninput=()=>{ this._distM=+$("alDist").value; this.refresh(); };
-
-    // EQ sliders — update tuning + sync to SimVoice on every change
-    $("alLoHz").oninput=()=>{
-      this._SA.tuning.loHz=+$("alLoHz").value;
-      $("alLoHzV").textContent=$("alLoHz").value+" Hz";
-      this.syncToSimVoice(); this.refresh();
-    };
-    $("alRevMax").oninput=()=>{
-      this._SA.tuning.reverbMax=+$("alRevMax").value/100;
-      $("alRevMaxV").textContent=(+$("alRevMax").value/100).toFixed(2);
-      this.syncToSimVoice(); this.refresh();
-    };
-    // populate browser voice picker (voices may load async)
-    function _populateBrowserVoices(){
-      const sel=$("alVoice"); if(!sel) return;
-      const all=speechSynthesis.getVoices().filter(v=>v.lang.startsWith("en"));
-      if(!all.length) return;
-      sel.innerHTML="";
-      all.forEach(v=>{
-        const o=document.createElement("option");
-        o.value=v.name; o.textContent=v.name+(v.localService?" ★":"");
-        sel.appendChild(o);
-      });
-      // restore saved preference
-      const saved=localStorage.getItem("gp.ttsVoice");
-      if(saved && all.find(v=>v.name===saved)) sel.value=saved;
-    }
-    function _populateAndStatus(){ _populateBrowserVoices(); _updateVoiceStatus(); }
-    _populateAndStatus();
-    if(speechSynthesis.onvoiceschanged!==undefined) speechSynthesis.onvoiceschanged=_populateAndStatus;
-
-    function _updateVoiceStatus(){
-      const v=$("alVoice").value;
-      const st=$("alModelStatus");
-      if(v){ st.textContent="active: "+v; st.style.color="var(--go)"; }
-      else { st.textContent="no voice selected — pick one above"; st.style.color="var(--fog)"; }
-    }
-
-    $("alVoice").onchange=()=>{
-      localStorage.setItem("gp.ttsVoice", $("alVoice").value);
-      _updateVoiceStatus();
-    };
-
-    $("alVoiceTest").onclick=()=>{
-      const st=$("alModelStatus");
-      const voiceName=$("alVoice").value;
-      if(!voiceName){ st.textContent="no voice selected"; st.style.color="var(--hazard)"; return; }
-      speechSynthesis.cancel();
-      const u=new SpeechSynthesisUtterance("Welcome to Kicking Horse. Follow the trail ahead.");
-      u.rate=1.05;
-      const v=speechSynthesis.getVoices().find(vv=>vv.name===voiceName);
-      if(!v){ st.textContent="voice not found — try reloading"; st.style.color="var(--hazard)"; return; }
-      u.voice=v;
-      st.textContent="speaking with: "+v.name; st.style.color="var(--go)";
-      u.onend=()=>{ st.textContent="primary: cloud TTS — fallback: "+v.name; st.style.color="var(--fog)"; };
-      speechSynthesis.speak(u);
-    };
+  syncToSimVoice(){
+    if(typeof SimVoice==="undefined") return;
+    SimVoice.tuning.hiHz=this.tuning.hiHz; SimVoice.tuning.loHz=this.tuning.loHz;
+    SimVoice.tuning.reverbMax=this.tuning.reverbMax; SimVoice.tuning.tau=this.tuning.tau;
   }
 };
-
-AudioLab.init();
 </script>
 </body>
 </html>
