@@ -1721,37 +1721,25 @@ async function api(request, env, url) {
     }
   }
 
-  // --- TTS (Workers AI speecht5_tts → WAV) ---
+  // --- TTS (Workers AI aura-1 → MP3 stream) ---
+  // @cf/microsoft/speecht5_tts was removed from the Workers AI catalog
+  // (confirmed via `wrangler ai models` — no longer listed, calls 502
+  // "no such model"). Replaced with @cf/deepgram/aura-1, which returns
+  // MP3 audio directly as a ReadableStream via returnRawResponse — no PCM
+  // decoding/WAV encoding needed. Client-side decodeAudioData() is
+  // format-agnostic (auto-detects MP3 vs WAV from the bytes), so no
+  // frontend changes are required for this swap.
   if (path === "/api/tts" && method === "POST") {
     if (!env.AI) return json({ error: "AI binding not configured" }, 503, CORS_PUBLIC);
     try {
       const { text } = await request.json();
       if (!text || typeof text !== "string") return json({ error: "text required" }, 400, CORS_PUBLIC);
-      const result = await env.AI.run("@cf/microsoft/speecht5_tts", {
-        prompt: text.slice(0, 600)
-      });
-      // result.audio is Float32Array of 16 kHz PCM samples
-      const samples = result.audio;
-      if (!samples || !samples.length) return json({ error: "no audio returned" }, 502, CORS_PUBLIC);
-      // encode PCM → WAV
-      const pcmBuf = new ArrayBuffer(samples.length * 2);
-      const pcm = new DataView(pcmBuf);
-      for (let i = 0; i < samples.length; i++) {
-        const s = Math.max(-1, Math.min(1, samples[i]));
-        pcm.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-      }
-      const wav = new ArrayBuffer(44 + pcmBuf.byteLength);
-      const v = new DataView(wav);
-      const w = (s, o) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-      w('RIFF', 0); v.setUint32(4, 36 + pcmBuf.byteLength, true); w('WAVE', 8);
-      w('fmt ', 12); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-      v.setUint32(24, 16000, true); v.setUint32(28, 32000, true);
-      v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-      w('data', 36); v.setUint32(40, pcmBuf.byteLength, true);
-      new Uint8Array(wav).set(new Uint8Array(pcmBuf), 44);
-      return new Response(new Uint8Array(wav), {
+      const result = await env.AI.run("@cf/deepgram/aura-1", {
+        text: text.slice(0, 600)
+      }, { returnRawResponse: true });
+      return new Response(result.body, {
         status: 200,
-        headers: { "content-type": "audio/wav", ...CORS_PUBLIC }
+        headers: { "content-type": "audio/mpeg", ...CORS_PUBLIC }
       });
     } catch(e) {
       return json({ error: e.message }, 502, CORS_PUBLIC);
