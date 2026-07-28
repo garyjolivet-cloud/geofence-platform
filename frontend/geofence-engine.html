@@ -603,7 +603,10 @@ const EngineKokoro={
   tts:null, voice:'af_bella',
   async tryLoad(){
     if(this.tts) return;
-    const models=['onnx-community/Kokoro-82M-v1.0','onnx-community/Kokoro-82M-v1.0_float16'];
+    // Kokoro-82M-v1.0(/_float16) went gated/private on Hugging Face (401,
+    // confirmed 2026-07-27) — this repo is the still-public mirror with the
+    // same file layout (config/tokenizer/onnx incl. the q4 quant used below).
+    const models=['onnx-community/Kokoro-82M-ONNX'];
     try{
       const{KokoroTTS}=await import('https://esm.sh/kokoro-js@1.2.1');
       for(const m of models){
