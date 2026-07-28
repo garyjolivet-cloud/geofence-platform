@@ -224,11 +224,6 @@
   @keyframes micpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,106,61,.4)}50%{box-shadow:0 0 0 8px rgba(255,106,61,0)}}
   .av-dot{width:16px;height:16px;border-radius:50%;background:var(--coral);border:2px solid #fff;
           box-shadow:0 0 0 5px rgba(255,106,61,.25);cursor:grab}
-  .tracker-dot{width:16px;height:16px;border-radius:50%;background:var(--ice);border:2px solid #fff;
-               box-shadow:0 0 0 5px rgba(143,182,212,.3);cursor:grab;position:relative}
-  .tracker-label{position:absolute;top:20px;left:50%;transform:translateX(-50%);
-                 font-family:"Barlow Condensed";font-size:11px;color:var(--ice);
-                 white-space:nowrap;text-shadow:0 1px 3px #0a1018;pointer-events:none}
   /* map drag handles */
   .map-handle{width:14px;height:14px;border-radius:50%;border:2px solid #fff;cursor:grab;
               box-shadow:0 0 0 3px rgba(0,0,0,.55);transition:transform .1s;position:relative}
@@ -241,7 +236,6 @@
   .map-handle.mh-bearing{background:#ffc24d;width:16px;height:16px}
   .map-handle.mh-radius{background:#27d67b}
   .map-handle.mh-audio{background:#6fbfff}
-  .map-handle.mh-broadcast{background:#ff9900}
   .map-handle.mh-vertex{background:#fff;border-radius:3px;width:12px;height:12px}
   .map-handle.mh-tripend{background:#00e5ff}
   .map-handle.mh-projrange{background:#b96fff}
@@ -361,10 +355,6 @@
     <div class="key-row">
       <div class="key-dot" style="background:#9b3fd4"></div>
       <div class="key-row-text"><b>Fade gradient (purple haze)</b><span>Fills the space between voice range and full volume. Solid = 100% volume, fading to clear = where audio starts.</span></div>
-    </div>
-    <div class="key-row">
-      <div class="key-dot" style="background:#ff9900"></div>
-      <div class="key-row-text"><b>Broadcast radius (orange) — west</b><span>Tracker circles only. Drag to set the moving zone bubble size for device-vs-zone intersection.</span></div>
     </div>
     <div class="key-row">
       <div class="key-dot sq" style="background:#fff"></div>
@@ -566,7 +556,7 @@
     <input id="pName" placeholder="Mountain Flower Garden">
     <!-- ── Path movement (path stops only) — plus the full trigger system below,
          same as every other stop: hazard flag, Voices & Audio, pipeline,
-         speak-when/dwell, and Advanced (tracker/webhook/bearing) ── -->
+         speak-when/dwell, and Advanced (webhook/bearing) ── -->
     <div class="va-section" id="pPathSection" style="display:none">
       <div class="va-label">Movement</div>
       <label class="k">movement mode</label>
@@ -653,41 +643,6 @@
       <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
       <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
       <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
-      <hr>
-      <div id="revealWrap"><label class="k">reveal radius m</label><input id="pReveal" type="number" min="3"></div>
-      <div id="trackerRow">
-        <label class="k">tracker ID — zone follows this device's GPS</label>
-        <input id="pTrackerId" placeholder="guide-1  (leave blank for static zone)">
-      </div>
-      <div id="broadcastRow">
-        <label class="k">broadcast radius m</label>
-        <input id="pBroadcast" type="number" value="20" min="5">
-      </div>
-      <label class="k">audio fades in from (m) — how far away this stop's clip starts fading in</label>
-      <input id="pAudio" type="number" value="40" min="0">
-      <hr>
-      <label class="k">webhook (fires on event)</label>
-      <div class="row">
-        <select id="pActOn" style="flex:0 0 100px">
-          <option value="enter">on enter</option>
-          <option value="reveal">on reveal</option>
-          <option value="exit">on exit</option>
-        </select>
-        <input id="pActUrl" placeholder="https://your-system/hook" style="flex:1">
-      </div>
-      <label style="display:flex;gap:7px;align-items:center;margin-top:4px;font-size:13px;color:var(--fog)">
-        <input type="checkbox" id="pActDev" style="width:16px;height:16px">
-        include device id (requires consent)
-      </label>
-      <hr>
-      <div class="row" style="align-items:center;gap:6px;margin:0">
-        <label class="k" style="margin:0;flex:0 0 auto">triggers fire for</label>
-        <select id="pSubject" style="flex:1">
-          <option value="any">visitor or zone</option>
-          <option value="visitor">visitor only</option>
-          <option value="zone">zone only</option>
-        </select>
-      </div>
       <hr>
       <label class="k">bearing of interest — visitor faces this direction on arrival</label>
       <div style="display:flex;gap:6px;align-items:center">
@@ -1079,10 +1034,6 @@ function renderSources(){
       feats.push({type:"Feature",properties:{kind:"pclear",sel:selected},
         geometry:{type:"Polygon",coordinates:[circleRing(c,fg.clearM,48)]}});
     }
-    // tracker broadcast ring (circles with trackerId only)
-    if(s.type==="circle"&&z.trackerId&&(z.broadcastRadiusM||0)>0)
-      feats.push({type:"Feature",properties:{kind:"broadcast",sel:selected},
-        geometry:{type:"Polygon",coordinates:[circleRing(c,z.broadcastRadiusM,48)]}});
     // target shape — zIdx lets map clicks identify the zone
     const hz=!!z.isHazard;
     if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",zIdx:i,sel:selected,name:z.name,isHazard:hz},
@@ -1202,9 +1153,6 @@ map.on("load",()=>{
   // audio fade-in ring (blue-grey dotted)
   map.addLayer({id:"audio-ring",type:"line",source:"fences",filter:["==","kind","audio"],
      paint:{"line-color":"#6fbfff","line-width":1.2,"line-dasharray":[1,3],"line-opacity":0.65}});
-  // tracker broadcast ring (orange dotted)
-  map.addLayer({id:"broadcast-ring",type:"line",source:"fences",filter:["==","kind","broadcast"],
-     paint:{"line-color":"#ff9900","line-width":1.5,"line-dasharray":[1,2],"line-opacity":0.8}});
   // fade gradient band (clear at trigger ring → solid at full-volume ring).
   // Added here, before the ring outline layers below, so those stay crisp
   // on top of the translucent fill.
@@ -1398,7 +1346,6 @@ function refreshHandles(z){
     mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); z.shape.radiusM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pReveal").value=z.shape.radiusM;
       _setLbl(el,"radius: "+z.shape.radiusM+" m"); renderSources();
     });
     mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
@@ -1412,27 +1359,12 @@ function refreshHandles(z){
     mk.on("dragstart",()=>el.classList.add("mh-active"));
     mk.on("drag",()=>{
       const ll=mk.getLngLat(); z.audioM=Math.max(5,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pAudio").value=z.audioM;
       _setLbl(el,"audio fade: "+z.audioM+" m"); renderSources();
     });
     mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
   }
 
-  // ---- 5: broadcast ring handle (orange, west) — tracker circles only ----
-  if(z.shape.type==="circle"&&z.trackerId){
-    const bR=z.broadcastRadiusM||20;
-    const el=_mkHandle("mh-broadcast","broadcast: "+bR+" m");
-    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,bR,270)).addTo(map);
-    mk.on("dragstart",()=>el.classList.add("mh-active"));
-    mk.on("drag",()=>{
-      const ll=mk.getLngLat(); z.broadcastRadiusM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])));
-      document.getElementById("pBroadcast").value=z.broadcastRadiusM;
-      _setLbl(el,"broadcast: "+z.broadcastRadiusM+" m"); renderSources();
-    });
-    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-    _handles.push(mk);
-  }
 
   // ---- 6: polygon vertex handles (white squares) ----
   if(z.shape.type==="polygon"){
@@ -1551,18 +1483,6 @@ function refreshProps(){
   fires.disabled = isTrip;
   document.getElementById("dwellRow").style.display=(!isTrip && z.fires==="dwell")?"flex":"none";
   document.getElementById("pDwell").value=z.dwellS;
-  document.getElementById("revealWrap").style.display=z.shape.type==="circle"?"block":"none";
-  if(z.shape.type==="circle") document.getElementById("pReveal").value=z.shape.radiusM;
-  document.getElementById("trackerRow").style.display=z.shape.type==="circle"?"block":"none";
-  document.getElementById("pTrackerId").value=z.trackerId||"";
-  document.getElementById("broadcastRow").style.display=(z.shape.type==="circle"&&z.trackerId)?"block":"none";
-  document.getElementById("pBroadcast").value=z.broadcastRadiusM||20;
-  document.getElementById("pSubject").value=z.triggerSubject||"any";
-  document.getElementById("pAudio").value=z.audioM;
-  const act=(z.actions&&z.actions[0])||null;
-  document.getElementById("pActOn").value=act?(act.on||"enter"):"enter";
-  document.getElementById("pActUrl").value=act?(act.url||""):"";
-  document.getElementById("pActDev").checked=!!(act&&act.includeDevice);
   updatePipelineSummary(z);
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   document.getElementById("pIsHazard").checked = !!z.isHazard;
@@ -1695,12 +1615,6 @@ function bindProp(id,fn){ document.getElementById(id).addEventListener("input",(
 bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
 bindProp("pSay",z=>{ z.say=document.getElementById("pSay").value; });
 bindProp("pDwell",z=>{ z.dwellS=+document.getElementById("pDwell").value||20; });
-bindProp("pReveal",z=>{ if(z.shape.type==="circle") z.shape.radiusM=+document.getElementById("pReveal").value||12; });
-bindProp("pAudio",z=>{ z.audioM=+document.getElementById("pAudio").value||0; });
-bindProp("pTrackerId",z=>{ z.trackerId=document.getElementById("pTrackerId").value.trim()||null;
-  document.getElementById("broadcastRow").style.display=(z.shape.type==="circle"&&z.trackerId)?"block":"none"; });
-bindProp("pBroadcast",z=>{ z.broadcastRadiusM=+document.getElementById("pBroadcast").value||20; });
-bindProp("pSubject",z=>{ z.triggerSubject=document.getElementById("pSubject").value; });
 document.getElementById("pMoveMode").addEventListener("input",()=>{
   if(sel<0) return; const z=zones[sel];
   z.movementMode=document.getElementById("pMoveMode").value;
@@ -1736,15 +1650,6 @@ document.getElementById("pVolume").addEventListener("input",()=>{
 bindProp("pBearing",z=>{ const v=document.getElementById("pBearing").value; z.bearingDeg=(v!==""&&v!==null)?(+v+360)%360:null; });
 document.getElementById("pIsHazard").addEventListener("change",()=>{ if(sel<0)return; zones[sel].isHazard=document.getElementById("pIsHazard").checked; render(); });
 document.getElementById("pLoopAudio").addEventListener("change",()=>{ if(sel<0)return; zones[sel].loopAudio=document.getElementById("pLoopAudio").checked; autoSave(); });
-function syncAction(z){
-  const url=document.getElementById("pActUrl").value.trim();
-  if(!url){ delete z.actions; return; }
-  const a={ type:"webhook", on:document.getElementById("pActOn").value, url:url };
-  if(document.getElementById("pActDev").checked){ a.includeDevice=true; a.requires="live-tracking"; }
-  z.actions=[a];
-}
-bindProp("pActUrl",syncAction);
-document.getElementById("pActOn").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
 
 /* ---- per-stop audio upload to R2 (spatial audio source) ---- */
 let verifiedToken="";
@@ -2215,7 +2120,6 @@ document.getElementById("cmbRender").onclick=async()=>{
   }catch(e){ alert("Combine failed: "+e.message); }
   finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }
 };
-document.getElementById("pActDev").addEventListener("change",()=>{ if(sel<0)return; syncAction(zones[sel]); });
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
   document.getElementById("dwellRow").style.display=zones[sel].fires==="dwell"?"flex":"none"; });
@@ -2266,13 +2170,8 @@ function zoneToEngine(z){
   else rev.fires_on="enter";
   if(z.say) rev.say=z.say;
   trig.push(rev);
-  const subj=z.triggerSubject||"any";
-  if(subj!=="any") trig.forEach(t=>{ t.subject=subj; });
   zo.triggers=trig;
-  if(z.trackerId) zo.trackerId=z.trackerId;
-  if(z.broadcastRadiusM) zo.broadcastRadiusM=z.broadcastRadiusM;
   if(z.pipeline&&Array.isArray(z.pipeline.nodes)&&z.pipeline.nodes.length) zo.pipeline=z.pipeline;
-  if(Array.isArray(z.actions) && z.actions.length) zo.actions=z.actions;
   if(z.audioUrl) zo.audioUrl=z.audioUrl;
   if(z.volume!=null && Math.abs(z.volume-1)>0.001) zo.volume=z.volume;
   if(z.loopAudio===false) zo.loopAudio=false;
@@ -2340,15 +2239,10 @@ function engineToZone(zo){
     if(t.say) z.say=t.say;
     if(t.fires_on==="dwell"){ z.fires="dwell"; if(t.delayS) z.dwellS=t.delayS; }
   });
-  if(Array.isArray(zo.actions) && zo.actions.length) z.actions=zo.actions;
   if(zo.audioUrl) z.audioUrl=zo.audioUrl;
   if(zo.bearingDeg!=null) z.bearingDeg=zo.bearingDeg;
   if(zo.isHazard) z.isHazard=true;
-  if(zo.trackerId) z.trackerId=zo.trackerId;
-  if(zo.broadcastRadiusM) z.broadcastRadiusM=zo.broadcastRadiusM;
   if(zo.pipeline&&Array.isArray(zo.pipeline.nodes)) z.pipeline=zo.pipeline;
-  const firstSubjTrig=(zo.triggers||[]).find(t=>t.subject&&t.subject!=="any");
-  if(firstSubjTrig) z.triggerSubject=firstSubjTrig.subject;
   // Per-stop hearing-range override — every stop, not just path stops.
   z.spatialRangeM=zo.spatialRangeM??null;
   z.spatialClearM=zo.spatialClearM??null;
@@ -2834,9 +2728,6 @@ function makeSimSmoother(){return{s:null,prev:null,rawPrev:null,spd:0,lastHeadin
     return{lat:this.s.lat,lon:this.s.lon,acc:fix.acc,t:fix.t,speed:this.spd,headingTravel};},
   reset(){this.s=null;this.prev=null;this.rawPrev=null;this.spd=0;this.lastHeading=null;}};}
 const SimSmoother=makeSimSmoother();
-const _trackerSmoothers={};
-function trackerSmoother(id){return _trackerSmoothers[id]||(_trackerSmoothers[id]=makeSimSmoother());}
-function resetTrackerSmoothers(){Object.keys(_trackerSmoothers).forEach(k=>_trackerSmoothers[k].reset());}
 // Smoothed position for the current sim tick — set by feedSim() before it calls
 // SimFencer.update(), so SimFencer.onEvent (fired synchronously from inside that
 // update() call) can read it for pipeline data.position blocks.
@@ -2874,14 +2765,6 @@ const SimFencer={state:{},onEvent:null,
     const g=layer.geometry;if(!g)return null;
     if(g.type==="polygon")return SimGeo.sdPolygon(PT,g.coords,simBundle.ref);
     return null;},
-  sdCircleVsLayer(srcCenter,srcR,zone,layer,now){
-    const zc=zone.path?simAmbientCenterNow(zone,now||Date.now()):zone.center;
-    if(layer.radiusM!=null)return SimGeo.hav(srcCenter,zc)-(srcR+layer.radiusM);
-    const g=layer.geometry;if(!g)return null;
-    if(g.type==="polygon")return SimGeo.sdPolygon(srcCenter,g.coords,simBundle.ref)-srcR;
-    if(g.type==="tripline"){const P=SimGeo.toXY(srcCenter,simBundle.ref);
-      return SimGeo.segDist(P,SimGeo.toXY(g.from,simBundle.ref),SimGeo.toXY(g.to,simBundle.ref))-srcR;}
-    return null;},
   _step(zone,layer,i,sd,now,kpfx,subj){
     const k=kpfx+":"+this.key(zone,layer,i);
     const st=this.state[k]||(this.state[k]={phase:"out",delivered:{},t0:0});
@@ -2906,27 +2789,12 @@ const SimFencer={state:{},onEvent:null,
       if(sd<0&&st.phase==="in")active.push({zone,layer,sd});
       this._step(zone,layer,i,sd,now,"visitor","visitor");
     });});
-    /* dynamic zone vs all other zones */
-    simBundle.zones.forEach((srcZ,si)=>{
-      if(!srcZ.trackerId||!srcZ.center)return;
-      const srcR=srcZ.broadcastRadiusM||20;
-      simBundle.zones.forEach((tgtZ,ti)=>{
-        if(si===ti)return;
-        tgtZ.layers.forEach((layer,i)=>{
-          if(layer.geometry&&layer.geometry.type==="tripline")return;
-          const sd=this.sdCircleVsLayer(srcZ.center,srcR,tgtZ,layer,now);if(sd==null)return;
-          this._step(tgtZ,layer,i,sd,now,srcZ.trackerId,srcZ.trackerId);
-        });
-      });
-    });
     return active;},
   _fire(zone,layer,kind,info,subj="visitor"){
     if(this.onEvent)this.onEvent({zone,layer,kind,info,subject:subj});
     (zone.triggers||[]).forEach(t=>{
       if(t.fires_on===kind&&(!t.layer||t.layer===layer.kind))this._deliver(zone,t,subj);});},
   _deliver(zone,t,subj="visitor"){
-    const ts=t.subject||"any";
-    if(ts!=="any"&&ts!==subj)return;
     if(t.say){if(!zone.audioUrl&&simSoundOn)try{const u=new SpeechSynthesisUtterance(t.say);speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
       if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
   reset(){this.state={};}
@@ -3135,7 +3003,6 @@ const SimAmbient={
 /* ---- sim state ---- */
 let simMode=false, simAvatar=null, simBundle=null, simPrev=null, simPrevRaw=null;
 let simPath=[], simPlaying=false, simDist=0, simTimer=null;
-let simTrackers=[], simOrigCenters={};
 let simAmbientMarkers={}, simAmbientTimer=null;
 
 // Live marker for each path (moving ambient) stop's current position —
@@ -3187,11 +3054,10 @@ function editorToSimBundle(){
     else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
     else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
     else if(isPath) targetLayer={kind:"target",radiusM:z.approachM||30};
-    const subj=z.triggerSubject||"any";
     const triggers=[];
-    if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true,subject:subj});
-      else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true,subject:subj});}
-    const out={id:z.id,name:z.name,center,trackerId:z.trackerId||null,broadcastRadiusM:z.broadcastRadiusM||20,
+    if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true});
+      else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true});}
+    const out={id:z.id,name:z.name,center,
       audioUrl:z.audioUrl||null,audibleFromM:z.audioM||farM,volume:z.volume!=null?z.volume:1,
       loopAudio:z.loopAudio!==false,
       // spatialRangeM/spatialClearM are per-stop hearing-range overrides for
@@ -3243,10 +3109,6 @@ function feedSim(lat,lon,acc,t){
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;
-  // update per-tracker smoothers so speed/heading are available at chat trigger time
-  (simBundle.zones||[]).filter(z=>z.trackerId&&z.center).forEach(z=>{
-    trackerSmoother(z.trackerId).push({lat:z.center[0],lon:z.center[1],t});
-  });
   // find nearest zone for spatial audio — raw position, same reason as
   // SimFencer above: the smoothed position can lag well behind raw at high
   // sim-test speeds (a fast simulated walk/teleport-style jump followed by
@@ -3422,37 +3284,10 @@ function refreshSimChips(){
       if(st.phase==="in")ph="in";else if(st.phase==="pending"&&ph!=="in")ph="pending";else if(st.phase==="cooldown"&&ph==="out")ph="cooldown";});
     const c=document.createElement("div");c.className="sim-chip";
     const n=document.createElement("b");
-    n.textContent=(z.trackerId?"⟳ ":"")+z.name;
-    if(z.trackerId)n.title="dynamic — tracker: "+z.trackerId;
+    n.textContent=z.name;
     const tg=document.createElement("span");tg.className="stag "+ph;tg.textContent=ph;
     c.appendChild(n);c.appendChild(tg);el.appendChild(c);
   });
-  /* zone-zone intersection states */
-  const pairs=[];
-  simBundle.zones.forEach(srcZ=>{
-    if(!srcZ.trackerId)return;
-    simBundle.zones.forEach(tgtZ=>{
-      if(srcZ===tgtZ)return;
-      let best="out";
-      tgtZ.layers.forEach((L,i)=>{const st=SimFencer.state[srcZ.trackerId+":"+tgtZ.id+":"+L.kind+":"+i];if(!st)return;
-        if(st.phase==="in")best="in";else if(st.phase==="pending"&&best!=="in")best="pending";});
-      if(best!=="out")pairs.push({srcZ,tgtZ,phase:best});
-    });
-  });
-  if(pairs.length){
-    const sep=document.createElement("div");
-    sep.style.cssText="border-top:1px solid var(--rim);margin-top:4px;padding-top:4px";
-    const lbl=document.createElement("label");lbl.className="k";lbl.textContent="zone interactions";
-    sep.appendChild(lbl);
-    pairs.forEach(({srcZ,tgtZ,phase})=>{
-      const c=document.createElement("div");c.className="sim-chip";
-      const n=document.createElement("span");n.style.color="var(--ice)";
-      n.textContent="⟳ "+srcZ.trackerId+" → "+tgtZ.name;
-      const tg=document.createElement("span");tg.className="stag "+phase;tg.textContent=phase;
-      c.appendChild(n);c.appendChild(tg);sep.appendChild(c);
-    });
-    el.appendChild(sep);
-  }
 }
 
 /* ---- enter / exit test mode ---- */
@@ -3463,7 +3298,7 @@ function enterTestMode(){
   if(tool){draft=[];tool=null;document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));render();}
   selectZone(-1);
   simBundle=editorToSimBundle();
-  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;resetTrackerSmoothers();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   // unlock AudioContext now while we're inside the button click gesture
   SimVoice.ensure();
   if(SimVoice.ctx.state==="suspended") SimVoice.ctx.resume();
@@ -3486,24 +3321,6 @@ function enterTestMode(){
     simAvatar.on("drag",()=>{const now=performance.now();if(now-dragT<150)return;dragT=now;
       const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());});
   } else simAvatar.setLngLat([c.lng,c.lat]);
-  // create tracker markers for dynamic zones
-  simOrigCenters={};simTrackers=[];
-  zones.forEach((z,i)=>{
-    if(z.shape.type!=="circle"||!z.trackerId)return;
-    simOrigCenters[z.id]=[...z.shape.center]; // save [lon,lat]
-    const el=document.createElement("div");el.className="tracker-dot";
-    const lbl=document.createElement("div");lbl.className="tracker-label";lbl.textContent=z.trackerId;el.appendChild(lbl);
-    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(z.shape.center).addTo(map);
-    let dragT=0;
-    mk.on("drag",()=>{const now=performance.now();if(now-dragT<80)return;dragT=now;
-      const ll=mk.getLngLat();
-      z.shape.center=[ll.lng,ll.lat];           // editor format [lon,lat] — drives render()
-      simBundle.zones[i].center=[ll.lat,ll.lng]; // engine format [lat,lon] — drives geofencer
-      render();
-      if(simAvatar&&simPrev){const ap=simAvatar.getLngLat();feedSim(ap.lat,ap.lng,5,Date.now());}
-    });
-    simTrackers.push({marker:mk,zoneIdx:i});
-  });
   document.getElementById("editSection").style.display="none";
   document.getElementById("editorControls").style.display="none";
   document.getElementById("audioPalette").style.display="none"; // no clip-assignment during a simulated walk
@@ -3511,9 +3328,8 @@ function enterTestMode(){
   document.getElementById("testModeBtn").textContent="✕ Exit test";
   document.getElementById("testModeBtn").classList.add("on");
   refreshSimChips();
-  const dynCount=simTrackers.length;
   simLogEv("sev-sys","test loaded — "+simBundle.zones.length+" stop"+(simBundle.zones.length===1?"":"s")
-    +(dynCount?" · "+dynCount+" dynamic (blue dot = tracker)":"")+" — click map or drag dot.");
+    +" — click map or drag dot.");
 }
 
 function exitTestMode(){
@@ -3525,13 +3341,6 @@ function exitTestMode(){
   Object.values(simAmbientMarkers).forEach(mk=>mk.remove());
   simAmbientMarkers={};
   if(simAvatar){simAvatar.remove();simAvatar=null;}
-  // restore tracker markers and original zone centers
-  simTrackers.forEach(t=>{
-    const z=zones[t.zoneIdx];
-    if(simOrigCenters[z.id])z.shape.center=simOrigCenters[z.id];
-    t.marker.remove();
-  });
-  simTrackers=[];simOrigCenters={};
   render();
   document.getElementById("editSection").style.display="";
   document.getElementById("editorControls").style.display="";
@@ -3561,7 +3370,7 @@ function simPlay(){
   if(!simPath.length&&!buildSimStopsPath()){simLogEv("sev-warn","no stops to walk");return;}
   if(simPlaying){simPause();return;}
   if(SimVoice.ctx&&SimVoice.ctx.state==="suspended")SimVoice.ctx.resume();
-  if(simDist>=simPathTotal()){simDist=0;SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;resetTrackerSmoothers();refreshSimChips();}
+  if(simDist>=simPathTotal()){simDist=0;SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;refreshSimChips();}
   simPlaying=true;
   document.getElementById("simPlay").textContent="⏸";
   document.getElementById("simPlay").classList.add("on");
@@ -3601,7 +3410,7 @@ document.getElementById("advToggle").onclick=()=>{
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
-  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;resetTrackerSmoothers();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simPlay();};
 document.getElementById("simPlay").onclick=simPlay;
@@ -3618,7 +3427,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
   document.getElementById('simGuidanceHud').style.display='none';
   const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
-  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;resetTrackerSmoothers();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();refreshSimChips();simLogEv("sev-sys","reset");};
 // speed presets
 (function(){

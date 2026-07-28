@@ -1371,40 +1371,6 @@ setInterval(()=>Analytics.sync(), 30000);
 try{ window.addEventListener('online', ()=>Analytics.sync());
      document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) Analytics.sync(); }); }catch(e){}
 
-/* ---- action dispatcher: optional per-state actions (webhooks now; extensible) ----
-   lives outside the shared core (sim never fires real actions);
-   every action is consent-gated and failures never interrupt the walk */
-const Actions = {
-  ON: { enter:'enter', exit:'exit', say:'reveal' },
-  run(kind, zone){
-    const on = this.ON[kind];
-    if(!on || !zone || !Array.isArray(zone.actions)) return;
-    zone.actions.forEach(a => { if((a.on||'enter')===on) this.dispatch(a, on, zone); });
-  },
-  dispatch(a, on, zone){
-    if(!a || !a.type) return;
-    // consent enforcement: an action may declare a required scope; refuse if not granted
-    if(a.requires && !(window.hasConsent && window.hasConsent(a.requires))){
-      HUD.log('ev-flick','ACTION skipped ('+a.type+' on '+on+') — needs consent: '+a.requires); return; }
-    if(a.type==='webhook') return this.webhook(a, on, zone);
-    HUD.log('ev-flick','ACTION unknown type: '+a.type);
-  },
-  webhook(a, on, zone){
-    if(!a.url){ HUD.log('ev-warn','webhook action missing url'); return; }
-    const body = { event:on, zone:zone.id, name:zone.name,
-                   project:(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null, ts:Date.now() };
-    if(a.includeDevice){ try{ body.deviceId=localStorage.getItem('gp.device')||null; }catch(e){} }
-    let ctrl, to;
-    try{ ctrl=new AbortController(); to=setTimeout(()=>ctrl.abort(), a.timeoutMs||5000); }catch(e){}
-    fetch(a.url, { method:a.method||'POST', headers:{'content-type':'application/json'},
-        body:JSON.stringify(Object.assign(body, a.extra||{})),
-        mode:'cors', keepalive:true, signal:ctrl?ctrl.signal:undefined })
-      .then(r => HUD.log('ev-sys','ACTION webhook '+on+' → '+zone.name+' ('+r.status+')'))
-      .catch(err => HUD.log('ev-warn','ACTION webhook failed: '+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||err)))
-      .finally(()=>{ if(to) clearTimeout(to); });
-  }
-};
-
 /* Geofencer -> HUD log wiring */
 Geofencer.onEvent=(e)=>{
   if(e.kind==='enter'){ HUD.log('ev-enter','ENTER  '+e.zone.name+(e.info.side?' ('+e.info.side+')':''));
@@ -1419,7 +1385,6 @@ Geofencer.onEvent=(e)=>{
          setTimeout(()=>{ wrap.style.transition='box-shadow .6s ease-out';
            wrap.style.boxShadow='inset 0 0 0 0 rgba(255,106,61,0)'; },60); } }
   else if(e.kind==='suppressed') HUD.log('ev-flick','HOLD   reveal suppressed (fix too loose)');
-  Actions.run(e.kind, e.zone);
 
   // Pipeline runtime: evaluates zone.pipeline (if any) for this zone. This is
   // the sole replacement for the old bot-based guidance trigger (verified
@@ -1457,7 +1422,22 @@ Geofencer.onEvent=(e)=>{
         if(hud) hud.style.display='block';
         HUD.log('ev-sys','Guidance started → '+targetZone.name);
       },
-      webhookFn:(url)=>{ HUD.log('ev-sys','webhook → '+url); },
+      webhookFn:(url,includeDevice)=>{
+        if(!url) return;
+        if(includeDevice && !(window.hasConsent && window.hasConsent('live-tracking'))){
+          HUD.log('ev-flick','webhook skipped — needs consent: live-tracking'); return;
+        }
+        const body={ event:e.kind, zone:e.zone.id, name:e.zone.name,
+                     project:(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null, ts:Date.now() };
+        if(includeDevice){ try{ body.deviceId=localStorage.getItem('gp.device')||null; }catch(err){} }
+        let ctrl,to;
+        try{ ctrl=new AbortController(); to=setTimeout(()=>ctrl.abort(),5000); }catch(err){}
+        fetch(url,{ method:'POST', headers:{'content-type':'application/json'},
+            body:JSON.stringify(body), mode:'cors', keepalive:true, signal:ctrl?ctrl.signal:undefined })
+          .then(r=>HUD.log('ev-sys','webhook '+e.kind+' → '+e.zone.name+' ('+r.status+')'))
+          .catch(err=>HUD.log('ev-warn','webhook failed: '+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||err)))
+          .finally(()=>{ if(to) clearTimeout(to); });
+      },
       allZones: BUNDLE.zones||[]
     });
     if(e.kind==='enter') PipelineRuntime.tick(e.zone.id, null, lastSmoothed, { entered:true });
