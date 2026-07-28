@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chase Life — Pipeline Editor</title>
+<script src="role-gate.js"></script>
+<script>RoleGate.require(['admin']);</script>
+<script src="pipeline-runtime.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
+         --snow:#ffffff;--ice:#c8dff2;--fog:#8aa5bf;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow);overflow:hidden}
+  .hdr{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rim);background:rgba(10,16,24,.95)}
+  .hdr h1{font-family:"Black Han Sans";font-size:16px;margin:0}
+  .hdr .sub{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);flex:1}
+  .hdr a{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:6px 12px}
+  button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+         font-size:13px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:9px;
+         padding:8px 14px;cursor:pointer}
+  button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  input,select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
+         color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px 10px;width:100%}
+  label.field{display:block;font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;
+         letter-spacing:.5px;color:var(--fog);margin:10px 0 4px}
+  .layout{display:flex;height:calc(100% - 52px)}
+  .palette{width:180px;border-right:1px solid var(--rim);overflow-y:auto;padding:10px;flex:0 0 auto}
+  .palette h3{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:12px 0 6px}
+  .blk-card{background:var(--slate);border:1px solid var(--rim);border-radius:8px;padding:8px 10px;
+         margin-bottom:6px;cursor:grab;font-family:"Barlow Condensed";font-size:13px}
+  .blk-card:hover{border-color:var(--coral)}
+  .blk-card.cat-trigger{border-left:3px solid var(--go)}
+  .blk-card.cat-data{border-left:3px solid var(--ice)}
+  .blk-card.cat-logic{border-left:3px solid var(--amber)}
+  .blk-card.cat-action{border-left:3px solid var(--coral)}
+  .canvas-wrap{flex:1;position:relative;overflow:auto;background:
+         linear-gradient(var(--slate-2) 1px,transparent 1px) 0 0/24px 24px,
+         linear-gradient(90deg,var(--slate-2) 1px,transparent 1px) 0 0/24px 24px, var(--night)}
+  svg{display:block;min-width:2000px;min-height:1400px}
+  .pnode rect{fill:var(--slate);stroke:var(--rim);stroke-width:1.5;rx:9}
+  .pnode.sel rect{stroke:var(--coral);stroke-width:2}
+  .pnode text.title{fill:var(--snow);font-family:"Barlow Condensed";font-size:12px;font-weight:600}
+  .pnode text.port-label{fill:var(--fog);font-family:"Barlow Condensed";font-size:10px}
+  .port{cursor:crosshair}
+  .port.gate{fill:var(--amber)}
+  .port.value{fill:var(--ice)}
+  .port:hover{stroke:var(--coral);stroke-width:2}
+  .pedge{fill:none;stroke:var(--fog);stroke-width:2}
+  .pedge.gate{stroke:var(--amber)}
+  .pedge-temp{fill:none;stroke:var(--coral);stroke-width:2;stroke-dasharray:4 3}
+  .del-x{fill:var(--hazard);cursor:pointer;font-family:"Barlow Condensed";font-size:12px}
+  .props{width:240px;border-left:1px solid var(--rim);padding:12px;flex:0 0 auto;overflow-y:auto}
+  .props h3{font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin:0 0 8px}
+  .props .empty{font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
+  #errBanner{display:none;background:var(--hazard);color:#fff;font-family:"Barlow Condensed";font-size:12px;
+         padding:6px 16px}
+  #saveMsg{font-family:"Barlow Condensed";font-size:12px;color:var(--go)}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>Pipeline Editor</h1>
+  <div class="sub" id="ctxLabel">loading…</div>
+  <span id="saveMsg"></span>
+  <button id="saveBtn" class="on">Save</button>
+  <a id="backLink" href="/editor">← Back to Fence Editor</a>
+</div>
+<div id="errBanner"></div>
+<div class="layout">
+  <div class="palette" id="palette"></div>
+  <div class="canvas-wrap">
+    <svg id="svg"></svg>
+  </div>
+  <div class="props" id="props"><h3>Properties</h3><div class="empty">Select a node</div></div>
+</div>
+
+<script>
+const qs = new URLSearchParams(location.search);
+const projectId = qs.get("project");
+const zoneId = qs.get("zone");
+document.getElementById("backLink").href = "/editor?app=" + encodeURIComponent(qs.get("app") || "") + "&project=" + encodeURIComponent(projectId || "");
+
+let bundle = null, zone = null, pipeline = { v: 1, nodes: [], edges: [] };
+let selectedId = null;
+let nextId = 1;
+
+function getToken(){
+  try{ const s = localStorage.getItem("gp.session"); if (s) return s; }catch(e){}
+  return "";
+}
+
+function showErr(msg){
+  const el = document.getElementById("errBanner");
+  if (!msg){ el.style.display = "none"; return; }
+  el.textContent = msg; el.style.display = "block";
+}
+
+async function load(){
+  if (!projectId || !zoneId){ showErr("Missing ?project= or ?zone= in URL"); return; }
+  const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle");
+  if (!r.ok){ showErr("Could not load bundle for project " + projectId); return; }
+  bundle = await r.json();
+  zone = (bundle.zones || []).find(z => z.id === zoneId);
+  if (!zone){ showErr("Zone " + zoneId + " not found in this project's bundle"); return; }
+  pipeline = zone.pipeline && zone.pipeline.v === 1 ? zone.pipeline : { v: 1, nodes: [], edges: [] };
+  nextId = 1 + pipeline.nodes.reduce((m, n) => Math.max(m, parseInt((n.id || "n0").slice(1)) || 0), 0);
+  document.getElementById("ctxLabel").textContent = (bundle.name || projectId) + " — " + zone.name;
+  renderPalette();
+  render();
+}
+
+function renderPalette(){
+  const el = document.getElementById("palette");
+  el.innerHTML = "";
+  const cats = { trigger: "Triggers", data: "Data", logic: "Logic", action: "Actions" };
+  Object.keys(cats).forEach(cat => {
+    const h = document.createElement("h3"); h.textContent = cats[cat]; el.appendChild(h);
+    Object.keys(PipelineRuntime.BLOCKS).forEach(type => {
+      const def = PipelineRuntime.BLOCKS[type];
+      if (def.category !== cat) return;
+      const card = document.createElement("div");
+      card.className = "blk-card cat-" + cat;
+      card.textContent = def.label;
+      card.draggable = true;
+      card.addEventListener("dragstart", e => e.dataTransfer.setData("blockType", type));
+      el.appendChild(card);
+    });
+  });
+}
+
+/* ===================== SVG canvas ===================== */
+const svg = document.getElementById("svg");
+const NODE_W = 150, PORT_ROW_H = 18, HEADER_H = 26;
+
+function nodeHeight(node){
+  const def = PipelineRuntime.BLOCKS[node.type];
+  return HEADER_H + Math.max(def.inputs.length, def.outputs.length) * PORT_ROW_H + 10;
+}
+function portPos(node, portId, dir){
+  const def = PipelineRuntime.BLOCKS[node.type];
+  const list = dir === "in" ? def.inputs : def.outputs;
+  const idx = list.findIndex(p => p.id === portId);
+  const y = node.y + HEADER_H + idx * PORT_ROW_H + PORT_ROW_H / 2;
+  const x = dir === "in" ? node.x : node.x + NODE_W;
+  return { x, y };
+}
+function svgPoint(evt){
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+let drag = null; // {mode:'node'|'edge', ...}
+
+function render(){
+  svg.innerHTML = "";
+  const w = Math.max(2000, ...pipeline.nodes.map(n => n.x + 400));
+  const h = Math.max(1400, ...pipeline.nodes.map(n => n.y + 300));
+  svg.setAttribute("width", w); svg.setAttribute("height", h);
+
+  // edges
+  pipeline.edges.forEach(e => {
+    const fromNode = pipeline.nodes.find(n => n.id === e.from.n);
+    const toNode = pipeline.nodes.find(n => n.id === e.to.n);
+    if (!fromNode || !toNode) return;
+    const a = portPos(fromNode, e.from.p, "out");
+    const b = portPos(toNode, e.to.p, "in");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const def = PipelineRuntime.BLOCKS[toNode.type];
+    const portDef = def.inputs.find(p => p.id === e.to.p);
+    path.setAttribute("class", "pedge" + (portDef && portDef.type === "gate" ? " gate" : ""));
+    path.setAttribute("d", bez(a, b));
+    path.dataset.edgeId = e.id;
+    path.addEventListener("click", ev => { ev.stopPropagation(); pipeline.edges = pipeline.edges.filter(x => x.id !== e.id); render(); });
+    svg.appendChild(path);
+  });
+
+  pipeline.nodes.forEach(node => svg.appendChild(renderNode(node)));
+
+  if (drag && drag.mode === "edge") {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("class", "pedge-temp");
+    path.setAttribute("d", bez(drag.from, drag.cur));
+    svg.appendChild(path);
+  }
+  renderProps();
+}
+
+function bez(a, b){
+  const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
+  return "M" + a.x + "," + a.y + " C" + (a.x + dx) + "," + a.y + " " + (b.x - dx) + "," + b.y + " " + b.x + "," + b.y;
+}
+
+function renderNode(node){
+  const def = PipelineRuntime.BLOCKS[node.type];
+  const hgt = nodeHeight(node);
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  g.setAttribute("class", "pnode" + (node.id === selectedId ? " sel" : ""));
+  g.setAttribute("transform", "translate(" + node.x + "," + node.y + ")");
+  g.dataset.nodeId = node.id;
+
+  const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rect.setAttribute("width", NODE_W); rect.setAttribute("height", hgt); rect.setAttribute("rx", 9);
+  g.appendChild(rect);
+
+  const title = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  title.setAttribute("class", "title"); title.setAttribute("x", 10); title.setAttribute("y", 17);
+  title.textContent = def.label;
+  g.appendChild(title);
+
+  const delX = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  delX.setAttribute("class", "del-x"); delX.setAttribute("x", NODE_W - 14); delX.setAttribute("y", 17);
+  delX.textContent = "✕";
+  delX.addEventListener("mousedown", ev => { ev.stopPropagation(); deleteNode(node.id); });
+  g.appendChild(delX);
+
+  def.inputs.forEach((p, i) => {
+    const y = HEADER_H + i * PORT_ROW_H + PORT_ROW_H / 2;
+    g.appendChild(portCircle(0, y, p.type, node.id, p.id, "in"));
+    g.appendChild(portLabel(8, y + 3, p.id, "start"));
+  });
+  def.outputs.forEach((p, i) => {
+    const y = HEADER_H + i * PORT_ROW_H + PORT_ROW_H / 2;
+    g.appendChild(portCircle(NODE_W, y, p.type, node.id, p.id, "out"));
+    g.appendChild(portLabel(NODE_W - 8, y + 3, p.id, "end"));
+  });
+
+  g.addEventListener("mousedown", ev => {
+    if (ev.target.classList.contains("port") || ev.target.classList.contains("del-x")) return;
+    selectedId = node.id;
+    drag = { mode: "node", id: node.id, dx: svgPoint(ev).x - node.x, dy: svgPoint(ev).y - node.y };
+    render();
+  });
+
+  return g;
+}
+function portCircle(x, y, type, nodeId, portId, dir){
+  const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", 5);
+  c.setAttribute("class", "port " + type);
+  c.dataset.nodeId = nodeId; c.dataset.portId = portId; c.dataset.dir = dir; c.dataset.portType = type;
+  c.addEventListener("mousedown", ev => {
+    ev.stopPropagation();
+    const node = pipeline.nodes.find(n => n.id === nodeId);
+    const p = portPos(node, portId, dir);
+    if (dir === "out") drag = { mode: "edge", from: p, fromNode: nodeId, fromPort: portId, cur: p };
+    else drag = { mode: "edge", from: p, toNode: nodeId, toPort: portId, cur: p, reverse: true };
+  });
+  return c;
+}
+function portLabel(x, y, text, anchor){
+  const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  t.setAttribute("class", "port-label"); t.setAttribute("x", x); t.setAttribute("y", y);
+  t.setAttribute("text-anchor", anchor); t.textContent = text;
+  return t;
+}
+
+svg.addEventListener("mousedown", ev => { if (ev.target === svg) { selectedId = null; render(); } });
+document.addEventListener("mousemove", ev => {
+  if (!drag) return;
+  const p = svgPoint(ev);
+  if (drag.mode === "node") {
+    const node = pipeline.nodes.find(n => n.id === drag.id);
+    node.x = Math.max(0, p.x - drag.dx); node.y = Math.max(0, p.y - drag.dy);
+    render();
+  } else if (drag.mode === "edge") {
+    drag.cur = p; render();
+  }
+});
+document.addEventListener("mouseup", ev => {
+  if (!drag) return;
+  if (drag.mode === "edge") {
+    const target = ev.target;
+    if (target && target.classList && target.classList.contains("port")) {
+      const nodeId = target.dataset.nodeId, portId = target.dataset.portId, dir = target.dataset.dir, portType = target.dataset.portType;
+      let from, to;
+      if (drag.fromNode && dir === "in") { from = { n: drag.fromNode, p: drag.fromPort }; to = { n: nodeId, p: portId }; }
+      else if (drag.toNode && dir === "out") { from = { n: nodeId, p: portId }; to = { n: drag.toNode, p: drag.toPort }; }
+      if (from && to) {
+        const fromDef = PipelineRuntime.BLOCKS[pipeline.nodes.find(n => n.id === from.n).type];
+        const toDef = PipelineRuntime.BLOCKS[pipeline.nodes.find(n => n.id === to.n).type];
+        const outType = (fromDef.outputs.find(p => p.id === from.p) || {}).type;
+        const inType = (toDef.inputs.find(p => p.id === to.p) || {}).type;
+        const compatible = outType === inType || (outType === "gate") === (inType === "gate");
+        if (compatible) {
+          pipeline.edges = pipeline.edges.filter(e => !(e.to.n === to.n && e.to.p === to.p)); // one source per input
+          pipeline.edges.push({ id: "e" + (nextId++), from, to });
+        } else {
+          showErr("Incompatible ports — can't connect a data value to a gate (or vice versa)");
+          setTimeout(() => showErr(null), 2500);
+        }
+      }
+    }
+  }
+  drag = null; render();
+});
+
+function deleteNode(id){
+  pipeline.nodes = pipeline.nodes.filter(n => n.id !== id);
+  pipeline.edges = pipeline.edges.filter(e => e.from.n !== id && e.to.n !== id);
+  if (selectedId === id) selectedId = null;
+  render();
+}
+
+svg.parentElement.addEventListener("dragover", ev => ev.preventDefault());
+svg.parentElement.addEventListener("drop", ev => {
+  ev.preventDefault();
+  const type = ev.dataTransfer.getData("blockType");
+  if (!type || !PipelineRuntime.BLOCKS[type]) return;
+  const p = svgPoint(ev);
+  pipeline.nodes.push({ id: "n" + (nextId++), type, x: Math.max(0, p.x - NODE_W / 2), y: Math.max(0, p.y - 20), params: defaultParams(type) });
+  render();
+});
+function defaultParams(type){
+  const out = {};
+  (PipelineRuntime.BLOCKS[type].params || []).forEach(p => out[p.id] = p.default);
+  return out;
+}
+
+/* ===================== Property panel ===================== */
+function renderProps(){
+  const el = document.getElementById("props");
+  const node = pipeline.nodes.find(n => n.id === selectedId);
+  if (!node){ el.innerHTML = "<h3>Properties</h3><div class=\"empty\">Select a node</div>"; return; }
+  const def = PipelineRuntime.BLOCKS[node.type];
+  el.innerHTML = "<h3>" + def.label + "</h3>";
+  if (!def.params.length){ el.innerHTML += "<div class=\"empty\">No settings for this block</div>"; return; }
+  def.params.forEach(p => {
+    const label = document.createElement("label"); label.className = "field"; label.textContent = p.label || p.id;
+    el.appendChild(label);
+    let input;
+    if (p.type === "select") {
+      input = document.createElement("select");
+      p.options.forEach(o => { const opt = document.createElement("option"); opt.value = o; opt.textContent = o; input.appendChild(opt); });
+      input.value = node.params[p.id] ?? p.default;
+    } else if (p.type === "zoneSelect") {
+      input = document.createElement("select");
+      (bundle.zones || []).forEach(z => { const opt = document.createElement("option"); opt.value = z.id; opt.textContent = z.name; input.appendChild(opt); });
+      input.value = node.params[p.id] ?? "";
+    } else if (p.type === "boolean") {
+      input = document.createElement("input"); input.type = "checkbox"; input.style.width = "auto";
+      input.checked = !!(node.params[p.id] ?? p.default);
+    } else if (p.type === "number") {
+      input = document.createElement("input"); input.type = "number"; input.value = node.params[p.id] ?? p.default;
+    } else {
+      input = document.createElement("input"); input.type = "text"; input.value = node.params[p.id] ?? p.default ?? "";
+    }
+    input.addEventListener("input", () => {
+      node.params[p.id] = p.type === "boolean" ? input.checked : p.type === "number" ? Number(input.value) : input.value;
+    });
+    el.appendChild(input);
+  });
+}
+
+/* ===================== Save ===================== */
+document.getElementById("saveBtn").addEventListener("click", async () => {
+  const { cyclic } = PipelineRuntime.topoSort(pipeline.nodes, pipeline.edges);
+  if (cyclic) { showErr("Pipeline has a cycle — remove a connection before saving"); return; }
+  showErr(null);
+  zone.pipeline = pipeline;
+  const token = getToken();
+  const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+    body: JSON.stringify(bundle)
+  });
+  const msg = document.getElementById("saveMsg");
+  if (r.ok) { msg.textContent = "Saved"; setTimeout(() => msg.textContent = "", 2000); }
+  else { showErr("Save failed: " + r.status); }
+});
+
+load();
+</script>
+</body>
+</html>

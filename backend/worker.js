@@ -11,7 +11,6 @@
      env.ASSETS         static assets
      env.AUDIO          R2 bucket for audio clips
      env.ADMIN_TOKEN    bearer secret for write endpoints  (wrangler secret)
-     env.GROQ_API_KEY   Groq API key for /api/chat  (wrangler secret)
      env.RESEMBLE_API_TOKEN  Resemble AI token for /api/chatterbox/generate  (wrangler secret)
      env.ORG_ID         organisation slug, e.g. "chase-life"  (var)
      env.ALLOWED_ORIGIN browser origin allowed on write endpoints, e.g.
@@ -39,11 +38,6 @@ function json(obj, status = 200, cors = CORS_PUBLIC) {
   return new Response(JSON.stringify(obj), {
     status, headers: { "content-type": "application/json", ...cors }
   });
-}
-
-function degToCompass(deg) {
-  const d = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  return d[Math.round(deg / 22.5) % 16];
 }
 
 async function cleanupLiveZones(env) {
@@ -172,88 +166,6 @@ async function saveSnowSnapshot(env) {
   ).run();
 
   return { snapshotDate: localDate, ...data };
-}
-
-function buildChatPrompt(regionBot, clientBot, state, weather, snowHistory) {
-  const persona = (regionBot && regionBot.persona) || "You are a knowledgeable and friendly guide at this location.";
-  const knowledge = (regionBot && regionBot.knowledge) || "";
-  let p = persona.trim();
-  if (knowledge) p += "\n\nKNOWLEDGE ABOUT THIS LOCATION:\n" + knowledge.trim();
-  if (clientBot && clientBot.knowledge) p += "\n\nCLIENT PROFILE (you know this person):\n" + clientBot.knowledge.trim();
-
-  if (weather) {
-    p += "\n\nCURRENT MOUNTAIN CONDITIONS (White Wall station, 2325m):";
-    p += `\n  Temperature: ${weather.ww_temp_c}°C`;
-    p += `\n  Wind: ${weather.ww_wind_spd_kph} km/h from the ${degToCompass(weather.ww_wind_dir_deg)}, gusting to ${weather.ww_wind_gust_kph} km/h`;
-    p += weather.hour_precip_mm > 0
-      ? `\n  Precipitation last hour: ${weather.hour_precip_mm} mm`
-      : `\n  No precipitation in the last hour`;
-    if (weather.precip_24hr_mm > 0) p += `\n  24-hour precipitation: ${weather.precip_24hr_mm} mm`;
-    const t = String(weather.reading_time).padStart(4,'0');
-    p += `\n  (Reading time: ${weather.reading_date} ${t.slice(0,2)}:${t.slice(2)})`;
-  }
-
-  if (snowHistory && snowHistory.length) {
-    p += "\n\nSNOW HISTORY — last 14 days (8am daily snapshot):";
-    for (const r of snowHistory) {
-      const snow = r.hn24_cm > 0 ? ` | new snow: ${r.hn24_cm}cm` : '';
-      const precip = r.precip_24hr_mm > 0 ? ` | precip: ${r.precip_24hr_mm}mm` : '';
-      p += `\n  ${r.snapshot_date}: ${r.ww_temp_c}°C${snow}${precip}`;
-    }
-  }
-
-  p += "\n\nCURRENT VISITOR SITUATION:\n";
-  if (state) {
-    if (state.zoneName)         p += `At: ${state.zoneName}.\n`;
-    if (state.dwellSeconds > 5) p += `Time here: ${Math.round(state.dwellSeconds)}s.\n`;
-    if (state.previousZones && state.previousZones.length)
-      p += `Previously visited: ${state.previousZones.join(", ")}.\n`;
-    if (state.distFromCenterM != null)
-      p += `Distance from zone centre: ${state.distFromCenterM}m.\n`;
-    if (state.speedKmh != null) {
-      if (state.speedKmh > 15)     p += `Moving fast: ${state.speedKmh} km/h (skiing).\n`;
-      else if (state.speedKmh > 2) p += `Moving slowly: ${state.speedKmh} km/h.\n`;
-      else                          p += `Stationary.\n`;
-    }
-    if (state.headingDeg != null) {
-      const _16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-      const card = _16[Math.round(state.headingDeg / 22.5) % 16];
-      p += `Heading: ${card} (${state.headingDeg}°).\n`;
-    }
-    if (state.timeOfDay) p += `Local time: ${state.timeOfDay}.\n`;
-    if (state.nearbyZones && state.nearbyZones.length)
-      p += `Nearby: ${state.nearbyZones.map(z => `${z.name} (${Math.round(z.distanceM)}m ${z.direction})`).join(", ")}.\n`;
-    if (state.visitorHistory && state.visitorHistory.length)
-      p += `Visitor's zone history: ${state.visitorHistory.map(r => `${r.zoneName} (${r.dwellSeconds}s)`).join(" → ")}.\n`;
-    if (state.trackers && state.trackers.length) {
-      const _16c = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-      p += `Trackers currently in zones: ${state.trackers.map(t => {
-        let s = `${t.trackerId} in "${t.zoneName}" for ${t.dwellSeconds}s`;
-        if (t.speedKmh > 2) s += `, moving at ${t.speedKmh} km/h`;
-        else if (t.speedKmh != null) s += `, stationary`;
-        if (t.headingDeg != null) s += ` heading ${_16c[Math.round(t.headingDeg/22.5)%16]}`;
-        return s;
-      }).join("; ")}.\n`;
-    }
-    if (state.trackerHistories && Object.keys(state.trackerHistories).length) {
-      for (const [tid, hist] of Object.entries(state.trackerHistories))
-        p += `${tid} zone history: ${hist.map(r => `${r.zoneName} (${r.dwellSeconds}s)`).join(" → ")}.\n`;
-    }
-    if (state.peerHistories && Object.keys(state.peerHistories).length) {
-      p += "\nPEER BOT HISTORIES (shared by other moving bots):\n";
-      for (const [name, hist] of Object.entries(state.peerHistories))
-        p += `${name}: ${hist.map(r => `${r.zoneName} (${r.dwellSeconds}s)`).join(" → ")}.\n`;
-    }
-  }
-  // MARKET DATA: (coming soon — Yahoo Finance cron scrape cached in D1)
-  // NEWS: (coming soon — Al Jazeera RSS scrape cached in D1)
-  p += "\n\nRULES — follow these exactly:";
-  p += "\n1. Facts only. Every fact you state MUST be explicitly written in your KNOWLEDGE section above. Do not infer, extrapolate, or invent details not written there. If you don't have the information, say \"I don't have details on that\" — never guess.";
-  p += "\n2. No compass directions. Never say North, South, East, West, N, S, E, W, northeast, etc. Use landmarks, slope names, or relative terms (left, right, ahead) instead.";
-  p += "\n3. Short. Keep responses under 3 sentences unless the visitor explicitly asks for more.";
-  p += "\n4. Stay in persona as described above.";
-  if (state && state.speedKmh > 15) p += "\n5. Visitor is moving fast (skiing) — 1 short sentence only.";
-  return p;
 }
 
 function rawAdminToken(request, env) {
@@ -402,7 +314,7 @@ export default {
       "/studio": "/audio-studio.html",
       "/chatterbox": "/chatterbox-studio.html",
       "/field": "/field-recorder.html",
-      "/bots": "/bot-library.html",
+      "/pipeline": "/pipeline-editor.html",
       "/login": "/login.html",
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
@@ -647,7 +559,7 @@ async function api(request, env, url) {
   // --- nuke all data (master only) — wipes every row, keeps schema ---
   if (path === "/api/nuke" && method === "DELETE") {
     if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
-    const tables = ["event","consent","device","audit_log","published_bundle","api_key","project","app","bot"];
+    const tables = ["event","consent","device","audit_log","published_bundle","api_key","project","app"];
     const wiped = [], skipped = [];
     for (const t of tables) {
       try { await env.DB.prepare(`DELETE FROM ${t}`).run(); wiped.push(t); }
@@ -853,17 +765,13 @@ async function api(request, env, url) {
       const chk = await env.DB.prepare("SELECT id FROM project WHERE appId=? LIMIT 1").bind(aid).first();
       if (chk) return json({ error: "remove or reassign this app's projects first, or use cascade=true" }, 409, AC);
     }
-    // Bots live under the app (app_id), not under any one project, so the
-    // per-project cleanup above never touches them — an app cascade-delete
-    // must remove them explicitly or they're left behind as orphans.
-    await env.DB.prepare("DELETE FROM bot WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
     return json({ ok: true, deleted: aid }, 200, AC);
   }
 
-  // --- merge one workspace's projects (and bots) into another (master only) ---
+  // --- merge one workspace's projects into another (master only) ---
   // Non-destructive: the source app row itself is left behind, empty, so
   // there's nothing to roll back if this fails partway — same reasoning as
   // /api/projects/combine. v1 restricts this to two apps under the same
@@ -884,67 +792,11 @@ async function api(request, env, url) {
     const now = new Date().toISOString();
     const projMove = await env.DB.prepare("UPDATE project SET appId=?, updatedAt=? WHERE appId=?")
       .bind(targetId, now, sourceAppId).run();
-    const botMove = await env.DB.prepare("UPDATE bot SET app_id=?, updated_at=? WHERE app_id=?")
-      .bind(targetId, now, sourceAppId).run();
     await logAudit(env, request, { keyId: "master" }, "app.merge", targetId);
     return json({
       ok: true,
-      movedProjects: projMove.meta?.changes || 0,
-      movedBots: botMove.meta?.changes || 0
+      movedProjects: projMove.meta?.changes || 0
     }, 200, AC);
-  }
-
-  // --- bots: org-scoped reusable bot library ---
-  if (path === "/api/bots" && method === "GET") {
-    const A = await auth(request, env);
-    if (!A) return json({ bots: [] }, 200, AC);
-    // Non-master callers are pinned to their own client's app id, ignoring
-    // whatever ?appId= was requested — this was unscoped before multi-client
-    // support existed.
-    const appId = A.master ? url.searchParams.get("appId") : A.appId;
-    const sql = appId
-      ? "SELECT * FROM bot WHERE app_id=? ORDER BY name"
-      : "SELECT * FROM bot ORDER BY name";
-    const { results } = await env.DB.prepare(sql).bind(...(appId ? [appId] : [])).all();
-    return json({ bots: results || [] });
-  }
-
-  if (path === "/api/bots" && method === "POST") {
-    const A = await auth(request, env);
-    if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
-    const b = await request.json().catch(() => ({}));
-    if (!b.name) return json({ error: "name required" }, 400, AC);
-    const id = b.id || "bot_" + crypto.randomUUID().slice(0, 8);
-    const now = new Date().toISOString();
-    const fnJson = b.functions ? JSON.stringify(b.functions) : null;
-    await env.DB.prepare(
-      "INSERT INTO bot (id,app_id,name,type,avatar,persona,knowledge,greeting,functions,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
-    ).bind(id, b.appId || null, b.name, b.type || "region", b.avatar || "🤖",
-           b.persona || null, b.knowledge || null, b.greeting || null, fnJson, now, now).run();
-    return json({ ok: true, id }, 201, AC);
-  }
-
-  const mbot = path.match(/^\/api\/bots\/([^/]+)$/);
-  if (mbot && method === "PUT") {
-    const A = await auth(request, env);
-    if (!scopeOk(A, "publish", null)) return json({ error: "publish scope required" }, 401, AC);
-    const bid = decodeURIComponent(mbot[1]);
-    const b = await request.json().catch(() => ({}));
-    const now = new Date().toISOString();
-    const fnJson = b.functions !== undefined ? (b.functions ? JSON.stringify(b.functions) : null) : undefined;
-    await env.DB.prepare(
-      "UPDATE bot SET name=COALESCE(?,name), type=COALESCE(?,type), avatar=COALESCE(?,avatar), persona=?, knowledge=?, greeting=?, functions=COALESCE(?,functions), app_id=COALESCE(?,app_id), updated_at=? WHERE id=?"
-    ).bind(b.name || null, b.type || null, b.avatar || null,
-           b.persona ?? null, b.knowledge ?? null, b.greeting ?? null,
-           fnJson ?? null, b.appId || null, now, bid).run();
-    return json({ ok: true }, 200, AC);
-  }
-
-  if (mbot && method === "DELETE") {
-    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
-    const bid = decodeURIComponent(mbot[1]);
-    await env.DB.prepare("DELETE FROM bot WHERE id=?").bind(bid).run();
-    return json({ ok: true, deleted: bid }, 200, AC);
   }
 
   // --- move a project into an app (admin) ---
@@ -1152,14 +1004,13 @@ async function api(request, env, url) {
       if (!src) return json({ error: "source project not found: " + sid }, 404, AC);
       sources.push(src);
     }
-    // v1 restriction: same workspace only, so bot references (scoped by
-    // app_id) stay valid without any re-scoping work.
+    // v1 restriction: same workspace only.
     const appId = sources[0].appId;
     if (sources.some(s => s.appId !== appId)) {
       return json({ error: "all source projects must be in the same workspace" }, 400, AC);
     }
     const orgId = sources[0].orgId;
-    let mergedZones = [], mergedBots = new Set(), visitorBotId = null;
+    let mergedZones = [];
     for (const src of sources) {
       const row = await env.DB.prepare(
         "SELECT json FROM published_bundle WHERE projectId=? ORDER BY version DESC LIMIT 1"
@@ -1171,8 +1022,6 @@ async function api(request, env, url) {
       for (const z of zones) {
         mergedZones.push({ ...z, id: src.id + "__" + z.id });
       }
-      (bundle.bots || []).forEach(bid => mergedBots.add(bid));
-      if (!visitorBotId && bundle.visitorBotId) visitorBotId = bundle.visitorBotId;
     }
     if (!mergedZones.length) return json({ error: "no published zones found in the selected projects" }, 400, AC);
     // ref = centroid of every combined zone's center, mirrors fence-editor's
@@ -1204,7 +1053,7 @@ async function api(request, env, url) {
     const mergedBundle = {
       project: newId, name, ref, ...scalars,
       appId, orgId, isTemplate: !!isTemplate,
-      bots: [...mergedBots], visitorBotId, zones: mergedZones
+      zones: mergedZones
     };
     await env.DB.prepare(
       "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
@@ -1472,17 +1321,6 @@ async function api(request, env, url) {
       await env.DB.prepare(
         "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
       ).bind(pid, ver, JSON.stringify(bundle), now).run();
-      // upsert bots from bundle into D1 bot table for cross-project reuse
-      if (Array.isArray(bundle.bots) && bundle.bots.length) {
-        const appId = bundle.appId || null;
-        for (const b of bundle.bots) {
-          if (!b.id || !b.name) continue;
-          await env.DB.prepare(
-            "INSERT INTO bot (id,app_id,name,type,avatar,persona,knowledge,greeting,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, type=excluded.type, avatar=excluded.avatar, persona=excluded.persona, knowledge=excluded.knowledge, greeting=excluded.greeting, app_id=COALESCE(excluded.app_id,bot.app_id), updated_at=excluded.updated_at"
-          ).bind(b.id, appId, b.name, b.type || "region", b.avatar || "🤖",
-                 b.persona || null, b.knowledge || null, b.greeting || null, now, now).run().catch(() => {});
-        }
-      }
       await logAudit(env, request, A, "publish", pid + " v" + ver);
       return json({ ok: true, version: ver }, 200, AC);
     }
@@ -2034,33 +1872,6 @@ async function api(request, env, url) {
         return json({ error: e.message }, 502, CORS_PUBLIC);
       }
     }
-  }
-
-  // --- chatbot (proxies Groq, streams SSE) ---
-  if (path === "/api/chat" && method === "POST") {
-    if (!env.GROQ_API_KEY) return json({ error: "GROQ_API_KEY not configured" }, 503, CORS_PUBLIC);
-    let body;
-    try { body = await request.json(); } catch(e) { return json({ error: "invalid JSON" }, 400, CORS_PUBLIC); }
-    const { regionBot, clientBot, messages, geofenceState,
-            persona, knowledge } = body; // persona/knowledge kept for backward compat
-    if (!Array.isArray(messages) || !messages.length) return json({ error: "messages required" }, 400, CORS_PUBLIC);
-    const rBot = regionBot || { persona, knowledge };
-    const weather = env.DB ? await env.DB.prepare('SELECT * FROM weather_cache ORDER BY id DESC LIMIT 1').first().catch(()=>null) : null;
-    const snowRows = env.DB ? await env.DB.prepare('SELECT snapshot_date, precip_24hr_mm, hn24_cm, ww_temp_c FROM snow_history ORDER BY snapshot_date DESC LIMIT 14').all().catch(()=>({results:[]})) : {results:[]};
-    const sys = buildChatPrompt(rBot, clientBot, geofenceState, weather, snowRows.results || []);
-    const gr = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: { "Authorization": "Bearer " + env.GROQ_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [{ role: "system", content: sys }, ...messages.slice(-10)],
-        stream: true,
-        max_tokens: 300,
-        temperature: 0.3
-      })
-    });
-    if (!gr.ok) { const t = await gr.text(); return json({ error: "Groq " + gr.status, detail: t }, 502, CORS_PUBLIC); }
-    return new Response(gr.body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", "access-control-allow-origin": "*" } });
   }
 
   // --- token check ---

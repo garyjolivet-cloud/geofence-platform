@@ -247,16 +247,6 @@
   .map-handle.mh-projrange{background:#b96fff}
   .map-handle.mh-projclear{background:#9b3fd4}
   .map-handle.mh-visitor{background:#00e5ff;border-style:dashed}
-  /* bot slot in zone props */
-  .bot-slot{display:flex;align-items:center;gap:8px;background:var(--slate-2);border:1px solid var(--rim);
-            border-radius:8px;padding:8px 10px;cursor:pointer;transition:.12s}
-  .bot-slot:hover{border-color:var(--ice)}
-  .bot-slot.empty{border-style:dashed;color:var(--fog);justify-content:center}
-  .bot-slot .av{width:28px;height:28px;border-radius:50%;background:var(--slate);
-                font-size:16px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
-  .bot-slot .bn{font-family:"Barlow Condensed";font-size:13px;flex:1}
-  .bot-slot .rm{background:none;border:none;color:var(--fog);font-size:14px;padding:0 2px;cursor:pointer;flex:0 0 auto;line-height:1}
-  .bot-slot .rm:hover{color:var(--hazard)}
   /* advanced section */
   .adv-toggle{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.8px;
               color:var(--fog);cursor:pointer;display:flex;align-items:center;gap:5px;margin:8px 0 4px;user-select:none}
@@ -269,69 +259,7 @@
   .spd-btn{font-size:14px;padding:6px 8px;flex:1 1 auto;min-width:40px;text-align:center;
            font-family:"Barlow Condensed";font-size:12px;letter-spacing:.3px}
   .spd-btn.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
-  /* bot tray */
-  .bot-tray{border-top:1px solid var(--rim);padding-top:8px;margin-top:6px}
-  .bot-tray-head{display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;margin-bottom:0}
-  .bot-tray-head .k{margin:0}
-  .bot-tray-head .arr{font-size:9px;color:var(--fog);transition:transform .15s;margin-right:4px}
-  .bot-tray-head.open .arr{transform:rotate(90deg)}
-  .bot-tray-scroll{display:none;gap:8px;overflow-x:auto;padding-bottom:4px;margin-top:6px}
-  .bot-tray-head.open+.bot-tray-scroll{display:flex}
   #zlist{max-height:35vh;overflow-y:auto;margin-top:2px}
-  .bot-tray-scroll::-webkit-scrollbar{height:4px}
-  .bot-tray-scroll::-webkit-scrollbar-thumb{background:var(--rim);border-radius:2px}
-  .bot-card{flex:0 0 60px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:grab;
-            padding:6px 4px;border:1px solid var(--rim);border-radius:10px;background:var(--slate);
-            transition:.12s;user-select:none}
-  .bot-card:hover{border-color:var(--ice);background:var(--slate-2)}
-  .bot-card.dragging{opacity:.4}
-  .bot-card .bc-av{width:34px;height:34px;border-radius:50%;background:var(--slate-2);
-                   font-size:20px;display:flex;align-items:center;justify-content:center}
-  .bot-card .bc-nm{font-family:"Barlow Condensed";font-size:10px;color:var(--ice);
-                   text-align:center;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  /* bot picker modal */
-  #botPicker{display:none;position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.7);
-             align-items:center;justify-content:center;padding:16px}
-  #botPickerBox{background:#1e2d42;border:2px solid var(--ice);border-radius:14px;padding:16px;
-                width:320px;max-height:75vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
-  #botPickerBox h3{font-family:"Barlow Condensed";font-size:14px;text-transform:uppercase;letter-spacing:.6px;margin:0;color:var(--snow)}
-  .bpick-grid{display:flex;flex-wrap:wrap;gap:8px}
-  .bpick-card{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px;
-              border:1px solid var(--rim);border-radius:10px;background:var(--slate);
-              cursor:pointer;width:72px;transition:.12s}
-  .bpick-card:hover{border-color:var(--coral);background:rgba(255,106,61,.08)}
-  .bpick-av{width:38px;height:38px;border-radius:50%;background:var(--slate-2);
-            font-size:22px;display:flex;align-items:center;justify-content:center}
-  .bpick-nm{font-family:"Barlow Condensed";font-size:10px;color:var(--ice);text-align:center;
-            max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  /* multi-bot zone rows */
-  .bz-list{display:flex;flex-direction:column;gap:3px;margin:4px 0}
-  .bz-row{display:flex;align-items:center;gap:6px;background:var(--slate-2);border:1px solid var(--rim);
-          border-radius:8px;padding:6px 8px;cursor:grab;user-select:none;transition:.12s}
-  .bz-row:hover{border-color:var(--ice)}
-  .bz-row.bz-active{border-color:var(--go);background:rgba(56,224,166,.07)}
-  .bz-row.drag-over{border-color:var(--coral);background:rgba(255,106,61,.08)}
-  .bz-row.dragging{opacity:.35}
-  .bz-handle{color:var(--fog);font-size:14px;flex:0 0 auto;cursor:grab;line-height:1}
-  .bz-av{width:24px;height:24px;border-radius:50%;background:var(--slate);font-size:14px;
-         display:flex;align-items:center;justify-content:center;flex:0 0 auto}
-  .bz-nm{font-family:"Barlow Condensed";font-size:13px;color:var(--snow);flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-  .bz-pri{font-family:"Barlow Condensed";font-size:10px;color:var(--fog);flex:0 0 auto;width:14px;text-align:center}
-  .bz-cond-btn{background:none;border:1px solid var(--rim);border-radius:5px;color:var(--fog);
-               font-size:11px;padding:2px 5px;cursor:pointer;flex:0 0 auto;line-height:1}
-  .bz-cond-btn.active{border-color:var(--amber);color:var(--amber)}
-  .bz-rm{background:none;border:none;color:var(--fog);font-size:13px;padding:0 2px;cursor:pointer;flex:0 0 auto}
-  .bz-rm:hover{color:var(--hazard)}
-  .bz-cond-panel{background:#0c1421;border:1px solid var(--rim);border-radius:8px;padding:8px;
-                 display:none;flex-direction:column;gap:6px;margin:-2px 0 3px}
-  .bz-cond-panel.open{display:flex}
-  .bz-cond-row{display:flex;align-items:center;gap:6px}
-  .bz-cond-row .k{margin:0;flex:0 0 60px}
-  .bz-cond-row select{flex:1;font-size:12px;padding:4px 6px}
-  .bz-cond-row input{flex:0 0 54px;font-size:12px;padding:4px 6px}
-  .bz-add{border:1px dashed var(--rim);border-radius:8px;padding:8px;text-align:center;
-          font-family:"Barlow Condensed";font-size:12px;color:var(--fog);cursor:pointer;margin-top:3px;transition:.12s}
-  .bz-add:hover,.bz-add.drag-over{border-color:var(--coral);color:var(--coral)}
   /* project setting dot-buttons */
   .proj-dot-row{display:flex;gap:5px}
   .proj-dot-btn{display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;
@@ -372,29 +300,6 @@
               background:rgba(200,223,242,.06);border:1px solid rgba(200,223,242,.1);
               border-radius:7px;margin:4px 0;min-height:26px}
   .va-summary.empty{color:var(--fog);font-style:italic}
-  .va-timing{margin:4px 0 6px}
-  /* bot row inline editor */
-  .bz-show-when{font-family:"Barlow Condensed";font-size:11px;background:var(--slate);
-                border:1px solid var(--rim);border-radius:6px;color:var(--fog);
-                padding:2px 4px;cursor:pointer;flex:0 0 auto;max-width:88px}
-  .bz-edit-btn{background:none;border:1px solid var(--rim);border-radius:5px;color:var(--fog);
-               font-size:12px;padding:2px 5px;cursor:pointer;flex:0 0 auto;line-height:1}
-  .bz-edit-btn:hover,.bz-edit-btn.open{border-color:var(--ice);color:var(--snow)}
-  .bz-inline-editor{background:#0c1421;border:1px solid var(--rim);border-radius:9px;
-                    padding:10px;display:flex;flex-direction:column;gap:5px;
-                    margin:-2px 0 4px 0}
-  .bz-inline-editor .bie-row{display:flex;gap:6px;align-items:flex-end}
-  .bz-inline-editor .bie-av-wrap{display:flex;flex-direction:column;align-items:center;gap:3px;flex:0 0 auto}
-  .bz-inline-editor .bie-av-preview{width:36px;height:36px;border-radius:50%;background:var(--slate);
-                                     font-size:22px;display:flex;align-items:center;justify-content:center}
-  .bz-inline-editor .bie-save{background:var(--coral);border-color:var(--coral);color:#1a0d07}
-  .bz-inline-editor .bie-msg{font-family:"Barlow Condensed";font-size:11px;color:var(--go);
-                              min-height:14px;text-align:center}
-  /* bot function chips */
-  .fn-chip{font-family:"Barlow Condensed";font-size:10px;padding:2px 6px;border-radius:9px;
-           background:rgba(255,106,61,.13);border:1px solid rgba(255,106,61,.3);color:var(--coral)}
-  .fn-chip.hazard{background:rgba(255,47,78,.13);border-color:rgba(255,47,78,.35);color:var(--hazard)}
-  .fn-chip.webhook{background:rgba(138,165,191,.1);border-color:var(--rim);color:var(--fog)}
   /* map drag overlay targets */
   .map-drop-target{position:absolute;border-radius:50%;border:3px dashed var(--coral);
                    background:rgba(255,106,61,.15);pointer-events:all;display:flex;
@@ -403,6 +308,7 @@
   .map-drop-target.hover{background:rgba(255,106,61,.35)}
 </style>
 <script src="/guidance-bot.js"></script>
+<script src="/pipeline-runtime.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -606,18 +512,6 @@
       </div>
     </div>
 
-    <!-- chat panel — shown when visitor enters a zone with a chatbot -->
-    <div id="simChat" style="display:none;flex-direction:column;gap:6px;border-top:1px solid var(--rim);padding-top:8px;margin-top:2px">
-      <div id="simChatHeader" style="font-family:'Barlow Condensed';font-size:12px;color:var(--ice);letter-spacing:.4px"></div>
-      <div id="simChatLog" style="background:#0c1421;border:1px solid var(--rim);border-radius:8px;padding:6px 8px;font-family:'Barlow Condensed';font-size:13px;line-height:1.5;height:120px;overflow-y:auto"></div>
-      <div id="simChatTranscript" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);text-align:center;min-height:15px;font-style:italic"></div>
-      <button id="simMicBtn" class="mic-btn">🎤 Tap to speak</button>
-      <div class="row" style="gap:4px;margin-top:2px">
-        <input id="simChatInput" placeholder="or type here…" style="flex:1;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--fog);font-family:'Barlow Condensed';font-size:12px;padding:5px 8px">
-        <button id="simChatSend" class="ghost" style="font-size:12px;padding:5px 10px">Send</button>
-      </div>
-    </div>
-
     <div class="row" style="margin-top:2px">
       <button id="simWalk" class="ghost" style="flex:1">▶ Walk stops</button>
       <button id="simPlay" class="ghost" style="flex:0 0 auto;padding:8px 10px">▶</button>
@@ -671,7 +565,7 @@
     <label class="k">name</label>
     <input id="pName" placeholder="Mountain Flower Garden">
     <!-- ── Path movement (path stops only) — plus the full trigger system below,
-         same as every other stop: hazard flag, Voices & Audio, Bots & Chat,
+         same as every other stop: hazard flag, Voices & Audio, pipeline,
          speak-when/dwell, and Advanced (tracker/webhook/bearing) ── -->
     <div class="va-section" id="pPathSection" style="display:none">
       <div class="va-label">Movement</div>
@@ -723,7 +617,7 @@
       <!-- what-plays summary -->
       <div style="display:flex;align-items:center;gap:6px">
         <button id="pAudioPlay" class="ghost" style="flex:0 0 auto;display:none" title="Play this clip">▶</button>
-        <div class="va-summary empty" id="vaSummary" style="flex:1">nothing set — add a clip or a bot</div>
+        <div class="va-summary empty" id="vaSummary" style="flex:1">nothing set — add a clip or a pipeline</div>
         <button id="pAudioClear" class="ghost" style="flex:0 0 auto;color:var(--hazard);border-color:var(--hazard);display:none" title="Remove this clip">✕</button>
       </div>
     </div>
@@ -740,33 +634,21 @@
       </div>
     </div>
 
-    <!-- Advanced collapsible — hazard flag + all Bots & Chat settings live here
-         too now, rather than in their own separate top-level toggles -->
+    <!-- Advanced collapsible — hazard flag + everything else that isn't
+         Voices & Audio or the pipeline lives here -->
     <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
     <div class="adv-body" id="advBody">
       <label class="chk" id="pHazardRow" style="margin:0 0 6px">
         <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
       </label>
       <hr>
-      <!-- bot greeting delay (shown only when clip + bot both set) -->
-      <div class="va-timing" id="vaTiming" style="display:none">
-        <label class="k">bot greeting delay — clip plays first</label>
-        <div style="display:flex;align-items:center;gap:8px">
-          <input type="range" id="pBotDelay" min="0" max="30" step="1" value="0" style="flex:1;accent-color:var(--coral)">
-          <span id="pBotDelayV" style="font-family:'Barlow Condensed';font-size:13px;color:var(--ice);flex:0 0 40px">0 s</span>
-        </div>
+      <!-- Pipeline: drag-and-drop function blocks (weather lookups, compares,
+           speak/guide/webhook actions) replace the old per-zone bot system. -->
+      <label class="k" style="margin-top:4px">🧩 Pipeline</label>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="hint" id="pPipelineSummary" style="flex:1">no pipeline set</span>
+        <button id="pPipelineEdit" class="ghost" style="flex:0 0 auto">Edit Pipeline →</button>
       </div>
-
-      <!-- multi-bot priority list -->
-      <label class="k" style="margin-top:4px">🤖 bots — drag to set priority</label>
-      <div class="bz-list" id="pBotList"></div>
-      <div class="bz-add" id="pBotDrop">+ Drop a bot here</div>
-      <!-- hidden inputs kept for compatibility -->
-      <select id="pBotId" style="display:none"><option value="">— none —</option></select>
-      <select id="pClientBotId" style="display:none"><option value="">— none —</option></select>
-
-      <label class="k" style="margin-top:8px">greeting prompt</label>
-      <input id="pChatGreeting" placeholder="Greet the visitor and tell them the current temperature and wind">
 
       <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
       <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
@@ -780,10 +662,6 @@
       <div id="broadcastRow">
         <label class="k">broadcast radius m</label>
         <input id="pBroadcast" type="number" value="20" min="5">
-      </div>
-      <div id="clientBotRow">
-        <label class="k">client bot (tracker zones)</label>
-        <select id="pClientBotIdAdv" style="width:100%"><option value="">— none —</option></select>
       </div>
       <label class="k">audio fades in from (m) — how far away this stop's clip starts fading in</label>
       <input id="pAudio" type="number" value="40" min="0">
@@ -824,21 +702,11 @@
     </div>
   </div>
 
-  <!-- Advanced (project-level): visitor bot, region bots, and Audio Lab —
-       all secondary/rarely-touched project config, tucked behind one toggle
-       instead of three separate always-visible blocks. -->
+  <!-- Advanced (project-level): Audio Lab — secondary/rarely-touched project
+       config, tucked behind one toggle. -->
   <div style="margin-top:6px">
     <div class="adv-toggle" id="advProjToggle"><span class="arr">▶</span> Advanced</div>
     <div id="advProjBody" class="adv-body" style="padding-top:6px">
-      <label class="k" style="margin-top:2px">visitor bot (travels with visitor)</label>
-      <select id="visitorBotSel"><option value="">— none —</option></select>
-      <hr>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <label class="k" style="margin:0">🤖 Region Bots</label>
-        <a href="/bots" target="_blank" style="font-family:'Barlow Condensed';font-size:11px;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:6px;padding:3px 8px">Manage →</a>
-      </div>
-      <div class="bot-tray-scroll" id="botTrayScroll" style="display:flex"></div>
-      <hr>
       <label class="k" style="margin:0 0 4px">&#128266; Audio Lab</label>
       <div class="row" style="margin:0;gap:6px">
         <label id="alFileLabel" style="flex:1;text-align:center;font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;border:1px solid var(--rim);border-radius:8px;padding:7px;cursor:pointer;color:var(--ice)">Load file<input type="file" id="alFile" accept="audio/*" style="display:none"></label>
@@ -935,13 +803,6 @@
   </div>
 </div>
 
-<div id="botPicker">
-  <div id="botPickerBox">
-    <h3>Pick a region bot</h3>
-    <div class="bpick-grid" id="botPickerGrid"></div>
-    <button id="botPickerCancel" style="margin-top:8px;width:100%;background:none;border:1px solid var(--rim);color:var(--ice);font-family:'Barlow Condensed';font-size:13px;border-radius:8px;padding:8px;cursor:pointer">Cancel</button>
-  </div>
-</div>
 
 <div id="trimOverlay">
   <div id="trimBox">
@@ -1016,8 +877,6 @@ const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,z
 map.addControl(new maplibregl.NavigationControl());
 
 let zones=[];               // rich stop objects (see makeZone)
-let editorBots=[];          // bot library for this project
-let editingBotId=null;      // which bot is open in the edit panel
 let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
 let sel=-1;                 // selected zone index (-1 = none)
 
@@ -1292,10 +1151,8 @@ function renderSources(){
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
     else if(s.type==="path") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:true},
         geometry:{type:"LineString",coordinates:s.coords}});
-    // label + bot avatar(s)
-    const _bslots=Array.isArray(z.bots)?z.bots:(z.botId?[{botId:z.botId}]:[]);
-    const _botAv=_bslots.slice(0,3).map(sl=>{const b=editorBots.find(x=>x.id===sl.botId);return b?(b.avatar||"🤖"):"";}).filter(Boolean).join("");
-    const _lp={kind:"label",name:z.name,zIdx:i}; if(_botAv)_lp.botAv=_botAv;
+    // label
+    const _lp={kind:"label",name:z.name,zIdx:i};
     if(z[zoneAudioField(z)]) _lp.hasAudio=true;
     feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
   });
@@ -1372,14 +1229,8 @@ map.on("load",()=>{
   map.addLayer({id:"fence-lbl",type:"symbol",source:"fences",filter:["==","kind","label"],
      layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.4}});
-  map.addLayer({id:"bot-lbl",type:"symbol",source:"fences",
-     filter:["all",["==","kind","label"],["has","botAv"]],
-     layout:{"text-field":["get","botAv"],"text-size":18,"text-offset":[0,-1.4],
-             "text-font":["Open Sans Regular"],"text-allow-overlap":true},
-     paint:{"text-color":"#ffffff","text-halo-color":"#0a1018","text-halo-width":1.5}});
   // small speaker badge — shown whenever the stop (or path) has a clip
-  // assigned (zoneAudioField), offset to the side so it doesn't collide
-  // with bot avatars sitting directly above the name
+  // assigned (zoneAudioField)
   map.addLayer({id:"audio-lbl",type:"symbol",source:"fences",
      filter:["all",["==","kind","label"],["has","hasAudio"]],
      layout:{"text-field":"🔊","text-size":13,"text-offset":[1.7,1.15],
@@ -1507,17 +1358,6 @@ window.addEventListener("mouseup",()=>{
   }
   _zoneDrag=null;
 });
-
-// click bot avatar on map → select zone + open first bot's inline editor
-map.on("click","bot-lbl",e=>{
-  const f=e.features[0]; if(!f) return;
-  const zIdx=f.properties.zIdx; if(zIdx==null||!zones[zIdx]) return;
-  selectZone(zIdx);
-  setTimeout(()=>document.querySelector("#pBotList .bz-edit-btn")?.click(), 300);
-  e.stopPropagation();
-});
-map.on("mouseenter","bot-lbl",()=>map.getCanvas().style.cursor="pointer");
-map.on("mouseleave","bot-lbl",()=>map.getCanvas().style.cursor="");
 
 // click empty space to deselect
 map.on("click",e=>{
@@ -1738,7 +1578,7 @@ function refreshProps(){
   document.getElementById("pName").value=z.name;
   const isPath=z.shape.type==="path";
 
-  // Path stops fire the full trigger system too (hazard flag, bots/chat,
+  // Path stops fire the full trigger system too (hazard flag, pipeline,
   // "speak when"/dwell, all folded into the single Advanced section below) —
   // exactly like every other stop — plus their own Movement/ambient section.
   document.getElementById("pFiresRow").style.display="block";
@@ -1781,21 +1621,14 @@ function refreshProps(){
   document.getElementById("pActOn").value=act?(act.on||"enter"):"enter";
   document.getElementById("pActUrl").value=act?(act.url||""):"";
   document.getElementById("pActDev").checked=!!(act&&act.includeDevice);
-  document.getElementById("pChatGreeting").value=z.chatGreeting||z.greeting||"";
-  refreshBotDropdowns();
-  renderZoneBots(z);
-  document.getElementById("clientBotRow").style.display=z.trackerId?"block":"none";
-  const advClientSel=document.getElementById("pClientBotIdAdv");
-  if(advClientSel) advClientSel.value=z.clientBotId||"";
-  document.getElementById("pBotDelay").value=z.botGreetingDelayS||0;
-  document.getElementById("pBotDelayV").textContent=(z.botGreetingDelayS||0)+" s";
+  updatePipelineSummary(z);
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   document.getElementById("pIsHazard").checked = !!z.isHazard;
   updateVaSummary(z);
-  // Auto-expand Advanced when the zone already has bot/TTS content or the
-  // hazard flag set — both now live inside it, and a config that already
-  // exists shouldn't disappear into a collapsed section unnoticed.
-  const hasAdvContent=(z.bots||[]).length>0||!!(z.say||"").trim()||!!z.isHazard;
+  // Auto-expand Advanced when the zone already has pipeline/TTS content or
+  // the hazard flag set — a config that already exists shouldn't disappear
+  // into a collapsed section unnoticed.
+  const hasAdvContent=(z.pipeline&&z.pipeline.nodes&&z.pipeline.nodes.length>0)||!!(z.say||"").trim()||!!z.isHazard;
   const advTgl=document.getElementById("advToggle");
   const advBdy=document.getElementById("advBody");
   if(advTgl&&advBdy){
@@ -1805,29 +1638,21 @@ function refreshProps(){
 }
 function updateVaSummary(zone){
   const el=document.getElementById("vaSummary"); if(!el) return;
-  const timingEl=document.getElementById("vaTiming");
   const clipUrl=zone[zoneAudioField(zone)];
   const hasClip=!!clipUrl;
   const clipName=hasClip?(clipUrl.split("/").pop()||"clip"):"";
-  const firstSlot=(zone.bots||[])[0];
-  const firstBot=firstSlot?editorBots.find(b=>b.id===firstSlot.botId):null;
   const hasSay=!!(zone.say||"").trim();
   const fires=zone.fires||"enter";
   const fireLabel=fires==="dwell"?"on dwell":"on entry";
   let txt="", isEmpty=false;
-  if(hasClip&&firstBot){
-    txt="🎵 "+clipName+" → "+(firstBot.avatar||"🤖")+" "+firstBot.name+" "+fireLabel;
-  } else if(hasClip){
-    txt="🎵 "+clipName+" plays spatially — no bot";
-  } else if(firstBot){
-    txt=(firstBot.avatar||"🤖")+" "+firstBot.name+" greets "+fireLabel;
+  if(hasClip){
+    txt="🎵 "+clipName+" plays spatially "+fireLabel;
   } else if(hasSay){
     txt='💬 TTS: "'+zone.say.slice(0,40)+(zone.say.length>40?"…":"")+'"';
   } else {
-    txt="nothing set — add a clip or a bot"; isEmpty=true;
+    txt="nothing set — add a clip or a pipeline"; isEmpty=true;
   }
   el.textContent=txt; el.className="va-summary"+(isEmpty?" empty":"");
-  if(timingEl) timingEl.style.display=(hasClip&&firstBot)?"block":"none";
   const clearBtn=document.getElementById("pAudioClear");
   if(clearBtn) clearBtn.style.display=hasClip?"inline-block":"none";
   const playBtn=document.getElementById("pAudioPlay");
@@ -1835,6 +1660,70 @@ function updateVaSummary(zone){
     playBtn.style.display=hasClip?"inline-block":"none";
     if(!hasClip||_paPlaying?.url!==clipUrl) pAudioStopPlay();
   }
+}
+function updatePipelineSummary(zone){
+  const el=document.getElementById("pPipelineSummary"); if(!el) return;
+  const nodes=(zone.pipeline&&zone.pipeline.nodes)||[];
+  if(!nodes.length){ el.textContent="no pipeline set"; return; }
+  const hasGuide=nodes.some(n=>n.type==="action.guide_to_zone");
+  el.textContent=nodes.length+" block"+(nodes.length===1?"":"s")+(hasGuide?" · guides visitor":"");
+}
+document.getElementById("pPipelineEdit").onclick=()=>{
+  if(sel<0) return;
+  const projectId=_currentProjectId||slug(projName())||"project";
+  const zoneId=zones[sel].id;
+  window.open("/pipeline?project="+encodeURIComponent(projectId)+"&zone="+encodeURIComponent(zoneId), "_blank");
+};
+
+/* ---- map canvas drop — drag an audio clip from the Audio Files panel
+   directly onto a map zone ---- */
+(function(){
+  function _nearestZone(pt){
+    let best=null,bestD=200;
+    zones.forEach((z,i)=>{
+      const c=zoneCenterLonLat(z); if(!c)return;
+      const d=SimGeo.hav([pt.lat,pt.lng],LL(c));
+      if(d<bestD){bestD=d;best=i;}
+    });
+    return best;
+  }
+  function setupMapDrop(){
+    const canvas=map.getCanvas();
+    canvas.addEventListener("dragover",e=>{
+      if(e.dataTransfer.types.includes("audiourl"))e.preventDefault();
+    });
+    canvas.addEventListener("drop",e=>{
+      e.preventDefault();
+      const audioUrl=e.dataTransfer.getData("audiourl");
+      if(!audioUrl)return;
+      const rect=canvas.getBoundingClientRect();
+      const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
+      const best=_nearestZone(pt);
+      if(best==null)return;
+      zones[best][zoneAudioField(zones[best])]=audioUrl;
+      if(sel===best){
+        updateVaSummary(zones[best]);
+        render(); // sel===best skips selectZone's render() below — refresh the map's 🔊 badge now
+      }
+      if(sel!==best){ selectZone(best); map.flyTo({center:zoneCenterLonLat(zones[best]),zoom:17}); }
+    });
+  }
+  if(map._loaded) setupMapDrop(); else map.on("load",setupMapDrop);
+})();
+
+/* ---- zone list rows drop target (audio clips) ---- */
+function _makeZoneRowDroppable(rowEl, zoneIdx){
+  rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("audiourl")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
+  rowEl.ondragleave=()=>rowEl.style.background="";
+  rowEl.ondrop=e=>{ e.preventDefault();rowEl.style.background="";
+    const audioUrl=e.dataTransfer.getData("audiourl");
+    if(!audioUrl)return;
+    zones[zoneIdx][zoneAudioField(zones[zoneIdx])]=audioUrl;
+    if(sel===zoneIdx){
+      updateVaSummary(zones[zoneIdx]);
+    }
+    render(); // refresh the map's 🔊 badge for this stop
+  };
 }
 let _paPlaying=null;
 function pAudioStopPlay(){
@@ -1870,7 +1759,6 @@ bindProp("pTrackerId",z=>{ z.trackerId=document.getElementById("pTrackerId").val
   document.getElementById("broadcastRow").style.display=(z.shape.type==="circle"&&z.trackerId)?"block":"none"; });
 bindProp("pBroadcast",z=>{ z.broadcastRadiusM=+document.getElementById("pBroadcast").value||20; });
 bindProp("pSubject",z=>{ z.triggerSubject=document.getElementById("pSubject").value; });
-bindProp("pChatGreeting",z=>{ z.chatGreeting=document.getElementById("pChatGreeting").value; });
 document.getElementById("pMoveMode").addEventListener("input",()=>{
   if(sel<0) return; const z=zones[sel];
   z.movementMode=document.getElementById("pMoveMode").value;
@@ -1882,13 +1770,6 @@ bindProp("pSpeed",z=>{ z.speedKmh=Math.max(0,+document.getElementById("pSpeed").
 bindProp("pLoopMode",z=>{ z.loopMode=document.getElementById("pLoopMode").value; });
 bindProp("pRangeVoice",z=>{ const v=document.getElementById("pRangeVoice").value; z.spatialRangeM=v===""?null:Math.max(0,+v||0); });
 bindProp("pRangeClear",z=>{ const v=document.getElementById("pRangeClear").value; z.spatialClearM=v===""?null:Math.max(0,+v||0); });
-document.getElementById("pBotDelay").addEventListener("input",()=>{
-  if(sel<0) return;
-  const v=+document.getElementById("pBotDelay").value;
-  zones[sel].botGreetingDelayS=v;
-  document.getElementById("pBotDelayV").textContent=v+" s";
-  autoSave();
-});
 document.getElementById("pVolume").addEventListener("input",()=>{
   if(sel<0) return;
   const v=+document.getElementById("pVolume").value;
@@ -1913,9 +1794,6 @@ document.getElementById("pVolume").addEventListener("input",()=>{
 bindProp("pBearing",z=>{ const v=document.getElementById("pBearing").value; z.bearingDeg=(v!==""&&v!==null)?(+v+360)%360:null; });
 document.getElementById("pIsHazard").addEventListener("change",()=>{ if(sel<0)return; zones[sel].isHazard=document.getElementById("pIsHazard").checked; render(); });
 document.getElementById("pLoopAudio").addEventListener("change",()=>{ if(sel<0)return; zones[sel].loopAudio=document.getElementById("pLoopAudio").checked; autoSave(); });
-bindProp("pBotId",z=>{ z.botId=document.getElementById("pBotId").value||null; });
-(function(){ const el=document.getElementById("pClientBotIdAdv");
-  if(el) el.addEventListener("input",()=>{ if(sel<0)return; zones[sel].clientBotId=el.value||null; render(); }); })();
 function syncAction(z){
   const url=document.getElementById("pActUrl").value.trim();
   if(!url){ delete z.actions; return; }
@@ -2451,17 +2329,11 @@ function zoneToEngine(z){
   zo.triggers=trig;
   if(z.trackerId) zo.trackerId=z.trackerId;
   if(z.broadcastRadiusM) zo.broadcastRadiusM=z.broadcastRadiusM;
-  if(z.chatPersona) zo.chatPersona=z.chatPersona;
-  if(z.chatKnowledge) zo.chatKnowledge=z.chatKnowledge;
-  if(z.chatGreeting) zo.chatGreeting=z.chatGreeting;
-  if(z.botId) zo.botId=z.botId;
-  if(Array.isArray(z.bots)&&z.bots.length) zo.bots=z.bots;
-  if(z.clientBotId) zo.clientBotId=z.clientBotId;
+  if(z.pipeline&&Array.isArray(z.pipeline.nodes)&&z.pipeline.nodes.length) zo.pipeline=z.pipeline;
   if(Array.isArray(z.actions) && z.actions.length) zo.actions=z.actions;
   if(z.audioUrl) zo.audioUrl=z.audioUrl;
   if(z.volume!=null && Math.abs(z.volume-1)>0.001) zo.volume=z.volume;
   if(z.loopAudio===false) zo.loopAudio=false;
-  if(z.botGreetingDelayS) zo.botGreetingDelayS=z.botGreetingDelayS;
   if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
   if(z.isHazard) zo.isHazard=true;
   // Per-stop hearing-range override — every stop, not just path stops.
@@ -2491,8 +2363,6 @@ function exportBundle(){
               appId:document.getElementById("appSel").value||null,
               orgId:document.getElementById("clientSel").value||null,
               isTemplate:document.getElementById("isTemplateChk").checked,
-              bots:editorBots,
-              visitorBotId:document.getElementById("visitorBotSel").value||null,
               guideId:null,
               liveTtlMs:+document.getElementById("liveTtlMs").value,
               audioRetriggerDelayS:+document.getElementById("audioRetriggerDelayS").value,
@@ -2534,12 +2404,7 @@ function engineToZone(zo){
   if(zo.isHazard) z.isHazard=true;
   if(zo.trackerId) z.trackerId=zo.trackerId;
   if(zo.broadcastRadiusM) z.broadcastRadiusM=zo.broadcastRadiusM;
-  if(zo.chatPersona) z.chatPersona=zo.chatPersona;
-  if(zo.chatKnowledge) z.chatKnowledge=zo.chatKnowledge;
-  if(zo.chatGreeting) z.chatGreeting=zo.chatGreeting;
-  if(zo.botId) z.botId=zo.botId;
-  if(Array.isArray(zo.bots)&&zo.bots.length) z.bots=zo.bots;
-  if(zo.clientBotId) z.clientBotId=zo.clientBotId;
+  if(zo.pipeline&&Array.isArray(zo.pipeline.nodes)) z.pipeline=zo.pipeline;
   const firstSubjTrig=(zo.triggers||[]).find(t=>t.subject&&t.subject!=="any");
   if(firstSubjTrig) z.triggerSubject=firstSubjTrig.subject;
   // Per-stop hearing-range override — every stop, not just path stops.
@@ -2559,16 +2424,12 @@ document.getElementById("importBtn").onclick=()=>{
   try{ const b=JSON.parse(raw);
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
     zones=b.zones.map(engineToZone); sel=-1; tool=null; draft=[];
-    editorBots=Array.isArray(b.bots)?b.bots:[];
-    renderBotTray();
     if(b.name) document.getElementById("projCrumb").textContent=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
     if(b.stopVisibilityRadiusM){ document.getElementById("stopVisRadius").value=b.stopVisibilityRadiusM; document.getElementById("stopVisRadiusV").textContent=b.stopVisibilityRadiusM; }
     if(b.spatialTuning) AudioLab.setTuning(b.spatialTuning);
     if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
-    refreshBotDropdowns();
-    if(b.visitorBotId) document.getElementById("visitorBotSel").value=b.visitorBotId;
     if(b.liveTtlMs) document.getElementById("liveTtlMs").value=String(b.liveTtlMs);
     if(b.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=String(b.audioRetriggerDelayS);
     render(); refreshProps();
@@ -2625,7 +2486,6 @@ async function loadFromPlatform(id){
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
-    fetchAndMergeBots();
     doAudioRefresh();
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
@@ -3035,6 +2895,33 @@ const SimSmoother=makeSimSmoother();
 const _trackerSmoothers={};
 function trackerSmoother(id){return _trackerSmoothers[id]||(_trackerSmoothers[id]=makeSimSmoother());}
 function resetTrackerSmoothers(){Object.keys(_trackerSmoothers).forEach(k=>_trackerSmoothers[k].reset());}
+// Smoothed position for the current sim tick — set by feedSim() before it calls
+// SimFencer.update(), so SimFencer.onEvent (fired synchronously from inside that
+// update() call) can read it for pipeline data.position blocks.
+let simLastSmoothed=null;
+// Shared by both the legacy bot-guidance trigger and the new action.guide_to_zone
+// pipeline block, so the two produce identical GuidanceBot.start() calls.
+function simStartGuidance(targetZone){
+  if(typeof GuidanceBot==='undefined'||!targetZone) return;
+  GuidanceBot.start({
+    targetZone,
+    allZones:simBundle.zones,
+    sayFn:(text)=>{ simLogEv("sev-say","GUIDE  \""+text+"\""); if(simSoundOn) simTTS(text); },
+    onInstruction:(text,distM,phase)=>{
+      const hud=document.getElementById('simGuidanceHud');
+      if(hud){hud.style.display='block';
+        document.getElementById('simGuidanceInstr').textContent=text;
+        document.getElementById('simGuidanceDist').textContent=distM!=null?Math.round(distM)+' m':'—';
+        document.getElementById('simGuidancePhase').textContent=phase;}
+    },
+    onComplete:()=>{
+      const hud=document.getElementById('simGuidanceHud');
+      if(hud)hud.style.display='none';
+      simLogEv("sev-say","GUIDE  arrived — guidance complete");
+    }
+  });
+  simLogEv("sev-sys","guidance started → "+targetZone.name);
+}
 const SimFencer={state:{},onEvent:null,
   key(z,l,i){return z.id+":"+l.kind+":"+i;},
   sd(PT,zone,layer,now){
@@ -3376,8 +3263,7 @@ function editorToSimBundle(){
       // 0 survives instead of being treated as unset.
       spatialRangeM:z.spatialRangeM??null,spatialClearM:z.spatialClearM??null,
       layers:[generalLayer,targetLayer].filter(Boolean),triggers,
-      chatPersona:z.chatPersona||null,chatKnowledge:z.chatKnowledge||null,chatGreeting:z.chatGreeting||null,
-      botId:z.botId||null,bots:z.bots||[],clientBotId:z.clientBotId||null,
+      pipeline:(z.pipeline&&Array.isArray(z.pipeline.nodes)&&z.pipeline.nodes.length)?z.pipeline:null,
       bearingDeg:z.bearingDeg!=null?z.bearingDeg:null,isHazard:!!z.isHazard};
     if(s.type==="path"){
       out.path=s.coords.map(c=>[c[1],c[0]]);
@@ -3391,7 +3277,6 @@ function editorToSimBundle(){
   const cs=simZones.filter(z=>z.center);
   const ref=cs.length?[cs.reduce((s,z)=>s+z.center[0],0)/cs.length,cs.reduce((s,z)=>s+z.center[1],0)/cs.length]:[0,0];
   return{name:slug(projName())||"project",ref,zones:simZones,
-    bots:editorBots,visitorBotId:document.getElementById("visitorBotSel").value||null,
     spatialRangeM:farM,spatialClearM:clearM,spatialTuning:AudioLab.getTuning()};
 }
 
@@ -3410,6 +3295,7 @@ function feedSim(lat,lon,acc,t){
   acc=acc||5; t=t||Date.now();
   const sm=SimSmoother.push({lat,lon,acc,t});
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+  simLastSmoothed=sm;
   // use raw (unsmoothed) position for zone detection so small zones aren't missed at speed
   const raw={lat,lon,acc};
   const active=SimFencer.update(raw,simPrevRaw,t);
@@ -3429,7 +3315,7 @@ function feedSim(lat,lon,acc,t){
   simBundle.zones.forEach(z=>{if(!z.center)return;const d=SimGeo.hav([raw.lat,raw.lon],z.center);if(d<nearestD){nearestD=d;nearest=z;}});
   if(nearest){
     const {range,clearM}=simZoneRangeClear(nearest);
-    if(!nearest.audioUrl||!simSoundOn||simChatZone){
+    if(!nearest.audioUrl||!simSoundOn){
       SimVoice.fadeOut();
     }else if(nearestD<range){
       SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
@@ -3554,67 +3440,28 @@ function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)ret
 
 SimFencer.onEvent=e=>{
   const who=e.subject&&e.subject!=="visitor"?"["+e.subject+"] ":"";
-  const botId=e.subject||"visitor";
   if(e.kind==="enter"){
     simLogEv("sev-enter","ENTER  "+who+e.zone.name+"/"+(e.layer?e.layer.kind:"")+(e.info&&e.info.side?" ("+e.info.side+")":""));
-    if(e.layer&&e.layer.kind==="target"){
-      if(!simBotHistory[botId])simBotHistory[botId]=[];
-      simBotHistory[botId].push({zoneId:e.zone.id,zoneName:e.zone.name,enteredAt:Date.now(),exitedAt:null,dwellSeconds:null});
-      if(!who){
-        // check for guidance bot on this zone
-        const guidanceSlot=(e.zone.bots||[]).find(slot=>{
-          const bot=resolveBot(slot.botId);
-          if(!bot) return false;
-          return bot.type==='guidance'||(bot.functions||[]).some(f=>f.type==='guide');
+    if(!who&&e.layer&&e.layer.kind==="target"){
+      // Pipeline runtime — evaluates zone.pipeline (if any) for this zone.
+      // Verified 2026-07-27 to produce identical GuidanceBot.start() calls
+      // to the legacy bot-guidance trigger it replaces (see plan history).
+      if(typeof PipelineRuntime!=='undefined'){
+        PipelineRuntime.load(e.zone, {
+          sayFn:(text)=>{ simLogEv("sev-say","[pipeline] SAY \""+text+"\""); if(simSoundOn) simTTS(text); },
+          guideStartFn:(targetZone)=>{ simLogEv("sev-sys","[pipeline] guide_to_zone → "+targetZone.name); simStartGuidance(targetZone); },
+          webhookFn:(url)=>{ simLogEv("sev-sys","[pipeline] webhook → "+url); },
+          allZones: simBundle.zones
         });
-        if(guidanceSlot&&typeof GuidanceBot!=='undefined'){
-          const targetZone=(simBundle.zones||[]).find(z=>z.id===guidanceSlot.targetZoneId);
-          simLogEv("sev-sys","guidance trigger: slot="+(guidanceSlot?guidanceSlot.botId:"none")+" targetZoneId="+(guidanceSlot?guidanceSlot.targetZoneId:"—")+" targetZone="+(targetZone?targetZone.name:"NOT FOUND"));
-          if(targetZone){
-            GuidanceBot.start({
-              targetZone,
-              allZones:simBundle.zones,
-              sayFn:(text)=>{
-                simLogEv("sev-say","GUIDE  \""+text+"\"");
-                if(!simSoundOn) return;
-                simTTS(text);
-              },
-              onInstruction:(text,distM,phase)=>{
-                const hud=document.getElementById('simGuidanceHud');
-                if(hud){hud.style.display='block';
-                  document.getElementById('simGuidanceInstr').textContent=text;
-                  document.getElementById('simGuidanceDist').textContent=distM!=null?Math.round(distM)+' m':'—';
-                  document.getElementById('simGuidancePhase').textContent=phase;}
-              },
-              onComplete:()=>{
-                const hud=document.getElementById('simGuidanceHud');
-                if(hud)hud.style.display='none';
-                simLogEv("sev-say","GUIDE  arrived — guidance complete");
-              }
-            });
-            simLogEv("sev-sys","guidance started → "+targetZone.name);
-          }
-        }
-        // visitor entered a zone — open chat (region bot or inline persona; fallback to zone name)
-        openSimChat(e.zone);
-      } else {
-        // tracker entered a region — open chat with region bot + tracker's client bot
-        const regionHasBot=(e.zone.bots&&e.zone.bots.length)||e.zone.botId||e.zone.chatPersona||e.zone.chatKnowledge;
-        if(regionHasBot){
-          const srcZ=(simBundle.zones||[]).find(z=>z.trackerId===e.subject);
-          const trackerClientBot=srcZ?resolveBot(srcZ.clientBotId)||resolveBot(srcZ.botId):null;
-          openSimChat(e.zone, trackerClientBot);
-        }
+        PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { entered:true });
       }
     }
   } else if(e.kind==="exit"){
     simLogEv("sev-exit","EXIT   "+who+e.zone.name+"  "+e.info.dur.toFixed(0)+"s");
-    if(e.layer&&e.layer.kind==="target"){
-      const hist=simBotHistory[botId];
-      if(hist){const rec=[...hist].reverse().find(r=>r.zoneId===e.zone.id&&r.exitedAt===null);
-        if(rec){rec.exitedAt=Date.now();rec.dwellSeconds=Math.round(e.info.dur||0);}}
+    if(!who&&e.layer&&e.layer.kind==="target"&&typeof PipelineRuntime!=='undefined'){
+      PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { exited:true });
+      PipelineRuntime.unload(e.zone.id);
     }
-    if(!who&&e.layer&&e.layer.kind==="target"&&simChatZone&&simChatZone.id===e.zone.id)closeSimChat();
   } else if(e.kind==="say"){
     simLogEv("sev-say","SAY    "+who+"\""+e.text+"\"");
   }
@@ -3671,7 +3518,7 @@ function enterTestMode(){
   if(tool){draft=[];tool=null;document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));render();}
   selectZone(-1);
   simBundle=editorToSimBundle();
-  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simBotHistory={};resetTrackerSmoothers();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;resetTrackerSmoothers();
   // unlock AudioContext now while we're inside the button click gesture
   SimVoice.ensure();
   if(SimVoice.ctx.state==="suspended") SimVoice.ctx.resume();
@@ -3732,7 +3579,6 @@ function exitTestMode(){
   if(simAmbientTimer){clearInterval(simAmbientTimer);simAmbientTimer=null;}
   Object.values(simAmbientMarkers).forEach(mk=>mk.remove());
   simAmbientMarkers={};
-  closeSimChat();simVisited=[];
   if(simAvatar){simAvatar.remove();simAvatar=null;}
   // restore tracker markers and original zone centers
   simTrackers.forEach(t=>{
@@ -3748,7 +3594,6 @@ function exitTestMode(){
   document.getElementById("simPanel").style.display="none";
   document.getElementById("testModeBtn").textContent="▶ Test";
   document.getElementById("testModeBtn").classList.remove("on");
-  Object.keys(activeBotPerZone).forEach(k=>delete activeBotPerZone[k]);
 }
 
 /* ---- path playback ---- */
@@ -3802,738 +3647,23 @@ document.getElementById("projCfgToggle").onclick=()=>{
 document.getElementById("mapKeyBtn").onclick=()=>document.getElementById("mapKeyOverlay").classList.toggle("open");
 document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.target===e.currentTarget) e.currentTarget.classList.remove("open"); });
 
-/* ---- advanced section toggle (also covers hazard + bots/chat, folded in above) ---- */
+/* ---- advanced section toggle (also covers hazard + pipeline, folded in above) ---- */
 document.getElementById("advToggle").onclick=()=>{
   document.getElementById("advToggle").classList.toggle("open");
   document.getElementById("advBody").classList.toggle("open");
 };
 
-/* ---- project-level advanced toggle (visitor bot, region bots, Audio Lab) ---- */
+/* ---- project-level advanced toggle (Audio Lab) ---- */
 document.getElementById("advProjToggle").onclick=()=>{
   document.getElementById("advProjToggle").classList.toggle("open");
   document.getElementById("advProjBody").classList.toggle("open");
 };
 
 
-/* ---- bot system ---- */
-function _botUid(){ return "bot_"+Math.random().toString(36).slice(2,9); }
-
-// localStorage bridge for /bots page
-function _loadStoredBots(){ try{ return JSON.parse(localStorage.getItem("gp.bots")||"[]"); }catch(e){ return []; } }
-function _saveStoredBots(){ try{ localStorage.setItem("gp.bots",JSON.stringify(editorBots)); }catch(e){} }
-
-// Fetch bots from D1 and merge with localStorage
-async function fetchAndMergeBots(){
-  const appId=document.getElementById("appSel").value;
-  try{
-    const url="/api/bots"+(appId?"?appId="+encodeURIComponent(appId):"");
-    const r=await fetch(url,{headers:{authorization:"Bearer "+getToken()}});
-    if(r.ok){
-      const {bots}=await r.json();
-      (bots||[]).forEach(sb=>{
-        if(typeof sb.functions==="string"){ try{ sb.functions=JSON.parse(sb.functions); }catch(e){ sb.functions=[]; } }
-        const idx=editorBots.findIndex(b=>b.id===sb.id);
-        if(idx>=0) editorBots[idx]={...editorBots[idx],...sb}; else editorBots.push(sb); });
-    }
-  }catch(e){}
-  // also merge localStorage
-  _loadStoredBots().forEach(sb=>{ if(!editorBots.find(b=>b.id===sb.id)) editorBots.push(sb); });
-  renderBotTray();
-}
-
-// Migrate legacy single-botId zone to bots[] array
-function migrateZoneBots(z){
-  if(Array.isArray(z.bots)) return;
-  z.bots=z.botId?[{botId:z.botId,priority:1,suppressIf:null,promoteIf:null}]:[];
-}
-async function saveInlineBotEdit(botId, fields, zone){
-  // update in-memory
-  const idx=editorBots.findIndex(b=>b.id===botId);
-  if(idx>=0) Object.assign(editorBots[idx], fields);
-  // persist via API
-  const tok=getToken();
-  if(tok){
-    try{
-      await fetch("/api/bots/"+botId,{method:"PUT",
-        headers:{"Content-Type":"application/json","Authorization":"Bearer "+tok},
-        body:JSON.stringify(fields)});
-    }catch(e){ /* offline — in-memory only */ }
-  }
-  // re-render tray + bot rows + summary
-  renderBotTray();
-  if(sel>=0){ renderZoneBots(zones[sel]); updateVaSummary(zones[sel]); }
-}
-
-function renderBotTray(){
-  const scroll=document.getElementById("botTrayScroll");
-  scroll.innerHTML="";
-  editorBots.filter(b=>b.type==="region"||b.type==="guidance").forEach(b=>{
-    const card=document.createElement("div");
-    card.className="bot-card"; card.draggable=true; card.dataset.botId=b.id;
-    const typeTag=b.type==="guidance"?'<div style="font-family:\'Barlow Condensed\';font-size:9px;text-transform:uppercase;letter-spacing:.6px;color:var(--go);text-align:center">guidance</div>':'';
-    card.innerHTML='<div class="bc-av">'+(b.avatar||"🧭")+'</div><div class="bc-nm">'+(b.name||"Bot")+'</div>'+typeTag;
-    card.ondragstart=e=>{ e.dataTransfer.setData("botId",b.id); card.classList.add("dragging"); };
-    card.ondragend=()=>card.classList.remove("dragging");
-    scroll.appendChild(card);
-  });
-  refreshBotDropdowns();
-  _saveStoredBots();
-}
-
-function refreshBotDropdowns(){
-  const regionOpts='<option value="">— none —</option>'+editorBots.filter(b=>b.type==="region").map(b=>`<option value="${b.id}">${b.name}</option>`).join("");
-  const visitorOpts='<option value="">— none —</option>'+editorBots.filter(b=>b.type==="visitor").map(b=>`<option value="${b.id}">${b.name}</option>`).join("");
-  document.getElementById("pBotId").innerHTML=regionOpts;
-  document.getElementById("pClientBotId").innerHTML=regionOpts;
-  const advSel=document.getElementById("pClientBotIdAdv"); if(advSel) advSel.innerHTML=regionOpts;
-  document.getElementById("visitorBotSel").innerHTML=visitorOpts;
-}
-
-// Init: merge localStorage bots, then fetch from D1
-(function(){ _loadStoredBots().forEach(sb=>{ if(!editorBots.find(b=>b.id===sb.id)) editorBots.push(sb); }); renderBotTray(); })();
-
-/* ---- multi-bot zone list ---- */
-const COND_OPTS=[
-  {v:"",l:"— none —"},
-  {v:"visited",l:"Visited this zone before"},
-  {v:"first_visit",l:"First-time visitor"},
-  {v:"speed_gt",l:"Speed faster than (km/h)",num:true},
-  {v:"snow_gt",l:"New snow more than (cm)",num:true},
-  {v:"temp_lt",l:"Temperature below (°C)",num:true},
-  {v:"wind_gt",l:"Wind faster than (km/h)",num:true},
-  {v:"time_before",l:"Before hour (0–23)",num:true},
-  {v:"time_after",l:"After hour (0–23)",num:true}
-];
-function _condOpts(sel){ return COND_OPTS.map(o=>`<option value="${o.v}"${o.v===sel?" selected":""}>${o.l}</option>`).join(""); }
-function _condNeedsNum(type){ return (COND_OPTS.find(o=>o.v===type)||{}).num; }
-
-function _slotToShowWhen(slot){
-  const s=slot.suppressIf, p=slot.promoteIf;
-  if(!s&&!p) return "always";
-  if(s&&s.type==="visited"&&!p) return "first";
-  if(p&&p.type==="visited"&&!s) return "returning";
-  return "advanced";
-}
-function renderZoneBots(zone){
-  migrateZoneBots(zone);
-  const list=document.getElementById("pBotList");
-  list.innerHTML="";
-  let dragSrcIdx=null;
-  (zone.bots||[]).forEach((slot,i)=>{
-    const bot=editorBots.find(b=>b.id===slot.botId);
-    if(!bot) return;
-    const isActive=zone.id&&activeBotPerZone[zone.id]===slot.botId;
-    const showWhen=_slotToShowWhen(slot);
-    const hasAdvCond=showWhen==="advanced";
-    // row
-    const row=document.createElement("div"); row.className="bz-row"+(isActive?" bz-active":""); row.draggable=true;
-    row.innerHTML=`<span class="bz-handle">⠿</span>`
-      +`<div class="bz-av">${bot.avatar||"🤖"}</div>`
-      +`<span class="bz-nm">${bot.name||"Bot"}</span>`
-      +`<select class="bz-show-when" title="show this bot when">`
-      +`<option value="always"${showWhen==="always"?" selected":""}>always</option>`
-      +`<option value="first"${showWhen==="first"?" selected":""}>first visit</option>`
-      +`<option value="returning"${showWhen==="returning"?" selected":""}>returning</option>`
-      +`<option value="advanced"${hasAdvCond?" selected":""}>advanced…</option>`
-      +`</select>`
-      +`<button class="bz-edit-btn" title="edit bot">✎</button>`
-      +`<button class="bz-rm" title="remove from zone">✕</button>`;
-    // advanced condition panel (hidden by default, shown when showWhen==="advanced")
-    const cp=document.createElement("div"); cp.className="bz-cond-panel"+(hasAdvCond?" open":"");
-    const sType=slot.suppressIf?slot.suppressIf.type:"";
-    const sVal=slot.suppressIf&&slot.suppressIf.value!=null?slot.suppressIf.value:"";
-    const pType=slot.promoteIf?slot.promoteIf.type:"";
-    const pVal=slot.promoteIf&&slot.promoteIf.value!=null?slot.promoteIf.value:"";
-    cp.innerHTML=`<div class="bz-cond-row"><span class="k">Suppress if</span>`
-      +`<select class="bz-suppress-type">${_condOpts(sType)}</select>`
-      +`<input class="bz-suppress-val" type="number" value="${sVal}" style="display:${_condNeedsNum(sType)?"":"none"}">`
-      +`</div><div class="bz-cond-row"><span class="k">Promote if</span>`
-      +`<select class="bz-promote-type">${_condOpts(pType)}</select>`
-      +`<input class="bz-promote-val" type="number" value="${pVal}" style="display:${_condNeedsNum(pType)?"":"none"}">`
-      +`</div>`;
-    // inline editor (collapsed)
-    const ie=document.createElement("div"); ie.className="bz-inline-editor"; ie.style.display="none";
-    ie.innerHTML=`<div class="bie-row">`
-      +`<div class="bie-av-wrap"><div class="bie-av-preview">${bot.avatar||"🤖"}</div>`
-      +`<input class="bie-avatar" maxlength="2" value="${bot.avatar||""}" style="width:42px;text-align:center;font-size:16px;padding:4px"></div>`
-      +`<div style="flex:1"><label class="k" style="margin:0 0 2px">name</label>`
-      +`<input class="bie-name" value="${(bot.name||"").replace(/"/g,"&quot;")}" placeholder="Bot name"></div></div>`
-      +`<label class="k">persona — who is speaking</label>`
-      +`<textarea class="bie-persona say" rows="2" placeholder="You are a warm mountain guide…">${(bot.persona||"").replace(/</g,"&lt;")}</textarea>`
-      +`<label class="k">knowledge base</label>`
-      +`<textarea class="bie-knowledge say" rows="2" placeholder="Facts about this location…">${(bot.knowledge||"").replace(/</g,"&lt;")}</textarea>`
-      +`<label class="k">greeting prompt</label>`
-      +`<input class="bie-greeting" value="${(bot.greeting||"").replace(/"/g,"&quot;")}" placeholder="Welcome to…">`
-      +`<div class="row" style="margin-top:2px;gap:6px"><button class="bie-cancel ghost">Cancel</button>`
-      +`<button class="bie-save">Save bot</button></div>`
-      +`<div class="bie-msg"></div>`;
-    // show-when select handler
-    row.querySelector(".bz-show-when").onchange=e=>{
-      e.stopPropagation();
-      const v=e.target.value;
-      if(v==="always")   { slot.suppressIf=null; slot.promoteIf=null; cp.classList.remove("open"); }
-      if(v==="first")    { slot.suppressIf={type:"visited"}; slot.promoteIf=null; cp.classList.remove("open"); }
-      if(v==="returning"){ slot.promoteIf={type:"visited"}; slot.suppressIf=null; cp.classList.remove("open"); }
-      if(v==="advanced") { cp.classList.add("open"); }
-      autoSave();
-    };
-    // pencil edit toggle
-    const editBtn=row.querySelector(".bz-edit-btn");
-    editBtn.onclick=e=>{ e.stopPropagation();
-      const open=ie.style.display!=="none";
-      // collapse all other inline editors first
-      list.querySelectorAll(".bz-inline-editor").forEach(el=>{ el.style.display="none"; });
-      list.querySelectorAll(".bz-edit-btn").forEach(el=>el.classList.remove("open"));
-      if(!open){ ie.style.display="flex"; ie.style.flexDirection="column"; editBtn.classList.add("open"); }
-    };
-    // inline editor events
-    ie.querySelector(".bie-avatar").oninput=e=>{ ie.querySelector(".bie-av-preview").textContent=e.target.value||"🤖"; };
-    ie.querySelector(".bie-cancel").onclick=e=>{ e.stopPropagation(); ie.style.display="none"; editBtn.classList.remove("open"); };
-    ie.querySelector(".bie-save").onclick=async e=>{ e.stopPropagation();
-      const fields={
-        avatar: ie.querySelector(".bie-avatar").value||"🤖",
-        name:   ie.querySelector(".bie-name").value,
-        persona:ie.querySelector(".bie-persona").value,
-        knowledge:ie.querySelector(".bie-knowledge").value,
-        greeting:ie.querySelector(".bie-greeting").value
-      };
-      const msg=ie.querySelector(".bie-msg");
-      msg.textContent="saving…"; msg.style.color="var(--fog)";
-      await saveInlineBotEdit(slot.botId, fields, zone);
-      msg.textContent="saved ✓"; msg.style.color="var(--go)";
-      setTimeout(()=>{ ie.style.display="none"; editBtn.classList.remove("open"); },800);
-    };
-    // remove
-    row.querySelector(".bz-rm").onclick=e=>{ e.stopPropagation();
-      if(zone.id&&activeBotPerZone[zone.id]===slot.botId) delete activeBotPerZone[zone.id];
-      zone.bots.splice(i,1); renderZoneBots(zone); updateVaSummary(zone); render(); };
-    function saveCond(){
-      const st=cp.querySelector(".bz-suppress-type").value;
-      const sv=cp.querySelector(".bz-suppress-val").value;
-      const pt=cp.querySelector(".bz-promote-type").value;
-      const pv=cp.querySelector(".bz-promote-val").value;
-      slot.suppressIf=st?{type:st,...(_condNeedsNum(st)?{value:+sv}:{})}:null;
-      slot.promoteIf=pt?{type:pt,...(_condNeedsNum(pt)?{value:+pv}:{})}:null;
-      // snap show-when select back to named option if possible
-      row.querySelector(".bz-show-when").value=_slotToShowWhen(slot);
-    }
-    cp.querySelector(".bz-suppress-type").onchange=e=>{
-      cp.querySelector(".bz-suppress-val").style.display=_condNeedsNum(e.target.value)?"":"none"; saveCond();};
-    cp.querySelector(".bz-promote-type").onchange=e=>{
-      cp.querySelector(".bz-promote-val").style.display=_condNeedsNum(e.target.value)?"":"none"; saveCond();};
-    cp.querySelector(".bz-suppress-val").oninput=saveCond;
-    cp.querySelector(".bz-promote-val").oninput=saveCond;
-    // drag-to-reorder within list
-    row.ondragstart=e=>{ if(e.target.classList.contains("bz-handle")||e.target.classList.contains("bz-row")){
-      dragSrcIdx=i; row.classList.add("dragging"); e.stopPropagation(); e.dataTransfer.setData("bzIdx",i); }};
-    row.ondragend=()=>row.classList.remove("dragging");
-    row.ondragover=e=>{ if(e.dataTransfer.types.includes("bzidx")){e.preventDefault();row.classList.add("drag-over");}};
-    row.ondragleave=()=>row.classList.remove("drag-over");
-    row.ondrop=e=>{ row.classList.remove("drag-over");
-      const from=parseInt(e.dataTransfer.getData("bzIdx"));
-      if(isNaN(from)||from===i)return; e.stopPropagation();
-      const [moved]=zone.bots.splice(from,1); zone.bots.splice(i,0,moved);
-      renderZoneBots(zone); render(); };
-    // function chips row
-    const botFns=bot.functions||[];
-    if(botFns.length){
-      const chipRow=document.createElement("div");
-      chipRow.style.cssText="display:flex;gap:4px;flex-wrap:wrap;margin:2px 0 4px 34px";
-      chipRow.innerHTML=botFns.map(f=>{
-        if(f.type==="guide")   return '<span class="fn-chip">🧭 Guide</span>';
-        if(f.type==="hazard")  return '<span class="fn-chip hazard">⚠️ Hazard</span>';
-        if(f.type==="webhook") return '<span class="fn-chip webhook">🔗 Webhook</span>';
-        return '';
-      }).filter(Boolean).join('');
-      list.appendChild(row); list.appendChild(chipRow); list.appendChild(cp); list.appendChild(ie);
-    } else {
-      list.appendChild(row); list.appendChild(cp); list.appendChild(ie);
-    }
-    // guide function OR guidance type: zone-picker
-    const hasGuide=bot.type==="guidance"||(bot.functions||[]).some(f=>f.type==="guide");
-    if(hasGuide){
-      const gp=document.createElement("div");
-      gp.style.cssText="margin:2px 8px 6px 34px";
-      const zoneOpts=zones.map(z=>`<option value="${z.id}"${slot.targetZoneId===z.id?" selected":""}>${z.name}</option>`).join("");
-      gp.innerHTML=`<label style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:2px">Guide to zone</label>`
-        +`<select style="width:100%;font-family:'Barlow Condensed';font-size:12px;background:var(--slate-2);border:1px solid var(--rim);border-radius:7px;color:var(--snow);padding:5px 8px">`
-        +`<option value="">— pick a target zone —</option>${zoneOpts}</select>`;
-      gp.querySelector("select").onchange=e=>{ slot.targetZoneId=e.target.value||null; render(); };
-      list.appendChild(gp);
-    }
-  });
-  // sync legacy botId to first bot
-  document.getElementById("pBotId").value=(zone.bots&&zone.bots[0])?zone.bots[0].botId:"";
-  updateVaSummary(zone);
-}
-
-function addBotToZone(zone, botId){
-  migrateZoneBots(zone);
-  if(zone.bots.find(s=>s.botId===botId)) return; // already assigned
-  zone.bots.push({botId,priority:zone.bots.length+1,suppressIf:null,promoteIf:null});
-  renderZoneBots(zone); render(); drawList();
-}
-
-/* ---- zone props drop target (bz-add) ---- */
-(function(){
-  const drop=document.getElementById("pBotDrop");
-  drop.ondragover=e=>{if(e.dataTransfer.types.includes("botid")){e.preventDefault();drop.classList.add("drag-over");}};
-  drop.ondragleave=()=>drop.classList.remove("drag-over");
-  drop.ondrop=e=>{ drop.classList.remove("drag-over"); e.preventDefault();
-    const botId=e.dataTransfer.getData("botId"); if(!botId||sel<0)return;
-    addBotToZone(zones[sel],botId); };
-  drop.onclick=()=>openBotPicker();
-})();
-
-/* ---- map canvas drop — drag a bot from the tray, or an audio clip from the
-   Audio Files panel, directly onto a map zone ---- */
-(function(){
-  function _nearestZone(pt){
-    let best=null,bestD=200;
-    zones.forEach((z,i)=>{
-      const c=zoneCenterLonLat(z); if(!c)return;
-      const d=SimGeo.hav([pt.lat,pt.lng],LL(c));
-      if(d<bestD){bestD=d;best=i;}
-    });
-    return best;
-  }
-  function setupMapDrop(){
-    const canvas=map.getCanvas();
-    canvas.addEventListener("dragover",e=>{
-      if(e.dataTransfer.types.includes("botid")||e.dataTransfer.types.includes("audiourl"))e.preventDefault();
-    });
-    canvas.addEventListener("drop",e=>{
-      e.preventDefault();
-      const botId=e.dataTransfer.getData("botId"), audioUrl=e.dataTransfer.getData("audiourl");
-      if(!botId&&!audioUrl)return;
-      const rect=canvas.getBoundingClientRect();
-      const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
-      const best=_nearestZone(pt);
-      if(best==null)return;
-      if(botId) addBotToZone(zones[best],botId);
-      if(audioUrl){
-        zones[best][zoneAudioField(zones[best])]=audioUrl;
-        if(sel===best){
-          updateVaSummary(zones[best]);
-          render(); // sel===best skips selectZone's render() below — refresh the map's 🔊 badge now
-        }
-      }
-      if(sel!==best){ selectZone(best); map.flyTo({center:zoneCenterLonLat(zones[best]),zoom:17}); }
-    });
-  }
-  if(map._loaded) setupMapDrop(); else map.on("load",setupMapDrop);
-})();
-
-/* ---- zone list rows drop target (bots or audio clips) ---- */
-function _makeZoneRowDroppable(rowEl, zoneIdx){
-  rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("botid")||e.dataTransfer.types.includes("audiourl")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
-  rowEl.ondragleave=()=>rowEl.style.background="";
-  rowEl.ondrop=e=>{ e.preventDefault();rowEl.style.background="";
-    const botId=e.dataTransfer.getData("botId"), audioUrl=e.dataTransfer.getData("audiourl");
-    if(botId){ addBotToZone(zones[zoneIdx],botId); if(sel===zoneIdx) renderZoneBots(zones[zoneIdx]); }
-    if(audioUrl){
-      zones[zoneIdx][zoneAudioField(zones[zoneIdx])]=audioUrl;
-      if(sel===zoneIdx){
-        updateVaSummary(zones[zoneIdx]);
-      }
-      render(); // refresh the map's 🔊 badge for this stop
-    }
-  };
-}
-
-/* ---- bot picker modal ---- */
-function openBotPicker(){
-  const grid=document.getElementById("botPickerGrid"); grid.innerHTML="";
-  editorBots.filter(b=>b.type==="region"||b.type==="guidance").forEach(b=>{
-    const card=document.createElement("div"); card.className="bpick-card";
-    card.innerHTML='<div class="bpick-av">'+(b.avatar||"🤖")+'</div><div class="bpick-nm">'+(b.name||"Bot")+'</div>';
-    card.onclick=()=>{ if(sel>=0) addBotToZone(zones[sel],b.id);
-      document.getElementById("botPicker").style.display="none"; };
-    grid.appendChild(card);
-  });
-  if(!grid.children.length) grid.innerHTML='<div style="font-family:\'Barlow Condensed\';font-size:12px;color:var(--fog);padding:8px">No region bots yet — <a href="/bots" target="_blank" style="color:var(--ice)">create some</a>.</div>';
-  document.getElementById("botPicker").style.display="flex";
-}
-document.getElementById("botPickerCancel").onclick=()=>{document.getElementById("botPicker").style.display="none";};
-
-/* ---- sim chat (voice-first) ---- */
-let simChatZone=null,simChatMessages=[],simChatEntryTime=0,simVisited=[];
-let simMediaRec=null,simRecording=false,simSpeaking=false;
-let simBotHistory={};       // { "visitor": [{...}], trackerId: [...] }
-let simChatClientBot=null;  // active client bot for current chat (visitor bot OR tracker bot)
-const activeBotPerZone={};  // zoneId → botId currently speaking; cleared on chat close
-
-// Kokoro TTS — neural in-browser TTS (cached after first ~45 MB download)
-const KokoroVoice = {
-  tts: null, _loading: false, _error: null, voice: 'af_bella',
-
-  async load(onProgress) {
-    if (this.tts) return true;
-    if (this._loading) return false;
-    this._loading = true; this._error = null;
-    const models=['onnx-community/Kokoro-82M-v1.0','onnx-community/Kokoro-82M-v1.0_float16'];
-    try {
-      const { KokoroTTS } = await import('https://esm.sh/kokoro-js@1.2.1');
-      let last;
-      for(const m of models){
-        try {
-          this.tts = await KokoroTTS.from_pretrained(m, {
-            dtype: 'q4', progress_callback: onProgress || (()=>{})
-          });
-          this._loading = false;
-          return true;
-        } catch(e){ last=e; }
-      }
-      throw last;
-    } catch(e) {
-      this._error = e.message; this._loading = false;
-      console.warn('Kokoro load failed:', e);
-      return false;
-    }
-  },
-
-  async generate(text) {
-    if (!this.tts) return null;
-    return await this.tts.generate(text, { voice: this.voice });
-    // returns { audio: Float32Array, sampling_rate: number }
-  }
-};
-
-// TTSVoice — own node chain, independent of SimVoice ambient loop
-const TTSVoice = {
-  ctx: null, nodes: null, _src: null,
-  _ensure() {
-    SimVoice.ensure();
-    if (this.ctx) return;
-    this.ctx = SimVoice.ctx;
-    const c = this.ctx;
-    const mono = c.createGain(); mono.channelCount=1; mono.channelCountMode='explicit'; mono.channelInterpretation='speakers';
-    const lpf  = c.createBiquadFilter(); lpf.type='lowpass'; lpf.Q.value=0.7;
-    const pan  = c.createStereoPanner();
-    const vol  = c.createGain(); vol.gain.value=1;
-    const dry  = c.createGain(); dry.gain.value=1;
-    const conv = c.createConvolver();
-    const rlen = Math.floor(c.sampleRate*1.2), rb = c.createBuffer(2,rlen,c.sampleRate);
-    for(let ch=0;ch<2;ch++){const d=rb.getChannelData(ch);for(let i=0;i<rlen;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/rlen,2.6);}
-    conv.buffer = rb;
-    const wet = c.createGain(); wet.gain.value=0;
-    mono.connect(lpf); lpf.connect(pan); pan.connect(vol);
-    vol.connect(dry); dry.connect(c.destination);
-    vol.connect(conv); conv.connect(wet); wet.connect(c.destination);
-    this.nodes = {mono, lpf, pan, vol, dry, conv, wet};
-  },
-  play(buf, distM, onEnd) {
-    this._ensure();
-    const c = this.ctx;
-    if (c.state === 'suspended') c.resume();
-    if (this._src) { try { this._src.stop(); } catch(e) {} }
-    const s = c.createBufferSource(); s.buffer = buf;
-    s.connect(this.nodes.mono); s.start();
-    this._src = s;
-    const t = SimVoice.tuning;
-    const f = Math.max(0, Math.min(1, (distM - t.clearM) / Math.max(1, t.farM - t.clearM)));
-    this.nodes.lpf.frequency.setValueAtTime(t.hiHz * Math.pow(t.loHz/t.hiHz, f), c.currentTime);
-    this.nodes.vol.gain.setValueAtTime(fadeGain(f), c.currentTime);
-    this.nodes.wet.gain.setValueAtTime(t.reverbMax * Math.pow(f, 0.6), c.currentTime);
-    this.nodes.pan.pan.setValueAtTime(0, c.currentTime);
-    s.onended = () => { if (onEnd) onEnd(); };
-  },
-  stop() { if (this._src) { try { this._src.stop(); } catch(e) {} this._src = null; } }
-};
-
-function _playKokoroResult(result, distM, text, onEnd) {
-  TTSVoice._ensure();
-  const c = TTSVoice.ctx;
-  const buf = c.createBuffer(1, result.audio.length, result.sampling_rate);
-  buf.getChannelData(0).set(result.audio);
-  TTSVoice.play(buf, distM, () => { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); });
-}
-
-async function simSpeak(text, onEnd) {
-  if (!text) return;
-  simSpeaking = true; _micBtnState();
-
-  // Selected browser voice is primary — instant, no network
-  const savedVoiceName = localStorage.getItem("gp.ttsVoice");
-  if (savedVoiceName && window.speechSynthesis) {
-    const v = speechSynthesis.getVoices().find(vv => vv.name === savedVoiceName);
-    if (v) { _fallbackSpeak(text, onEnd); return; }
-  }
-
-  // Workers AI TTS — when no browser voice selected (spatial filter applies)
-  const distM = (simChatZone && simPrev)
-    ? SimGeo.hav([simPrev.lat,simPrev.lon], simChatZone.center || [simPrev.lat,simPrev.lon])
-    : 0;
-  fetch('/api/tts', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({text})})
-    .then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status))
-    .then(ab => {
-      TTSVoice._ensure();
-      TTSVoice.ctx.decodeAudioData(ab, buf => {
-        TTSVoice.play(buf, distM, () => { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); });
-      }, () => _fallbackSpeak(text, onEnd));
-    })
-    .catch(() => _fallbackSpeak(text, onEnd));
-}
-
-function _fallbackSpeak(text, onEnd) {
-  if (!window.speechSynthesis) { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); return; }
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.rate=1.05; u.pitch=1.0;
-  const savedVoiceName=localStorage.getItem("gp.ttsVoice");
-  if(savedVoiceName){
-    const v=speechSynthesis.getVoices().find(vv=>vv.name===savedVoiceName);
-    if(v) u.voice=v;
-  }
-  u.onend = () => { simSpeaking=false; _micBtnState(); if (onEnd) onEnd(); };
-  speechSynthesis.speak(u);
-}
-function _micBtnState(){
-  const btn=document.getElementById("simMicBtn");if(!btn)return;
-  if(simRecording){btn.textContent="🔴 Recording — tap to send";btn.className="mic-btn listening";}
-  else if(simSpeaking){btn.textContent="🔊 Speaking…";btn.className="mic-btn speaking";}
-  else{btn.textContent="🎤 Tap to speak";btn.className="mic-btn";}
-}
-async function simStartListening(){
-  if(simRecording){
-    simMediaRec&&simMediaRec.state==="recording"&&simMediaRec.stop();return;
-  }
-  speechSynthesis.cancel();
-  const tr=document.getElementById("simChatTranscript");
-  try{
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-    const chunks=[];
-    simMediaRec=new MediaRecorder(stream);
-    simMediaRec.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
-    simMediaRec.onstop=async()=>{
-      stream.getTracks().forEach(t=>t.stop());
-      simRecording=false;_micBtnState();
-      tr.textContent="Transcribing…";
-      try{
-        const blob=new Blob(chunks,{type:simMediaRec.mimeType||"audio/webm"});
-        const ab=await blob.arrayBuffer();
-        const resp=await fetch("/api/transcribe",{method:"POST",headers:{"Content-Type":"audio/webm"},body:ab});
-        const{text,error}=await resp.json();
-        if(error)throw new Error(error);
-        if(text){tr.textContent='"'+text+'"';_doSendChat(text);}
-        else tr.textContent="Nothing heard — tap to try again";
-      }catch(e){tr.textContent="Transcription error: "+e.message;}
-    };
-    simMediaRec.start();simRecording=true;_micBtnState();
-    tr.textContent="Recording… tap to send";
-    // auto-stop after 8 s
-    setTimeout(()=>{if(simRecording&&simMediaRec&&simMediaRec.state==="recording")simMediaRec.stop();},8000);
-  }catch(e){tr.textContent="Mic error: "+e.message;}
-}
-function resolveBot(id){ return (simBundle.bots||[]).find(b=>b.id===id)||null; }
-
-// Evaluate a single condition against live state + cached weather
-let _simWeatherCache=null;
-async function _fetchSimWeather(){
-  if(_simWeatherCache)return _simWeatherCache;
-  try{ const r=await fetch("/api/weather"); if(r.ok){ _simWeatherCache=(await r.json()).latest||null; }}catch(e){}
-  return _simWeatherCache;
-}
-function _evalCond(cond, state, weather){
-  if(!cond||!cond.type)return false;
-  const visited=(state.visitorHistory||[]).some(h=>h.zoneName===state.zoneName);
-  switch(cond.type){
-    case "visited":      return visited;
-    case "first_visit":  return (state.visitorHistory||[]).length===0;
-    case "speed_gt":     return (state.speedKmh||0)>cond.value;
-    case "snow_gt":      return weather&&(weather.hn24_cm||0)>cond.value;
-    case "temp_lt":      return weather&&(weather.ww_temp_c||0)<cond.value;
-    case "wind_gt":      return weather&&(weather.ww_wind_spd_kph||0)>cond.value;
-    case "time_before":  return new Date().getHours()<cond.value;
-    case "time_after":   return new Date().getHours()>cond.value;
-    default:             return false;
-  }
-}
-// Select the winning bot from a zone's bots[] array using conditions
-async function selectZoneBot(zone){
-  migrateZoneBots(zone);
-  if(!zone.bots||!zone.bots.length) return resolveBot(zone.botId)||null;
-  const state=_buildGeoState();
-  const weather=await _fetchSimWeather();
-  // Sort: promoted bots float to top, then by priority
-  let slots=[...zone.bots].map((s,i)=>({...s,_origIdx:i}));
-  slots=slots.sort((a,b)=>{
-    const aP=a.promoteIf&&_evalCond(a.promoteIf,state,weather)?1:0;
-    const bP=b.promoteIf&&_evalCond(b.promoteIf,state,weather)?1:0;
-    return bP-aP || a.priority-b.priority;
-  });
-  // Return first non-suppressed, non-active bot
-  for(const s of slots){
-    if(activeBotPerZone[zone.id]===s.botId) continue; // already speaking
-    if(!_evalCond(s.suppressIf,state,weather)){
-      const bot=resolveBot(s.botId);
-      if(bot)return bot;
-    }
-  }
-  return null; // all suppressed or active
-}
-function _buildGeoState(){
-  const ap=simAvatar?simAvatar.getLngLat():null;
-  const _cmp=d=>['N','NE','E','SE','S','SW','W','NW'][Math.round(d/45)%8];
-  const nearbyZones=ap?simBundle.zones.filter(z=>z!==simChatZone&&z.center)
-    .map(z=>{const distanceM=SimGeo.hav([ap.lat,ap.lng],z.center);
-      return{name:z.name,distanceM,direction:_cmp(SimGeo.bearing([ap.lat,ap.lng],z.center))};})
-    .filter(z=>z.distanceM<150).sort((a,b)=>a.distanceM-b.distanceM).slice(0,3):[];
-  const distFromCenterM=ap&&simChatZone&&simChatZone.center?Math.round(SimGeo.hav([ap.lat,ap.lng],simChatZone.center)):null;
-  const speedKmh=Math.round(SimSmoother.spd*3.6*10)/10;
-  const now=Date.now();
-  const _d=new Date();const _hh=String(_d.getHours()).padStart(2,'0'),_mm=String(_d.getMinutes()).padStart(2,'0');
-  const timeOfDay=`${_hh}:${_mm} (${_d.getHours()<12?'morning':_d.getHours()<17?'afternoon':'evening'})`;
-  const headingDeg=SimSmoother.lastHeading!=null?Math.round(SimSmoother.lastHeading):null;
-  const trackers=[];
-  (simBundle.zones||[]).filter(srcZ=>srcZ.trackerId&&srcZ.center).forEach(srcZ=>{
-    const ts=trackerSmoother(srcZ.trackerId);
-    const tSpeedKmh=Math.round(ts.spd*3.6*10)/10;
-    const tHeadingDeg=ts.lastHeading!=null?Math.round(ts.lastHeading):null;
-    (simBundle.zones||[]).forEach(tgtZ=>{(tgtZ.layers||[]).forEach((layer,i)=>{
-      const k=srcZ.trackerId+":"+tgtZ.id+":"+layer.kind+":"+i;
-      const st=SimFencer.state[k];
-      if(st&&st.phase==="in") trackers.push({trackerId:srcZ.trackerId,zoneName:tgtZ.name,
-        dwellSeconds:Math.round((now-st.t0)/1000),speedKmh:tSpeedKmh,headingDeg:tHeadingDeg});
-    });});
-  });
-  const visitorHistory=(simBotHistory.visitor||[]).filter(r=>r.exitedAt!=null).slice(-10)
-    .map(r=>({zoneName:r.zoneName,dwellSeconds:r.dwellSeconds}));
-  const trackerHistories={};
-  trackers.forEach(t=>{const hist=(simBotHistory[t.trackerId]||[]).filter(r=>r.exitedAt!=null).slice(-10)
-    .map(r=>({zoneName:r.zoneName,dwellSeconds:r.dwellSeconds}));if(hist.length)trackerHistories[t.trackerId]=hist;});
-  const peerHistories={};
-  (simBundle.zones||[]).filter(srcZ=>srcZ.trackerId).forEach(srcZ=>{
-    const bot=resolveBot(srcZ.botId)||resolveBot(srcZ.clientBotId);
-    const hist=(simBotHistory[srcZ.trackerId]||[]).filter(r=>r.exitedAt!=null).slice(-10)
-      .map(r=>({zoneName:r.zoneName,dwellSeconds:r.dwellSeconds}));
-    if(hist.length) peerHistories[bot?(bot.name||srcZ.trackerId):srcZ.trackerId]=hist;
-  });
-  return{zoneName:simChatZone?simChatZone.name:"",dwellSeconds:(now-simChatEntryTime)/1000,
-    previousZones:simVisited.filter(n=>n!==simChatZone?.name),nearbyZones,distFromCenterM,speedKmh,
-    headingDeg,timeOfDay,trackers,visitorHistory,trackerHistories,peerHistories};
-}
-async function openSimChat(zone, clientBotOverride){
-  simChatZone=zone;simChatMessages=[];simChatEntryTime=Date.now();
-  simChatClientBot=clientBotOverride!==undefined ? clientBotOverride : resolveBot(simBundle.visitorBotId)||null;
-  // Select winning bot (skips any already active for this zone)
-  const rBot=await selectZoneBot(zone);
-  // No bot — SimVoice already plays the R2 clip spatially; just bail
-  if(!rBot&&!zone.chatGreeting&&!zone.chatPersona){
-    simChatZone=null; return;
-  }
-  // Bot about to speak — silence the ambient R2 loop so they don't overlap
-  SimVoice.fadeOut();
-  // Mark this bot active so re-entry picks the next one
-  if(rBot&&zone.id) activeBotPerZone[zone.id]=rBot.id;
-  const name=rBot?rBot.name:(zone.chatPersona||"").split(/[,.\n]/)[0].replace(/^you are\s*/i,"").trim()||"Guide";
-  document.getElementById("simChatHeader").textContent=(rBot?rBot.avatar||"💬":"💬")+" "+name+" — "+zone.name;
-  document.getElementById("simChatTranscript").textContent="";
-  const log=document.getElementById("simChatLog");log.innerHTML="";
-  document.getElementById("simChat").style.display="flex";
-  _micBtnState();
-  const greeting=rBot?rBot.greeting:(zone.chatGreeting||zone.greeting||"");
-  if(greeting){
-    const delayMs=(zone.botGreetingDelayS||0)*1000;
-    if(delayMs>0) setTimeout(()=>_autoGreet(greeting,log,rBot),delayMs);
-    else _autoGreet(greeting,log,rBot);
-  }
-}
-async function _autoGreet(hint,log,rBotOverride){
-  // greeting field is a Groq prompt — generate a live response using full context
-  const rBot=rBotOverride||resolveBot(simChatZone.botId)||{persona:simChatZone.chatPersona||"",knowledge:simChatZone.chatKnowledge||""};
-  const geoState=_buildGeoState();
-  const respEl=document.createElement("div");
-  respEl.style.cssText="margin:3px 0;padding:5px 8px;border-radius:7px;line-height:1.45;background:#0f1d2e;color:var(--ice)";
-  respEl.textContent="…";log.appendChild(respEl);log.scrollTop=log.scrollHeight;
-  try{
-    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({regionBot:rBot,clientBot:simChatClientBot,
-        messages:[{role:"user",content:hint}],geofenceState:geoState,isGreeting:true})});
-    if(!r.ok){const t=await r.text().catch(()=>"");let d="HTTP "+r.status;try{const j=JSON.parse(t);d=(j.error||d)+(j.detail?" — "+j.detail.slice(0,140):"");}catch(e){}throw new Error(d);}
-    const reader=r.body.getReader(),dec=new TextDecoder();
-    let buf="",full="";respEl.textContent="";
-    while(true){const{done,value}=await reader.read();if(done)break;
-      buf+=dec.decode(value,{stream:true});
-      const lines=buf.split("\n");buf=lines.pop();
-      for(const line of lines){if(!line.startsWith("data:"))continue;
-        const d=line.slice(5).trim();if(d==="[DONE]")break;
-        try{const t=JSON.parse(d).choices?.[0]?.delta?.content;if(t){full+=t;respEl.textContent=full;log.scrollTop=log.scrollHeight;}}catch(e){}}}
-    if(full){simChatMessages.push({role:"assistant",content:full});simSpeak(full);}
-    else{respEl.remove();}
-  }catch(e){
-    respEl.textContent="(greeting failed: "+e.message+") ";
-    const retryBtn=document.createElement("button");
-    retryBtn.textContent="↺ retry"; retryBtn.style.cssText="font-size:11px;background:none;border:1px solid var(--rim);color:var(--fog);border-radius:5px;padding:2px 7px;cursor:pointer;margin-left:4px";
-    retryBtn.onclick=()=>{respEl.remove(); _autoGreet(hint,log,rBotOverride);};
-    respEl.appendChild(retryBtn);
-  }
-}
-function closeSimChat(){
-  speechSynthesis.cancel();
-  if(simMediaRec&&simMediaRec.state==="recording"){try{simMediaRec.stop();}catch(e){}}
-  simRecording=false;simSpeaking=false;simChatClientBot=null;
-  if(simChatZone){
-    if(!simVisited.includes(simChatZone.name))simVisited.push(simChatZone.name);
-    if(simChatZone.id) delete activeBotPerZone[simChatZone.id]; // release bot for next trigger
-  }
-  simChatZone=null;simChatMessages=[];
-  document.getElementById("simChat").style.display="none";
-}
-function addChatMsg(role,text,log){
-  log=log||document.getElementById("simChatLog");
-  const d=document.createElement("div");
-  d.style.cssText="margin:3px 0;padding:5px 8px;border-radius:7px;line-height:1.45;"
-    +(role==="user"?"background:#1b2738;color:var(--snow);text-align:right":"background:#0f1d2e;color:var(--ice)");
-  d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;
-}
-async function _doSendChat(text){
-  if(!text.trim()||!simChatZone)return;
-  document.getElementById("simChatTranscript").textContent="";
-  const log=document.getElementById("simChatLog");
-  addChatMsg("user",text,log);
-  simChatMessages.push({role:"user",content:text});
-  const geofenceState=_buildGeoState();
-  const respEl=document.createElement("div");
-  respEl.style.cssText="margin:3px 0;padding:5px 8px;border-radius:7px;line-height:1.45;background:#0f1d2e;color:var(--ice)";
-  respEl.textContent="…";log.appendChild(respEl);log.scrollTop=log.scrollHeight;
-  try{
-    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        regionBot: resolveBot(simChatZone.botId) || {persona:simChatZone.chatPersona||"",knowledge:simChatZone.chatKnowledge||"",greeting:simChatZone.chatGreeting||""},
-        clientBot: simChatClientBot,
-        messages:simChatMessages.slice(-10),geofenceState})});
-    if(!r.ok){const t=await r.text().catch(()=>"");let d="HTTP "+r.status;try{const j=JSON.parse(t);d=(j.error||d)+(j.detail?" — "+j.detail.slice(0,140):"");}catch(e){}throw new Error(d);}
-    const reader=r.body.getReader(),dec=new TextDecoder();
-    let buf="",full="";respEl.textContent="";
-    while(true){
-      const{done,value}=await reader.read();if(done)break;
-      buf+=dec.decode(value,{stream:true});
-      const lines=buf.split("\n");buf=lines.pop();
-      for(const line of lines){
-        if(!line.startsWith("data: "))continue;
-        const d=line.slice(6).trim();if(d==="[DONE]")break;
-        try{const j=JSON.parse(d),tok=j.choices?.[0]?.delta?.content||"";
-          if(tok){full+=tok;respEl.textContent=full;log.scrollTop=log.scrollHeight;}}catch(e){}
-      }
-    }
-    if(full){simChatMessages.push({role:"assistant",content:full});simSpeak(full);}
-  }catch(e){respEl.style.color="var(--hazard)";respEl.textContent="Error: "+e.message;}
-}
-document.getElementById("simMicBtn").onclick=simStartListening;
-document.getElementById("simChatSend").onclick=()=>{
-  const v=document.getElementById("simChatInput").value.trim();
-  if(v){document.getElementById("simChatInput").value="";_doSendChat(v);}
-};
-document.getElementById("simChatInput").addEventListener("keydown",e=>{
-  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();
-    const v=e.target.value.trim();if(v){e.target.value="";_doSendChat(v);}}
-});
-
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
-  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;resetTrackerSmoothers();
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simPlay();};
 document.getElementById("simPlay").onclick=simPlay;
@@ -4550,7 +3680,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
   document.getElementById('simGuidanceHud').style.display='none';
   const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
-  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;simBotHistory={};resetTrackerSmoothers();
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;resetTrackerSmoothers();
   simBundle=editorToSimBundle();refreshSimChips();simLogEv("sev-sys","reset");};
 // speed presets
 (function(){

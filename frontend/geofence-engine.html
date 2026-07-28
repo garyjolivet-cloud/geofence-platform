@@ -119,6 +119,7 @@
     margin-top:10px;line-height:1.45}
 </style>
 <script src="/guidance-bot.js"></script>
+<script src="/pipeline-runtime.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -1077,6 +1078,10 @@ const AmbientVoice = {
 };
 
 /* ============================== HUD ============================== */
+// Smoothed position for the current tick — set by HUD.onFix() before it calls
+// Geofencer.update(), so Geofencer.onEvent (fired synchronously from inside
+// that update() call) can read it for pipeline data.position blocks.
+let lastSmoothed=null;
 const HUD = {
   pos:null, prev:null, fixes:0,
   el(id){ return document.getElementById(id); },
@@ -1088,6 +1093,7 @@ const HUD = {
   onFix(fix){               // fix = {lat,lon,acc,t[,heading]}
     window.__lastAcc=fix.acc;
     const sm=Smoother.push(fix);
+    lastSmoothed=sm;
     TravelHeading.update(sm.speed, sm.headingTravel);
     this.fixes++;
     const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
@@ -1412,14 +1418,16 @@ Geofencer.onEvent=(e)=>{
   else if(e.kind==='suppressed') HUD.log('ev-flick','HOLD   reveal suppressed (fix too loose)');
   Actions.run(e.kind, e.zone);
 
-  // Guidance bot trigger: fire when visitor enters the target layer of a zone with a guidance bot
-  if(e.kind==='enter' && e.layer && e.layer.kind==='target'){
-    const slots=(e.zone.bots||[]);
-    const guidanceSlot=slots.map(s=>({slot:s,bot:(BUNDLE.bots||[]).find(b=>b.id===s.botId)}))
-      .find(x=>x.bot&&x.bot.type==='guidance');
-    if(guidanceSlot&&typeof GuidanceBot!=='undefined'){
-      const targetZone=(BUNDLE.zones||[]).find(z=>z.id===guidanceSlot.slot.targetZoneId);
-      if(targetZone){
+  // Pipeline runtime: evaluates zone.pipeline (if any) for this zone. This is
+  // the sole replacement for the old bot-based guidance trigger (verified
+  // 2026-07-27 to produce identical GuidanceBot.start() calls in the fence
+  // editor's simulator before this swap). Gated the same way the old
+  // guidance trigger was — target-layer enter/exit only, not general-layer
+  // or 'say'/'suppressed' events.
+  if((e.kind==='enter'||e.kind==='exit') && e.layer && e.layer.kind==='target' && typeof PipelineRuntime!=='undefined'){
+    PipelineRuntime.load(e.zone, {
+      sayFn:(text)=>Audio.say(text,false,0),
+      guideStartFn:(targetZone)=>{
         GuidanceBot.start({
           targetZone,
           allZones:BUNDLE.zones||[],
@@ -1445,8 +1453,12 @@ Geofencer.onEvent=(e)=>{
         const hud=document.getElementById('guidanceHud');
         if(hud) hud.style.display='block';
         HUD.log('ev-sys','Guidance started → '+targetZone.name);
-      }
-    }
+      },
+      webhookFn:(url)=>{ HUD.log('ev-sys','webhook → '+url); },
+      allZones: BUNDLE.zones||[]
+    });
+    if(e.kind==='enter') PipelineRuntime.tick(e.zone.id, null, lastSmoothed, { entered:true });
+    else if(e.kind==='exit'){ PipelineRuntime.tick(e.zone.id, null, lastSmoothed, { exited:true }); PipelineRuntime.unload(e.zone.id); }
   }
 };
 
