@@ -43,6 +43,16 @@
   .form-col input{background:var(--slate2);border:1px solid var(--rim);color:var(--snow);border-radius:8px;padding:8px 10px;font-family:"Barlow Condensed";font-size:13px}
   button.sm{font-family:"Barlow Condensed";font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;padding:4px 10px;border-radius:7px;cursor:pointer;border:1px solid var(--rim);background:var(--slate2);color:var(--ice);margin-right:6px}
   button.sm:hover{border-color:var(--coral);color:var(--snow)}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;display:flex;align-items:center;justify-content:center}
+  .modal{background:var(--slate);border:1px solid var(--rim);border-radius:14px;padding:18px;max-width:520px;width:90vw;max-height:80vh;overflow-y:auto}
+  .modal h3{margin:0 0 4px;font-family:"Barlow Condensed";font-size:16px}
+  .modal .close{float:right;background:none;border:none;color:var(--fog);cursor:pointer;font-size:16px}
+  .ent-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #1a2433}
+  .ent-row:last-child{border-bottom:none}
+  .ent-row .ic{font-size:16px}
+  .ent-row .nm{flex:1;font-family:"Barlow Condensed";font-size:13px}
+  .ent-row input[type=checkbox]{accent-color:var(--coral)}
+  .ent-tag{font-family:"Barlow Condensed";font-size:10px;text-transform:uppercase;color:var(--go);border:1px solid var(--go);border-radius:5px;padding:1px 6px}
 </style>
 </head>
 <body>
@@ -84,6 +94,15 @@
   </section>
 </div>
 
+<div class="modal-backdrop" id="entModal" style="display:none">
+  <div class="modal">
+    <button class="close" onclick="closeEntitlements()">✕</button>
+    <h3 id="entTitle">Entitlements</h3>
+    <p class="hint" style="margin-bottom:10px">Which built-in code objects can this client's operators see and attach to stops (Editor's 🧩 palette, Code Library). Custom objects a client authors themselves are self-entitled and not listed here.</p>
+    <div id="entList"><p class="note">Loading…</p></div>
+  </div>
+</div>
+
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
@@ -116,6 +135,7 @@ function renderClientRows(clients){
         '<button class="sm" onclick="runAs(\''+esc(c.id)+"','dashboard')\">Run · Dashboard</button>"+
         '<button class="sm" onclick="runAs(\''+esc(c.id)+"','field')\">Run · Field</button>"+
         '<button class="sm" onclick="copyLogin(\''+esc(c.slug)+"')\">Login link</button>"+
+        '<button class="sm" onclick="openEntitlements(\''+esc(c.id)+"','"+esc(c.name)+"')\">Entitlements</button>"+
         '<button class="sm" style="color:var(--coral);border-color:rgba(255,106,61,.4)" onclick="deleteClient(\''+esc(c.id)+"','"+esc(c.name)+"',"+(c.projectCount||0)+","+(c.userCount||0)+")\">Delete</button>"+
       "</td>";
     table.appendChild(tr);
@@ -161,6 +181,50 @@ async function deleteClient(id,name,projectCount,userCount){
   }
   alert("Delete failed: "+(j.error||"HTTP "+r.status)+(r.status===401?" — sign in again and retry.":""));
   msg.textContent="✕ "+(j.error||"delete failed");
+}
+
+/* ---- Code Object entitlements (the upsell lever) ---- */
+function closeEntitlements(){ $("entModal").style.display="none"; }
+$("entModal").addEventListener("click",e=>{ if(e.target===$("entModal")) closeEntitlements(); });
+async function openEntitlements(clientId, clientName){
+  $("entTitle").textContent="Entitlements — "+clientName;
+  $("entList").innerHTML='<p class="note">Loading…</p>';
+  $("entModal").style.display="flex";
+  const tok=token();
+  try{
+    const [objRes, grantRes]=await Promise.all([
+      fetch("/api/code-objects?org="+encodeURIComponent(clientId),{headers:{authorization:"Bearer "+tok}}),
+      fetch("/api/entitlements?org="+encodeURIComponent(clientId),{headers:{authorization:"Bearer "+tok}})
+    ]);
+    if(!objRes.ok || !grantRes.ok){ $("entList").innerHTML='<p class="note">Couldn\'t load — try again.</p>'; return; }
+    const objects=await objRes.json();
+    const grants=await grantRes.json();
+    const grantedKeys=new Set(grants.map(g=>g.feature_key));
+    const builtIns=objects.filter(o=>o.orgId==null);
+    const customCount=objects.length-builtIns.length;
+    if(!builtIns.length){
+      $("entList").innerHTML='<p class="note">No built-in code objects exist yet — author one in Code Library first.</p>';
+      return;
+    }
+    $("entList").innerHTML="";
+    builtIns.forEach(o=>{
+      const row=document.createElement("div");
+      row.className="ent-row";
+      row.innerHTML='<span class="ic">'+esc(o.icon)+'</span><span class="nm">'+esc(o.name)+'</span>'+
+        '<input type="checkbox" '+(grantedKeys.has(o.featureKey)?"checked":"")+'>';
+      const cb=row.querySelector("input");
+      cb.addEventListener("change",async()=>{
+        cb.disabled=true;
+        const method=cb.checked?"POST":"DELETE";
+        const r=await fetch("/api/entitlements",{method,headers:{"content-type":"application/json",authorization:"Bearer "+tok},
+          body:JSON.stringify({orgId:clientId,featureKey:o.featureKey})});
+        cb.disabled=false;
+        if(!r.ok){ cb.checked=!cb.checked; alert("Update failed — try again."); }
+      });
+      $("entList").appendChild(row);
+    });
+    if(customCount) $("entList").innerHTML+='<p class="note">+ '+customCount+' custom object'+(customCount===1?"":"s")+' this client authored (always available to them).</p>';
+  }catch(e){ $("entList").innerHTML='<p class="note">Couldn\'t reach the platform.</p>'; }
 }
 
 $("createBtn").onclick=async()=>{

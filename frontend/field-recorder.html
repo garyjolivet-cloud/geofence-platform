@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Field</title>
 <script src="role-gate.js"></script>
+<script src="code-objects.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <style>
@@ -215,6 +216,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
       <button class="fbt" id="btnMark" disabled>📍 Mark Stop</button>
       <button class="fbt" id="btnRec"  disabled>⏺ Record</button>
       <button class="fbt" id="btnLive" disabled>🎙 Start Stop</button>
+      <button class="fbt" id="btnCodeObj">🧩 Code</button>
     </div>
     <div id="status">Starting up…</div>
   </div>
@@ -237,6 +239,12 @@ const asClient = _qs.get("asClient") || null;
 
 function orgQueryParam(){
   return (_me && _me.role === 'admin' && asClient) ? 'org=' + encodeURIComponent(asClient) : '';
+}
+// Same org resolution as orgQueryParam(), for CodeObjects' entitlement-gated
+// list — admin previewing "as client" sees that client's library, everyone
+// else (including guides) sees their own org's.
+function currentOrgId(){
+  return (_me && _me.role === 'admin' && asClient) ? asClient : (_me && _me.orgId) || null;
 }
 function applyPreviewBanner(){
   if (!_me || _me.role !== 'admin' || !asClient) return;
@@ -350,6 +358,8 @@ let liveMode      = false;
 let liveActivity  = "walk";
 let liveRecState  = "idle"; // "idle" | "recording" | "uploading"
 let liveStops     = [];     // successfully published live stops (in-memory for this session)
+let currentLiveStop = null; // the stop object currently mid-recording in Live mode, if any — lets
+                             // the guide attach a code object before "Stop Recording" finalizes it
 let liveNum       = 0;      // auto-increment counter for live stop names
 let publishedZones = [];    // the project's real published tour stops (fence-editor zones) — reference layer, not editable here
 let projSpatialRangeM = null, projSpatialClearM = null;  // project-wide audio-fade defaults, for the blue-ring/grey-cone stop marker
@@ -751,14 +761,16 @@ function refreshPublishedZones(){
     audioFeats.push(...cachedStopAudioFeatures(z.id,z.center[0],z.center[1],farM,clearM));
     const tgt=(z.layers||[]).find(l=>l.kind==="target");
     if(!tgt) return;
+    const coSuffix = (z.codeObjects && z.codeObjects.length) ? " 🧩"+(z.codeObjects.length>1?"×"+z.codeObjects.length:"") : "";
+    const labelName = z.name+coSuffix;
     if(tgt.radiusM!=null){
-      feats.push({type:"Feature",properties:{name:z.name},
+      feats.push({type:"Feature",properties:{name:labelName},
         geometry:{type:"Polygon",coordinates:[circleRing(z.center[0],z.center[1],tgt.radiusM)]}});
     } else if(tgt.geometry && tgt.geometry.type==="polygon"){
-      feats.push({type:"Feature",properties:{name:z.name},
+      feats.push({type:"Feature",properties:{name:labelName},
         geometry:{type:"Polygon",coordinates:[tgt.geometry.coords.map(c=>[c[1],c[0]])]}});
     } else if(tgt.geometry && tgt.geometry.type==="tripline"){
-      feats.push({type:"Feature",properties:{name:z.name},
+      feats.push({type:"Feature",properties:{name:labelName},
         geometry:{type:"LineString",coordinates:[[tgt.geometry.from[1],tgt.geometry.from[0]],[tgt.geometry.to[1],tgt.geometry.to[0]]]}});
     }
   });
@@ -770,15 +782,19 @@ function refreshPublishedZones(){
 function refreshMap(){
   if(!map||!map.isStyleLoaded()) return;
   const now = Date.now();
+  // Reuses the existing name-label text layer for the 🧩 marker (no new
+  // MapLibre layer/sprite needed) — same badge convention as Fence Editor's
+  // stop list, just rendered into the map label instead of a separate chip.
+  const coSuffix = s => (s.codeObjects && s.codeObjects.length) ? " 🧩"+(s.codeObjects.length>1?"×"+s.codeObjects.length:"") : "";
   const allFeatures = [
     ...stops.map(s=>({
       type:"Feature",
-      properties:{name:s.name, hasClip:!!s.clipId, isLive:false},
+      properties:{name:s.name+coSuffix(s), hasClip:!!s.clipId, isLive:false},
       geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||12)]}
     })),
     ...liveStops.filter(s=>s.expiresAt>now).map(s=>({
       type:"Feature",
-      properties:{name:s.name, hasClip:true, isLive:true},
+      properties:{name:s.name+coSuffix(s), hasClip:true, isLive:true},
       geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||25)]}
     }))
   ];
@@ -833,29 +849,37 @@ function renderStopList(){
     const playBtn  = audioUrl
       ? `<button class="sp-play" onclick="playStopAudio('${esc(audioUrl)}')">▶</button>`
       : "";
+    const coBadge = (s.codeObjects && s.codeObjects.length)
+      ? `<span title="${s.codeObjects.length} code object${s.codeObjects.length===1?"":"s"} attached">🧩${s.codeObjects.length>1?"×"+s.codeObjects.length:""}</span>`
+      : "";
+    // Only locally-held stops (not yet finalized live, not already published)
+    // are editable here — those go through openCodeObjectPickerForId().
+    const coBtn = (!s._live && !s._published)
+      ? `<button class="sp-play" title="Code objects" onclick="openCodeObjectPickerForId('${esc(s.id)}')">🧩</button>`
+      : "";
     if(s._live){
       const rem  = Math.max(0, s.expiresAt - now);
       const mins = Math.floor(rem/60000);
       const secs = String(Math.floor((rem%60000)/1000)).padStart(2,"0");
       return `<div class="sp-row">
         <span class="sp-dot" style="color:var(--hazard)">⬤</span>
-        <span class="sp-name">${esc(s.name)}</span>
+        <span class="sp-name">${esc(s.name)} ${coBadge}</span>
         <span class="sp-countdown" data-expires="${s.expiresAt}">${mins}:${secs}</span>
         ${playBtn}
       </div>`;
     } else if(s._published){
       return `<div class="sp-row">
         <span class="sp-dot" style="color:var(--ice)" title="Already published">◈</span>
-        <span class="sp-name">${esc(s.name)}</span>
+        <span class="sp-name">${esc(s.name)} ${coBadge}</span>
         <span class="sp-countdown"></span>
         ${playBtn}
       </div>`;
     } else {
       return `<div class="sp-row">
         <span class="sp-dot" style="color:var(--go)">●</span>
-        <span class="sp-name">${esc(s.name)}</span>
+        <span class="sp-name">${esc(s.name)} ${coBadge}</span>
         <span class="sp-countdown"></span>
-        ${playBtn}
+        ${coBtn}${playBtn}
       </div>`;
     }
   }).join("");
@@ -1168,6 +1192,7 @@ async function startLiveStop(){
   mediaRec.onstop = async () => { bCtx.close().catch(()=>{}); await finishLiveStop(stop); };
   mediaRec.start(1000);
 
+  currentLiveStop = stop;
   liveRecState = "recording";
   updateLiveBtn();
   setStatus("⏺ Recording "+stop.name+"…");
@@ -1222,6 +1247,7 @@ async function finishLiveStop(stop){
     setStatus("Queued — will upload when signal returns");
   } finally {
     liveRecState = "idle";
+    if (currentLiveStop === stop) currentLiveStop = null;
     updateLiveBtn();
   }
 }
@@ -1237,7 +1263,8 @@ function buildLiveZone(stop){
     layers:     [{kind:"general",radiusM:genR},{kind:"target",radiusM:stop.radiusM||25}],
     triggers:   [{event:"enter",action:"play"},{event:"exit",action:"fadeout"}],
     audioUrl:   stop.audioUrl,
-    expiresAt:  stop.expiresAt
+    expiresAt:  stop.expiresAt,
+    ...(stop.codeObjects && stop.codeObjects.length ? {codeObjects:stop.codeObjects} : {})
   };
 }
 
@@ -1484,16 +1511,6 @@ async function doPublish(pid, pname, token){
   }
 
   setProg("Publishing bundle…", 0.88);
-  const newZones = myStops.map(s=>{
-    const cl   = clips.find(c=>c.id===s.clipId&&c.audioUrl);
-    const genR = Math.max(30,(s.radiusM||12)*2.5);
-    return {
-      id:s.id, name:s.name, center:[s.lat,s.lon], audibleFromM:40, bearingDeg:s.bearingDeg??null,
-      layers:[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM||12}],
-      triggers:[{event:"enter",action:"play"},{event:"exit",action:"fadeout"}],
-      ...(cl?{audioUrl:cl.audioUrl}:{})
-    };
-  });
 
   // Merge, don't replace: the bundle PUT endpoint overwrites the whole zones
   // array, and this project may have real content from the fence editor
@@ -1506,6 +1523,25 @@ async function doPublish(pid, pname, token){
     if(gb.ok) base = await gb.json();
   }catch(e){ /* no existing bundle yet — publishing for the first time */ }
   const existingZones = Array.isArray(base.zones) ? base.zones : [];
+  const existingById = {}; existingZones.forEach(z=>{ existingById[z.id]=z; });
+
+  const newZones = myStops.map(s=>{
+    const cl   = clips.find(c=>c.id===s.clipId&&c.audioUrl);
+    const genR = Math.max(30,(s.radiusM||12)*2.5);
+    const existing = existingById[s.id];
+    return {
+      id:s.id, name:s.name, center:[s.lat,s.lon], audibleFromM:40, bearingDeg:s.bearingDeg??null,
+      layers:[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM||12}],
+      triggers:[{event:"enter",action:"play"},{event:"exit",action:"fadeout"}],
+      ...(cl?{audioUrl:cl.audioUrl}:{}),
+      // Re-recording a stop here rebuilds it from this minimal field-recorder
+      // model, which knows nothing about pipeline/codeObjects — without this,
+      // republishing silently wipes out anything attached from Fence Editor.
+      ...(s.codeObjects && s.codeObjects.length ? {codeObjects:s.codeObjects}
+          : existing && existing.codeObjects ? {codeObjects:existing.codeObjects} : {}),
+      ...(existing && existing.pipeline ? {pipeline:existing.pipeline} : {})
+    };
+  });
   const newIds = new Set(newZones.map(z=>z.id));
   const zones = [...existingZones.filter(z=>!newIds.has(z.id)), ...newZones];
 
@@ -1551,6 +1587,42 @@ function openSheet(title, html, onConfirm, confirmLabel="✓ Save", keepOpen=fal
 }
 function closeSheet(){ document.getElementById("sheet").classList.remove("open"); }
 document.getElementById("sheet").onclick = e => { if(e.target===document.getElementById("sheet")) closeSheet(); };
+
+/* ── code objects: tap-to-attach (drag is awkward one-handed in the field,
+   so this reuses the existing bottom sheet instead of code-objects.js's
+   floating palette — same CodeObjects.attach/detach/fetchList underneath,
+   just a touch-first list instead of drag cards) ──────────────────────── */
+async function openCodeObjectPicker(stopLike){
+  if(!stopLike){ setStatus("Mark or start a stop first"); return; }
+  const org = currentOrgId();
+  if(!org){ setStatus("No customer resolved — can't load code objects"); return; }
+  const list = await CodeObjects.fetchList(org, getToken);
+  if(!list.length){
+    openSheet("🧩 Code Objects", '<div class="empty-hint">No code objects available for this client yet.</div>', async()=>{}, "Close");
+    return;
+  }
+  const html = list.map(o => {
+    const checked = (stopLike.codeObjects||[]).some(co=>co.objectId===o.id);
+    return `<label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #1a2433">
+      <input type="checkbox" data-oid="${esc(o.id)}" ${checked?"checked":""} style="width:20px;height:20px">
+      <span>${o.icon} ${esc(o.name)}</span>
+    </label>`;
+  }).join("");
+  openSheet("🧩 "+esc(stopLike.name||"Stop"), html, async () => {
+    document.querySelectorAll("#sheetContent input[type=checkbox]").forEach(cb => {
+      if(cb.checked) CodeObjects.attach(stopLike, cb.dataset.oid, CodeObjects.latestVersion(cb.dataset.oid), {});
+      else CodeObjects.detach(stopLike, cb.dataset.oid);
+    });
+    if(stops.includes(stopLike)) await dbPut("stops", stopLike);
+    renderStopList();
+  }, "✓ Save");
+}
+document.getElementById("btnCodeObj").onclick = () => {
+  openCodeObjectPicker((liveMode && currentLiveStop) ? currentLiveStop : lastStop);
+};
+function openCodeObjectPickerForId(id){
+  openCodeObjectPicker(stops.find(s=>s.id===id));
+}
 
 function setStatus(msg){ document.getElementById("status").textContent = msg; }
 

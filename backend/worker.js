@@ -239,6 +239,23 @@ async function libraryScopeOk(env, A, orgId) {
     return !!(row && row.orgId === orgId);
   } catch (e) { return false; }
 }
+// Same shape as libraryScopeOk — code objects are org-scoped like the
+// audio Library, gating who can list/author/entitle them. Kept distinct
+// (not reusing libraryScopeOk directly) since the "audio" scope shouldn't
+// imply code-object management, even though the org-match logic is
+// identical; codeObjectScopeOk checks the "publish" scope instead.
+async function codeObjectScopeOk(env, A, orgId) {
+  if (!A) return false;
+  if (A.master) return true;
+  const scopes = (A.scopes || "").split(",").map(s => s.trim());
+  if (!(scopes.includes("*") || scopes.includes("publish"))) return false;
+  if (A.appId == null) return true;
+  if (A.appId === orgId) return true;
+  try {
+    const row = await env.DB.prepare("SELECT orgId FROM app WHERE id=?").bind(A.appId).first();
+    return !!(row && row.orgId === orgId);
+  } catch (e) { return false; }
+}
 function scopesForRole(role) {
   if (role === "admin") return "*";
   if (role === "operator") return "analytics";
@@ -315,6 +332,7 @@ export default {
       "/chatterbox": "/chatterbox-studio.html",
       "/field": "/field-recorder.html",
       "/pipeline": "/pipeline-editor.html",
+      "/code-library": "/code-library.html",
       "/login": "/login.html",
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
@@ -1294,29 +1312,54 @@ async function api(request, env, url) {
       }
       const proj = await env.DB.prepare("SELECT bundleVersion FROM project WHERE id=?").bind(pid).first();
       const ver = ((proj && proj.bundleVersion) || 0) + 1;
+      if (!proj && !bundle.createIfMissing) {
+        return json({ error: "project not found — create it from the main screen first" }, 404, AC);
+      }
+      // Determine the TRUE effective org this publish lands under — an
+      // existing project keeps its own org unless master explicitly moves it
+      // (orgOverride); a new project inherits its resolved workspace's real
+      // owner. Deliberately NOT just chosenOrgId: for a non-master caller
+      // chosenOrgId is always the server's default org (see comment above),
+      // which would let the entitlement check below be silently bypassed by
+      // any scoped key publishing a new project without an explicit orgId.
+      let finalOrgId = chosenOrgId;
+      if (proj) {
+        finalOrgId = orgOverride || (existingProj && existingProj.orgId) || chosenOrgId;
+      } else if (!orgOverride && resolvedAppId) {
+        const ownerApp = await env.DB.prepare("SELECT orgId FROM app WHERE id=?").bind(resolvedAppId).first();
+        if (ownerApp && ownerApp.orgId) finalOrgId = ownerApp.orgId;
+      }
+      // Reject a publish that references a code object this org isn't
+      // entitled to. This — not the palette's list filter, which only
+      // controls what an admin SEES — is the real enforcement boundary for
+      // the upsell: covers every authoring surface that ends up PUTting a
+      // bundle here (Fence Editor today, Field Recorder in a later phase)
+      // from one place instead of needing to be re-checked per surface.
+      if (!(A && A.master)) {
+        const objectIds = new Set();
+        (bundle.zones || []).forEach(z => (z.codeObjects || []).forEach(co => { if (co && co.objectId) objectIds.add(co.objectId); }));
+        if (objectIds.size) {
+          const entitledRows = await env.DB.prepare("SELECT feature_key FROM org_entitlement WHERE org_id=?").bind(finalOrgId).all();
+          const entitledKeys = new Set((entitledRows.results || []).map(r => r.feature_key));
+          const objRows = await env.DB.prepare(
+            "SELECT id,feature_key FROM code_object WHERE id IN (" + [...objectIds].map(() => "?").join(",") + ")"
+          ).bind(...objectIds).all();
+          const featureKeyById = {};
+          (objRows.results || []).forEach(r => { featureKeyById[r.id] = r.feature_key; });
+          for (const oid of objectIds) {
+            const fk = featureKeyById[oid];
+            if (!fk || !entitledKeys.has(fk)) return json({ error: "not entitled to code object: " + oid }, 403, AC);
+          }
+        }
+      }
       // Only auto-create the project row if the editor explicitly opts in
       if (proj) {
         await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId), is_template=? WHERE id=?")
           .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, bundle.isTemplate ? 1 : 0, pid).run();
-      } else if (bundle.createIfMissing) {
-        // A new project landing in an existing workspace must inherit THAT
-        // workspace's real client — otherwise, whenever the editor's client
-        // dropdown is left untouched, chosenOrgId silently falls back to the
-        // server's global default org, orphaning the project under the wrong
-        // client (invisible in any client-scoped view) despite its workspace
-        // unambiguously belonging to someone else. Only applies when master
-        // didn't explicitly pick a client (orgOverride null) — an explicit
-        // choice always wins.
-        let insertOrgId = chosenOrgId;
-        if (!orgOverride && resolvedAppId) {
-          const ownerApp = await env.DB.prepare("SELECT orgId FROM app WHERE id=?").bind(resolvedAppId).first();
-          if (ownerApp && ownerApp.orgId) insertOrgId = ownerApp.orgId;
-        }
+      } else {
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, insertOrgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
-      } else {
-        return json({ error: "project not found — create it from the main screen first" }, 404, AC);
+        ).bind(pid, finalOrgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
       }
       await env.DB.prepare(
         "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"
@@ -1860,6 +1903,126 @@ async function api(request, env, url) {
         return json({ error: e.message }, 502, CORS_PUBLIC);
       }
     }
+  }
+
+  // --- code objects ---
+  // GET /:id stays public/unauthenticated on purpose: it's fetched by
+  // pipeline-runtime.js from an anonymous visitor's browser during a live
+  // walk to resolve zone.codeObjects at GPS-tick time (see resolveCodeObjects
+  // in pipeline-runtime.js) — gating it would break execution for real
+  // visitors. Entitlement is enforced where it actually matters: what an
+  // admin can see/attach (the list below) and what a bundle is allowed to
+  // publish (PUT /api/projects/:id/bundle's codeObjects validation).
+  if (path === "/api/code-objects" && method === "GET") {
+    const orgId = url.searchParams.get("org");
+    if (!orgId) return json({ error: "org required" }, 400, AC);
+    const A = await auth(request, env);
+    if (!(await codeObjectScopeOk(env, A, orgId))) return json({ error: "forbidden" }, 403, AC);
+    // Even a platform master, viewing this org's library, only sees THIS
+    // org's custom objects (workspace isolation) plus entitlement-gated
+    // built-ins — master's bypass is of the entitlement check, not of org
+    // scoping, so it still sees every built-in regardless of grants.
+    const rows = A.master
+      ? await env.DB.prepare("SELECT id,org_id,name,description,icon,category,version,param_schema,feature_key FROM code_object WHERE org_id IS NULL OR org_id=? ORDER BY name").bind(orgId).all()
+      : await env.DB.prepare(
+          "SELECT co.id,co.org_id,co.name,co.description,co.icon,co.category,co.version,co.param_schema,co.feature_key FROM code_object co " +
+          "JOIN org_entitlement oe ON oe.feature_key=co.feature_key AND oe.org_id=? " +
+          "WHERE co.org_id IS NULL OR co.org_id=? ORDER BY co.name"
+        ).bind(orgId, orgId).all();
+    return json((rows.results || []).map(row => ({
+      id: row.id, orgId: row.org_id, name: row.name, description: row.description, icon: row.icon,
+      category: row.category, version: row.version, paramSchema: JSON.parse(row.param_schema), featureKey: row.feature_key
+    })), 200, AC);
+  }
+  if (path === "/api/code-objects" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const orgId = b.orgId;
+    if (!orgId) return json({ error: "orgId required" }, 400, AC);
+    if (!(await codeObjectScopeOk(env, A, orgId))) return json({ error: "forbidden" }, 403, AC);
+    if (!b.name || !b.template || !Array.isArray(b.template.nodes)) return json({ error: "name and template required" }, 400, AC);
+    const slug = b.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "object";
+    const id = b.id || (slug + "-" + Math.random().toString(36).slice(2, 8));
+    const featureKey = b.featureKey || id;
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO code_object (id,org_id,built_in,name,description,icon,category,version,template,param_schema,feature_key,created_at,updated_at) " +
+      "VALUES (?,?,0,?,?,?,?,1,?,?,?,?,?)"
+    ).bind(id, orgId, b.name, b.description || "", b.icon || "🧩", b.category || "custom",
+      JSON.stringify(b.template), JSON.stringify(b.paramSchema || []), featureKey, now, now).run();
+    // Self-entitled: the org that authors a custom object can use it immediately,
+    // no separate master grant step needed (grants are for built-ins / cross-org).
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO org_entitlement (org_id,feature_key,granted_at,granted_by) VALUES (?,?,?,?)"
+    ).bind(orgId, featureKey, now, A.keyId || "self").run();
+    return json({ id, featureKey }, 200, AC);
+  }
+  if (path.startsWith("/api/code-objects/") && method === "GET") {
+    const id = decodeURIComponent(path.slice("/api/code-objects/".length));
+    const row = await env.DB.prepare("SELECT * FROM code_object WHERE id=?").bind(id).first();
+    if (!row) return json({ error: "not found" }, 404, CORS_PUBLIC);
+    return json({
+      id: row.id, name: row.name, description: row.description, icon: row.icon,
+      category: row.category, version: row.version,
+      template: JSON.parse(row.template), paramSchema: JSON.parse(row.param_schema)
+    }, 200, CORS_PUBLIC);
+  }
+  if (path.startsWith("/api/code-objects/") && (method === "PATCH" || method === "DELETE")) {
+    const id = decodeURIComponent(path.slice("/api/code-objects/".length));
+    const row = await env.DB.prepare("SELECT * FROM code_object WHERE id=?").bind(id).first();
+    if (!row) return json({ error: "not found" }, 404, AC);
+    const A = await auth(request, env);
+    // Built-ins (org_id NULL) are shared across every entitled org — only a
+    // platform master may edit/delete the shared definition. Custom objects
+    // are editable by the org that owns them.
+    const ok = row.org_id == null ? !!(A && A.master) : await codeObjectScopeOk(env, A, row.org_id);
+    if (!ok) return json({ error: "forbidden" }, 403, AC);
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM code_object WHERE id=?").bind(id).run();
+      return json({ ok: true }, 200, AC);
+    }
+    const b = await request.json().catch(() => ({}));
+    const fields = [], vals = [];
+    if (b.name != null) { fields.push("name=?"); vals.push(b.name); }
+    if (b.description != null) { fields.push("description=?"); vals.push(b.description); }
+    if (b.icon != null) { fields.push("icon=?"); vals.push(b.icon); }
+    if (b.category != null) { fields.push("category=?"); vals.push(b.category); }
+    if (b.template != null) { fields.push("template=?"); vals.push(JSON.stringify(b.template)); fields.push("version=version+1"); }
+    if (b.paramSchema != null) { fields.push("param_schema=?"); vals.push(JSON.stringify(b.paramSchema)); }
+    if (!fields.length) return json({ error: "nothing to update" }, 400, AC);
+    fields.push("updated_at=?"); vals.push(new Date().toISOString());
+    vals.push(id);
+    await env.DB.prepare("UPDATE code_object SET " + fields.join(",") + " WHERE id=?").bind(...vals).run();
+    const updated = await env.DB.prepare("SELECT version FROM code_object WHERE id=?").bind(id).first();
+    return json({ ok: true, version: updated.version }, 200, AC);
+  }
+
+  // --- entitlements (the upsell lever — master-only) ---
+  if (path === "/api/entitlements" && method === "GET") {
+    const A = await auth(request, env);
+    if (!A || !A.master) return json({ error: "admin access required" }, 403, AC);
+    const orgId = url.searchParams.get("org");
+    if (!orgId) return json({ error: "org required" }, 400, AC);
+    const rows = await env.DB.prepare("SELECT feature_key,granted_at,granted_by FROM org_entitlement WHERE org_id=?").bind(orgId).all();
+    return json(rows.results || [], 200, AC);
+  }
+  if (path === "/api/entitlements" && method === "POST") {
+    const A = await auth(request, env);
+    if (!A || !A.master) return json({ error: "admin access required" }, 403, AC);
+    const b = await request.json().catch(() => ({}));
+    if (!b.orgId || !b.featureKey) return json({ error: "orgId and featureKey required" }, 400, AC);
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO org_entitlement (org_id,feature_key,granted_at,granted_by) VALUES (?,?,?,?)"
+    ).bind(b.orgId, b.featureKey, new Date().toISOString(), A.keyId || "master").run();
+    return json({ ok: true }, 200, AC);
+  }
+  if (path === "/api/entitlements" && method === "DELETE") {
+    const A = await auth(request, env);
+    if (!A || !A.master) return json({ error: "admin access required" }, 403, AC);
+    const b = await request.json().catch(() => ({}));
+    if (!b.orgId || !b.featureKey) return json({ error: "orgId and featureKey required" }, 400, AC);
+    await env.DB.prepare("DELETE FROM org_entitlement WHERE org_id=? AND feature_key=?").bind(b.orgId, b.featureKey).run();
+    return json({ ok: true }, 200, AC);
   }
 
   // --- token check ---

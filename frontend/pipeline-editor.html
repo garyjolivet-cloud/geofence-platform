@@ -80,11 +80,21 @@
 const qs = new URLSearchParams(location.search);
 const projectId = qs.get("project");
 const zoneId = qs.get("zone");
-document.getElementById("backLink").href = "/editor?app=" + encodeURIComponent(qs.get("app") || "") + "&project=" + encodeURIComponent(projectId || "");
+const codeObjectId = qs.get("codeObject");
+const codeObjectOrg = qs.get("org");
+document.getElementById("backLink").href = codeObjectId
+  ? "/code-library?org=" + encodeURIComponent(codeObjectOrg || "")
+  : "/editor?app=" + encodeURIComponent(qs.get("app") || "") + "&project=" + encodeURIComponent(projectId || "");
+if (codeObjectId) document.getElementById("backLink").textContent = "← Back to Code Library";
 
 let bundle = null, zone = null, pipeline = { v: 1, nodes: [], edges: [] };
 let selectedId = null;
 let nextId = 1;
+// Code-object authoring mode only: which node params are exposed for
+// per-attachment override, keyed "nodeId:paramKey" -> {label}. Populated
+// from the loaded paramSchema, edited via checkboxes in renderProps().
+let exposedParams = {};
+let codeObjectMeta = null; // {name,description,icon,category} of the object being authored
 
 function getToken(){
   try{ const s = localStorage.getItem("gp.session"); if (s) return s; }catch(e){}
@@ -98,6 +108,7 @@ function showErr(msg){
 }
 
 async function load(){
+  if (codeObjectId) return loadCodeObject();
   if (!projectId || !zoneId){ showErr("Missing ?project= or ?zone= in URL"); return; }
   const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle");
   if (!r.ok){ showErr("Could not load bundle for project " + projectId); return; }
@@ -107,6 +118,20 @@ async function load(){
   pipeline = zone.pipeline && zone.pipeline.v === 1 ? zone.pipeline : { v: 1, nodes: [], edges: [] };
   nextId = 1 + pipeline.nodes.reduce((m, n) => Math.max(m, parseInt((n.id || "n0").slice(1)) || 0), 0);
   document.getElementById("ctxLabel").textContent = (bundle.name || projectId) + " — " + zone.name;
+  renderPalette();
+  render();
+}
+
+async function loadCodeObject(){
+  const r = await fetch("/api/code-objects/" + encodeURIComponent(codeObjectId));
+  if (!r.ok){ showErr("Could not load code object " + codeObjectId); return; }
+  const def = await r.json();
+  codeObjectMeta = { name: def.name, description: def.description, icon: def.icon, category: def.category };
+  pipeline = def.template && def.template.v === 1 ? def.template : { v: 1, nodes: [], edges: [] };
+  exposedParams = {};
+  (def.paramSchema || []).forEach(p => { exposedParams[p.nodeId + ":" + p.paramKey] = { label: p.label, type: p.type, default: p.default }; });
+  nextId = 1 + pipeline.nodes.reduce((m, n) => Math.max(m, parseInt((n.id || "n0").slice(1)) || 0), 0);
+  document.getElementById("ctxLabel").textContent = "Code Object: " + def.name + " (v" + def.version + ")";
   renderPalette();
   render();
 }
@@ -337,7 +362,7 @@ function renderProps(){
       input.value = node.params[p.id] ?? p.default;
     } else if (p.type === "zoneSelect") {
       input = document.createElement("select");
-      (bundle.zones || []).forEach(z => { const opt = document.createElement("option"); opt.value = z.id; opt.textContent = z.name; input.appendChild(opt); });
+      ((bundle && bundle.zones) || []).forEach(z => { const opt = document.createElement("option"); opt.value = z.id; opt.textContent = z.name; input.appendChild(opt); });
       input.value = node.params[p.id] ?? "";
     } else if (p.type === "boolean") {
       input = document.createElement("input"); input.type = "checkbox"; input.style.width = "auto";
@@ -351,6 +376,22 @@ function renderProps(){
       node.params[p.id] = p.type === "boolean" ? input.checked : p.type === "number" ? Number(input.value) : input.value;
     });
     el.appendChild(input);
+
+    if (codeObjectId) {
+      const key = node.id + ":" + p.id;
+      const expRow = document.createElement("label");
+      expRow.style.cssText = "display:flex;align-items:center;gap:6px;margin-top:3px;font-family:'Barlow Condensed';font-size:11px;color:var(--fog)";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.style.width = "auto";
+      cb.checked = key in exposedParams;
+      cb.addEventListener("change", () => {
+        if (cb.checked) exposedParams[key] = { label: p.label || p.id, type: p.type, default: node.params[p.id] };
+        else delete exposedParams[key];
+      });
+      expRow.appendChild(cb);
+      expRow.appendChild(document.createTextNode("expose to attachments"));
+      el.appendChild(expRow);
+    }
   });
 }
 
@@ -359,14 +400,29 @@ document.getElementById("saveBtn").addEventListener("click", async () => {
   const { cyclic } = PipelineRuntime.topoSort(pipeline.nodes, pipeline.edges);
   if (cyclic) { showErr("Pipeline has a cycle — remove a connection before saving"); return; }
   showErr(null);
-  zone.pipeline = pipeline;
   const token = getToken();
+  const msg = document.getElementById("saveMsg");
+  if (codeObjectId) {
+    const paramSchema = Object.keys(exposedParams).map(key => {
+      const [nodeId, paramKey] = key.split(":");
+      const meta = exposedParams[key];
+      return { id: paramKey, nodeId, paramKey, type: meta.type, default: meta.default, label: meta.label };
+    });
+    const r = await fetch("/api/code-objects/" + encodeURIComponent(codeObjectId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body: JSON.stringify({ template: pipeline, paramSchema })
+    });
+    if (r.ok) { msg.textContent = "Saved"; setTimeout(() => msg.textContent = "", 2000); }
+    else { const e = await r.json().catch(() => ({})); showErr("Save failed: " + (e.error || r.status)); }
+    return;
+  }
+  zone.pipeline = pipeline;
   const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle", {
     method: "PUT",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
     body: JSON.stringify(bundle)
   });
-  const msg = document.getElementById("saveMsg");
   if (r.ok) { msg.textContent = "Saved"; setTimeout(() => msg.textContent = "", 2000); }
   else { showErr("Save failed: " + r.status); }
 });

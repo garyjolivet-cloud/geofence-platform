@@ -54,6 +54,12 @@ const BLOCKS = {
     inputs: [], outputs: [{ id: "seconds", type: "number" }],
     params: []
   },
+  "data.zone_props": {
+    label: "Zone Properties", category: "data",
+    inputs: [],
+    outputs: [{ id: "bearingDeg", type: "number" }, { id: "isHazard", type: "gate" }, { id: "id", type: "text" }],
+    params: []
+  },
   "logic.compare": {
     label: "Compare", category: "logic",
     inputs: [{ id: "in", type: "number" }, { id: "gate", type: "gate" }],
@@ -72,6 +78,12 @@ const BLOCKS = {
     label: "Or", category: "logic",
     inputs: [{ id: "a", type: "gate" }, { id: "b", type: "gate" }],
     outputs: [{ id: "out", type: "gate" }], params: []
+  },
+  "logic.aspect_load": {
+    label: "Aspect Load", category: "logic",
+    inputs: [{ id: "windDirDeg", type: "number" }, { id: "bearingDeg", type: "number" }],
+    outputs: [{ id: "out", type: "gate" }],
+    params: [{ id: "toleranceDeg", type: "number", default: 90, label: "Tolerance (deg)" }]
   },
   "action.speak": {
     label: "Speak", category: "action",
@@ -134,13 +146,72 @@ let dataCache = {}; // { weather:{...}, snowHistory:{...} } — shared across zo
 let dataTimer = null;
 let callbacks = {};
 
-function compile(zone) {
-  const pipeline = zone.pipeline;
-  if (!pipeline || !Array.isArray(pipeline.nodes) || !pipeline.nodes.length) return null;
-  const { order, cyclic } = topoSort(pipeline.nodes, pipeline.edges || []);
+// objectId@version -> {template:{v,nodes,edges}, paramSchema} — fetched once,
+// cached forever per page load (a given version's definition is immutable).
+const codeObjectDefCache = {};
+
+async function fetchCodeObjectDef(objectId, version) {
+  const key = objectId + "@" + version;
+  if (key in codeObjectDefCache) return codeObjectDefCache[key];
+  let def = null;
+  try {
+    const r = await fetch("/api/code-objects/" + encodeURIComponent(objectId));
+    if (r.ok) def = await r.json();
+  } catch (e) { /* degrade silently, same convention as refreshDataCache */ }
+  codeObjectDefCache[key] = def;
+  return def;
+}
+
+// Inlines each attached code object's template nodes/edges, namespaced per
+// instance so multiple attachments (or the same object attached twice) never
+// collide with each other or with the zone's own hand-built pipeline nodes.
+async function resolveCodeObjects(zone) {
+  const nodes = [], edges = [];
+  if (!zone.codeObjects || !zone.codeObjects.length) return { nodes, edges };
+  let idx = 0;
+  for (const inst of zone.codeObjects) {
+    const def = await fetchCodeObjectDef(inst.objectId, inst.version);
+    idx++;
+    if (!def || !def.template || !Array.isArray(def.template.nodes)) continue;
+    const prefix = "co" + idx + "_";
+    const idMap = {};
+    def.template.nodes.forEach(n => { idMap[n.id] = prefix + n.id; });
+    // Rewrite {{nodeId.port}} interpolation references (e.g. in action.speak's
+    // text param) to the namespaced node ids — otherwise a template's own
+    // internal references silently resolve to nothing once its nodes are
+    // renamed, since interpolate() looks values up by the *compiled* node id.
+    const rewriteRefs = (s) => typeof s === "string"
+      ? s.replace(/\{\{(\w+)\.(\w+)\}\}/g, (m, n, p) => (n in idMap) ? "{{" + idMap[n] + "." + p + "}}" : m)
+      : s;
+    def.template.nodes.forEach(n => {
+      const nid = idMap[n.id];
+      const params = {};
+      Object.keys(n.params || {}).forEach(k => { params[k] = rewriteRefs(n.params[k]); });
+      (def.paramSchema || []).forEach(p => {
+        if (p.nodeId === n.id && inst.params && inst.params[p.paramKey] !== undefined) {
+          params[p.paramKey] = inst.params[p.paramKey];
+        }
+      });
+      nodes.push({ ...n, id: nid, params });
+    });
+    (def.template.edges || []).forEach(e => {
+      if (!(e.from.n in idMap) || !(e.to.n in idMap)) return; // dangling within its own template — ignore
+      edges.push({ id: prefix + e.id, from: { n: idMap[e.from.n], p: e.from.p }, to: { n: idMap[e.to.n], p: e.to.p } });
+    });
+  }
+  return { nodes, edges };
+}
+
+async function compile(zone) {
+  const pipeline = (zone.pipeline && Array.isArray(zone.pipeline.nodes)) ? zone.pipeline : { nodes: [], edges: [] };
+  const resolved = await resolveCodeObjects(zone);
+  const nodes = [...pipeline.nodes, ...resolved.nodes];
+  const edges = [...(pipeline.edges || []), ...resolved.edges];
+  if (!nodes.length) return null;
+  const { order, cyclic } = topoSort(nodes, edges);
   if (cyclic) { console.warn("[PipelineRuntime] zone", zone.id, "pipeline has a cycle — skipped"); return null; }
-  const byId = {}; pipeline.nodes.forEach(n => byId[n.id] = n);
-  return { order, byId, edges: pipeline.edges || [], zone };
+  const byId = {}; nodes.forEach(n => byId[n.id] = n);
+  return { order, byId, edges, zone };
 }
 
 async function refreshDataCache() {
@@ -162,13 +233,28 @@ async function refreshDataCache() {
 const PipelineRuntime = {
   BLOCKS, topoSort, // exposed for pipeline-editor.html's validation/property-panel use
 
-  load(zone, opts) {
+  async load(zone, opts) {
     callbacks = opts || {};
-    const g = compile(zone);
+    const g = await compile(zone);
     if (g) compiled[zone.id] = g;
     if (!dataTimer) {
       refreshDataCache();
       dataTimer = setInterval(refreshDataCache, 5 * 60 * 1000);
+    }
+  },
+
+  // Warms codeObjectDefCache for every zone in a bundle before any GPS event
+  // fires, so the per-zone `await load()` on actual entry resolves instantly
+  // instead of racing the first tick against a network fetch.
+  async prefetch(zones) {
+    const seen = new Set();
+    for (const zone of (zones || [])) {
+      for (const inst of (zone.codeObjects || [])) {
+        const key = inst.objectId + "@" + inst.version;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        await fetchCodeObjectDef(inst.objectId, inst.version);
+      }
     }
   },
 
@@ -221,6 +307,26 @@ const PipelineRuntime = {
           break;
         }
         case "data.dwell_time": cache[id].seconds = evt.dwellSeconds ?? null; break;
+        case "data.zone_props": {
+          cache[id].bearingDeg = (g.zone && g.zone.bearingDeg != null) ? g.zone.bearingDeg : null;
+          cache[id].isHazard = !!(g.zone && g.zone.isHazard);
+          cache[id].id = g.zone ? g.zone.id : null;
+          break;
+        }
+        case "logic.aspect_load": {
+          const windDirDeg = getIn("windDirDeg"); const bearingDeg = getIn("bearingDeg");
+          const tol = (node.params && node.params.toleranceDeg) || 90;
+          let pass = false;
+          if (windDirDeg != null && bearingDeg != null) {
+            // "Loaded" aspect is the leeward side — roughly opposite the direction wind blows from.
+            const leewardDeg = (windDirDeg + 180) % 360;
+            let diff = Math.abs(bearingDeg - leewardDeg) % 360;
+            if (diff > 180) diff = 360 - diff;
+            pass = diff <= tol / 2;
+          }
+          cache[id].out = pass;
+          break;
+        }
         case "logic.compare": {
           const inVal = getIn("in"); const gate = getIn("gate");
           const op = (node.params && node.params.op) || "gt";
