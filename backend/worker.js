@@ -1942,8 +1942,15 @@ async function api(request, env, url) {
     if (!(await codeObjectScopeOk(env, A, orgId))) return json({ error: "forbidden" }, 403, AC);
     if (!b.name || !b.template || !Array.isArray(b.template.nodes)) return json({ error: "name and template required" }, 400, AC);
     const slug = b.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "object";
-    const id = b.id || (slug + "-" + Math.random().toString(36).slice(2, 8));
-    const featureKey = b.featureKey || id;
+    // id/featureKey are always server-generated, never taken from the client:
+    // feature_key is the exact key self-entitled to this org two lines below,
+    // so trusting a client-supplied featureKey let any org with "publish"
+    // scope self-grant an EXISTING feature_key (e.g. a real built-in's) just
+    // by naming their own dummy object with a matching string — bypassing
+    // the master-only /api/entitlements gate entirely. id is likewise never
+    // client-controlled so it can't be pointed at an existing row.
+    const id = slug + "-" + Math.random().toString(36).slice(2, 8);
+    const featureKey = id;
     const now = new Date().toISOString();
     await env.DB.prepare(
       "INSERT INTO code_object (id,org_id,built_in,name,description,icon,category,version,template,param_schema,feature_key,created_at,updated_at) " +

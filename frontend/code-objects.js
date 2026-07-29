@@ -17,6 +17,12 @@
   let _cache = null;      // list of {id,name,icon,category,description,paramSchema,version}
   let _cacheOrg = null;   // orgId the current _cache was fetched for — refetch on change
 
+  // obj.name/obj.icon (and zone.name, used in openMatrix()) are attacker-
+  // controllable — any org with "publish" scope sets them via POST
+  // /api/code-objects with no server-side sanitization — so every innerHTML
+  // interpolation of them in this module must go through this first.
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
   // The list endpoint is entitlement-gated (unlike the single-object GET
   // used by pipeline-runtime.js's runtime resolver, which stays public —
   // see worker.js's comment on that route) so it needs an org + bearer token.
@@ -170,9 +176,9 @@
     if (!list.length || !zones.length) {
       html += '<div class="co-empty">' + (!list.length ? "no code objects available" : "no stops yet") + '</div>';
     } else {
-      html += '<table><tr><th>Stop</th>' + list.map(o => '<th>' + o.icon + ' ' + o.name + '</th>').join("") + '</tr>';
+      html += '<table><tr><th>Stop</th>' + list.map(o => '<th>' + esc(o.icon) + ' ' + esc(o.name) + '</th>').join("") + '</tr>';
       zones.forEach((z, zi) => {
-        html += '<tr><td>' + (z.name || "Stop " + (zi + 1)) + '</td>' + list.map(o => {
+        html += '<tr><td>' + esc(z.name || "Stop " + (zi + 1)) + '</td>' + list.map(o => {
           const checked = (z.codeObjects || []).some(co => co.objectId === o.id);
           return '<td style="text-align:center"><input type="checkbox" data-zi="' + zi + '" data-oid="' + o.id + '" ' + (checked ? "checked" : "") + '></td>';
         }).join("") + '</tr>';
@@ -265,7 +271,7 @@
         card.className = "co-card";
         card.draggable = true;
         card.title = obj.description || "";
-        card.innerHTML = '<span class="ic">' + obj.icon + '</span><span class="nm">' + obj.name + '</span>' +
+        card.innerHTML = '<span class="ic">' + esc(obj.icon) + '</span><span class="nm">' + esc(obj.name) + '</span>' +
           '<button class="co-remove" title="remove from current selection">−</button>';
         card.addEventListener("dragstart", (e) => {
           e.dataTransfer.setData("codeobjectid", obj.id);

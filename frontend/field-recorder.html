@@ -1605,7 +1605,7 @@ async function openCodeObjectPicker(stopLike){
     const checked = (stopLike.codeObjects||[]).some(co=>co.objectId===o.id);
     return `<label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #1a2433">
       <input type="checkbox" data-oid="${esc(o.id)}" ${checked?"checked":""} style="width:20px;height:20px">
-      <span>${o.icon} ${esc(o.name)}</span>
+      <span>${esc(o.icon)} ${esc(o.name)}</span>
     </label>`;
   }).join("");
   openSheet("🧩 "+esc(stopLike.name||"Stop"), html, async () => {

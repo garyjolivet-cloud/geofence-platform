@@ -1524,6 +1524,10 @@ function updatePipelineSummary(zone){
   const hasGuide=nodes.some(n=>n.type==="action.guide_to_zone");
   el.textContent=nodes.length+" block"+(nodes.length===1?"":"s")+(hasGuide?" · guides visitor":"");
 }
+// obj.name/obj.icon (code_object rows, set via POST /api/code-objects with no
+// server-side sanitization) and zone.name are attacker-controllable — must
+// never go into innerHTML unescaped.
+function escHtml(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function updateCodeObjectsSummary(zone){
   const el=document.getElementById("pCodeObjectsChips"); if(!el) return;
   const list=zone.codeObjects||[];
@@ -1531,9 +1535,9 @@ function updateCodeObjectsSummary(zone){
   const cached=(typeof CodeObjects!=="undefined")?CodeObjects.getCached():[];
   el.innerHTML=list.map(co=>{
     const meta=cached.find(o=>o.id===co.objectId);
-    const label=meta?(meta.icon+" "+meta.name):co.objectId;
+    const label=meta?escHtml(meta.icon+" "+meta.name):escHtml(co.objectId);
     return '<span class="chk" style="background:rgba(255,106,61,.1);border:1px solid var(--rim);border-radius:8px;padding:3px 6px;font-size:12px;display:inline-flex;align-items:center;gap:5px">'
-      +label+'<button data-oid="'+co.objectId+'" style="background:none;border:none;color:var(--fog);cursor:pointer;font-size:12px;padding:0">✕</button></span>';
+      +label+'<button data-oid="'+escHtml(co.objectId)+'" style="background:none;border:none;color:var(--fog);cursor:pointer;font-size:12px;padding:0">✕</button></span>';
   }).join("");
   el.querySelectorAll("button[data-oid]").forEach(btn=>{
     btn.onclick=()=>{
