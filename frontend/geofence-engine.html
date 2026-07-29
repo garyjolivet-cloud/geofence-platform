@@ -815,7 +815,12 @@ const SpatialVoice = {
     for(let ch=0;ch<2;ch++){const d=b.getChannelData(ch);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,decay);}return b; },
   async load(url){
     if(this.buffers[url]) return this.buffers[url];
-    const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+    // playZone() runs on every GPS fix while a visitor is in range — without
+    // caching a 404 here, a single broken clip reference re-fetches the same
+    // dead URL (and re-logs a warning) on every fix instead of failing once.
+    if(this._dead && this._dead.has(url)) throw new Error('skipped (previous 404)');
+    const r=await fetch(url);
+    if(!r.ok){ if(!this._dead) this._dead=new Set(); this._dead.add(url); throw new Error('HTTP '+r.status); }
     const ct=(r.headers.get('content-type')||'audio/mpeg').split(';')[0].trim();
     const ab=await r.arrayBuffer();
     try{
@@ -866,7 +871,12 @@ const SpatialVoice = {
     this.tuning.clearM=clearM;
     this.loadingUrl=url;
     let loaded; try{ loaded=await this.load(url); }
-    catch(e){ this.loadingUrl=null; HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); return; }
+    catch(e){
+      this.loadingUrl=null;
+      if(!this._warned) this._warned=new Set();
+      if(!this._warned.has(url)){ this._warned.add(url); HUD.log('ev-warn','audio load failed ('+zone.name+'): '+e.message); }
+      return;
+    }
     this.loadingUrl=null;
     const c=this.ctx;
     // stop previous source
@@ -968,7 +978,11 @@ const AmbientVoice = {
     for(let ch=0;ch<2;ch++){const d=b.getChannelData(ch);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,decay);}return b; },
   async load(url){
     if(this.buffers[url]) return this.buffers[url];
-    const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+    // tick() runs on every GPS fix while a visitor is in range — same reason
+    // as SpatialVoice.load(): cache a 404 so it fails once, not on every fix.
+    if(this._dead && this._dead.has(url)) throw new Error('skipped (previous 404)');
+    const r=await fetch(url);
+    if(!r.ok){ if(!this._dead) this._dead=new Set(); this._dead.add(url); throw new Error('HTTP '+r.status); }
     const ct=(r.headers.get('content-type')||'audio/mpeg').split(';')[0].trim();
     const ab=await r.arrayBuffer();
     try{
@@ -999,7 +1013,12 @@ const AmbientVoice = {
     this.tuning.clearM=clearM;
     this.loadingUrl=url;
     let loaded; try{ loaded=await this.load(url); }
-    catch(e){ this.loadingUrl=null; HUD.log('ev-warn','ambient audio load failed ('+zone.name+'): '+e.message); return; }
+    catch(e){
+      this.loadingUrl=null;
+      if(!this._warned) this._warned=new Set();
+      if(!this._warned.has(url)){ this._warned.add(url); HUD.log('ev-warn','ambient audio load failed ('+zone.name+'): '+e.message); }
+      return;
+    }
     this.loadingUrl=null;
     const c=this.ctx;
     if(this.src){
