@@ -223,7 +223,16 @@ async function openEntitlements(clientId, clientName){
       });
       $("entList").appendChild(row);
     });
-    if(customCount) $("entList").innerHTML+='<p class="note">+ '+customCount+' custom object'+(customCount===1?"":"s")+' this client authored (always available to them).</p>';
+    if(customCount){
+      // Appended as a real node, not innerHTML+= — that destroys and rebuilds
+      // every existing child (including the checkbox rows above), silently
+      // stripping their change listeners. Confirmed live: broke entitlement
+      // toggling for any client with >=1 custom code object.
+      const note=document.createElement("p");
+      note.className="note";
+      note.textContent="+ "+customCount+" custom object"+(customCount===1?"":"s")+" this client authored (always available to them).";
+      $("entList").appendChild(note);
+    }
   }catch(e){ $("entList").innerHTML='<p class="note">Couldn\'t reach the platform.</p>'; }
 }
 

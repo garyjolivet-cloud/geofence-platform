@@ -255,7 +255,10 @@
       body.appendChild(hint);
     }
     if (!list.length) {
-      body.innerHTML += '<div class="co-empty">no code objects available</div>';
+      const empty = document.createElement("div");
+      empty.className = "co-empty";
+      empty.textContent = "no code objects available";
+      body.appendChild(empty);
     } else {
       list.forEach(obj => {
         const card = document.createElement("div");
