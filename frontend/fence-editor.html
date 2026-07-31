@@ -135,42 +135,7 @@
   .r2key{font-family:'Barlow Condensed';font-size:12px;color:#eef4fb;word-break:break-all}
   .r2sz{font-family:'Barlow Condensed';font-size:11px;color:#5b7088}
   .r2btns{display:flex;gap:6px;flex-shrink:0}
-  /* Audio Files panel (docked in the editor; also used standalone by /library) */
-  .af-tabs{display:flex;gap:4px;margin-bottom:6px}
-  .af-tab{flex:1;font-family:'Barlow Condensed';font-size:11px;font-weight:700;text-transform:uppercase;
-          letter-spacing:.4px;padding:6px 4px;text-align:center;border:1px solid var(--rim);border-radius:8px;
-          background:none;color:var(--fog);cursor:pointer}
-  .af-tab.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
-  .af-crumb{display:flex;align-items:center;gap:6px;margin:2px 0 6px;font-family:'Barlow Condensed';font-size:12px;color:var(--fog)}
-  .af-crumb select{flex:1;background:var(--slate-2);border:1px solid var(--rim);color:var(--ice);
-                    border-radius:7px;padding:4px 6px;font-family:'Barlow Condensed';font-size:12px}
-  .af-crumb button{flex:0 0 auto;background:none;border:1px solid var(--rim);border-radius:7px;color:var(--ice);
-                    font-family:'Barlow Condensed';font-size:11px;padding:4px 8px;cursor:pointer}
-  .af-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:4px;margin:0 0 6px}
-  .af-folder-tile{border:1px solid var(--rim);border-radius:7px;padding:6px 4px;text-align:center;cursor:pointer;
-                   background:rgba(255,255,255,.02);font-family:'Barlow Condensed';font-size:10px;color:var(--ice);
-                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .af-folder-tile:hover{border-color:var(--coral)}
-  .af-list{max-height:220px;overflow-y:auto}
-  /* wraps on narrow viewports (the docked editor panel) — the button group
-     drops to its own right-aligned line instead of forcing the row to
-     overflow horizontally; on wider viewports (the standalone /library
-     page) everything still fits on one line */
-  .af-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0;border-top:1px solid #26344a;position:relative}
-  .af-row .af-drag{cursor:grab;color:var(--fog);flex:0 0 auto;font-size:13px}
-  .af-row .af-info{flex:1 1 90px;min-width:0}
-  .af-row .af-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-                    font-family:'Barlow Condensed';font-size:12px;color:#eef4fb}
-  .af-row .af-sz{font-family:'Barlow Condensed';font-size:10px;color:#5b7088}
-  .af-row .af-exp{font-family:'Barlow Condensed';font-size:10px;color:var(--amber)}
-  .af-row .af-btns{display:flex;gap:4px;flex:0 0 auto;margin-left:auto}
-  .af-row button{background:none;border:1px solid #26344a;border-radius:6px;color:#8fb6d4;
-                  font-family:'Barlow Condensed';font-weight:700;font-size:11px;padding:3px 7px;cursor:pointer;flex:0 0 auto}
-  .af-row button.af-use{background:#ff6a3d;border:none;color:#1a0d07}
-  .af-row button.af-del{border-color:var(--hazard);color:var(--hazard)}
-  .af-row input[type=checkbox]{flex:0 0 auto;accent-color:var(--coral)}
-  .af-empty{font-family:'Barlow Condensed';font-size:12px;color:var(--fog);text-align:center;padding:12px 0}
-  .af-name input{width:100%;font-size:12px;padding:2px 4px}
+  /* Audio Palette drag-source tree lives in #afTreeHost, styled by audio-tree.js itself */
   .clip-menu{display:none;position:absolute;top:100%;right:6px;margin-top:4px;min-width:150px;
              background:var(--slate);border:1px solid var(--rim);border-radius:10px;overflow:hidden;
              box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:25;flex-direction:column}
@@ -303,6 +268,7 @@
 <script src="/guidance-bot.js"></script>
 <script src="/pipeline-runtime.js"></script>
 <script src="/code-objects.js"></script>
+<script src="/audio-tree.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -686,22 +652,12 @@
   <div id="audioPaletteHead">
     <span class="ttl">&#128193; Audio Palette</span>
     <a href="/studio" id="afOpenStudio" class="ghost" style="color:var(--coral);text-decoration:none">Open in Studio &rarr;</a>
+    <button id="afRefresh" class="ghost" title="Refresh">&#8635;</button>
     <button id="audioPaletteMin" class="ghost" title="Minimize">&#8722;</button>
   </div>
   <div id="audioPaletteBody">
-    <div class="af-tabs">
-      <button class="af-tab on" id="afTabProject">This Project</button>
-      <button class="af-tab" id="afTabLibrary">Library</button>
-      <button id="afRefresh" class="ghost" style="flex:0 0 auto;font-size:11px">&#8635;</button>
-    </div>
-    <div id="afNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to use its shared Library</div>
-    <div class="af-crumb" id="afCrumb" style="display:none">
-      <button id="afFolderBack" class="ghost" style="display:none;font-size:10px">&larr; root</button>
-      <span class="hint" id="afFolderLabel">&#128193; Library (root)</span>
-    </div>
-    <div id="afFolderGrid" class="af-folder-grid" style="display:none"></div>
-    <div id="afStatus" class="hint" style="display:none;font-size:10px;margin:0"></div>
-    <div class="af-list" id="afList"></div>
+    <div id="afNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to see its shared Library here too</div>
+    <div id="afTreeHost"></div>
     <div class="hint">drag &#10241; onto a stop on the map, or a stop in the list, to assign a clip</div>
   </div>
 </div>
@@ -784,6 +740,13 @@ let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
 let sel=-1;                 // selected zone index (-1 = none)
 let coBulkMode=false;        // "Bulk assign" mode — shows checkboxes in #zlist
 let coBulkSel=new Set();     // zone indices checked while coBulkMode is on
+// Declared here (not down near loadFromPlatform/publishToPlatform, where it
+// conceptually belongs) because afProjectId() — called synchronously at
+// script-load time by the AudioTree.mount() call below — reads it. `let` is
+// in the temporal dead zone until its declaration line runs, so declaring it
+// later than that mount call threw "Cannot access '_currentProjectId' before
+// initialization" and aborted the rest of the script on every page load.
+let _currentProjectId=null;
 
 /* ---- localStorage auto-save / auto-restore ---- */
 const DRAFT_KEY="gp.editor.draft";
@@ -1822,8 +1785,6 @@ document.getElementById("pAudioClear").onclick=async()=>{
    Recording, trimming, moving, deleting, combining, and uploading now all
    live in Audio Studio (/studio) — this panel only lists clips to drag onto
    a stop, plus a read-only folder browser and a deep link into Studio. ---- */
-let afTab="project", afFolder="";
-let afKnownFolders=new Set(), afPendingFolders=new Set();
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
 
@@ -1875,218 +1836,24 @@ document.getElementById("audioPaletteMin").onclick=e=>{
     document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
   });
 })();
-function afSetTab(tab){
-  afTab=tab; afFolder="";
-  document.getElementById("afTabProject").classList.toggle("on",tab==="project");
-  document.getElementById("afTabLibrary").classList.toggle("on",tab==="library");
-  doAudioRefresh();
-}
-document.getElementById("afTabProject").onclick=()=>afSetTab("project");
-document.getElementById("afTabLibrary").onclick=()=>afSetTab("library");
-document.getElementById("afRefresh").onclick=doAudioRefresh;
-document.getElementById("afFolderBack").onclick=()=>{ afFolder=""; doAudioRefresh(); };
-
-async function doAudioRefresh(){
-  const list=document.getElementById("afList");
-  document.getElementById("afNoOrg").style.display="none";
-  document.getElementById("afCrumb").style.display="none";
-  document.getElementById("afFolderGrid").style.display="none";
-  document.getElementById("afOpenStudio").href=afOpenStudioHref();
-  if(afTab==="library" && !afOrgId()){
-    document.getElementById("afNoOrg").style.display="block";
-    list.innerHTML="";
-    return;
-  }
-  list.innerHTML='<div class="af-empty">loading…</div>';
-  try{
-    let qs;
-    if(afTab==="project"){
-      const pid=afProjectId();
-      if(!pid){ list.innerHTML='<div class="af-empty">save this tour first</div>'; return; }
-      qs="project="+encodeURIComponent(pid);
-    } else {
-      qs="scope=library&org="+encodeURIComponent(afOrgId())+(afFolder?"&folder="+encodeURIComponent(afFolder):"");
-    }
-    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
-    if(r.status===401){ list.innerHTML='<div class="af-empty">token rejected — needs audio/publish scope</div>'; clearToken(); return; }
-    const j=r.ok?await r.json():{objects:[],folders:[]};
-    if(afTab==="library"){
-      document.getElementById("afCrumb").style.display="flex";
-      document.getElementById("afFolderBack").style.display=afFolder?"inline-block":"none";
-      document.getElementById("afFolderLabel").textContent=afFolder?("📁 "+afFolder):"📁 Library (root)";
-      if(!afFolder){
-        // non-root listings never report folders (R2 has no real nesting) —
-        // only a root listing is authoritative for "which folders exist".
-        afKnownFolders=new Set(j.folders||[]);
-        const grid=document.getElementById("afFolderGrid");
-        grid.innerHTML="";
-        (j.folders||[]).forEach(f=>{
-          const t=document.createElement("div"); t.className="af-folder-tile"; t.textContent=f;
-          t.onclick=()=>{ afFolder=f; doAudioRefresh(); };
-          grid.appendChild(t);
-        });
-        grid.style.display=(j.folders||[]).length?"grid":"none";
-      }
-    }
-    renderAudioList(j.objects||[]);
-  }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
-}
-function renderAudioList(objects){
-  const list=document.getElementById("afList");
-  list.innerHTML="";
-  if(!objects.length){ list.innerHTML='<div class="af-empty">no audio files yet</div>'; return; }
-  objects.forEach(o=>list.appendChild(afBuildRow(o)));
-}
-function afFmtExpiry(ts){
-  const ms=ts-Date.now(); if(ms<=0) return "expiring…";
-  const m=Math.round(ms/60000);
-  return m<60?("expires in "+m+"m"):("expires in "+Math.round(m/60)+"h");
-}
-function afBuildRow(o){
-  const row=document.createElement("div"); row.className="af-row";
-  row.draggable=true;
-  row.addEventListener("dragstart",e=>{
-    e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key);
-    e.dataTransfer.effectAllowed="copy";
-  });
-  const drag=document.createElement("span"); drag.className="af-drag"; drag.textContent="⠿";
-  const playBtn=document.createElement("button"); playBtn.textContent="▶";
-  playBtn.addEventListener("click",()=>afTogglePlay(o,playBtn));
-  const info=document.createElement("div"); info.className="af-info";
-  const nm=document.createElement("div"); nm.className="af-name"; nm.textContent=o.key.split("/").pop();
-  info.appendChild(nm);
-  if(o.expiresAt){ const exp=document.createElement("div"); exp.className="af-exp"; exp.textContent="⏳ "+afFmtExpiry(o.expiresAt); info.appendChild(exp); }
-  const moreBtn=document.createElement("button"); moreBtn.textContent="⋯"; moreBtn.title="Rename, move, or delete";
-  const menu=buildClipMenu(o,nm);
-  moreBtn.onclick=e=>{
-    e.stopPropagation();
-    const wasOpen=menu.classList.contains("show");
-    closeClipMenus();
-    if(!wasOpen){ menu.classList.add("show"); _openClipMenu=menu; }
-  };
-  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(info); row.appendChild(moreBtn); row.appendChild(menu);
-  return row;
-}
-let _afPlaying=null;
-function afTogglePlay(o,btn){
-  if(_afPlaying&&_afPlaying.url===o.url){ _afPlaying.audio.pause(); _afPlaying=null; btn.textContent="▶"; return; }
-  if(_afPlaying){ _afPlaying.audio.pause(); _afPlaying.btn.textContent="▶"; }
-  const audio=new Audio(o.url); audio.play();
-  audio.onended=()=>{ btn.textContent="▶"; _afPlaying=null; };
-  _afPlaying={url:o.url,audio,btn}; btn.textContent="⏸";
-}
-let _openClipMenu=null;
-function closeClipMenus(){
-  document.querySelectorAll(".clip-menu.show").forEach(m=>m.classList.remove("show"));
-  _openClipMenu=null;
-}
-document.addEventListener("click",e=>{
-  if(_openClipMenu && !_openClipMenu.contains(e.target)) closeClipMenus();
+// Drag-source-only clip browser — all editing (rename/move/copy/delete/
+// upload) lives in Audio Studio, so this mounts audio-tree.js read-only.
+// Still one unified tree (project folders + a pinned Library subtree), same
+// as Studio, just without the CRUD affordances.
+const audioTree=AudioTree.mount(document.getElementById("afTreeHost"),{
+  mode:"project",
+  projectId: afProjectId(),
+  projectLabel: projName()||afProjectId(),
+  orgId: afOrgId(),
+  getToken,
+  readOnly:true,
+  onError: ()=>{} // drag-source only — nothing here can fail loudly enough to need a popup
 });
-document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeClipMenus(); });
-function buildClipMenu(o,nameEl){
-  const menu=document.createElement("div"); menu.className="clip-menu";
-  const renameBtn=document.createElement("button"); renameBtn.className="clip-menu-item"; renameBtn.type="button"; renameBtn.textContent="✎ Rename";
-  renameBtn.onclick=e=>{ e.stopPropagation(); closeClipMenus(); startClipRename(o,nameEl); };
-  menu.appendChild(renameBtn);
-  if(o.key.startsWith("library/")){
-    const moveBtn=document.createElement("button"); moveBtn.className="clip-menu-item"; moveBtn.type="button"; moveBtn.textContent="📁 Move to…";
-    moveBtn.onclick=e=>{ e.stopPropagation(); showMoveSubmenu(o,menu); };
-    menu.appendChild(moveBtn);
-  }
-  const delBtn=document.createElement("button"); delBtn.className="clip-menu-item danger"; delBtn.type="button"; delBtn.textContent="🗑 Delete";
-  delBtn.onclick=async e=>{
-    e.stopPropagation(); closeClipMenus();
-    const name=o.key.split("/").pop();
-    if(!confirm('Delete "'+name+'"? This cannot be undone.')) return;
-    try{
-      const r=await fetch(o.url,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-      if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
-      doAudioRefresh();
-    }catch(e){ alert("Delete failed: "+e.message); }
-  };
-  menu.appendChild(delBtn);
-  return menu;
-}
-function startClipRename(o,nameEl){
-  if(nameEl.querySelector("input")) return; // already renaming this row — don't stack a second closure on top
-  const dir=o.key.slice(0,o.key.length-o.key.split("/").pop().length);
-  const oldName=o.key.split("/").pop();
-  const extM=oldName.match(/\.([^.]+)$/), ext=extM?extM[1]:"mp3", base=oldName.replace(/\.[^.]+$/,"");
-  nameEl.innerHTML='<input type="text" maxlength="60">';
-  const inp=nameEl.querySelector("input"); inp.value=base; inp.focus(); inp.select();
-  // busy stays true for the whole round trip, including while confirm() is
-  // open — alert()/confirm() blur the focused input as a side effect, and
-  // without this guard that reentrant blur re-invokes commit() (which shows
-  // another alert(), which blurs again, ...), an infinite dialog loop. It
-  // only drops back to false once we've decided the outcome (retry, cancel
-  // back to editing, or give up) so any reentrant call in between is a no-op.
-  let busy=false;
-  const move=(to,overwrite)=>fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to,overwrite})});
-  const commit=async()=>{
-    if(busy) return;
-    const newBase=slug(inp.value);
-    if(!newBase || newBase===base){ doAudioRefresh(); return; }
-    busy=true;
-    const to=dir+newBase+"."+ext;
-    let r;
-    try{ r=await move(to,false); }
-    catch(e){ busy=false; alert("Rename failed: "+e.message); inp.focus(); return; }
-    if(r.status===404){
-      // the clip itself is gone (renamed/deleted elsewhere) — no point
-      // leaving them editing a name for a file that no longer exists.
-      busy=false; alert("This clip no longer exists — the list will refresh."); doAudioRefresh(); return;
-    }
-    if(r.status===409){
-      const replace=confirm('A file named "'+newBase+"."+ext+'" already exists. Replace it?');
-      if(replace){
-        try{
-          const r2=await move(to,true);
-          busy=false;
-          if(r2.status===404){ alert("This clip no longer exists — the list will refresh."); doAudioRefresh(); return; }
-          if(!r2.ok){ alert("Replace failed: "+(await r2.text())); inp.focus(); return; }
-          doAudioRefresh();
-        }catch(e){ busy=false; alert("Replace failed: "+e.message); inp.focus(); }
-      } else {
-        busy=false;
-        inp.focus(); inp.select(); // back to the name prompt to allow a change
-      }
-      return;
-    }
-    busy=false;
-    if(!r.ok){ alert("Rename failed: "+(await r.text())); inp.focus(); return; }
-    doAudioRefresh();
-  };
-  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") doAudioRefresh(); });
-  inp.addEventListener("blur",commit);
-}
-function showMoveSubmenu(o,menu){
-  const old=menu.querySelector(".clip-menu-folders"); if(old){ old.remove(); return; }
-  const wrap=document.createElement("div"); wrap.className="clip-menu-folders";
-  const currentFolder=o.key.split("/").slice(2,-1).join("/");
-  const opts=[["","Library (root)"],...[...new Set([...afKnownFolders,...afPendingFolders])].sort().map(f=>[f,f])];
-  opts.forEach(([val,label])=>{
-    if(val===currentFolder) return;
-    const b=document.createElement("button"); b.className="clip-menu-item"; b.type="button"; b.textContent="📁 "+label;
-    b.onclick=e=>{ e.stopPropagation(); closeClipMenus(); moveLibraryClip(o.key,val); };
-    wrap.appendChild(b);
-  });
-  if(!wrap.children.length){ wrap.innerHTML='<div class="clip-menu-item" style="cursor:default;color:var(--fog)">no other folders</div>'; }
-  menu.appendChild(wrap);
-}
-async function moveLibraryClip(fromKey,destFolder,overwrite){
-  const org=fromKey.split("/")[1];
-  const to="library/"+org+"/"+(destFolder?destFolder+"/":"")+fromKey.split("/").pop();
-  if(to===fromKey) return;
-  try{
-    const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:fromKey,to,overwrite:!!overwrite})});
-    if(r.status===409){
-      if(confirm('A file named "'+to.split("/").pop()+'" already exists there. Replace it?')) moveLibraryClip(fromKey,destFolder,true);
-      return;
-    }
-    if(!r.ok){ alert("Move failed: "+(await r.text())); return; }
-    doAudioRefresh();
-  }catch(e){ alert("Move failed: "+e.message); }
+document.getElementById("afRefresh").onclick=doAudioRefresh;
+function doAudioRefresh(){
+  document.getElementById("afNoOrg").style.display = afOrgId()?"none":"block";
+  document.getElementById("afOpenStudio").href=afOpenStudioHref();
+  audioTree.refresh({ projectId: afProjectId(), projectLabel: projName()||afProjectId(), orgId: afOrgId() });
 }
 
 /* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
@@ -2354,7 +2121,6 @@ function updateClientCrumb(){
   const opt=as.options[as.selectedIndex];
   document.getElementById("clientCrumb").textContent=(opt&&opt.value)?opt.text:"—";
 }
-let _currentProjectId=null;
 async function loadFromPlatform(id){
   if(!id){ ps().textContent="no project specified"; return; }
   try{
@@ -3556,7 +3322,7 @@ if(typeof CodeObjects!=="undefined"){
       render();
     }
   });
-  document.getElementById("clientSel").addEventListener("change",()=>CodeObjects.refresh());
+  document.getElementById("clientSel").addEventListener("change",()=>{ CodeObjects.refresh(); doAudioRefresh(); });
 }
 </script>
 </body>

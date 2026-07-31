@@ -98,7 +98,7 @@
   }
 
   const STYLE = `
-    .co-float{position:fixed;z-index:400;top:80px;right:16px;width:220px;
+    .co-float{position:fixed;z-index:400;bottom:16px;right:16px;width:220px;
       background:var(--slate-2,#1b2738);border:1px solid var(--rim,#2e3f58);border-radius:12px;
       box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:'Barlow Condensed',sans-serif;
       color:var(--snow,#eef4fb);user-select:none}
@@ -148,6 +148,7 @@
       const r = float.getBoundingClientRect();
       dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
       float.style.right = "auto";
+      float.style.bottom = "auto"; // default position is bottom-anchored — clear it so top+bottom can't both apply and stretch the box while dragging
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
     });

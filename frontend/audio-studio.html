@@ -6,6 +6,7 @@
 <title>Chase Life — Audio Studio</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="audio-tree.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -43,11 +44,8 @@
   /* ---- main studio screen ---- */
   #studioScreen{flex:1;display:none;min-height:0}
   #studioScreen.show{display:flex}
-  .rail{width:280px;flex:0 0 280px;border-right:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;background:rgba(255,255,255,.01)}
-  .rail-tabs{display:flex;gap:4px;padding:8px 8px 0}
-  .rail-tab{flex:1;font-family:'Barlow Condensed';font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
-             background:none;border:1px solid var(--rim);border-radius:7px 7px 0 0;color:var(--fog);padding:7px 4px}
-  .rail-tab.on{background:var(--slate-2);color:var(--snow);border-bottom-color:var(--slate-2)}
+  .rail{width:280px;flex:0 0 auto;border-right:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;background:rgba(255,255,255,.01);
+        resize:horizontal;overflow:auto;min-width:200px;max-width:70vw}
   .rail-body{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px;min-height:0}
   .crumb-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .crumb-row button{font-size:10px;padding:4px 8px}
@@ -199,10 +197,6 @@
 <!-- ================= main studio ================= -->
 <div id="studioScreen">
   <div class="rail">
-    <div class="rail-tabs">
-      <button class="rail-tab on" id="railTabProject">This Project</button>
-      <button class="rail-tab" id="railTabLibrary">Library</button>
-    </div>
     <div class="rail-body" id="railBody"></div>
     <div class="rail-foot">
       <div id="railUploadMenu" class="upload-menu">
@@ -229,6 +223,10 @@
       <button id="btnZoomOut" class="ghost" title="Zoom out">－</button>
       <span class="zoomlbl" id="zoomLbl">80px/s</span>
       <button id="btnZoomIn" class="ghost" title="Zoom in">＋</button>
+      <div class="sep"></div>
+      <button id="btnNewSession" class="ghost">🆕 New</button>
+      <button id="btnSaveSession" class="ghost">💾 Save</button>
+      <button id="btnSaveSessionAs" class="ghost">Save As…</button>
       <div class="sep"></div>
       <button id="btnExport" class="on">Export ▶</button>
     </div>
@@ -316,18 +314,34 @@
       <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save as</label>
       <input id="expName" style="width:100%;margin-top:4px" placeholder="mixed-clip">
     </div>
-    <div class="seg" id="expDest" style="width:100%">
-      <button data-d="project" class="on" style="flex:1">This Project</button>
-      <button data-d="library" style="flex:1">Library</button>
-    </div>
-    <div id="expFolderRow" style="display:none">
-      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Folder</label>
+    <div id="expFolderRow">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save to</label>
       <div class="tile-grid" id="expFolderGrid" style="margin-top:4px"></div>
     </div>
     <div id="expTotal" class="hint"></div>
     <div class="row">
       <button id="expCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
       <button id="expRender" class="on" style="flex:1">Render + Upload ▶</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= save session overlay ================= -->
+<div class="overlay" id="saveSessionOverlay">
+  <div class="obox">
+    <h2>Save session</h2>
+    <div class="hint" style="margin:0 0 4px">Saves which clips are arranged and how (trim, fades, gain, spatial filter) — not audio itself. An Act/Scene structure is just folders; save each scene's mix inside its own folder.</div>
+    <div style="margin:2px 0">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Name</label>
+      <input id="ssName" style="width:100%;margin-top:4px" placeholder="Scene 1 Mix">
+    </div>
+    <div id="ssFolderRow">
+      <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save to</label>
+      <div class="tile-grid" id="ssFolderGrid" style="margin-top:4px"></div>
+    </div>
+    <div class="row">
+      <button id="ssCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
+      <button id="ssSave" class="on" style="flex:1">💾 Save</button>
     </div>
   </div>
 </div>
@@ -507,19 +521,21 @@ async function bakeSpatialFilter(seg,params){
 /* ============================================================
    Upload helper
    ============================================================ */
-function uploadBlob(blob,key,mimeType){
+function uploadBlob(blob,target,name,mimeType){
   return new Promise((resolve,reject)=>{
     const token=getToken(); if(!token){ reject(new Error("no token")); return; }
     const kb=blob.size/1024, sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
     showBar(0); setStatus("uploading "+sizeStr+"…");
+    const qs=new URLSearchParams({scope:target.scope,scopeId:target.scopeId,name});
+    if(target.folderId) qs.set("folderId",target.folderId);
     const xhr=new XMLHttpRequest();
-    xhr.open("PUT","/api/audio/"+key);
+    xhr.open("POST","/api/audio-clip?"+qs.toString());
     xhr.setRequestHeader("authorization","Bearer "+token);
     xhr.setRequestHeader("content-type",mimeType||"audio/mpeg");
     xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){ showBar(ev.loaded/ev.total*100); } };
     xhr.onload=()=>{
       let j={}; try{ j=JSON.parse(xhr.responseText); }catch(e){}
-      if(xhr.status>=200&&xhr.status<300){ showBar(100); setStatus("uploaded ✓ "+sizeStr); setTimeout(hideBar,1200); resolve({url:j.url||("/api/audio/"+key),key}); }
+      if(xhr.status>=200&&xhr.status<300){ showBar(100); setStatus("uploaded ✓ "+sizeStr); setTimeout(hideBar,1200); resolve(j); }
       else if(xhr.status===401){ hideBar(); clearToken(); reject(new Error("unauthorized")); }
       else { hideBar(); setStatus("✕ upload failed: "+(j.error||xhr.statusText)); reject(new Error(j.error||xhr.statusText)); }
     };
@@ -590,7 +606,8 @@ async function enterProject(){
     const p=(j.projects||[]).find(x=>x.id===studio.projectId);
     if(p){ studio.projectName=p.name||p.id; document.getElementById("hdrCrumb").textContent=studio.projectName; }
   }catch(e){}
-  refreshRail();
+  openSessionId=null; openSessionName=null; updateSaveButtons();
+  audioTree.refresh({projectId:studio.projectId,projectLabel:studio.projectName||studio.projectId});
 }
 document.getElementById("btnBackToProjects").onclick=()=>{
   try{ localStorage.removeItem("audioStudio.lastProject"); }catch(e){}
@@ -612,256 +629,107 @@ document.getElementById("btnBackToEditor").addEventListener("click",e=>{
 });
 
 /* ============================================================
-   Source rail — "This Project" + "Library" (graphical file browser)
+   Source tree — "This Project" folders + pinned org Library, both
+   real nested trees (audio-tree.js), backed by GET /api/audio/tree.
    ============================================================ */
-let railTab="project", railFolder="";
-let railKnownFolders=new Set(), railPendingFolders=new Set();
-function railOrgId(){ return currentOrg(); }
-function setRailTab(tab){
-  railTab=tab; railFolder="";
-  document.getElementById("railTabProject").classList.toggle("on",tab==="project");
-  document.getElementById("railTabLibrary").classList.toggle("on",tab==="library");
-  refreshRail();
-}
-document.getElementById("railTabProject").onclick=()=>setRailTab("project");
-document.getElementById("railTabLibrary").onclick=()=>setRailTab("library");
-
-async function refreshRail(){
-  const body=document.getElementById("railBody");
-  if(!studio.projectId){ body.innerHTML=""; return; }
-  body.innerHTML='<div class="rail-empty">loading…</div>';
-  try{
-    let qs, objects=[], folders=null;
-    if(railTab==="project"){
-      qs="project="+encodeURIComponent(studio.projectId);
-    } else {
-      const org=railOrgId(); if(!org){ body.innerHTML='<div class="rail-empty">pick a company above</div>'; return; }
-      qs="scope=library&org="+encodeURIComponent(org)+(railFolder?"&folder="+encodeURIComponent(railFolder):"");
-    }
-    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
-    if(r.status===401){ body.innerHTML='<div class="rail-empty">token rejected</div>'; clearToken(); return; }
-    const j=r.ok?await r.json():{objects:[],folders:[]};
-    objects=j.objects||[];
-    if(railTab==="library"){
-      if(!railFolder) railKnownFolders=new Set(j.folders||[]);
-      folders=[...new Set([...railKnownFolders,...railPendingFolders])].sort();
-    }
-    renderRail(objects,folders);
-  }catch(e){ body.innerHTML='<div class="rail-empty">error: '+e.message+'</div>'; }
-}
-function renderRail(objects,folders){
-  const body=document.getElementById("railBody"); body.innerHTML="";
-  if(folders!==null){
-    const crumb=document.createElement("div"); crumb.className="crumb-row";
-    const lbl=document.createElement("span"); lbl.className="hint";
-    lbl.textContent=railFolder?("📁 "+railFolder):"📁 Library (root)";
-    crumb.appendChild(lbl);
-    body.appendChild(crumb);
-    // Folder tiles (including root) stay visible no matter which folder is
-    // currently open, so a clip can be dragged straight from one folder to
-    // another — or back to root — without navigating out first.
-    const grid=document.createElement("div"); grid.className="tile-grid";
-    grid.appendChild(buildFolderTile("","Library (root)"));
-    folders.forEach(f=>grid.appendChild(buildFolderTile(f)));
-    grid.appendChild(buildNewFolderTile());
-    body.appendChild(grid);
-    if(railFolder){
-      const delBtn=document.createElement("button"); delBtn.className="danger ghost"; delBtn.style.fontSize="10px";
-      delBtn.textContent="Delete folder \""+railFolder+"\"";
-      delBtn.onclick=async()=>{
-        const org=railOrgId();
-        if(!confirm('Delete the folder "'+railFolder+'" and everything in it? This cannot be undone.')) return;
-        const r=await fetch("/api/audio/folder?org="+encodeURIComponent(org)+"&folder="+encodeURIComponent(railFolder),{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-        if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
-        railKnownFolders.delete(railFolder); railPendingFolders.delete(railFolder); railFolder="";
-        refreshRail();
-      };
-      body.appendChild(delBtn);
-    }
-  }
-  const list=document.createElement("div"); list.className="clip-list";
-  if(!objects.length){ list.innerHTML='<div class="rail-empty">no clips yet</div>'; }
-  else objects.forEach(o=>list.appendChild(buildClipTile(o)));
-  body.appendChild(list);
-}
-function buildFolderTile(name,label){
-  const t=document.createElement("div"); t.className="folder-tile"+(name===railFolder?" current":"");
-  t.innerHTML='<span class="fi">📁</span><span>'+esc(label!=null?label:name)+'</span>';
-  t.onclick=()=>{ railFolder=name; refreshRail(); };
-  t.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("audiourl")){ e.preventDefault(); t.classList.add("dragover"); } });
-  t.addEventListener("dragleave",()=>t.classList.remove("dragover"));
-  t.addEventListener("drop",e=>{
-    e.preventDefault(); t.classList.remove("dragover");
-    const key=e.dataTransfer.getData("audiokey"); if(!key||!key.startsWith("library/")) return;
-    moveLibraryClip(key,name);
-  });
-  return t;
-}
-function buildNewFolderTile(){
-  const t=document.createElement("div"); t.className="folder-tile new";
-  t.innerHTML='<span class="fi">＋</span><span>New folder</span>';
-  t.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("audiourl")){ e.preventDefault(); t.classList.add("dragover"); } });
-  t.addEventListener("dragleave",()=>t.classList.remove("dragover"));
-  t.addEventListener("drop",e=>{
-    e.preventDefault(); t.classList.remove("dragover");
-    const key=e.dataTransfer.getData("audiokey"); if(!key||!key.startsWith("library/")) return;
-    flipToInput(t,name=>{ railPendingFolders.add(name); moveLibraryClip(key,name); });
-  });
-  t.onclick=()=>flipToInput(t,name=>{ railPendingFolders.add(name); railFolder=name; refreshRail(); });
-  return t;
-}
-function flipToInput(tile,onCommit){
-  tile.innerHTML='<input type="text" placeholder="name" maxlength="40">';
-  const inp=tile.querySelector("input"); inp.focus();
-  const commit=()=>{
-    const name=slug(inp.value);
-    if(name && !name.includes("/")) onCommit(name);
-    else refreshRail();
-  };
-  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") refreshRail(); });
-  inp.addEventListener("blur",commit);
-}
-async function moveLibraryClip(fromKey,destFolder,overwrite){
-  const org=fromKey.split("/")[1];
-  const to="library/"+org+"/"+(destFolder?destFolder+"/":"")+fromKey.split("/").pop();
-  if(to===fromKey) return;
-  try{
-    const r=await fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:fromKey,to,overwrite:!!overwrite})});
-    if(r.status===409){
-      if(confirm('A file named "'+to.split("/").pop()+'" already exists there. Replace it?')) moveLibraryClip(fromKey,destFolder,true);
-      return;
-    }
-    if(!r.ok){ alert("Move failed: "+(await r.text())); return; }
-    refreshRail();
-  }catch(e){ alert("Move failed: "+e.message); }
-}
-function buildClipTile(o){
-  const row=document.createElement("div"); row.className="clip-tile"; row.draggable=true; row.style.position="relative";
-  row.addEventListener("dragstart",e=>{ e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key); e.dataTransfer.effectAllowed="copy"; });
-  const drag=document.createElement("span"); drag.className="ct-drag"; drag.textContent="⠿";
-  const playBtn=document.createElement("button"); playBtn.textContent="▶"; playBtn.title="Preview";
-  playBtn.onclick=()=>railTogglePlay(o,playBtn);
-  const nm=document.createElement("span"); nm.className="ct-name"; nm.textContent=o.key.split("/").pop();
-  const addBtn=document.createElement("button"); addBtn.textContent="+"; addBtn.title="Add to timeline";
-  addBtn.onclick=()=>addClipToTimeline(o);
-  const moreBtn=document.createElement("button"); moreBtn.textContent="⋯"; moreBtn.title="Rename, move, or delete";
-  const menu=buildClipMenu(o,nm);
-  moreBtn.onclick=e=>{
-    e.stopPropagation();
-    const wasOpen=menu.classList.contains("show");
-    closeClipMenus();
-    if(!wasOpen){ menu.classList.add("show"); _openClipMenu=menu; }
-  };
-  row.appendChild(drag); row.appendChild(playBtn); row.appendChild(nm); row.appendChild(addBtn); row.appendChild(moreBtn); row.appendChild(menu);
-  return row;
-}
-let _openClipMenu=null;
-function closeClipMenus(){
-  document.querySelectorAll(".clip-menu.show").forEach(m=>m.classList.remove("show"));
-  _openClipMenu=null;
-}
-document.addEventListener("click",e=>{
-  if(_openClipMenu && !_openClipMenu.contains(e.target)) closeClipMenus();
+const audioTree=AudioTree.mount(document.getElementById("railBody"),{
+  mode:"project",
+  projectId: studio.projectId,
+  projectLabel: studio.projectName||studio.projectId,
+  getToken,
+  onPick: o=>addClipToTimeline(o),
+  onOpenSession: s=>openSession(s),
+  onError: msg=>setStatus("✕ "+msg)
 });
-document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeClipMenus(); });
-function buildClipMenu(o,nameEl){
-  const menu=document.createElement("div"); menu.className="clip-menu";
-  const renameBtn=document.createElement("button"); renameBtn.className="clip-menu-item"; renameBtn.type="button"; renameBtn.textContent="✎ Rename";
-  renameBtn.onclick=e=>{ e.stopPropagation(); closeClipMenus(); startClipRename(o,nameEl); };
-  menu.appendChild(renameBtn);
-  if(o.key.startsWith("library/")){
-    const moveBtn=document.createElement("button"); moveBtn.className="clip-menu-item"; moveBtn.type="button"; moveBtn.textContent="📁 Move to…";
-    moveBtn.onclick=e=>{ e.stopPropagation(); showMoveSubmenu(o,menu); };
-    menu.appendChild(moveBtn);
-  }
-  const delBtn=document.createElement("button"); delBtn.className="clip-menu-item danger"; delBtn.type="button"; delBtn.textContent="🗑 Delete";
-  delBtn.onclick=async e=>{
-    e.stopPropagation(); closeClipMenus();
-    const name=o.key.split("/").pop();
-    if(!confirm('Delete "'+name+'"? This cannot be undone.')) return;
-    try{
-      const r=await fetch(o.url,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-      if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
-      refreshRail();
-    }catch(e){ alert("Delete failed: "+e.message); }
-  };
-  menu.appendChild(delBtn);
-  return menu;
+
+/* ============================================================
+   Studio sessions — saved arrangements (which clips, trim/fade/gain/
+   spatial per segment; never audio) living in the same project folder
+   tree as clips, so an Act/Scene structure is just folders with each
+   scene's mix saved inside it.
+   ============================================================ */
+let openSessionId=null, openSessionName=null;
+function updateSaveButtons(){
+  document.getElementById("btnSaveSession").textContent = openSessionId ? ("💾 Save \""+openSessionName+"\"") : "💾 Save";
 }
-function startClipRename(o,nameEl){
-  if(nameEl.querySelector("input")) return; // already renaming this row — don't stack a second closure on top
-  const dir=o.key.slice(0,o.key.length-o.key.split("/").pop().length);
-  const oldName=o.key.split("/").pop();
-  const ext=audioExt(oldName,""), base=oldName.replace(/\.[^.]+$/,"");
-  nameEl.innerHTML='<input type="text" maxlength="60">';
-  const inp=nameEl.querySelector("input"); inp.value=base; inp.focus(); inp.select();
-  // busy stays true for the whole round trip, including while confirm() is
-  // open — alert()/confirm() blur the focused input as a side effect, and
-  // without this guard that reentrant blur re-invokes commit() (which shows
-  // another alert(), which blurs again, ...), an infinite dialog loop. It
-  // only drops back to false once we've decided the outcome (retry, cancel
-  // back to editing, or give up) so any reentrant call in between is a no-op.
-  let busy=false;
-  const move=(to,overwrite)=>fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to,overwrite})});
-  const commit=async()=>{
-    if(busy) return;
-    const newBase=slug(inp.value);
-    if(!newBase || newBase===base){ refreshRail(); return; }
-    busy=true;
-    const to=dir+newBase+"."+ext;
-    let r;
-    try{ r=await move(to,false); }
-    catch(e){ busy=false; alert("Rename failed: "+e.message); inp.focus(); return; }
-    if(r.status===404){
-      // the clip itself is gone (renamed/deleted elsewhere) — no point
-      // leaving them editing a name for a file that no longer exists.
-      busy=false; alert("This clip no longer exists — the list will refresh."); refreshRail(); return;
-    }
-    if(r.status===409){
-      const replace=confirm('A file named "'+newBase+"."+ext+'" already exists. Replace it?');
-      if(replace){
-        try{
-          const r2=await move(to,true);
-          busy=false;
-          if(r2.status===404){ alert("This clip no longer exists — the list will refresh."); refreshRail(); return; }
-          if(!r2.ok){ alert("Replace failed: "+(await r2.text())); inp.focus(); return; }
-          refreshRail();
-        }catch(e){ busy=false; alert("Replace failed: "+e.message); inp.focus(); }
-      } else {
-        busy=false;
-        inp.focus(); inp.select(); // back to the name prompt to allow a change
-      }
-      return;
-    }
-    busy=false;
-    if(!r.ok){ alert("Rename failed: "+(await r.text())); inp.focus(); return; }
-    refreshRail();
-  };
-  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape") refreshRail(); });
-  inp.addEventListener("blur",commit);
+function newSession(){
+  if(allSegments().length && !confirm("Clear the timeline and start a new session? Anything unsaved will be lost.")) return;
+  stopPreview();
+  timeline.tracks=[]; selSegId=-1; nextTrackId=1; nextSegId=1;
+  newTrack();
+  openSessionId=null; openSessionName=null; updateSaveButtons();
+  renderTimelineUI();
+  setStatus("new session — timeline cleared");
 }
-function showMoveSubmenu(o,menu){
-  const old=menu.querySelector(".clip-menu-folders"); if(old){ old.remove(); return; }
-  const wrap=document.createElement("div"); wrap.className="clip-menu-folders";
-  const currentFolder=o.key.split("/").slice(2,-1).join("/");
-  const opts=[["","Library (root)"],...[...new Set([...railKnownFolders,...railPendingFolders])].sort().map(f=>[f,f])];
-  opts.forEach(([val,label])=>{
-    if(val===currentFolder) return;
-    const b=document.createElement("button"); b.className="clip-menu-item"; b.type="button"; b.textContent="📁 "+label;
-    b.onclick=e=>{ e.stopPropagation(); closeClipMenus(); moveLibraryClip(o.key,val); };
-    wrap.appendChild(b);
+document.getElementById("btnNewSession").onclick=newSession;
+async function openSession(session){
+  if(allSegments().length && !confirm('Open "'+session.name+'"? This replaces your current timeline.')) return;
+  setStatus("loading session…");
+  try{
+    const r=await fetch("/api/studio-session/"+encodeURIComponent(session.id),{headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    const j=await r.json();
+    timeline.tracks=[]; selSegId=-1;
+    const ok=await applyTimelineData(j.timeline);
+    if(!ok || !timeline.tracks.length) newTrack();
+    openSessionId=j.id; openSessionName=j.name; updateSaveButtons();
+    renderTimelineUI();
+    setStatus("opened \""+j.name+"\" ✓");
+  }catch(e){ setStatus("✕ couldn't open session: "+e.message); }
+}
+document.getElementById("btnSaveSession").onclick=async()=>{
+  if(!allSegments().length){ alert("Add at least one clip to the timeline first."); return; }
+  if(!openSessionId){ openSaveSessionDialog(); return; }
+  try{
+    await fetch("/api/studio-session/"+encodeURIComponent(openSessionId),{
+      method:"PATCH", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({timeline:serializeTimeline()})
+    });
+    setStatus("saved \""+openSessionName+"\" ✓");
+  }catch(e){ setStatus("✕ save failed: "+e.message); }
+};
+document.getElementById("btnSaveSessionAs").onclick=()=>{
+  if(!allSegments().length){ alert("Add at least one clip to the timeline first."); return; }
+  openSaveSessionDialog();
+};
+let ssTarget=null;
+function openSaveSessionDialog(){
+  document.getElementById("ssName").value=openSessionName||"";
+  ssTarget=audioTree.getUploadTarget()||{scope:"project",scopeId:studio.projectId,folderId:null};
+  syncSsFolderGrid();
+  document.getElementById("saveSessionOverlay").classList.add("show");
+}
+document.getElementById("ssCancel").onclick=()=>document.getElementById("saveSessionOverlay").classList.remove("show");
+document.getElementById("saveSessionOverlay").addEventListener("click",e=>{ if(e.target===document.getElementById("saveSessionOverlay")) document.getElementById("saveSessionOverlay").classList.remove("show"); });
+function syncSsFolderGrid(){
+  const grid=document.getElementById("ssFolderGrid"); grid.innerHTML="";
+  audioTree.listFolders("project").forEach(f=>{
+    const isCurrent=ssTarget && f.folderId===ssTarget.folderId;
+    const t=document.createElement("div"); t.className="folder-tile"+(isCurrent?" current":"");
+    t.innerHTML='<span class="fi">📁</span><span>'+esc(f.label)+'</span>';
+    t.onclick=()=>{ ssTarget=f; syncSsFolderGrid(); };
+    grid.appendChild(t);
   });
-  if(!wrap.children.length){ wrap.innerHTML='<div class="clip-menu-item" style="cursor:default;color:var(--fog)">no other folders</div>'; }
-  menu.appendChild(wrap);
 }
-let _railPlaying=null;
-function railTogglePlay(o,btn){
-  if(_railPlaying&&_railPlaying.url===o.url){ _railPlaying.audio.pause(); _railPlaying=null; btn.textContent="▶"; return; }
-  if(_railPlaying){ _railPlaying.audio.pause(); _railPlaying.btn.textContent="▶"; }
-  const audio=new Audio(o.url); audio.play();
-  audio.onended=()=>{ btn.textContent="▶"; _railPlaying=null; };
-  _railPlaying={url:o.url,audio,btn}; btn.textContent="⏸";
-}
+document.getElementById("ssSave").onclick=async()=>{
+  const name=(document.getElementById("ssName").value||"").trim();
+  if(!name){ alert("Name this session first."); return; }
+  const btn=document.getElementById("ssSave"); btn.textContent="saving…"; btn.disabled=true;
+  try{
+    const r=await fetch("/api/studio-session",{
+      method:"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({scopeId:studio.projectId, folderId:(ssTarget&&ssTarget.folderId)||null, name, timeline:serializeTimeline()})
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    openSessionId=j.id; openSessionName=j.name; updateSaveButtons();
+    document.getElementById("saveSessionOverlay").classList.remove("show");
+    await audioTree.refresh();
+    audioTree.revealFolder("project",j.folderId);
+    setStatus("saved \""+j.name+"\" ✓");
+  }catch(e){ alert("Save failed: "+e.message); }
+  finally{ btn.textContent="💾 Save"; btn.disabled=false; }
+};
 function isAllowedUploadExt(name){
   const m=(name||"").match(/\.([^.]+)$/);
   return !!m && (m[1].toLowerCase()==="mp3" || m[1].toLowerCase()==="mp4");
@@ -869,12 +737,13 @@ function isAllowedUploadExt(name){
 async function ingestUploadFile(f){
   if(!f) return;
   if(!isAllowedUploadExt(f.name)){ setStatus("✕ only .mp3 or .mp4 files are allowed"); return; }
-  if(railTab==="library" && !railOrgId()){ setStatus("pick a company above first"); return; }
+  const target=audioTree.getUploadTarget()||{scope:"project",scopeId:studio.projectId,folderId:null};
   const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
-  const key=railTab==="library"
-    ? "library/"+railOrgId()+"/"+(railFolder?railFolder+"/":"")+base+"-"+Date.now().toString(36)+"."+ext
-    : studio.projectId+"/"+base+"-"+Date.now().toString(36)+"."+ext;
-  try{ await uploadBlob(f,key,f.type||"audio/mpeg"); refreshRail(); }catch(err){ setStatus("✕ upload failed: "+err.message); }
+  try{
+    await uploadBlob(f,target,base+"-"+Date.now().toString(36)+"."+ext,f.type||"audio/mpeg");
+    await audioTree.refresh();
+    audioTree.revealFolder(target.scope,target.folderId);
+  }catch(err){ setStatus("✕ upload failed: "+err.message); }
 }
 document.getElementById("railUpload").addEventListener("change",e=>{
   const f=e.target.files[0]; e.target.value=""; ingestUploadFile(f);
@@ -933,37 +802,30 @@ function newTrack(name){
    since that's already the unique key used elsewhere (e.g. the Fence
    Editor back-link). ---- */
 let _persistDraftTimer=null;
-function persistTimelineDraft(){
-  if(!studio.projectId) return;
-  clearTimeout(_persistDraftTimer);
-  _persistDraftTimer=setTimeout(()=>{
-    try{
-      const data={
-        tracks:timeline.tracks.map(t=>({
-          id:t.id, name:t.name, muted:t.muted, solo:t.solo, gainDb:t.gainDb,
-          segments:t.segments.map(s=>({
-            id:s.id, sourceKey:s.sourceKey, sourceUrl:s.sourceUrl,
-            f0:s.f0, f1:s.f1, trackOffsetSec:s.trackOffsetSec,
-            fadeInSec:s.fadeInSec, fadeOutSec:s.fadeOutSec, gainDb:s.gainDb,
-            loopToFill:s.loopToFill, spatialFilter:s.spatialFilter, label:s.label
-          }))
-        })),
-        nextTrackId, nextSegId
-      };
-      localStorage.setItem("audioStudio.draft."+studio.projectId, JSON.stringify(data));
-    }catch(e){ /* localStorage full/unavailable — not worth interrupting the user over */ }
-  },400);
+// Shared by the localStorage draft (below) and saved Studio sessions
+// (server-side, see openSession/saveSession further down) — segments
+// reference their source clip by its permanent URL, never raw audio, so
+// this whole shape is small and cheap to store either way.
+function serializeTimeline(){
+  return {
+    tracks:timeline.tracks.map(t=>({
+      id:t.id, name:t.name, muted:t.muted, solo:t.solo, gainDb:t.gainDb,
+      segments:t.segments.map(s=>({
+        id:s.id, sourceKey:s.sourceKey, sourceUrl:s.sourceUrl,
+        sourceScope:s.sourceScope, sourceScopeId:s.sourceScopeId, sourceFolderId:s.sourceFolderId,
+        f0:s.f0, f1:s.f1, trackOffsetSec:s.trackOffsetSec,
+        fadeInSec:s.fadeInSec, fadeOutSec:s.fadeOutSec, gainDb:s.gainDb,
+        loopToFill:s.loopToFill, spatialFilter:s.spatialFilter, label:s.label
+      }))
+    })),
+    nextTrackId, nextSegId
+  };
 }
-/* Returns true if a draft existed (even a valid-but-empty one) so the
-   caller knows not to fall back to the normal blank-project newTrack(). */
-async function restoreTimelineDraft(){
-  let raw;
-  try{ raw=localStorage.getItem("audioStudio.draft."+studio.projectId); }catch(e){ return false; }
-  if(!raw) return false;
-  let data;
-  try{ data=JSON.parse(raw); }catch(e){ return false; }
+/* Appends data's tracks onto the current timeline (does not clear first —
+   callers that want a clean replace, like openSession, clear timeline.tracks
+   themselves before calling this). Returns true if anything was applied. */
+async function applyTimelineData(data){
   if(!data||!Array.isArray(data.tracks)) return false;
-
   for(const td of data.tracks){
     const t={ id:td.id, name:td.name, muted:!!td.muted, solo:!!td.solo, gainDb:td.gainDb||0, segments:[] };
     for(const sd of td.segments||[]){
@@ -980,20 +842,38 @@ async function restoreTimelineDraft(){
   nextSegId=Math.max(nextSegId,data.nextSegId||1);
   return true;
 }
+function persistTimelineDraft(){
+  if(!studio.projectId) return;
+  clearTimeout(_persistDraftTimer);
+  _persistDraftTimer=setTimeout(()=>{
+    try{ localStorage.setItem("audioStudio.draft."+studio.projectId, JSON.stringify(serializeTimeline())); }
+    catch(e){ /* localStorage full/unavailable — not worth interrupting the user over */ }
+  },400);
+}
+/* Returns true if a draft existed (even a valid-but-empty one) so the
+   caller knows not to fall back to the normal blank-project newTrack(). */
+async function restoreTimelineDraft(){
+  let raw;
+  try{ raw=localStorage.getItem("audioStudio.draft."+studio.projectId); }catch(e){ return false; }
+  if(!raw) return false;
+  let data;
+  try{ data=JSON.parse(raw); }catch(e){ return false; }
+  return applyTimelineData(data);
+}
 async function getBufAndPeaks(url){
   const buf=await _decodeUrl(url);
   return { buf, peaks:_buildPeaks(buf) };
 }
 async function addClipToTimeline(o,track,offsetSec){
-  setStatus("loading "+o.key.split("/").pop()+"…");
+  setStatus("loading "+o.name+"…");
   try{
     const {buf,peaks}=await getBufAndPeaks(o.url);
     hideBar(); statusEl.style.display="none";
     if(!track){ track=timeline.tracks[timeline.tracks.length-1]||newTrack(); }
-    const seg={ id:nextSegId++, sourceKey:o.key, sourceUrl:o.url, buf, peaks, f0:0, f1:1,
+    const seg={ id:nextSegId++, sourceKey:o.r2Key, sourceUrl:o.url, sourceScope:o.scope, sourceScopeId:o.scopeId, sourceFolderId:o.folderId||null, buf, peaks, f0:0, f1:1,
       trackOffsetSec: offsetSec!=null?offsetSec:(track.segments.length?Math.max(...track.segments.map(segEndSec)):0),
       fadeInSec:0.01, fadeOutSec:0.01, gainDb:0, loopToFill:false, spatialFilter:null,
-      label:o.key.split("/").pop() };
+      label:o.name };
     track.segments.push(seg);
     selSegId=seg.id;
     renderTimelineUI();
@@ -1515,19 +1395,22 @@ document.getElementById("spBake").onclick=async()=>{
     const params=currentSpatialParams();
     const blob=await bakeSpatialFilter(spSeg,params);
     const base=(spSeg.label||"clip").replace(/\.[^.]+$/,"").replace(/-spatial$/,"");
-    const org=railOrgId();
-    const key = spSeg.sourceKey && spSeg.sourceKey.startsWith("library/")
-      ? spSeg.sourceKey.replace(/\/[^/]+$/, "/"+base+"-spatial-"+Date.now().toString(36)+".mp3")
-      : (org ? "library/"+org+"/"+base+"-spatial-"+Date.now().toString(36)+".mp3"
-             : studio.projectId+"/"+base+"-spatial-"+Date.now().toString(36)+".mp3");
-    const {url}=await uploadBlob(blob,key,"audio/mpeg");
+    // Bake back into wherever the source clip already lives (its own
+    // project/library folder), falling back to the project root for a
+    // segment that was never a tree clip (e.g. a raw recording not yet saved).
+    const target={ scope: spSeg.sourceScope||"project", scopeId: spSeg.sourceScopeId||studio.projectId, folderId: spSeg.sourceFolderId||null };
+    const name=base+"-spatial-"+Date.now().toString(36)+".mp3";
+    const {url,r2Key}=await uploadBlob(blob,target,name,"audio/mpeg");
     const newBuf=await _decodeUrl(url);
     spSeg.buf=newBuf; spSeg.peaks=_buildPeaks(newBuf); spSeg.f0=0; spSeg.f1=1;
-    spSeg.sourceKey=key; spSeg.sourceUrl=url; spSeg.spatialFilter={azimuthDeg:Math.round((spAz*180/Math.PI+360)%360),distancePct:Math.round(spDistM/MAXM*100)};
-    spSeg.label=key.split("/").pop();
+    spSeg.sourceKey=r2Key; spSeg.sourceUrl=url; spSeg.sourceScope=target.scope; spSeg.sourceScopeId=target.scopeId; spSeg.sourceFolderId=target.folderId;
+    spSeg.spatialFilter={azimuthDeg:Math.round((spAz*180/Math.PI+360)%360),distancePct:Math.round(spDistM/MAXM*100)};
+    spSeg.label=name;
     StudioSpatialPreview.stop();
     document.getElementById("spatialOverlay").classList.remove("show");
-    renderTimelineUI(); refreshRail();
+    renderTimelineUI();
+    await audioTree.refresh();
+    audioTree.revealFolder(target.scope,target.folderId);
   }catch(e){ alert("Bake failed: "+e.message); }
   finally{ btn.textContent="Bake & Replace"; btn.disabled=false; }
 };
@@ -1535,31 +1418,24 @@ document.getElementById("spBake").onclick=async()=>{
 /* ============================================================
    Export
    ============================================================ */
-let expDest="project";
 document.getElementById("btnExport").onclick=()=>{
   if(!allSegments().length){ alert("Add at least one clip to the timeline first."); return; }
   document.getElementById("expName").value="";
   document.getElementById("expTotal").textContent=allSegments().length+" clip(s) across "+timeline.tracks.length+" track(s) · "+totalDurationSec().toFixed(1)+"s total";
+  expTarget=audioTree.getUploadTarget()||{scope:"project",scopeId:studio.projectId,folderId:null};
   syncExportFolderGrid();
   document.getElementById("exportOverlay").classList.add("show");
 };
 document.getElementById("expCancel").onclick=()=>document.getElementById("exportOverlay").classList.remove("show");
 document.getElementById("exportOverlay").addEventListener("click",e=>{ if(e.target===document.getElementById("exportOverlay")) document.getElementById("exportOverlay").classList.remove("show"); });
-document.getElementById("expDest").querySelectorAll("button").forEach(b=>b.onclick=()=>{
-  document.getElementById("expDest").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on");
-  expDest=b.dataset.d;
-  document.getElementById("expFolderRow").style.display=expDest==="library"?"block":"none";
-});
-let expFolder="";
+let expTarget=null;
 function syncExportFolderGrid(){
   const grid=document.getElementById("expFolderGrid"); grid.innerHTML="";
-  const all=[...new Set([...railKnownFolders,...railPendingFolders])].sort();
-  const rootTile=document.createElement("div"); rootTile.className="folder-tile"+(expFolder===""?" dragover":"");
-  rootTile.innerHTML='<span class="fi">📁</span><span>root</span>'; rootTile.onclick=()=>{ expFolder=""; syncExportFolderGrid(); };
-  grid.appendChild(rootTile);
-  all.forEach(f=>{
-    const t=document.createElement("div"); t.className="folder-tile"+(expFolder===f?" dragover":"");
-    t.innerHTML='<span class="fi">📁</span><span>'+esc(f)+'</span>'; t.onclick=()=>{ expFolder=f; syncExportFolderGrid(); };
+  audioTree.listFolders().forEach(f=>{
+    const isCurrent=expTarget && f.scope===expTarget.scope && f.scopeId===expTarget.scopeId && f.folderId===expTarget.folderId;
+    const t=document.createElement("div"); t.className="folder-tile"+(isCurrent?" current":"");
+    t.innerHTML='<span class="fi">📁</span><span>'+esc(f.label)+'</span>';
+    t.onclick=()=>{ expTarget=f; syncExportFolderGrid(); };
     grid.appendChild(t);
   });
 }
@@ -1568,17 +1444,11 @@ document.getElementById("expRender").onclick=async()=>{
   try{
     const blob=await renderTimeline();
     const name=slug(document.getElementById("expName").value||"mixed")||"mixed";
-    let key;
-    if(expDest==="project"){ key=studio.projectId+"/studio-"+name+"-"+Date.now().toString(36)+".mp3"; }
-    else{
-      const org=railOrgId(); if(!org){ alert("pick a company above first"); return; }
-      key="library/"+org+"/"+(expFolder?expFolder+"/":"")+name+"-"+Date.now().toString(36)+".mp3";
-      if(expFolder) railPendingFolders.add(expFolder);
-    }
-    await uploadBlob(blob,key,"audio/mpeg");
+    const target=expTarget||{scope:"project",scopeId:studio.projectId,folderId:null};
+    await uploadBlob(blob,target,"studio-"+name+"-"+Date.now().toString(36)+".mp3","audio/mpeg");
     document.getElementById("exportOverlay").classList.remove("show");
-    if(expDest==="project" && railTab==="project") refreshRail();
-    if(expDest==="library" && railTab==="library") refreshRail();
+    await audioTree.refresh();
+    audioTree.revealFolder(target.scope,target.folderId);
   }catch(e){ alert("Export failed: "+e.message); }
   finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }
 };
@@ -1593,7 +1463,6 @@ document.addEventListener("keydown",e=>{
 });
 initFromUrl();
 ClientPicker.init({ navEl: document.getElementById("clientPickerNav"), onChange: ()=>{
-  railKnownFolders=new Set(); railPendingFolders.clear();
   if(studio.projectId) enterProject(); else { showPicker(); loadProjectPicker(); }
 }});
 if(studio.projectId){

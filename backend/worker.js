@@ -70,9 +70,20 @@ async function deleteProjectRows(env, pid) {
   await env.DB.prepare("DELETE FROM project_link WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM project_guide WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM project_frontdesk WHERE project_id=?").bind(pid).run();
+  // Audio tree clips can live under a "clip/<uuid>" key now (not just the
+  // legacy "<pid>/..." prefix swept below), so their R2 objects have to be
+  // deleted by looking up each row's actual r2_key before dropping the rows.
+  if (env.AUDIO) {
+    const { results: clipRows } = await env.DB.prepare(
+      "SELECT r2_key FROM audio_clip WHERE scope='project' AND scope_id=?"
+    ).bind(pid).all();
+    for (const row of (clipRows || [])) await env.AUDIO.delete(row.r2_key).catch(() => {});
+  }
+  await env.DB.prepare("DELETE FROM audio_clip WHERE scope='project' AND scope_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM studio_session WHERE scope='project' AND scope_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM audio_folder WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
-  // R2 audio lives under "<pid>/..." — clean it up here too, or every project
-  // delete leaves its recordings/uploads orphaned in the bucket forever.
+  // Any remaining un-migrated legacy R2 audio still sitting under "<pid>/..."
   if (env.AUDIO) {
     let cursor;
     do {
@@ -96,6 +107,99 @@ async function listAllAudio(env, prefix) {
     cursor = l.truncated ? l.cursor : undefined;
   } while (cursor);
   return objects;
+}
+
+// --- Audio tree (D1-backed folders + clips, decoupled from R2 key layout) ---
+// Auth for a (scope, scopeId) pair, shared by every audio-folder/audio-clip
+// route below — mirrors the per-branch checks /api/audio-list already used,
+// just re-checked against a row's scope/scope_id instead of parsing its key.
+async function audioScopeAuthOk(env, A, scope, scopeId) {
+  if (scope === "library") return libraryScopeOk(env, A, scopeId);
+  if (scope === "project") {
+    const appId = await projectAppId(env, scopeId);
+    return scopeOk(A, "audio", appId) || scopeOk(A, "publish", appId);
+  }
+  return false;
+}
+// Would setting `folderId`'s parent to `newParentId` create a cycle? Walks
+// newParentId's own parent chain looking for folderId.
+async function wouldCreateCycle(env, folderId, newParentId) {
+  if (!newParentId) return false;
+  if (newParentId === folderId) return true;
+  let cur = newParentId, seen = new Set();
+  while (cur) {
+    if (cur === folderId) return true;
+    if (seen.has(cur)) break; // corrupt/looping data already — bail rather than spin
+    seen.add(cur);
+    const row = await env.DB.prepare("SELECT parent_id FROM audio_folder WHERE id=?").bind(cur).first();
+    cur = row ? row.parent_id : null;
+  }
+  return false;
+}
+// Every folder id in folderId's subtree, folderId included — used to cascade
+// a folder delete to every clip/folder underneath it in one pass.
+async function collectFolderSubtree(env, scope, scopeId, rootFolderId) {
+  const ids = [rootFolderId];
+  let frontier = [rootFolderId];
+  while (frontier.length) {
+    const ph = frontier.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT id FROM audio_folder WHERE scope=? AND scope_id=? AND parent_id IN (${ph})`
+    ).bind(scope, scopeId, ...frontier).all();
+    frontier = (results || []).map(r => r.id);
+    ids.push(...frontier);
+  }
+  return ids;
+}
+// Moves an entire folder subtree into a different scope in place — every
+// descendant folder and clip keeps its id/r2_key, only their scope/scope_id
+// columns change. Cheap (a couple of bulk UPDATEs), no R2 rewrite, and safe
+// from cycles by construction: the target parent (if any) already belongs to
+// the target scope, which is necessarily disjoint from rootFolderId's own
+// subtree before this call.
+async function rescopeFolderSubtree(env, rootFolderId, srcScope, srcScopeId, targetScope, targetScopeId, targetParentId) {
+  const folderIds = await collectFolderSubtree(env, srcScope, srcScopeId, rootFolderId);
+  const ph = folderIds.map(() => "?").join(",");
+  const now = new Date().toISOString();
+  await env.DB.prepare(`UPDATE audio_folder SET scope=?, scope_id=?, updated_at=? WHERE id IN (${ph})`)
+    .bind(targetScope, targetScopeId, now, ...folderIds).run();
+  await env.DB.prepare("UPDATE audio_folder SET parent_id=? WHERE id=?").bind(targetParentId, rootFolderId).run();
+  await env.DB.prepare(`UPDATE audio_clip SET scope=?, scope_id=?, updated_at=? WHERE folder_id IN (${ph})`)
+    .bind(targetScope, targetScopeId, now, ...folderIds).run();
+}
+// Duplicates one clip's R2 object under a fresh stable key + a new D1 row.
+async function copyClipRow(env, clipRow, targetScope, targetScopeId, targetFolderId, overrideName) {
+  const obj = await env.AUDIO.get(clipRow.r2_key);
+  if (!obj) throw new Error("source clip missing in R2: " + clipRow.r2_key);
+  const ext = (clipRow.r2_key.match(/\.[^.\/]+$/) || [""])[0];
+  const newKey = "clip/" + crypto.randomUUID() + ext;
+  await env.AUDIO.put(newKey, obj.body, { httpMetadata: obj.httpMetadata });
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO audio_clip (id,scope,scope_id,folder_id,name,r2_key,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+  ).bind(id, targetScope, targetScopeId, targetFolderId, overrideName || clipRow.name, newKey, obj.size || null, now, now).run();
+  return id;
+}
+// Recursively duplicates a folder + everything under it (subfolders and
+// clips) into a target location, possibly a different scope entirely.
+async function copyFolderSubtree(env, sourceFolderId, srcScope, srcScopeId, targetScope, targetScopeId, targetParentId) {
+  const src = await env.DB.prepare("SELECT name FROM audio_folder WHERE id=? AND scope=? AND scope_id=?")
+    .bind(sourceFolderId, srcScope, srcScopeId).first();
+  if (!src) throw new Error("source folder not found");
+  const newId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO audio_folder (id,scope,scope_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+    .bind(newId, targetScope, targetScopeId, targetParentId, src.name, now, now).run();
+  const { results: clips } = await env.DB.prepare(
+    "SELECT id,name,r2_key FROM audio_clip WHERE scope=? AND scope_id=? AND folder_id=?"
+  ).bind(srcScope, srcScopeId, sourceFolderId).all();
+  for (const c of (clips || [])) await copyClipRow(env, c, targetScope, targetScopeId, newId);
+  const { results: subfolders } = await env.DB.prepare(
+    "SELECT id FROM audio_folder WHERE scope=? AND scope_id=? AND parent_id=?"
+  ).bind(srcScope, srcScopeId, sourceFolderId).all();
+  for (const sf of (subfolders || [])) await copyFolderSubtree(env, sf.id, srcScope, srcScopeId, targetScope, targetScopeId, newId);
+  return newId;
 }
 
 async function scrapeWeather(env) {
@@ -1653,7 +1757,10 @@ async function api(request, env, url) {
     const groups = {};
     for (const o of objects) {
       const prefix = o.key.split("/")[0];
-      if (!prefix || prefix === "library" || liveIds.has(prefix)) continue;
+      // "clip" is the new stable-key prefix used by the audio tree (see
+      // below) — never a real project id, so it must never be flagged as
+      // an orphan group or a stray DELETE could wipe every tree-managed clip.
+      if (!prefix || prefix === "library" || prefix === "clip" || liveIds.has(prefix)) continue;
       if (!groups[prefix]) groups[prefix] = { prefix, files: [], totalSize: 0, oldest: null, newest: null };
       const g = groups[prefix];
       g.files.push(o.key);
@@ -1680,7 +1787,7 @@ async function api(request, env, url) {
     const b = await request.json().catch(() => ({}));
     const prefixes = Array.isArray(b.prefixes) ? b.prefixes : [];
     if (!prefixes.length) return json({ error: "need a non-empty prefixes array" }, 400);
-    if (prefixes.some(p => !p || typeof p !== "string" || p === "library" || p.includes("/")))
+    if (prefixes.some(p => !p || typeof p !== "string" || p === "library" || p === "clip" || p.includes("/")))
       return json({ error: "invalid prefix in list" }, 400);
     const { results: projRows } = await env.DB.prepare("SELECT id FROM project").all();
     const liveIds = new Set((projRows || []).map(r => r.id));
@@ -1697,6 +1804,470 @@ async function api(request, env, url) {
       results.push({ prefix, deleted });
     }
     return json({ ok: true, results }, 200, AC);
+  }
+
+  // --- audio tree: real nested folders for project clips + org Library,
+  // backed by audio_folder/audio_clip (D1). R2 keys are permanent/opaque —
+  // rename/move/copy below are metadata-only ops, never R2 key rewrites.
+  // Deprecated during rollout, kept working alongside these: /api/audio-list,
+  // /api/audio/move, DELETE /api/audio/folder (single flat level only). ---
+  if (path === "/api/audio/tree" && method === "GET") {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    const A = await auth(request, env);
+    const pid = url.searchParams.get("project");
+    const scopeParam = url.searchParams.get("scope");
+
+    if (pid) {
+      // Mirrors the old /api/audio-list's permissive behavior: a project
+      // that hasn't been published yet has no D1 row at all, but its
+      // Fence-Editor-recorded clips are still real (Record/Upload work
+      // pre-publish) — don't 404 just because the row doesn't exist yet.
+      const proj = await env.DB.prepare("SELECT appId,orgId FROM project WHERE id=? OR slug=? LIMIT 1").bind(pid, pid).first();
+      const appId = proj ? proj.appId : null;
+      if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
+      const [pf, pc, ps] = await Promise.all([
+        env.DB.prepare("SELECT id,parent_id AS parentId,name FROM audio_folder WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all(),
+        env.DB.prepare("SELECT id,folder_id AS folderId,name,r2_key AS r2Key,size_bytes AS sizeBytes,created_at AS createdAt FROM audio_clip WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all(),
+        // Timeline JSON is left out of the tree listing on purpose — it can
+        // get large and the tree doesn't need it, only opening a session does.
+        env.DB.prepare("SELECT id,folder_id AS folderId,name,updated_at AS updatedAt FROM studio_session WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all()
+      ]);
+      // ?org= lets a caller pick the Library explicitly (Fence Editor's own
+      // Customer dropdown, for a project that has no orgId yet) — falls back
+      // to the project row's own orgId (Audio Studio's case) when omitted.
+      const orgId = url.searchParams.get("org") || (proj && proj.orgId) || null;
+      let library = null;
+      if (orgId && (await libraryScopeOk(env, A, orgId))) {
+        const [lf, lc] = await Promise.all([
+          env.DB.prepare("SELECT id,parent_id AS parentId,name FROM audio_folder WHERE scope='library' AND scope_id=? ORDER BY name").bind(orgId).all(),
+          env.DB.prepare("SELECT id,folder_id AS folderId,name,r2_key AS r2Key,size_bytes AS sizeBytes,created_at AS createdAt FROM audio_clip WHERE scope='library' AND scope_id=? ORDER BY name").bind(orgId).all()
+        ]);
+        library = {
+          scope: "library", scopeId: orgId, folders: lf.results || [],
+          clips: (lc.results || []).map(c => ({ ...c, url: "/api/audio/" + c.r2Key }))
+        };
+      }
+      // Field Recorder's "live-stop" mode (temporary clips auto-deleted after
+      // a TTL) annotates matching clips with expiresAt, same as the old
+      // /api/audio-list — the Fence Editor's palette shows a countdown badge.
+      const { results: lz } = await env.DB.prepare(
+        "SELECT zone_json, expires_at FROM live_zone WHERE project_id=? AND expires_at IS NOT NULL"
+      ).bind(pid).all();
+      const expiryByUrl = {};
+      for (const row of (lz || [])) {
+        try { const z = JSON.parse(row.zone_json); if (z.audioUrl) expiryByUrl[z.audioUrl] = row.expires_at; } catch (e) {}
+      }
+      return json({
+        project: {
+          scope: "project", scopeId: pid, folders: pf.results || [],
+          clips: (pc.results || []).map(c => { const clipUrl = "/api/audio/" + c.r2Key; return { ...c, url: clipUrl, expiresAt: expiryByUrl[clipUrl] || null }; }),
+          sessions: ps.results || []
+        },
+        library
+      }, 200, AC);
+    }
+
+    if (scopeParam === "library") {
+      const libOrgId = url.searchParams.get("org");
+      if (!libOrgId) return json({ error: "?scope=library needs &org=<clientId>" }, 400, AC);
+      if (!(await libraryScopeOk(env, A, libOrgId))) return json({ error: "unauthorized" }, 401, AC);
+      const [lf, lc] = await Promise.all([
+        env.DB.prepare("SELECT id,parent_id AS parentId,name FROM audio_folder WHERE scope='library' AND scope_id=? ORDER BY name").bind(libOrgId).all(),
+        env.DB.prepare("SELECT id,folder_id AS folderId,name,r2_key AS r2Key,size_bytes AS sizeBytes,created_at AS createdAt FROM audio_clip WHERE scope='library' AND scope_id=? ORDER BY name").bind(libOrgId).all()
+      ]);
+      return json({
+        library: {
+          scope: "library", scopeId: libOrgId, folders: lf.results || [],
+          clips: (lc.results || []).map(c => ({ ...c, url: "/api/audio/" + c.r2Key }))
+        }
+      }, 200, AC);
+    }
+
+    return json({ error: "specify ?project=<id> or ?scope=library&org=<clientId>" }, 400, AC);
+  }
+
+  if (path === "/api/audio-folder" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const scope = b.scope, scopeId = (b.scopeId || "").trim(), name = (b.name || "").trim();
+    const parentId = b.parentId || null;
+    if (!["project", "library"].includes(scope)) return json({ error: "scope must be 'project' or 'library'" }, 400, AC);
+    if (!scopeId || !name) return json({ error: "scopeId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
+    if (!(await audioScopeAuthOk(env, A, scope, scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    if (parentId) {
+      const parent = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope=? AND scope_id=?").bind(parentId, scope, scopeId).first();
+      if (!parent) return json({ error: "parent folder not found in this scope" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare("INSERT INTO audio_folder (id,scope,scope_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+      .bind(id, scope, scopeId, parentId, name, now, now).run();
+    await logAudit(env, request, A, "audio.folder.create", scope + "/" + scopeId + "/" + name);
+    return json({ id, scope, scopeId, parentId, name }, 201, AC);
+  }
+
+  const mFolderCopy = path.match(/^\/api\/audio-folder\/([^/]+)\/copy$/);
+  if (mFolderCopy && method === "POST") {
+    const folderId = decodeURIComponent(mFolderCopy[1]);
+    const A = await auth(request, env);
+    const src = await env.DB.prepare("SELECT scope,scope_id AS scopeId FROM audio_folder WHERE id=?").bind(folderId).first();
+    if (!src) return json({ error: "folder not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, src.scope, src.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const targetScope = b.targetScope || src.scope;
+    const targetScopeId = b.targetScopeId || src.scopeId;
+    const targetParentId = b.targetParentId || null;
+    if (!["project", "library"].includes(targetScope)) return json({ error: "invalid targetScope" }, 400, AC);
+    if (!(await audioScopeAuthOk(env, A, targetScope, targetScopeId))) return json({ error: "unauthorized on target" }, 401, AC);
+    if (targetParentId) {
+      const parent = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope=? AND scope_id=?").bind(targetParentId, targetScope, targetScopeId).first();
+      if (!parent) return json({ error: "target parent folder not found" }, 404, AC);
+    }
+    try {
+      const newId = await copyFolderSubtree(env, folderId, src.scope, src.scopeId, targetScope, targetScopeId, targetParentId);
+      await logAudit(env, request, A, "audio.folder.copy", folderId + " -> " + newId);
+      return json({ id: newId }, 201, AC);
+    } catch (e) {
+      return json({ error: "copy failed: " + e.message }, 500, AC);
+    }
+  }
+
+  const mFolder = path.match(/^\/api\/audio-folder\/([^/]+)$/);
+  if (mFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mFolder[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT scope,scope_id AS scopeId,parent_id AS parentId,name FROM audio_folder WHERE id=?").bind(folderId).first();
+    if (!row) return json({ error: "folder not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, row.scope, row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      const folderIds = await collectFolderSubtree(env, row.scope, row.scopeId, folderId);
+      const fph = folderIds.map(() => "?").join(",");
+      const { results: clips } = await env.DB.prepare(
+        `SELECT id,r2_key FROM audio_clip WHERE scope=? AND scope_id=? AND folder_id IN (${fph})`
+      ).bind(row.scope, row.scopeId, ...folderIds).all();
+      for (const c of (clips || [])) await env.AUDIO.delete(c.r2_key).catch(() => {});
+      if ((clips || []).length) {
+        const cph = clips.map(() => "?").join(",");
+        await env.DB.prepare(`DELETE FROM audio_clip WHERE id IN (${cph})`).bind(...clips.map(c => c.id)).run();
+      }
+      await env.DB.prepare(`DELETE FROM studio_session WHERE scope=? AND scope_id=? AND folder_id IN (${fph})`)
+        .bind(row.scope, row.scopeId, ...folderIds).run();
+      await env.DB.prepare(`DELETE FROM audio_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "audio.folder.delete", folderId + " (" + (clips || []).length + " clips)");
+      return json({ ok: true, deletedFolders: folderIds.length, deletedClips: (clips || []).length }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name;
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+
+    const targetScope = b.targetScope || row.scope;
+    const targetScopeId = b.targetScopeId || row.scopeId;
+    const crossScope = targetScope !== row.scope || targetScopeId !== row.scopeId;
+
+    if (crossScope) {
+      if (!["project", "library"].includes(targetScope)) return json({ error: "invalid targetScope" }, 400, AC);
+      if (!(await audioScopeAuthOk(env, A, targetScope, targetScopeId))) return json({ error: "unauthorized on target" }, 401, AC);
+      const newParentId = b.parentId !== undefined ? (b.parentId || null) : null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope=? AND scope_id=?").bind(newParentId, targetScope, targetScopeId).first();
+        if (!parent) return json({ error: "target parent folder not found" }, 404, AC);
+      }
+      await rescopeFolderSubtree(env, folderId, row.scope, row.scopeId, targetScope, targetScopeId, newParentId);
+      if (name !== row.name) await env.DB.prepare("UPDATE audio_folder SET name=?, updated_at=? WHERE id=?").bind(name, new Date().toISOString(), folderId).run();
+      await logAudit(env, request, A, "audio.folder.move", folderId + " " + row.scope + "/" + row.scopeId + " -> " + targetScope + "/" + targetScopeId);
+      return json({ id: folderId, name, parentId: newParentId, scope: targetScope, scopeId: targetScopeId }, 200, AC);
+    }
+
+    let parentId = row.parentId;
+    if (b.parentId !== undefined) {
+      const newParentId = b.parentId || null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope=? AND scope_id=?").bind(newParentId, row.scope, row.scopeId).first();
+        if (!parent) return json({ error: "parent folder not found in this scope" }, 404, AC);
+        if (await wouldCreateCycle(env, folderId, newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
+      }
+      parentId = newParentId;
+    }
+    await env.DB.prepare("UPDATE audio_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+      .bind(name, parentId, new Date().toISOString(), folderId).run();
+    await logAudit(env, request, A, "audio.folder.update", folderId);
+    return json({ id: folderId, name, parentId, scope: row.scope, scopeId: row.scopeId }, 200, AC);
+  }
+
+  if (path === "/api/audio-clip" && method === "POST") {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    const A = await auth(request, env);
+    const scope = url.searchParams.get("scope");
+    const scopeId = (url.searchParams.get("scopeId") || "").trim();
+    const folderId = url.searchParams.get("folderId") || null;
+    const name = (url.searchParams.get("name") || "").trim();
+    if (!["project", "library"].includes(scope)) return json({ error: "scope must be 'project' or 'library'" }, 400, AC);
+    if (!scopeId || !name) return json({ error: "scopeId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "clip name can't contain /" }, 400, AC);
+    if (!(await audioScopeAuthOk(env, A, scope, scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope=? AND scope_id=?").bind(folderId, scope, scopeId).first();
+      if (!folder) return json({ error: "folder not found in this scope" }, 404, AC);
+    }
+    const ext = (name.match(/\.[^.]+$/) || [""])[0];
+    const r2Key = "clip/" + crypto.randomUUID() + ext;
+    const ct = request.headers.get("content-type") || "application/octet-stream";
+    const buf = await request.arrayBuffer();
+    await env.AUDIO.put(r2Key, buf, { httpMetadata: { contentType: ct } });
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO audio_clip (id,scope,scope_id,folder_id,name,r2_key,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+    ).bind(id, scope, scopeId, folderId, name, r2Key, buf.byteLength, now, now).run();
+    await logAudit(env, request, A, "audio.clip.create", scope + "/" + scopeId + "/" + name);
+    return json({ id, name, folderId, r2Key, url: "/api/audio/" + r2Key }, 201, AC);
+  }
+
+  const mClipCopy = path.match(/^\/api\/audio-clip\/([^/]+)\/copy$/);
+  if (mClipCopy && method === "POST") {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    const clipId = decodeURIComponent(mClipCopy[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare(
+      "SELECT scope,scope_id AS scopeId,folder_id AS folderId,name,r2_key AS r2Key FROM audio_clip WHERE id=?"
+    ).bind(clipId).first();
+    if (!row) return json({ error: "clip not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, row.scope, row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const targetScope = b.targetScope || row.scope;
+    const targetScopeId = b.targetScopeId || row.scopeId;
+    const targetFolderId = b.targetFolderId !== undefined ? (b.targetFolderId || null) : row.folderId;
+    if (!["project", "library"].includes(targetScope)) return json({ error: "invalid targetScope" }, 400, AC);
+    if (!(await audioScopeAuthOk(env, A, targetScope, targetScopeId))) return json({ error: "unauthorized on target" }, 401, AC);
+    if (targetFolderId) {
+      const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope=? AND scope_id=?").bind(targetFolderId, targetScope, targetScopeId).first();
+      if (!folder) return json({ error: "target folder not found" }, 404, AC);
+    }
+    try {
+      const newId = await copyClipRow(env, { name: row.name, r2_key: row.r2Key }, targetScope, targetScopeId, targetFolderId, b.name);
+      await logAudit(env, request, A, "audio.clip.copy", clipId + " -> " + newId);
+      return json({ id: newId }, 201, AC);
+    } catch (e) {
+      return json({ error: "copy failed: " + e.message }, 500, AC);
+    }
+  }
+
+  const mClip = path.match(/^\/api\/audio-clip\/([^/]+)$/);
+  if (mClip && (method === "PATCH" || method === "DELETE")) {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    const clipId = decodeURIComponent(mClip[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare(
+      "SELECT scope,scope_id AS scopeId,folder_id AS folderId,name,r2_key AS r2Key FROM audio_clip WHERE id=?"
+    ).bind(clipId).first();
+    if (!row) return json({ error: "clip not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, row.scope, row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      await env.AUDIO.delete(row.r2Key).catch(() => {});
+      await env.DB.prepare("DELETE FROM audio_clip WHERE id=?").bind(clipId).run();
+      await logAudit(env, request, A, "audio.clip.delete", clipId);
+      return json({ ok: true, deleted: clipId }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, folderId = row.folderId, scope = row.scope, scopeId = row.scopeId;
+    if (b.scope !== undefined || b.scopeId !== undefined) {
+      scope = b.scope || row.scope;
+      scopeId = b.scopeId || row.scopeId;
+      if (!["project", "library"].includes(scope)) return json({ error: "invalid scope" }, 400, AC);
+      if (!(await audioScopeAuthOk(env, A, scope, scopeId))) return json({ error: "unauthorized on target scope" }, 401, AC);
+      folderId = null; // scope changed — target folder (if any) must be re-specified below
+    }
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.folderId !== undefined) folderId = b.folderId || null;
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope=? AND scope_id=?").bind(folderId, scope, scopeId).first();
+      if (!folder) return json({ error: "folder not found in target scope" }, 404, AC);
+    }
+    await env.DB.prepare("UPDATE audio_clip SET name=?, folder_id=?, scope=?, scope_id=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, scope, scopeId, new Date().toISOString(), clipId).run();
+    await logAudit(env, request, A, "audio.clip.update", clipId);
+    return json({ id: clipId, name, folderId, scope, scopeId }, 200, AC);
+  }
+
+  // --- Studio sessions: saved timeline arrangements (which clips, trim
+  // points, fades, gain, spatial filter — never raw audio), organized in the
+  // same audio_folder tree as clips so an Act/Scene structure is just
+  // regular folders with a session saved inside each scene. Always
+  // scope='project' — there's no such thing as a Library session. ---
+  if (path === "/api/studio-session" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const scopeId = (b.scopeId || "").trim(), name = (b.name || "").trim();
+    const folderId = b.folderId || null;
+    if (!scopeId || !name) return json({ error: "scopeId and name required" }, 400, AC);
+    if (!b.timeline || typeof b.timeline !== "object") return json({ error: "timeline required" }, 400, AC);
+    if (!(await audioScopeAuthOk(env, A, "project", scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope='project' AND scope_id=?").bind(folderId, scopeId).first();
+      if (!folder) return json({ error: "folder not found in this project" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO studio_session (id,scope,scope_id,folder_id,name,timeline_json,created_at,updated_at) VALUES (?,'project',?,?,?,?,?,?)"
+    ).bind(id, scopeId, folderId, name, JSON.stringify(b.timeline), now, now).run();
+    await logAudit(env, request, A, "studio.session.create", scopeId + "/" + name);
+    return json({ id, name, folderId }, 201, AC);
+  }
+
+  const mSessionCopy = path.match(/^\/api\/studio-session\/([^/]+)\/copy$/);
+  if (mSessionCopy && method === "POST") {
+    const sessionId = decodeURIComponent(mSessionCopy[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT scope_id AS scopeId,folder_id AS folderId,name,timeline_json AS timelineJson FROM studio_session WHERE id=?").bind(sessionId).first();
+    if (!row) return json({ error: "session not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, "project", row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const targetFolderId = b.targetFolderId !== undefined ? (b.targetFolderId || null) : row.folderId;
+    if (targetFolderId) {
+      const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope='project' AND scope_id=?").bind(targetFolderId, row.scopeId).first();
+      if (!folder) return json({ error: "target folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO studio_session (id,scope,scope_id,folder_id,name,timeline_json,created_at,updated_at) VALUES (?,'project',?,?,?,?,?,?)"
+    ).bind(id, row.scopeId, targetFolderId, b.name || row.name, row.timelineJson, now, now).run();
+    await logAudit(env, request, A, "studio.session.copy", sessionId + " -> " + id);
+    return json({ id }, 201, AC);
+  }
+
+  const mSession = path.match(/^\/api\/studio-session\/([^/]+)$/);
+  if (mSession && (method === "GET" || method === "PATCH" || method === "DELETE")) {
+    const sessionId = decodeURIComponent(mSession[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare(
+      "SELECT scope_id AS scopeId,folder_id AS folderId,name,timeline_json AS timelineJson FROM studio_session WHERE id=?"
+    ).bind(sessionId).first();
+    if (!row) return json({ error: "session not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, "project", row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "GET") {
+      let timeline;
+      try { timeline = JSON.parse(row.timelineJson); } catch (e) { return json({ error: "stored session is corrupt" }, 500, AC); }
+      return json({ id: sessionId, name: row.name, folderId: row.folderId, scopeId: row.scopeId, timeline }, 200, AC);
+    }
+
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM studio_session WHERE id=?").bind(sessionId).run();
+      await logAudit(env, request, A, "studio.session.delete", sessionId);
+      return json({ ok: true, deleted: sessionId }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, folderId = row.folderId, timelineJson = row.timelineJson;
+    if (b.name !== undefined) {
+      if (!b.name.trim()) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.folderId !== undefined) {
+      const newFolderId = b.folderId || null;
+      if (newFolderId) {
+        const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope='project' AND scope_id=?").bind(newFolderId, row.scopeId).first();
+        if (!folder) return json({ error: "folder not found in this project" }, 404, AC);
+      }
+      folderId = newFolderId;
+    }
+    if (b.timeline !== undefined) {
+      if (typeof b.timeline !== "object") return json({ error: "invalid timeline" }, 400, AC);
+      timelineJson = JSON.stringify(b.timeline);
+    }
+    await env.DB.prepare("UPDATE studio_session SET name=?, folder_id=?, timeline_json=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, timelineJson, new Date().toISOString(), sessionId).run();
+    await logAudit(env, request, A, "studio.session.update", sessionId);
+    return json({ id: sessionId, name, folderId }, 200, AC);
+  }
+
+  // --- one-off, idempotent backfill: record every existing R2 audio object's
+  // current key as-is into audio_clip/audio_folder (no bytes are rewritten,
+  // no key ever changes) so old clips show up in the new tree endpoints
+  // above. Safe to re-run — skips any r2_key already present. ---
+  if (path === "/api/audio/migrate-legacy" && method === "POST") {
+    if (!env.AUDIO) return json({ error: "no audio bucket bound" }, 500);
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
+    const now = new Date().toISOString();
+    const stats = { projects: 0, projectClips: 0, orgs: 0, libraryFolders: 0, libraryClips: 0, skipped: 0 };
+
+    const { results: projRows } = await env.DB.prepare("SELECT id FROM project").all();
+    for (const p of (projRows || [])) {
+      let cursor;
+      do {
+        const l = await env.AUDIO.list({ prefix: p.id + "/", cursor });
+        for (const o of l.objects) {
+          const existing = await env.DB.prepare("SELECT id FROM audio_clip WHERE r2_key=?").bind(o.key).first();
+          if (existing) { stats.skipped++; continue; }
+          await env.DB.prepare(
+            "INSERT INTO audio_clip (id,scope,scope_id,folder_id,name,r2_key,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+          ).bind(crypto.randomUUID(), "project", p.id, null, o.key.split("/").pop(), o.key, o.size || null, now, now).run();
+          stats.projectClips++;
+        }
+        cursor = l.truncated ? l.cursor : undefined;
+      } while (cursor);
+      stats.projects++;
+    }
+
+    const { results: clientRows } = await env.DB.prepare("SELECT id FROM client").all();
+    for (const cl of (clientRows || [])) {
+      const libOrgId = cl.id;
+      const rootPrefix = "library/" + libOrgId + "/";
+      const rootList = await env.AUDIO.list({ prefix: rootPrefix, delimiter: "/" });
+      for (const o of rootList.objects) {
+        const existing = await env.DB.prepare("SELECT id FROM audio_clip WHERE r2_key=?").bind(o.key).first();
+        if (existing) { stats.skipped++; continue; }
+        await env.DB.prepare(
+          "INSERT INTO audio_clip (id,scope,scope_id,folder_id,name,r2_key,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+        ).bind(crypto.randomUUID(), "library", libOrgId, null, o.key.split("/").pop(), o.key, o.size || null, now, now).run();
+        stats.libraryClips++;
+      }
+      const folderNames = (rootList.delimitedPrefixes || []).map(p => p.slice(rootPrefix.length, -1));
+      for (const folderName of folderNames) {
+        let folderRow = await env.DB.prepare(
+          "SELECT id FROM audio_folder WHERE scope='library' AND scope_id=? AND parent_id IS NULL AND name=?"
+        ).bind(libOrgId, folderName).first();
+        let folderId;
+        if (folderRow) { folderId = folderRow.id; }
+        else {
+          folderId = crypto.randomUUID();
+          await env.DB.prepare("INSERT INTO audio_folder (id,scope,scope_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+            .bind(folderId, "library", libOrgId, null, folderName, now, now).run();
+          stats.libraryFolders++;
+        }
+        let cursor;
+        const prefix = rootPrefix + folderName + "/";
+        do {
+          const l = await env.AUDIO.list({ prefix, cursor });
+          for (const o of l.objects) {
+            const existing = await env.DB.prepare("SELECT id FROM audio_clip WHERE r2_key=?").bind(o.key).first();
+            if (existing) { stats.skipped++; continue; }
+            await env.DB.prepare(
+              "INSERT INTO audio_clip (id,scope,scope_id,folder_id,name,r2_key,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+            ).bind(crypto.randomUUID(), "library", libOrgId, folderId, o.key.split("/").pop(), o.key, o.size || null, now, now).run();
+            stats.libraryClips++;
+          }
+          cursor = l.truncated ? l.cursor : undefined;
+        } while (cursor);
+      }
+      stats.orgs++;
+    }
+
+    await logAudit(env, request, { keyId: "master" }, "audio.migrate-legacy", JSON.stringify(stats));
+    return json({ ok: true, ...stats }, 200, AC);
   }
 
   // --- audio assets in R2: upload (scoped) + serve (public) ---

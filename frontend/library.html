@@ -6,6 +6,7 @@
 <title>Chase Life — Audio Library</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="audio-tree.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -42,6 +43,12 @@
   .af-row button.af-del{border-color:var(--hazard);color:var(--hazard)}
   .af-row input[type=checkbox]{flex:0 0 auto;accent-color:var(--coral);width:16px;height:16px}
   .af-empty{font-family:'Barlow Condensed';font-size:13px;color:var(--fog);text-align:center;padding:20px 0}
+  .tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+  .folder-tile{border:1px solid var(--rim);border-radius:9px;padding:10px 6px;text-align:center;cursor:pointer;background:rgba(255,255,255,.02);
+               font-family:'Barlow Condensed';font-size:11px;color:var(--ice);display:flex;flex-direction:column;align-items:center;gap:4px}
+  .folder-tile .fi{font-size:20px}
+  .folder-tile:hover{border-color:var(--coral);background:rgba(255,106,61,.08)}
+  .folder-tile.current{border-color:var(--coral);color:var(--snow)}
   #combineBtn{display:none;margin-top:10px;width:100%}
   #trimOverlay,#combineOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);
                align-items:center;justify-content:center;padding:16px}
@@ -93,10 +100,6 @@
   <div id="noOrg" class="hint" style="display:none;margin-bottom:10px">Pick a company above to browse its Library.</div>
 
   <div class="toolbar" id="libToolbar">
-    <span>📂</span>
-    <select id="folderSel"><option value="">Library (root)</option></select>
-    <button id="newFolderBtn" class="ghost">+ Folder</button>
-    <button id="deleteFolderBtn" class="ghost" style="display:none;color:var(--hazard);border-color:var(--hazard)">Delete folder</button>
     <div class="upload-wrap">
       <div id="uploadMenu" class="upload-menu">
         <a href="https://pixabay.com/sound-effects/" target="_blank" rel="noopener" class="upload-menu-item">🎧 Free sound effects (Pixabay)</a>
@@ -112,9 +115,9 @@
   <div id="barWrap"><div id="barFill"></div></div>
   <div id="status"></div>
 
-  <div class="af-list" id="afList"></div>
+  <div id="libTreeHost"></div>
   <button id="combineBtn" class="on">Combine (0)</button>
-  <div class="hint" style="margin-top:10px">Drag &#10241; a clip's handle to copy its URL, or use it directly from a project's own Editor panel.</div>
+  <div class="hint" style="margin-top:10px">Drag &#10241; a clip's handle to use it directly from a project's own Editor panel, or use its ⋯ menu to copy its URL.</div>
 </div>
 
 <div id="trimOverlay">
@@ -124,7 +127,7 @@
     <div id="trimLabel"></div>
     <div style="margin:6px 0 2px">
       <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save as</label>
-      <input id="trimKey" style="width:100%;margin-top:4px" placeholder="library/name.mp3">
+      <input id="trimKey" style="width:100%;margin-top:4px" placeholder="name.mp3">
     </div>
     <div class="row">
       <button id="trimCancel" class="ghost" style="flex:0 0 auto">✕ Cancel</button>
@@ -145,10 +148,8 @@
     <div id="cmbBg"></div>
     <div style="margin:6px 0 2px">
       <label style="font-family:'Barlow Condensed';font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--fog)">Save to</label>
-      <div class="row" style="margin:4px 0 0;gap:6px">
-        <select id="cmbFolderSel" style="flex:1"><option value="">Library (root)</option></select>
-        <input id="cmbName" style="flex:1" placeholder="combined-clip">
-      </div>
+      <div class="tile-grid" id="cmbFolderGrid" style="margin-top:4px"></div>
+      <input id="cmbName" style="width:100%;margin-top:6px" placeholder="combined-clip">
     </div>
     <div id="cmbTotal" class="hint"></div>
     <div class="row">
@@ -175,135 +176,31 @@ function audioExt(name,type){
   return "webm";
 }
 function _mimeExt(mime){ return mime.includes("mpeg")||mime.includes("mp3")?"mp3":mime.includes("mp4")?"m4a":mime.includes("ogg")?"ogg":"webm"; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
-let folder="", selected=new Set(), objsByKey={};
-// R2 has no real directory objects — a folder only appears in a listing once
-// it holds a file, and a *non-root* listing's own "folders" is always empty
-// (we don't nest), so only a root listing can be trusted as the full,
-// authoritative folder inventory. pendingFolders covers the gap right after
-// creating a brand-new (still-empty) folder, before it has a file.
-let knownFolders=new Set();
-const pendingFolders=new Set();
 function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
 
-async function refresh(){
-  const list=document.getElementById("afList");
+const audioTree=AudioTree.mount(document.getElementById("libTreeHost"),{
+  mode:"library",
+  orgId: currentOrg(),
+  getToken,
+  selectable:true,
+  onTrim: o=>trimClip(o),
+  onSelectionChange: clips=>{
+    const btn=document.getElementById("combineBtn");
+    btn.style.display=clips.length>=2?"block":"none";
+    btn.textContent="Combine ("+clips.length+")";
+  },
+  onError: msg=>setStatus("✕ "+msg)
+});
+function refresh(){
   const org=currentOrg();
   document.getElementById("noOrg").style.display=org?"none":"block";
   document.getElementById("libToolbar").style.display=org?"flex":"none";
-  updateCombineBtn();
-  if(!org){ list.innerHTML=""; return; }
-  list.innerHTML='<div class="af-empty">loading…</div>';
-  try{
-    const qs="scope=library&org="+encodeURIComponent(org)+(folder?"&folder="+encodeURIComponent(folder):"");
-    const r=await fetch("/api/audio-list?"+qs,{headers:{authorization:"Bearer "+getToken()}});
-    if(r.status===401){ list.innerHTML='<div class="af-empty">token rejected</div>'; clearToken(); return; }
-    const j=r.ok?await r.json():{objects:[],folders:[]};
-    if(!folder) knownFolders=new Set(j.folders||[]); // only a root listing is authoritative
-    syncFolderOptions();
-    render(j.objects||[]);
-  }catch(e){ list.innerHTML='<div class="af-empty">error: '+e.message+'</div>'; }
+  return audioTree.refresh({orgId:org});
 }
-function syncFolderOptions(){
-  const all=[...new Set([...knownFolders, ...pendingFolders])].sort();
-  const opts='<option value="">Library (root)</option>'+all.map(f=>'<option value="'+f+'">'+f+'</option>').join("");
-  const fsel=document.getElementById("folderSel"); fsel.innerHTML=opts; fsel.value=folder; if(fsel.value!==folder) fsel.value="";
-  const cf=document.getElementById("cmbFolderSel"); const cv=cf.value; cf.innerHTML=opts; cf.value=cv; if(cf.value!==cv) cf.value="";
-  document.getElementById("deleteFolderBtn").style.display=folder?"inline-block":"none";
-}
-function render(objects){
-  const list=document.getElementById("afList");
-  list.innerHTML=""; objsByKey={};
-  if(!objects.length){ list.innerHTML='<div class="af-empty">no audio files yet — Upload one above</div>'; return; }
-  objects.forEach(o=>{ objsByKey[o.key]=o; list.appendChild(buildRow(o)); });
-}
-function buildRow(o){
-  const kb=(o.size/1024).toFixed(0);
-  const row=document.createElement("div"); row.className="af-row";
-  row.draggable=true;
-  row.addEventListener("dragstart",e=>{ e.dataTransfer.setData("audiourl",o.url); e.dataTransfer.setData("audiokey",o.key); e.dataTransfer.effectAllowed="copy"; });
-  const drag=document.createElement("span"); drag.className="af-drag"; drag.textContent="⠿";
-  const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=selected.has(o.key);
-  cb.addEventListener("change",()=>{ if(cb.checked) selected.add(o.key); else selected.delete(o.key); updateCombineBtn(); });
-  const playBtn=document.createElement("button"); playBtn.textContent="▶";
-  playBtn.addEventListener("click",()=>togglePlay(o,playBtn));
-  const info=document.createElement("div"); info.className="af-info";
-  const nm=document.createElement("div"); nm.className="af-name"; nm.textContent=o.key.split("/").pop();
-  const sz=document.createElement("div"); sz.className="af-sz"; sz.textContent=kb+" KB";
-  info.appendChild(nm); info.appendChild(sz);
-  const btns=document.createElement("div"); btns.className="af-btns";
-  const trimBtn=document.createElement("button"); trimBtn.textContent="✂"; trimBtn.title="Trim";
-  trimBtn.addEventListener("click",()=>trimClip(o)); btns.appendChild(trimBtn);
-  const mvBtn=document.createElement("button"); mvBtn.textContent="⇄"; mvBtn.title="Move";
-  mvBtn.addEventListener("click",()=>moveClip(o)); btns.appendChild(mvBtn);
-  const delBtn=document.createElement("button"); delBtn.className="af-del"; delBtn.textContent="✕"; delBtn.title="Delete";
-  delBtn.addEventListener("click",()=>deleteClip(o,row)); btns.appendChild(delBtn);
-  const copyBtn=document.createElement("button"); copyBtn.textContent="Copy URL";
-  copyBtn.addEventListener("click",()=>{ navigator.clipboard.writeText(location.origin+o.url).then(()=>{ copyBtn.textContent="copied ✓"; setTimeout(()=>copyBtn.textContent="Copy URL",1200); }); });
-  btns.appendChild(copyBtn);
-  row.appendChild(drag); row.appendChild(cb); row.appendChild(playBtn); row.appendChild(info); row.appendChild(btns);
-  return row;
-}
-let _playing=null;
-function togglePlay(o,btn){
-  if(_playing&&_playing.url===o.url){ _playing.audio.pause(); _playing=null; btn.textContent="▶"; return; }
-  if(_playing){ _playing.audio.pause(); _playing.btn.textContent="▶"; }
-  const audio=new Audio(o.url); audio.play();
-  audio.onended=()=>{ btn.textContent="▶"; _playing=null; };
-  _playing={url:o.url,audio,btn}; btn.textContent="⏸";
-}
-function deleteClip(o,row){
-  if(!confirm("Delete "+o.key+" ?\nThis cannot be undone.")) return;
-  fetch("/api/audio/"+o.key,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}}).then(async r=>{
-    if(r.ok){ row.remove(); selected.delete(o.key); updateCombineBtn();
-      if("caches" in self) try{ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.open(k).then(c=>c.delete(o.url)))); }catch(e){} }
-    else alert("Delete failed: "+(await r.text()));
-  }).catch(e=>alert("Delete failed: "+e.message));
-}
-function moveClip(o){
-  const raw=prompt('Move "'+o.key.split("/").pop()+'" to which folder? (blank = library root)', folder||"");
-  if(raw===null) return; // cancelled — must not be treated the same as "" (a deliberate move to root)
-  const dest=raw.trim();
-  if(dest===(folder||"")) return;
-  if(dest.includes("/")){ alert('Library folders are flat — no "/".'); return; }
-  const org=o.key.split("/")[1]; // library/<org>/<folder?>/<file> — move within the same company
-  const to="library/"+org+"/"+(dest?dest+"/":"")+o.key.split("/").pop();
-  fetch("/api/audio/move",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({from:o.key,to})})
-    .then(async r=>{
-      if(r.ok){ if(dest) pendingFolders.add(dest); refresh(); }
-      else alert("Move failed: "+(await r.text()));
-    })
-    .catch(e=>alert("Move failed: "+e.message));
-}
-function updateCombineBtn(){
-  const btn=document.getElementById("combineBtn");
-  btn.style.display=currentOrg() && selected.size>=2?"block":"none";
-  btn.textContent="Combine ("+selected.size+")";
-}
-document.getElementById("folderSel").onchange=e=>{ folder=e.target.value; selected.clear(); updateCombineBtn(); refresh(); };
 document.getElementById("refreshBtn").onclick=refresh;
-document.getElementById("newFolderBtn").onclick=()=>{
-  const name=(prompt("New folder name:")||"").trim();
-  if(!name) return;
-  if(name.includes("/")){ alert('Library folders are flat — no "/" in the name.'); return; }
-  pendingFolders.add(name);
-  folder=name;
-  syncFolderOptions();
-  refresh();
-};
-document.getElementById("deleteFolderBtn").onclick=async()=>{
-  const org=currentOrg(); if(!org||!folder) return;
-  if(!confirm('Delete the folder "'+folder+'" and everything in it? This cannot be undone.')) return;
-  try{
-    const r=await fetch("/api/audio/folder?org="+encodeURIComponent(org)+"&folder="+encodeURIComponent(folder),
-      {method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-    if(!r.ok){ alert("Delete failed: "+(await r.text())); return; }
-    knownFolders.delete(folder); pendingFolders.delete(folder);
-    folder=""; selected.clear(); updateCombineBtn();
-    refresh();
-  }catch(e){ alert("Delete failed: "+e.message); }
-};
-document.getElementById("combineBtn").onclick=()=>openCombineModal([...selected].map(k=>objsByKey[k]).filter(Boolean));
+document.getElementById("combineBtn").onclick=()=>openCombineModal(audioTree.getSelectedClips());
 
 /* ---- trim + render pipeline (ported from the Fence Editor; no zone/stop concept here) ---- */
 let _tBuf=null,_tFrac={start:0,end:1},_tOnSkip=null,_tOnOk=null,_tPeaks=[],_tNeedle=null,_tRAF=null,_tDrag=null,_tACtx=null,_tPrevSrc=null,_tCtxT0=0;
@@ -482,33 +379,46 @@ async function _decodeUrl(url){
   const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab); await tmp.close(); return buf;
 }
 
-function doUpload(blob, key, mimeType, onDone){
-  const token=getToken(); if(!token){ setStatus("upload cancelled — no token"); return; }
-  const kb=blob.size/1024, sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
-  const t0=Date.now();
-  showBar(0); setStatus("uploading "+sizeStr+"…");
-  const xhr=new XMLHttpRequest();
-  xhr.open("PUT","/api/audio/"+key);
-  xhr.setRequestHeader("authorization","Bearer "+token);
-  xhr.setRequestHeader("content-type",mimeType||"audio/mpeg");
-  xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){ const p=ev.loaded/ev.total*100; showBar(p); setStatus("uploading "+sizeStr+" — "+Math.round(p)+"%"); } };
-  xhr.onload=()=>{
-    const secs=((Date.now()-t0)/1000).toFixed(1); let j={}; try{j=JSON.parse(xhr.responseText);}catch(_){}
-    if(xhr.status>=200&&xhr.status<300){
-      showBar(100); setStatus("uploaded ✓ "+sizeStr+" in "+secs+"s"); setTimeout(hideBar,1500);
-      if(onDone) onDone(j.url||("/api/audio/"+key),key);
-    } else if(xhr.status===401){ hideBar(); setStatus("✕ unauthorized"); clearToken(); }
-    else { hideBar(); setStatus("✕ upload failed ("+xhr.status+"): "+(j.error||xhr.statusText||"server error")); }
-  };
-  xhr.onerror=()=>{ hideBar(); setStatus("✕ network error"); };
-  xhr.timeout=180000; xhr.send(blob);
+function doUpload(blob, target, name, mimeType){
+  return new Promise((resolve,reject)=>{
+    const token=getToken(); if(!token){ setStatus("upload cancelled — no token"); reject(new Error("no token")); return; }
+    const kb=blob.size/1024, sizeStr=kb>1024?(kb/1024).toFixed(1)+" MB":(kb|0)+" KB";
+    const t0=Date.now();
+    showBar(0); setStatus("uploading "+sizeStr+"…");
+    const qs=new URLSearchParams({scope:target.scope,scopeId:target.scopeId,name});
+    if(target.folderId) qs.set("folderId",target.folderId);
+    const xhr=new XMLHttpRequest();
+    xhr.open("POST","/api/audio-clip?"+qs.toString());
+    xhr.setRequestHeader("authorization","Bearer "+token);
+    xhr.setRequestHeader("content-type",mimeType||"audio/mpeg");
+    xhr.upload.onprogress=ev=>{ if(ev.lengthComputable){ const p=ev.loaded/ev.total*100; showBar(p); setStatus("uploading "+sizeStr+" — "+Math.round(p)+"%"); } };
+    xhr.onload=()=>{
+      const secs=((Date.now()-t0)/1000).toFixed(1); let j={}; try{j=JSON.parse(xhr.responseText);}catch(_){}
+      if(xhr.status>=200&&xhr.status<300){ showBar(100); setStatus("uploaded ✓ "+sizeStr+" in "+secs+"s"); setTimeout(hideBar,1500); resolve(j); }
+      else if(xhr.status===401){ hideBar(); setStatus("✕ unauthorized"); clearToken(); reject(new Error("unauthorized")); }
+      else { hideBar(); setStatus("✕ upload failed ("+xhr.status+"): "+(j.error||xhr.statusText||"server error")); reject(new Error(j.error||xhr.statusText)); }
+    };
+    xhr.onerror=()=>{ hideBar(); setStatus("✕ network error"); reject(new Error("network error")); };
+    xhr.timeout=180000; xhr.send(blob);
+  });
 }
 
+// Trim edits an already-uploaded clip in place: upload the trimmed bytes as
+// a new clip in the same spot, then drop the original — R2 keys are opaque
+// now, so there's no "overwrite this key" shortcut like the old flat scheme.
 function trimClip(o){
   setStatus("downloading for trim…");
   _decodeUrl(o.url).then(buf=>{
-    openTrimmer(buf, o.key, ()=>{ refresh(); },
-      (blob,userKey)=>{ const ext=_mimeExt(blob.type); const resolvedKey=(userKey||o.key).replace(/\.[^.]+$/,"."+ext); doUpload(blob, resolvedKey, blob.type, refresh); });
+    openTrimmer(buf, o.name, ()=>{ refresh(); },
+      async(blob,userName)=>{
+        const ext=_mimeExt(blob.type);
+        const name=(userName||o.name).replace(/\.[^.]+$/,"."+ext);
+        try{
+          await doUpload(blob, {scope:o.scope,scopeId:o.scopeId,folderId:o.folderId}, name, blob.type);
+          await fetch("/api/audio-clip/"+o.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+          refresh();
+        }catch(e){ setStatus("✕ trim failed: "+e.message); }
+      });
   }).catch(e=>setStatus("download failed — "+e.message));
 }
 function isAllowedUploadExt(name){
@@ -523,12 +433,13 @@ async function ingestUploadFile(f){
     const ab=await f.arrayBuffer();
     const ctx=new AudioContext(); let buf; try{ buf=await ctx.decodeAudioData(ab); }finally{ ctx.close(); }
     const ext=audioExt(f.name,f.type), base=slug(f.name.replace(/\.[^.]+$/,""))||"clip";
+    const target=audioTree.getUploadTarget()||{scope:"library",scopeId:org,folderId:null};
     // Always append a short uniqueness suffix — two uploads with the same
     // original filename must not silently overwrite each other.
-    const defaultKey="library/"+org+"/"+(folder?folder+"/":"")+base+"-"+Date.now().toString(36)+"."+ext;
-    openTrimmer(buf, defaultKey,
-      key=>{ doUpload(f, key||defaultKey, f.type||"audio/mpeg", refresh); },
-      (blob,userKey)=>{ doUpload(blob, userKey||defaultKey, blob.type, refresh); }
+    const defaultName=base+"-"+Date.now().toString(36)+"."+ext;
+    openTrimmer(buf, defaultName,
+      async name=>{ try{ await doUpload(f, target, name||defaultName, f.type||"audio/mpeg"); await audioTree.refresh(); audioTree.revealFolder(target.scope,target.folderId); }catch(e){} },
+      async(blob,name)=>{ try{ await doUpload(blob, target, name||defaultName, blob.type); await audioTree.refresh(); audioTree.revealFolder(target.scope,target.folderId); }catch(e){} }
     );
   }catch(e){ setStatus("couldn't read that file — "+e.message); }
 }
@@ -572,14 +483,26 @@ document.getElementById("pickDownloadsBtn").addEventListener("click",async()=>{
 });
 
 /* ---- Combine (blend) modal ---- */
-let _cmbSegs=[];
+let _cmbSegs=[], cmbTarget=null;
 function openCombineModal(objs){
   if(objs.length<2){ alert("Select at least 2 clips to combine."); return; }
   _cmbSegs=objs.map(o=>({o, lane:"main", f0:0, f1:1, buf:null, volPct:60}));
+  cmbTarget=audioTree.getUploadTarget()||{scope:"library",scopeId:currentOrg(),folderId:null};
+  syncCmbFolderGrid();
   renderCombineLanes(); document.getElementById("cmbName").value="";
   document.getElementById("combineOverlay").style.display="flex";
 }
-function closeCombineModal(){ document.getElementById("combineOverlay").style.display="none"; }
+function syncCmbFolderGrid(){
+  const grid=document.getElementById("cmbFolderGrid"); grid.innerHTML="";
+  audioTree.listFolders("library").forEach(f=>{
+    const isCurrent=cmbTarget && f.scopeId===cmbTarget.scopeId && f.folderId===cmbTarget.folderId;
+    const t=document.createElement("div"); t.className="folder-tile"+(isCurrent?" current":"");
+    t.innerHTML='<span class="fi">📁</span><span>'+esc(f.label)+'</span>';
+    t.onclick=()=>{ cmbTarget=f; syncCmbFolderGrid(); };
+    grid.appendChild(t);
+  });
+}
+function closeCombineModal(){ document.getElementById("combineOverlay").style.display="none"; audioTree.clearSelection(); }
 document.getElementById("cmbCancel").onclick=closeCombineModal;
 document.getElementById("combineOverlay").addEventListener("click",ev=>{ if(ev.target===document.getElementById("combineOverlay")) closeCombineModal(); });
 function renderCombineLanes(){
@@ -587,7 +510,7 @@ function renderCombineLanes(){
   mainWrap.innerHTML=""; bgWrap.innerHTML="";
   _cmbSegs.forEach(seg=>{
     const row=document.createElement("div"); row.className="cmb-seg";
-    const nm=document.createElement("span"); nm.className="cmb-nm"; nm.textContent=seg.o.key.split("/").pop();
+    const nm=document.createElement("span"); nm.className="cmb-nm"; nm.textContent=seg.o.name;
     const laneSel=document.createElement("select");
     laneSel.innerHTML='<option value="main">Main</option><option value="bg">Background</option>';
     laneSel.value=seg.lane; laneSel.onchange=()=>{ seg.lane=laneSel.value; renderCombineLanes(); };
@@ -617,17 +540,17 @@ document.getElementById("cmbRender").onclick=async()=>{
   try{
     for(const s of _cmbSegs){ if(!s.buf) s.buf=await _decodeUrl(s.o.url); }
     const blob=await _reencBlend(mainSegs,bgSegs);
-    const cFolder=document.getElementById("cmbFolderSel").value;
     const name=slug((document.getElementById("cmbName").value||"combined").trim())||"combined";
-    const key="library/"+org+"/"+(cFolder?cFolder+"/":"")+name+"-"+Date.now().toString(36)+".mp3";
+    const target=cmbTarget||{scope:"library",scopeId:org,folderId:null};
     closeCombineModal();
-    if(cFolder) pendingFolders.add(cFolder);
-    doUpload(blob, key, blob.type, refresh);
+    await doUpload(blob, target, name+"-"+Date.now().toString(36)+".mp3", blob.type);
+    await audioTree.refresh();
+    audioTree.revealFolder(target.scope,target.folderId);
   }catch(e){ alert("Combine failed: "+e.message); }
   finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }
 };
 
-ClientPicker.init({ navEl: document.getElementById("clientPickerNav"), onChange: ()=>{ folder=""; knownFolders=new Set(); pendingFolders.clear(); selected.clear(); refresh(); } });
+ClientPicker.init({ navEl: document.getElementById("clientPickerNav"), onChange: refresh });
 refresh();
 </script>
 </body>
