@@ -6,6 +6,7 @@
 <title>Chase Life — Chatterbox Studio</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="audio-tree.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -36,6 +37,11 @@
   .rail{width:260px;flex:0 0 260px;border-right:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;background:rgba(255,255,255,.01)}
   .rail h2{font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:12px 12px 6px}
   .rail-body{flex:1;overflow-y:auto;padding:0 10px 10px;display:flex;flex-direction:column;gap:8px;min-height:0}
+  /* ---- Library tree (right rail) — same AudioTree widget/data as Audio Studio,
+     mounted in project mode; resize:horizontal needs flex:0 0 auto (a fixed
+     flex-basis overrides it) — same fix already applied in audio-studio.html ---- */
+  .rail-right{width:280px;flex:0 0 auto;border-right:none;border-left:1px solid var(--rim);
+         resize:horizontal;overflow:auto;min-width:200px;max-width:70vw}
   /* ---- Resemble-voice registration panel (paste an existing Resemble AI voice UUID — the only way voices are created now) ---- */
   #resemblePanel{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--rim);border-radius:9px;background:rgba(255,255,255,.01)}
   #resemblePanel input{width:100%}
@@ -56,6 +62,9 @@
   /* ---- script editor (main) ---- */
   #editorPane{flex:1;display:flex;flex-direction:column;min-height:0}
   #scriptToolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--rim)}
+  #lineOpsBar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:6px 16px;border-bottom:1px solid var(--rim);background:rgba(255,255,255,.01)}
+  #lineOpsBar button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  input.ln-select-chk{margin-right:6px;accent-color:var(--coral);vertical-align:middle}
   #scriptToolbar input{flex:1}
   #scriptImport{flex:0 0 auto;padding:14px 16px}
   #scriptImport textarea{width:100%;height:140px;font-family:"Barlow";font-size:13px}
@@ -84,6 +93,7 @@
   <h1>🎙️ Chatterbox Studio</h1>
   <span class="crumb" id="hdrCrumb">voice cloning — Macbeth-to-park-tour narration</span>
   <nav id="clientNav" style="display:flex;align-items:center;gap:8px"></nav>
+  <select id="projectSel" title="Which project's audio tree renders save into" style="max-width:180px"><option value="">— pick a project —</option></select>
   <a href="/library">Library →</a>
   <a href="/studio">Audio Studio →</a>
   <a href="/editor">Editor →</a>
@@ -110,23 +120,35 @@
       <div class="hint" style="margin-bottom:6px">Paste a script (e.g. Macbeth), then import it below.</div>
       <textarea id="scriptRaw" placeholder="MACBETH: Is this a dagger which I see before me..."></textarea>
       <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
-        <input type="text" id="scriptSlugInput" placeholder="Script name (used as the Library folder)" style="flex:1">
+        <input type="text" id="scriptSlugInput" placeholder="Script name" style="flex:1">
         <button class="on" id="btnImportScript">Import Script</button>
       </div>
     </div>
 
     <div id="scriptToolbar" style="display:none">
-      <div class="hint">Highlight text, then drag a voice card onto the highlighted passage.</div>
-      <button class="ghost" id="btnReimport">← New script</button>
-      <button class="danger ghost" id="btnClearScript" title="Wipe this script completely, including the saved copy">🗑 Clear Script</button>
+      <div class="hint" style="flex:1">Highlight text, then drag a voice card onto the highlighted passage.</div>
+      <button class="ghost" id="btnReimport">🆕 New</button>
+      <button id="btnSaveScript">💾 Save</button>
+      <button class="ghost" id="btnSaveScriptAs">Save As…</button>
+      <button class="danger ghost" id="btnClearScript" title="Wipe this script completely, including the local draft">🗑 Clear Script</button>
+    </div>
+    <div id="lineOpsBar" style="display:none">
+      <button class="ghost" id="btnSelectLines">☐ Select lines</button>
+      <button class="ghost" id="btnCopyLines" title="Copy selected lines (voice tags + generated audio come with them)" style="display:none">⧉ Copy</button>
+      <button class="ghost" id="btnCutLines" title="Copy selected lines, then remove them from this script" style="display:none">✂ Cut</button>
+      <button class="ghost" id="btnPasteLines" title="Insert the copied/cut lines after the last selected line (or at the end)" style="display:none">📋 Paste</button>
+      <div class="hint" id="lineOpsHint" style="flex:1"></div>
     </div>
     <div id="scriptBody" contenteditable="true" style="display:none"></div>
     <div id="genAllBar" style="display:none">
-      <div class="hint">Save to:</div>
-      <select id="targetFolderSelect"></select>
       <div class="hint" id="genAllHint" style="flex:1"></div>
       <button id="btnGenerateAll">Generate All Tagged</button>
     </div>
+  </div>
+
+  <div class="rail rail-right" id="chatterboxTreeRail">
+    <h2>Library — save destination</h2>
+    <div class="rail-body" id="chatterboxTreeHost"></div>
   </div>
 </div>
 
@@ -154,6 +176,80 @@ function _cleanSpanText(span){
   const clone=span.cloneNode(true);
   clone.querySelectorAll(".vox-tag,.vox-actions").forEach(el=>el.remove());
   return clone.textContent.trim();
+}
+
+/* Plain new Audio(url).play() fails silently (a rejected promise nobody's
+   listening for) if the clip's R2 object is gone — e.g. a stale audioUrl
+   left over in a localStorage draft from before a since-deleted upload.
+   That reads as "the button just doesn't work" with zero feedback. Surface
+   it and offer the actual fix: regenerating this line. */
+function playGeneratedClip(span){
+  const url=span.dataset.audioUrl;
+  new Audio(url).play().catch(err=>{
+    console.error("Playback failed for",url,err);
+    if(confirm('This clip\'s audio file is missing (probably deleted server-side) — regenerate "'+(span.dataset.voiceName||"this line")+'" now?')) generateRun(span);
+  });
+}
+
+/* Rebuilds a generated line's action buttons to ▶ Play + 🗑 Discard — the
+   shared end state for both a fresh successful generateRun() and a restored
+   (from a saved script) already-generated line. */
+function markGenerated(span){
+  const actions=span.querySelector(".vox-actions");
+  if(!actions) return;
+  actions.innerHTML="";
+  const playBtn=document.createElement("button");
+  playBtn.textContent="▶ Play";
+  playBtn.onclick=(e)=>{ e.stopPropagation(); playGeneratedClip(span); };
+  actions.appendChild(playBtn);
+  const delBtn=document.createElement("button");
+  delBtn.className="ghost"; delBtn.title="Don't like this render? Delete it and clear the tag (so you can fix a wrong highlight and re-tag)";
+  delBtn.textContent="🗑";
+  delBtn.onclick=(e)=>{ e.stopPropagation(); discardRender(span); };
+  actions.appendChild(delBtn);
+}
+
+/* "As an option if we don't like the render" — deletes the actual clip
+   (D1 audio_clip row + R2 file, same as any other clip delete in this app)
+   AND fully untags the line: the voice tag, highlight, and Generate/Play
+   button all go away, leaving plain text again. This is deliberate, not
+   just clearing the audio — a bad render is often caused by a wrong
+   highlight range (too much/too little selected), so the fix has to let
+   the user re-select from scratch, not just re-generate the same range.
+   Replacing the span with a plain text node (then normalize()ing the
+   parent) is what makes that possible — the highlight listener can't
+   cleanly re-select across an existing .vox-run boundary. */
+/* Fully removes a tag/highlight — the span is replaced with a plain text
+   node (merged into its neighbors via normalize()) so the range can be
+   freshly re-selected; the highlight listener can't cleanly re-select
+   across an existing .vox-run boundary otherwise. Shared by the pre-
+   generation "✕" escape button (renderRunActions) and discardRender()
+   below (after it's deleted the clip) — same fix, two points where a wrong
+   highlight needs undoing. */
+function untagSpan(span){
+  _invalidateSpanGeneration(span); // cancels any in-flight generation before the span is removed
+  const text=span.dataset.text || _cleanSpanText(span);
+  const textNode=document.createTextNode(text);
+  span.replaceWith(textNode);
+  if(textNode.parentNode) textNode.parentNode.normalize();
+}
+async function discardRender(span){
+  if(!confirm("Delete this render? The audio file is removed for good and the text becomes unhighlighted, so you can re-select and re-tag it (e.g. if the wrong words got highlighted).")) return;
+  const clipId=span.dataset.audioClipId;
+  const url=span.dataset.audioUrl;
+  try{
+    if(clipId){
+      await fetch("/api/audio-clip/"+clipId,{method:"DELETE",headers:authHeaders()});
+    }else if(url){
+      // Legacy line from before clips got real D1 rows — best-effort delete
+      // via the old path-driven endpoint, extracted from the stored URL.
+      const key=url.replace(/^\/api\/audio\//,"");
+      await fetch("/api/audio/"+key,{method:"DELETE",headers:authHeaders()}).catch(()=>{});
+    }
+  }catch(e){ console.error("Discard render: server delete failed (reverting locally anyway):",e); }
+  untagSpan(span);
+  if(audioTree) audioTree.refresh().catch(()=>{});
+  persistScript();
 }
 
 /* Cancels any in-flight generation for this span and bumps its generation
@@ -380,7 +476,14 @@ document.getElementById("btnResembleSubmit").onclick=()=>{
    ============================================================ */
 let scriptSlug="";
 let lineSeq=0;
-let targetFolder=""; // destination Library folder for renders — see refreshFolderOptions()
+let projectId=new URLSearchParams(location.search).get("project")||localStorage.getItem("chatterbox.lastProject")||null;
+let projectName=null;
+let audioTree=null; // mounted in project mode — same audio_folder tree Audio Studio shows for this project; see mountTree()
+let openScriptId=null, openScriptName=null; // the saved chatterbox_script row currently open, if any — see saveScript()/openScript()
+let selectLineMode=false;
+let selectedLineDivs=new Set(); // Set<HTMLDivElement> — DOM elements, not indices, so cut/paste reordering can never desync them (a lesson learned the hard way with index-based bulk-select elsewhere in this app)
+let scriptClipboard=null; // {lines,assignments} — see copySelectedLines()/pasteLines()
+const SCRIPT_CLIPBOARD_KEY="chatterbox.script.clipboard.v1";
 
 /* ---- persistence: the script you're working on survives navigating away
    and coming back. Only the base line text + tagged/generated runs are
@@ -388,64 +491,75 @@ let targetFolder=""; // destination Library folder for renders — see refreshFo
    reload — a reasonable trade-off for a much simpler restore path). ---- */
 const SCRIPT_STORAGE_KEY="chatterbox.script.v1";
 
-function persistScript(){
-  const lineDivs=[...document.getElementById("scriptBody").children];
+/* Extracts {lines,assignments} from a given ordered list of line-divs —
+   shared by buildScriptPayload() (all lines) and copySelectedLines() (just
+   the checked ones). lineIndex in the result is always relative to the
+   given lineDivs array, so passing a subset naturally re-bases indices to
+   0..N-1 for that excerpt — exactly what a paste-elsewhere needs. */
+function extractLinesData(lineDivs){
   const lines=lineDivs.map(div=>{
     const topSpan=div.querySelector(".vox-run");
     return topSpan ? topSpan.dataset.text : div.textContent;
   });
-  const assignments=[...document.querySelectorAll(".vox-run[data-voice-id]")].map(s=>{
-    const lineDiv=lineDivs.find(div=>div.contains(s));
-    const topSpan=lineDiv&&lineDiv.querySelector(".vox-run");
-    // Character offset within the line's plain text, walked directly from
-    // the DOM rather than re-derived via indexOf() on restore — matchText
-    // alone can't disambiguate two identical phrases tagged to different
-    // voices in the same line (indexOf always finds the first).
-    let idx=-1;
-    if(topSpan){
-      let offset=0;
-      for(const node of topSpan.childNodes){
-        if(node===s){ idx=offset; break; }
-        offset += (node.dataset&&node.dataset.text!=null ? node.dataset.text : node.textContent||"").length;
+  const assignments=lineDivs.flatMap((div,lineIndex)=>
+    [...div.querySelectorAll(".vox-run[data-voice-id]")].map(s=>{
+      const topSpan=div.querySelector(".vox-run");
+      // Character offset within the line's plain text, walked directly from
+      // the DOM rather than re-derived via indexOf() on restore — matchText
+      // alone can't disambiguate two identical phrases tagged to different
+      // voices in the same line (indexOf always finds the first).
+      let idx=-1;
+      if(topSpan){
+        let offset=0;
+        for(const node of topSpan.childNodes){
+          if(node===s){ idx=offset; break; }
+          offset += (node.dataset&&node.dataset.text!=null ? node.dataset.text : node.textContent||"").length;
+        }
       }
-    }
-    return {
-      lineIndex: lineDiv?lineDivs.indexOf(lineDiv):-1,
-      matchText: s.dataset.text, idx,
-      voiceId: s.dataset.voiceId,
-      voiceName: s.dataset.voiceName,
-      audioUrl: s.dataset.audioUrl||null,
-      generatedText: s.dataset.generatedText||null
-    };
-  }).filter(a=>a.lineIndex>=0);
-  try{
-    localStorage.setItem(SCRIPT_STORAGE_KEY, JSON.stringify({
-      scriptRaw: document.getElementById("scriptRaw").value,
-      scriptSlug, targetFolder, lines, assignments
-    }));
-  }catch(e){ /* localStorage full/unavailable — not worth interrupting the user over */ }
+      return {
+        lineIndex, matchText: s.dataset.text, idx,
+        voiceId: s.dataset.voiceId,
+        voiceName: s.dataset.voiceName,
+        audioUrl: s.dataset.audioUrl||null,
+        audioClipId: s.dataset.audioClipId||null,
+        generatedText: s.dataset.generatedText||null
+      };
+    })
+  );
+  return {lines,assignments};
+}
+/* Shared by the localStorage safety-net draft (persistScript) and the real,
+   named tree save (saveScript) — same shape either way, just two different
+   destinations. */
+function buildScriptPayload(){
+  const {lines,assignments}=extractLinesData([...document.getElementById("scriptBody").children]);
+  return {
+    scriptRaw: document.getElementById("scriptRaw").value,
+    scriptSlug, saveTarget: audioTree?audioTree.getUploadTarget():null,
+    lines, assignments
+  };
+}
+function persistScript(){
+  try{ localStorage.setItem(SCRIPT_STORAGE_KEY, JSON.stringify(buildScriptPayload())); }
+  catch(e){ /* localStorage full/unavailable — not worth interrupting the user over */ }
 }
 
 function clearPersistedScript(){
   try{ localStorage.removeItem(SCRIPT_STORAGE_KEY); }catch(e){}
 }
 
-/* Rebuilds each line directly from text segments (plain text interleaved
-   with tagged .vox-run spans) rather than replaying live selection/Range
-   operations on a partially-built tree — far simpler and correctly
-   handles multiple non-overlapping assignments landing in the same line. */
-function restoreScript(data){
-  scriptSlug=data.scriptSlug||"";
-  targetFolder=data.targetFolder||"";
-  document.getElementById("scriptRaw").value=data.scriptRaw||"";
-  document.getElementById("scriptSlugInput").value=data.scriptSlug||"";
-
-  const body=document.getElementById("scriptBody");
-  body.innerHTML="";
-
-  (data.lines||[]).forEach((lineText,lineIndex)=>{
+/* Builds line-div elements directly from text segments (plain text
+   interleaved with tagged .vox-run spans) rather than replaying live
+   selection/Range operations on a partially-built tree — far simpler and
+   correctly handles multiple non-overlapping assignments landing in the
+   same line. Pure DOM-construction, no side effects — used both for a full
+   restoreScript() (replaces the whole body) and pasteLines() (inserted at
+   a point in the existing body), so pasted-in generated lines get fully
+   working Play/Discard buttons via markGenerated(), not just the right look. */
+function buildLineElements(lines,assignments){
+  return (lines||[]).map((lineText,lineIndex)=>{
     const p=document.createElement("div"); p.style.marginBottom="10px";
-    const lineAssignments=(data.assignments||[])
+    const lineAssignments=(assignments||[])
       .filter(a=>a.lineIndex===lineIndex)
       // Prefer the persisted character offset (disambiguates duplicate
       // matchText within a line); fall back to indexOf for scripts saved
@@ -473,10 +587,10 @@ function restoreScript(data){
       renderRunActions(runSpan);
       if(a.audioUrl){
         runSpan.dataset.audioUrl=a.audioUrl;
+        if(a.audioClipId) runSpan.dataset.audioClipId=a.audioClipId;
         if(a.generatedText) runSpan.dataset.generatedText=a.generatedText;
         runSpan.classList.add("generated");
-        const genBtn=runSpan.querySelector(".vox-actions button");
-        if(genBtn){ genBtn.textContent="▶ Play"; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(runSpan.dataset.audioUrl).play(); }; }
+        markGenerated(runSpan);
       }else{
         runSpan.classList.add("tagged");
       }
@@ -486,22 +600,141 @@ function restoreScript(data){
     if(cursor<lineText.length) topSpan.appendChild(document.createTextNode(lineText.slice(cursor)));
 
     p.appendChild(topSpan);
-    body.appendChild(p);
+    return p;
   });
+}
+function restoreScript(data){
+  scriptSlug=data.scriptSlug||"";
+  const savedTarget=data.saveTarget||null; // {scope,scopeId,folderId} — applied after the right project's tree is mounted, below
+  document.getElementById("scriptRaw").value=data.scriptRaw||"";
+  document.getElementById("scriptSlugInput").value=data.scriptSlug||"";
+
+  const body=document.getElementById("scriptBody");
+  body.innerHTML="";
+  buildLineElements(data.lines,data.assignments).forEach(div=>body.appendChild(div));
 
   document.getElementById("scriptImport").style.display="none";
   document.getElementById("scriptToolbar").style.display="flex";
+  document.getElementById("lineOpsBar").style.display="flex";
   body.style.display="block";
   document.getElementById("genAllBar").style.display="flex";
   updateGenAllHint();
-  refreshFolderOptions();
+  // A restored script may target a different project than the one currently
+  // selected — switch to it first, then reveal (not force-select — AudioTree
+  // has no API for that without a real click) the saved folder once its
+  // tree has loaded.
+  if(savedTarget && savedTarget.scopeId && savedTarget.scopeId!==projectId){
+    projectId=savedTarget.scopeId;
+    try{ localStorage.setItem("chatterbox.lastProject",projectId); }catch(e){}
+    document.getElementById("projectSel").value=projectId;
+  }
+  loadProjectOptions().then(()=>{
+    if(savedTarget && audioTree) audioTree.revealFolder(savedTarget.scope,savedTarget.folderId);
+  });
+  updateScriptButtons();
+  renderLineSelectUI();
 }
+
+/* ============================================================
+   Copy / Cut / Paste for whole lines — "copy part of the play (say Act
+   One), save it separately, then delete it from the working script."
+   Deliberately line-granularity, not arbitrary character ranges: a script
+   is fundamentally a sequence of lines, tagged runs don't split mid-line
+   sanely, and every meaningful excerpt the user actually wants (a scene,
+   an act) is already line-aligned. Mirrors the checkbox bulk-select
+   pattern already proven for stops in fence-editor.html.
+   ============================================================ */
+function renderLineSelectUI(){
+  const body=document.getElementById("scriptBody");
+  [...body.children].forEach(div=>{
+    let chk=div.querySelector(":scope > input.ln-select-chk");
+    if(selectLineMode){
+      if(!chk){
+        chk=document.createElement("input"); chk.type="checkbox"; chk.className="ln-select-chk"; chk.contentEditable="false";
+        chk.onclick=(e)=>{
+          e.stopPropagation();
+          if(chk.checked) selectedLineDivs.add(div); else selectedLineDivs.delete(div);
+          updateLineOpsBar();
+        };
+        div.prepend(chk);
+      }
+      chk.checked=selectedLineDivs.has(div);
+    }else if(chk){ chk.remove(); }
+  });
+  updateLineOpsBar();
+}
+function updateLineOpsBar(){
+  const n=selectedLineDivs.size;
+  document.getElementById("btnCopyLines").style.display=(selectLineMode&&n)?"":"none";
+  document.getElementById("btnCutLines").style.display=(selectLineMode&&n)?"":"none";
+  document.getElementById("btnPasteLines").style.display=(scriptClipboard&&scriptClipboard.lines&&scriptClipboard.lines.length)?"":"none";
+  const hint=document.getElementById("lineOpsHint");
+  hint.textContent=selectLineMode
+    ? (n?n+" line(s) selected":"Check lines to copy or cut")
+    : (scriptClipboard&&scriptClipboard.lines&&scriptClipboard.lines.length ? scriptClipboard.lines.length+" line(s) ready to paste" : "");
+}
+/* remove=false is Copy (buffer only); remove=true is Cut (buffer + delete
+   from this script). Either way the buffer keeps each line's audioUrl/
+   audioClipId as-is — a cut clip isn't deleted, it just moves with the
+   text when pasted (elsewhere in this script, a fresh one, or after
+   Save As, a different saved script entirely). */
+function copySelectedLines(remove){
+  if(!selectedLineDivs.size) return;
+  const body=document.getElementById("scriptBody");
+  const orderedDivs=[...body.children].filter(d=>selectedLineDivs.has(d));
+  scriptClipboard=extractLinesData(orderedDivs);
+  try{ localStorage.setItem(SCRIPT_CLIPBOARD_KEY,JSON.stringify(scriptClipboard)); }catch(e){}
+  if(remove){
+    orderedDivs.forEach(div=>{
+      div.querySelectorAll(".vox-run[data-voice-id]").forEach(s=>_invalidateSpanGeneration(s));
+      div.remove();
+    });
+    selectedLineDivs.clear();
+    updateGenAllHint();
+    persistScript();
+  }
+  updateLineOpsBar();
+}
+/* Inserts the buffered lines right after the last selected line (in
+   document order), or at the end of the script if nothing's currently
+   selected — the closest approximation of "paste at the cursor" this
+   line-based model supports. */
+function pasteLines(){
+  if(!scriptClipboard || !scriptClipboard.lines || !scriptClipboard.lines.length) return;
+  const body=document.getElementById("scriptBody");
+  const newDivs=buildLineElements(scriptClipboard.lines,scriptClipboard.assignments);
+  const orderedSelected=[...body.children].filter(d=>selectedLineDivs.has(d));
+  const anchor=orderedSelected.length?orderedSelected[orderedSelected.length-1]:null;
+  const refNode=anchor?anchor.nextSibling:null; // null = append at the end, matches insertBefore(x,null) semantics
+  newDivs.forEach(d=>body.insertBefore(d,refNode));
+  renderLineSelectUI(); // give the newly pasted lines checkboxes too, if select mode is on
+  updateGenAllHint();
+  persistScript();
+}
+document.getElementById("btnSelectLines").onclick=()=>{
+  selectLineMode=!selectLineMode;
+  if(!selectLineMode) selectedLineDivs.clear();
+  const btn=document.getElementById("btnSelectLines");
+  btn.textContent=(selectLineMode?"☑":"☐")+" Select lines";
+  btn.classList.toggle("on",selectLineMode);
+  renderLineSelectUI();
+};
+document.getElementById("btnCopyLines").onclick=()=>copySelectedLines(false);
+document.getElementById("btnCutLines").onclick=()=>{
+  const n=selectedLineDivs.size;
+  if(!confirm("Cut "+n+" line(s)? They're copied to the paste buffer and removed from this script — already-generated clips stay in the Library, just no longer referenced here until you paste them back.")) return;
+  copySelectedLines(true);
+};
+document.getElementById("btnPasteLines").onclick=pasteLines;
+try{
+  const savedClip=localStorage.getItem(SCRIPT_CLIPBOARD_KEY);
+  if(savedClip) scriptClipboard=JSON.parse(savedClip);
+}catch(e){}
 
 function importScript(){
   const raw=document.getElementById("scriptRaw").value.trim();
   if(!raw){ alert("Paste some script text first."); return; }
   scriptSlug=slug(document.getElementById("scriptSlugInput").value)||"script";
-  targetFolder=""; // recomputed to this script's default by refreshFolderOptions()
 
   const body=document.getElementById("scriptBody");
   body.innerHTML="";
@@ -518,53 +751,67 @@ function importScript(){
 
   document.getElementById("scriptImport").style.display="none";
   document.getElementById("scriptToolbar").style.display="flex";
+  document.getElementById("lineOpsBar").style.display="flex";
   body.style.display="block";
   document.getElementById("genAllBar").style.display="flex";
   updateGenAllHint();
-  refreshFolderOptions();
+  updateScriptButtons();
+  renderLineSelectUI();
   persistScript();
 }
 
-/* ---- destination folder picker (bottom of the Script Editor) — every
-   render's upload key uses whatever's selected here instead of always
-   deriving "chatterbox-<slug>", so existing folders (including ones from
-   past scripts) can be reused. ---- */
-async function refreshFolderOptions(){
-  const sel=document.getElementById("targetFolderSelect");
-  const defaultFolder="chatterbox-"+scriptSlug;
-  if(!targetFolder) targetFolder=defaultFolder;
-  // Always include targetFolder itself, not just defaultFolder — a folder
-  // just created via "+ New folder…" doesn't exist as a real object in R2
-  // yet (no file uploaded into it, and R2 has no empty-folder concept), so
-  // it wouldn't otherwise appear in the server's folder list and would
-  // silently drop out of this dropdown right after being "created".
-  let folders=[defaultFolder,targetFolder];
-  const org=currentOrg();
-  if(org){
-    try{
-      const r=await fetch("/api/audio-list?scope=library&org="+encodeURIComponent(org),{headers:{authorization:"Bearer "+getToken()}});
-      const j=r.ok?await r.json():{folders:[]};
-      folders=[defaultFolder,targetFolder,...(j.folders||[])];
-    }catch(e){ /* fall back to just default+current — picker still works */ }
+/* ---- destination tree (right rail) — the SAME audio_folder tree/component
+   Audio Studio mounts for this project ("project/act/scene", not a flat
+   Library folder namer). Clicking a folder row there sets it as the render
+   destination; generateRun() reads it via audioTree.getUploadTarget(). ---- */
+function mountTree(){
+  const host=document.getElementById("chatterboxTreeHost");
+  if(audioTree){ audioTree.destroy(); audioTree=null; }
+  host.innerHTML="";
+  if(!projectId){
+    host.innerHTML='<div class="hint" style="padding:10px">pick a client, then a project (top), to browse its audio tree</div>';
+    return;
   }
-  folders=[...new Set(folders)].sort();
-  sel.innerHTML="";
-  folders.forEach(f=>{
-    const opt=document.createElement("option"); opt.value=f; opt.textContent=f;
-    if(f===targetFolder) opt.selected=true;
-    sel.appendChild(opt);
+  audioTree=AudioTree.mount(host,{
+    mode:"project",
+    projectId,
+    projectLabel: projectName||projectId,
+    getToken,
+    onOpenScript: s=>openScript(s),
+    onError: msg=>console.error("[audio tree]",msg)
   });
-  const newOpt=document.createElement("option"); newOpt.value="__new__"; newOpt.textContent="+ New folder…";
-  sel.appendChild(newOpt);
 }
-document.getElementById("targetFolderSelect").onchange=(e)=>{
-  if(e.target.value==="__new__"){
-    const name=slug(prompt("New folder name:")||"");
-    if(name) targetFolder=name;
-    refreshFolderOptions();
-  }else{
-    targetFolder=e.target.value;
+async function loadProjectOptions(){
+  const sel=document.getElementById("projectSel");
+  const org=currentOrg();
+  if(!org){
+    sel.innerHTML='<option value="">— pick a client first —</option>';
+    sel.disabled=true;
+    mountTree();
+    return;
   }
+  sel.disabled=false;
+  try{
+    const r=await fetch("/api/projects?org="+encodeURIComponent(org),{headers:authHeaders()});
+    const j=r.ok?await r.json():{projects:[]};
+    const projects=j.projects||[];
+    sel.innerHTML='<option value="">— pick a project —</option>'+
+      projects.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===projectId?" selected":"")+'>'+esc(p.name||p.id)+'</option>').join("");
+    const match=projects.find(p=>p.id===projectId);
+    projectName=match?(match.name||match.id):null;
+    if(projectId && !match) projectId=null; // saved/URL project doesn't belong to this org — don't silently mount a stale tree
+  }catch(e){ sel.innerHTML='<option value="">— error loading projects —</option>'; }
+  mountTree();
+}
+document.getElementById("projectSel").onchange=(e)=>{
+  projectId=e.target.value||null;
+  const opt=e.target.selectedOptions[0];
+  projectName=(opt&&opt.value)?opt.textContent:null;
+  try{ if(projectId) localStorage.setItem("chatterbox.lastProject",projectId); else localStorage.removeItem("chatterbox.lastProject"); }catch(err){}
+  const u=new URL(location.href);
+  if(projectId) u.searchParams.set("project",projectId); else u.searchParams.delete("project");
+  history.replaceState(null,"",u);
+  mountTree();
   persistScript();
 };
 
@@ -610,14 +857,38 @@ document.getElementById("scriptBody").addEventListener("mouseup",()=>{
   sel.removeAllRanges();
 });
 
-/* ---- drop target: dragging a voice card onto a highlighted span ---- */
+/* ---- drop target: dragging a voice card onto a highlighted span, OR a
+   saved 📜 script from the tree (right rail) onto the body to merge its
+   lines in at the drop point — same insertion helper pasteLines() uses. ---- */
 const scriptBody=document.getElementById("scriptBody");
 scriptBody.addEventListener("dragover",e=>{
-  if(e.dataTransfer.types.includes("voiceid")){ e.preventDefault(); scriptBody.classList.add("dragover"); }
+  if(e.dataTransfer.types.includes("voiceid")||e.dataTransfer.types.includes("application/x-chatterbox-script-id")){
+    e.preventDefault(); scriptBody.classList.add("dragover");
+  }
 });
 scriptBody.addEventListener("dragleave",()=>scriptBody.classList.remove("dragover"));
-scriptBody.addEventListener("drop",e=>{
+scriptBody.addEventListener("drop",async e=>{
   e.preventDefault(); scriptBody.classList.remove("dragover");
+
+  const droppedScriptId=e.dataTransfer.getData("application/x-chatterbox-script-id");
+  if(droppedScriptId){
+    // Drop position: right after whichever line the cursor landed on/near,
+    // else at the very end (mirrors pasteLines()'s anchor logic).
+    const targetLine=e.target.closest("#scriptBody > div");
+    const refNode=targetLine?targetLine.nextSibling:null;
+    try{
+      const r=await fetch("/api/chatterbox-script/"+droppedScriptId,{headers:authHeaders()});
+      if(!r.ok) throw new Error(await errDetail(r));
+      const j=await r.json();
+      const newDivs=buildLineElements(j.script.lines,j.script.assignments);
+      newDivs.forEach(d=>scriptBody.insertBefore(d,refNode));
+      renderLineSelectUI();
+      updateGenAllHint();
+      persistScript();
+    }catch(err){ alert("Couldn't drop that script in: "+err.message); }
+    return;
+  }
+
   const voiceId=e.dataTransfer.getData("voiceid");
   const voiceName=e.dataTransfer.getData("voicename");
   if(!voiceId) return;
@@ -796,6 +1067,13 @@ function renderRunActions(span){
   const genBtn=document.createElement("button");
   genBtn.textContent="Generate"; genBtn.onclick=(e)=>{ e.stopPropagation(); generateRun(span); };
   actions.appendChild(genBtn);
+  // Escape hatch for a wrong highlight, before spending an API call on it —
+  // untags in place, no confirm (cheap/reversible, unlike discardRender's
+  // post-generation delete).
+  const untagBtn=document.createElement("button");
+  untagBtn.className="ghost"; untagBtn.textContent="✕"; untagBtn.title="Wrong text highlighted? Remove this tag and re-select";
+  untagBtn.onclick=(e)=>{ e.stopPropagation(); untagSpan(span); updateGenAllHint(); persistScript(); };
+  actions.appendChild(untagBtn);
   const prog=document.createElement("span");
   prog.className="vox-progress"; prog.style.display="none";
   const progTrack=document.createElement("span"); progTrack.className="vox-progress-track";
@@ -821,10 +1099,12 @@ async function generateRun(span){
   const voiceId=span.dataset.voiceId;
   const text=span.dataset.text || _cleanSpanText(span);
   if(!voiceId || !text) return;
-  // Checked before any UI state changes, so a missing client never leaves
-  // the busy/progress UI stuck on with no way to recover from it.
+  // Checked before any UI state changes, so a missing client/project/folder
+  // never leaves the busy/progress UI stuck on with no way to recover from it.
   const org=currentOrg();
   if(!org){ alert("Pick a client (top right) before generating — the clip needs an org to save under."); return; }
+  const target=audioTree&&audioTree.getUploadTarget();
+  if(!target){ alert("Pick a project and a folder in the Library tree (right) before generating — that's where the clip gets saved."); return; }
 
   const actions=span.querySelector(".vox-actions");
   const genBtn=actions && actions.querySelector("button");
@@ -872,24 +1152,25 @@ async function generateRun(span){
     const mp3Blob=await _wavBlobToMp3(wavBlob);
     if(span._genToken!==myToken) return; // superseded during mp3 encoding
 
-    const folder=targetFolder||("chatterbox-"+scriptSlug);
-    const key="library/"+org+"/"+folder+"/"+slug(span.dataset.voiceName)+"-"+span.dataset.lineId+"-"+Date.now().toString(36)+".mp3";
-    const token=getToken();
-    const putRes=await fetch("/api/audio/"+key,{
-      method:"PUT",
-      headers:{ "authorization":"Bearer "+token, "content-type":"audio/mpeg" },
-      body:mp3Blob
-    });
-    if(!putRes.ok) throw new Error("upload failed");
-    const putJson=await putRes.json().catch(()=>({}));
+    const name=slug(span.dataset.voiceName)+"-"+span.dataset.lineId+"-"+Date.now().toString(36)+".mp3";
+    const result=await AudioTree.upload(mp3Blob,{scope:target.scope,scopeId:target.scopeId,folderId:target.folderId,name,mimeType:"audio/mpeg",getToken});
     if(span._genToken!==myToken) return; // superseded during upload — discard, don't overwrite a newer result
 
-    span.dataset.audioUrl = putJson.url || ("/api/audio/"+key);
+    span.dataset.audioUrl = result.url;
+    span.dataset.audioClipId = result.id; // lets discardRender() delete the real clip later, not just the local reference
     span.dataset.generatedText = text; // baseline for detecting a later edit staling this clip out
     span.classList.add("generated");
     if(prog) prog.style.display="none";
-    if(genBtn){ genBtn.style.display=""; genBtn.textContent="▶ Play"; genBtn.disabled=false; genBtn.onclick=(e)=>{ e.stopPropagation(); new Audio(span.dataset.audioUrl).play(); }; }
+    markGenerated(span);
     persistScript();
+    // Fire-and-forget: this just updates the side tree panel so the new clip
+    // is visible there. Never awaited/thrown into the try above — "Generate
+    // All Tagged" runs lines concurrently, so overlapping refresh() calls
+    // (each does a full el.innerHTML="" rebuild) can race each other. If that
+    // were awaited here, a race in one line's refresh would land in the
+    // catch below and stomp this line's just-set "▶ Play" state with
+    // "✕ retry" even though generation + upload fully succeeded.
+    if(audioTree) audioTree.refresh().then(()=>audioTree.revealFolder(target.scope,target.folderId)).catch(()=>{});
   }catch(e){
     stopPolling();
     if(span._genToken!==myToken) return; // superseded — the newer generation owns error/retry UI now
@@ -919,33 +1200,93 @@ async function generateAllTagged(){
 
 document.getElementById("btnImportScript").onclick=importScript;
 document.getElementById("btnReimport").onclick=()=>{
-  // Just switches back to the import view — deliberately does NOT touch
-  // the current script or its saved copy, so an accidental click doesn't
-  // lose work. Use "Clear Script" to actually wipe it.
+  // Doubles as "New" — confirms if there's unsaved content, then detaches
+  // from whatever saved script (openScriptId) was open, not just a
+  // navigation-back. Already-generated clips are never touched either way.
+  const hasContent=document.getElementById("scriptBody").children.length>0;
+  if(hasContent && !confirm("Start a new script? Unsaved changes here will be lost (already-generated clips stay in the tree either way).")) return;
+  openScriptId=null; openScriptName=null;
+  // Selection state resets with the script (select mode is per-script); the
+  // paste buffer deliberately does NOT — cutting from one script then
+  // starting/opening another to paste into it is the whole point.
+  selectLineMode=false; selectedLineDivs.clear();
   document.getElementById("scriptImport").style.display="block";
   document.getElementById("scriptToolbar").style.display="none";
+  document.getElementById("lineOpsBar").style.display="none";
   document.getElementById("scriptBody").style.display="none";
   document.getElementById("genAllBar").style.display="none";
+  updateScriptButtons();
 };
 document.getElementById("btnClearScript").onclick=()=>{
   if(!confirm("Clear this script completely? This can't be undone — any tagging/generated clips already saved to the Library are unaffected, but the script itself and its progress will be gone.")) return;
   clearPersistedScript();
-  scriptSlug=""; targetFolder="";
+  scriptSlug=""; openScriptId=null; openScriptName=null;
+  selectLineMode=false; selectedLineDivs.clear();
   document.getElementById("scriptRaw").value="";
   document.getElementById("scriptSlugInput").value="";
   document.getElementById("scriptBody").innerHTML="";
   document.getElementById("scriptImport").style.display="block";
   document.getElementById("scriptToolbar").style.display="none";
+  document.getElementById("lineOpsBar").style.display="none";
   document.getElementById("scriptBody").style.display="none";
   document.getElementById("genAllBar").style.display="none";
+  updateScriptButtons();
 };
 document.getElementById("btnGenerateAll").onclick=generateAllTagged;
+
+/* ---- save/open — chatterbox_script rows, living in the same audio_folder
+   tree the rendered clips themselves save into. Save is context-sensitive
+   (overwrite the open script, or prompt like Save As if nothing's open);
+   Save As always prompts for a name — same resolved pattern Audio Studio
+   already uses for sessions. ---- */
+function updateScriptButtons(){
+  const btn=document.getElementById("btnSaveScript");
+  if(btn) btn.textContent=openScriptId?('💾 Save "'+openScriptName+'"'):"💾 Save";
+}
+async function saveScript(forceAs){
+  if(!projectId){ alert("Pick a project (top) before saving — scripts save into a project's tree."); return; }
+  const payload=buildScriptPayload();
+  if(!forceAs && openScriptId){
+    try{
+      const r=await fetch("/api/chatterbox-script/"+openScriptId,{method:"PATCH",headers:{...authHeaders(),"content-type":"application/json"},body:JSON.stringify({script:payload})});
+      if(!r.ok) throw new Error(await errDetail(r));
+      if(audioTree) audioTree.refresh().catch(()=>{});
+    }catch(e){ alert("Save failed: "+e.message); }
+    return;
+  }
+  const target=audioTree?audioTree.getUploadTarget():null;
+  const name=(prompt("Save script as:",openScriptName||scriptSlug||"script")||"").trim();
+  if(!name) return;
+  try{
+    const r=await fetch("/api/chatterbox-script",{method:"POST",headers:{...authHeaders(),"content-type":"application/json"},body:JSON.stringify({scopeId:projectId,name,folderId:(target&&target.folderId)||null,script:payload})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    openScriptId=j.id; openScriptName=j.name||name;
+    updateScriptButtons();
+    if(audioTree){ await audioTree.refresh(); audioTree.revealFolder("project",j.folderId); }
+  }catch(e){ alert("Save failed: "+e.message); }
+}
+async function openScript(script){
+  if(document.getElementById("scriptBody").children.length>0 && !confirm('Open "'+script.name+'"? Unsaved changes in the current script will be lost (already-generated clips stay in the tree either way).')) return;
+  try{
+    const r=await fetch("/api/chatterbox-script/"+script.id,{headers:authHeaders()});
+    if(!r.ok) throw new Error(await errDetail(r));
+    const j=await r.json();
+    openScriptId=j.id; openScriptName=j.name;
+    selectedLineDivs.clear(); // stale div references from whatever script was open before
+    restoreScript(j.script);
+    updateScriptButtons();
+  }catch(e){ alert("Open failed: "+e.message); }
+}
+document.getElementById("btnSaveScript").onclick=()=>saveScript(false);
+document.getElementById("btnSaveScriptAs").onclick=()=>saveScript(true);
 
 /* ============================================================
    Init
    ============================================================ */
 loadVoices();
-if(window.ClientPicker){ ClientPicker.init({navEl:document.getElementById("clientNav"),onChange:loadVoices}); }
+loadProjectOptions();
+if(window.ClientPicker){ ClientPicker.init({navEl:document.getElementById("clientNav"),onChange:()=>{loadVoices();loadProjectOptions();}}); }
 
 (function(){
   try{

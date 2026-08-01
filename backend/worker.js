@@ -81,7 +81,9 @@ async function deleteProjectRows(env, pid) {
   }
   await env.DB.prepare("DELETE FROM audio_clip WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM studio_session WHERE scope='project' AND scope_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM chatterbox_script WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM audio_folder WHERE scope='project' AND scope_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM stop_folder WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
   // Any remaining un-migrated legacy R2 audio still sitting under "<pid>/..."
   if (env.AUDIO) {
@@ -1825,12 +1827,14 @@ async function api(request, env, url) {
       const proj = await env.DB.prepare("SELECT appId,orgId FROM project WHERE id=? OR slug=? LIMIT 1").bind(pid, pid).first();
       const appId = proj ? proj.appId : null;
       if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
-      const [pf, pc, ps] = await Promise.all([
+      const [pf, pc, ps, pscr] = await Promise.all([
         env.DB.prepare("SELECT id,parent_id AS parentId,name FROM audio_folder WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all(),
         env.DB.prepare("SELECT id,folder_id AS folderId,name,r2_key AS r2Key,size_bytes AS sizeBytes,created_at AS createdAt FROM audio_clip WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all(),
         // Timeline JSON is left out of the tree listing on purpose — it can
         // get large and the tree doesn't need it, only opening a session does.
-        env.DB.prepare("SELECT id,folder_id AS folderId,name,updated_at AS updatedAt FROM studio_session WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all()
+        env.DB.prepare("SELECT id,folder_id AS folderId,name,updated_at AS updatedAt FROM studio_session WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all(),
+        // Same reasoning as sessions — script_json is left out, only opening a script needs it.
+        env.DB.prepare("SELECT id,folder_id AS folderId,name,updated_at AS updatedAt FROM chatterbox_script WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all()
       ]);
       // ?org= lets a caller pick the Library explicitly (Fence Editor's own
       // Customer dropdown, for a project that has no orgId yet) — falls back
@@ -1861,7 +1865,8 @@ async function api(request, env, url) {
         project: {
           scope: "project", scopeId: pid, folders: pf.results || [],
           clips: (pc.results || []).map(c => { const clipUrl = "/api/audio/" + c.r2Key; return { ...c, url: clipUrl, expiresAt: expiryByUrl[clipUrl] || null }; }),
-          sessions: ps.results || []
+          sessions: ps.results || [],
+          scripts: pscr.results || []
         },
         library
       }, 200, AC);
@@ -1953,6 +1958,8 @@ async function api(request, env, url) {
         await env.DB.prepare(`DELETE FROM audio_clip WHERE id IN (${cph})`).bind(...clips.map(c => c.id)).run();
       }
       await env.DB.prepare(`DELETE FROM studio_session WHERE scope=? AND scope_id=? AND folder_id IN (${fph})`)
+        .bind(row.scope, row.scopeId, ...folderIds).run();
+      await env.DB.prepare(`DELETE FROM chatterbox_script WHERE scope=? AND scope_id=? AND folder_id IN (${fph})`)
         .bind(row.scope, row.scopeId, ...folderIds).run();
       await env.DB.prepare(`DELETE FROM audio_folder WHERE id IN (${fph})`).bind(...folderIds).run();
       await logAudit(env, request, A, "audio.folder.delete", folderId + " (" + (clips || []).length + " clips)");
@@ -2192,6 +2199,192 @@ async function api(request, env, url) {
       .bind(name, folderId, timelineJson, new Date().toISOString(), sessionId).run();
     await logAudit(env, request, A, "studio.session.update", sessionId);
     return json({ id: sessionId, name, folderId }, 200, AC);
+  }
+
+  // --- Chatterbox scripts: saved script text + per-line voice tagging +
+  // generated-audio-URL state, organized in the same audio_folder tree the
+  // rendered clips themselves save into — a straight parallel of Studio
+  // Sessions above (script_json in place of timeline_json), so a play's
+  // Act/Scene structure holds the script that generated each scene's lines
+  // right alongside the clips it produced. Always scope='project'. ---
+  if (path === "/api/chatterbox-script" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const scopeId = (b.scopeId || "").trim(), name = (b.name || "").trim();
+    const folderId = b.folderId || null;
+    if (!scopeId || !name) return json({ error: "scopeId and name required" }, 400, AC);
+    if (!b.script || typeof b.script !== "object") return json({ error: "script required" }, 400, AC);
+    if (!(await audioScopeAuthOk(env, A, "project", scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope='project' AND scope_id=?").bind(folderId, scopeId).first();
+      if (!folder) return json({ error: "folder not found in this project" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO chatterbox_script (id,scope,scope_id,folder_id,name,script_json,created_at,updated_at) VALUES (?,'project',?,?,?,?,?,?)"
+    ).bind(id, scopeId, folderId, name, JSON.stringify(b.script), now, now).run();
+    await logAudit(env, request, A, "chatterbox.script.create", scopeId + "/" + name);
+    return json({ id, name, folderId }, 201, AC);
+  }
+
+  const mScriptCopy = path.match(/^\/api\/chatterbox-script\/([^/]+)\/copy$/);
+  if (mScriptCopy && method === "POST") {
+    const scriptId = decodeURIComponent(mScriptCopy[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT scope_id AS scopeId,folder_id AS folderId,name,script_json AS scriptJson FROM chatterbox_script WHERE id=?").bind(scriptId).first();
+    if (!row) return json({ error: "script not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, "project", row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const targetFolderId = b.targetFolderId !== undefined ? (b.targetFolderId || null) : row.folderId;
+    if (targetFolderId) {
+      const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope='project' AND scope_id=?").bind(targetFolderId, row.scopeId).first();
+      if (!folder) return json({ error: "target folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO chatterbox_script (id,scope,scope_id,folder_id,name,script_json,created_at,updated_at) VALUES (?,'project',?,?,?,?,?,?)"
+    ).bind(id, row.scopeId, targetFolderId, b.name || row.name, row.scriptJson, now, now).run();
+    await logAudit(env, request, A, "chatterbox.script.copy", scriptId + " -> " + id);
+    return json({ id }, 201, AC);
+  }
+
+  const mScript = path.match(/^\/api\/chatterbox-script\/([^/]+)$/);
+  if (mScript && (method === "GET" || method === "PATCH" || method === "DELETE")) {
+    const scriptId = decodeURIComponent(mScript[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare(
+      "SELECT scope_id AS scopeId,folder_id AS folderId,name,script_json AS scriptJson FROM chatterbox_script WHERE id=?"
+    ).bind(scriptId).first();
+    if (!row) return json({ error: "script not found" }, 404, AC);
+    if (!(await audioScopeAuthOk(env, A, "project", row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "GET") {
+      let script;
+      try { script = JSON.parse(row.scriptJson); } catch (e) { return json({ error: "stored script is corrupt" }, 500, AC); }
+      return json({ id: scriptId, name: row.name, folderId: row.folderId, scopeId: row.scopeId, script }, 200, AC);
+    }
+
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM chatterbox_script WHERE id=?").bind(scriptId).run();
+      await logAudit(env, request, A, "chatterbox.script.delete", scriptId);
+      return json({ ok: true, deleted: scriptId }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, folderId = row.folderId, scriptJson = row.scriptJson;
+    if (b.name !== undefined) {
+      if (!b.name.trim()) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.folderId !== undefined) {
+      const newFolderId = b.folderId || null;
+      if (newFolderId) {
+        const folder = await env.DB.prepare("SELECT id FROM audio_folder WHERE id=? AND scope='project' AND scope_id=?").bind(newFolderId, row.scopeId).first();
+        if (!folder) return json({ error: "folder not found in this project" }, 404, AC);
+      }
+      folderId = newFolderId;
+    }
+    if (b.script !== undefined) {
+      if (typeof b.script !== "object") return json({ error: "invalid script" }, 400, AC);
+      scriptJson = JSON.stringify(b.script);
+    }
+    await env.DB.prepare("UPDATE chatterbox_script SET name=?, folder_id=?, script_json=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, scriptJson, new Date().toISOString(), scriptId).run();
+    await logAudit(env, request, A, "chatterbox.script.update", scriptId);
+    return json({ id: scriptId, name, folderId }, 200, AC);
+  }
+
+  // --- Stop folders: organize a project's map stops (zones) into a tree
+  // when there are hundreds of them. Deliberately its own table, independent
+  // of audio_folder — confirmed with the user that sharing the audio tree
+  // wasn't useful in practice. Always project-scoped (no library equivalent).
+  // Stops themselves aren't rows here — a zone's folderId lives inside the
+  // published_bundle JSON like every other zone field; only the folder
+  // *structure* is server-side. ---
+  async function stopFolderAuthOk(env, A, projectId) {
+    const appId = await projectAppId(env, projectId);
+    return scopeOk(A, "audio", appId) || scopeOk(A, "publish", appId);
+  }
+  async function collectStopFolderSubtreeIds(env, rootId) {
+    const ids = [rootId]; let frontier = [rootId];
+    while (frontier.length) {
+      const ph = frontier.map(() => "?").join(",");
+      const { results } = await env.DB.prepare(`SELECT id FROM stop_folder WHERE parent_id IN (${ph})`).bind(...frontier).all();
+      frontier = (results || []).map(r => r.id);
+      ids.push(...frontier);
+    }
+    return ids;
+  }
+
+  if (path === "/api/stop-folder" && method === "GET") {
+    const A = await auth(request, env);
+    const projectId = url.searchParams.get("projectId");
+    if (!projectId) return json({ error: "projectId required" }, 400, AC);
+    if (!(await stopFolderAuthOk(env, A, projectId))) return json({ error: "unauthorized" }, 401, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,parent_id AS parentId,name FROM stop_folder WHERE project_id=? ORDER BY name"
+    ).bind(projectId).all();
+    return json({ folders: results || [] }, 200, AC);
+  }
+
+  if (path === "/api/stop-folder" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const projectId = (b.projectId || "").trim(), name = (b.name || "").trim();
+    const parentId = b.parentId || null;
+    if (!projectId || !name) return json({ error: "projectId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
+    if (!(await stopFolderAuthOk(env, A, projectId))) return json({ error: "unauthorized" }, 401, AC);
+    if (parentId) {
+      const parent = await env.DB.prepare("SELECT id FROM stop_folder WHERE id=? AND project_id=?").bind(parentId, projectId).first();
+      if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare("INSERT INTO stop_folder (id,project_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+      .bind(id, projectId, parentId, name, now, now).run();
+    await logAudit(env, request, A, "stopfolder.create", projectId + "/" + name);
+    return json({ id, projectId, parentId, name }, 201, AC);
+  }
+
+  const mStopFolder = path.match(/^\/api\/stop-folder\/([^/]+)$/);
+  if (mStopFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mStopFolder[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT project_id AS projectId,parent_id AS parentId,name FROM stop_folder WHERE id=?").bind(folderId).first();
+    if (!row) return json({ error: "folder not found" }, 404, AC);
+    if (!(await stopFolderAuthOk(env, A, row.projectId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      const folderIds = await collectStopFolderSubtreeIds(env, folderId);
+      const fph = folderIds.map(() => "?").join(",");
+      await env.DB.prepare(`DELETE FROM stop_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "stopfolder.delete", folderId);
+      return json({ ok: true, deletedFolders: folderIds.length }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, parentId = row.parentId;
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.parentId !== undefined) {
+      const newParentId = b.parentId || null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM stop_folder WHERE id=? AND project_id=?").bind(newParentId, row.projectId).first();
+        if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+        const subtreeIds = await collectStopFolderSubtreeIds(env, folderId);
+        if (subtreeIds.includes(newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
+      }
+      parentId = newParentId;
+    }
+    await env.DB.prepare("UPDATE stop_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+      .bind(name, parentId, new Date().toISOString(), folderId).run();
+    await logAudit(env, request, A, "stopfolder.update", folderId);
+    return json({ id: folderId, name, parentId }, 200, AC);
   }
 
   // --- one-off, idempotent backfill: record every existing R2 audio object's

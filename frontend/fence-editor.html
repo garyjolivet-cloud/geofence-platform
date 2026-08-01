@@ -66,6 +66,23 @@
              color:var(--ice);border:1px solid var(--rim);border-radius:6px;padding:1px 6px}
   .zone .del{flex:0 0 auto;background:none;border:none;color:var(--fog);font-size:16px;padding:0 4px;cursor:pointer}
   .hint{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);margin:4px 0}
+  .stop-folder-row{display:flex;align-items:center;gap:5px;padding:5px 4px;border-radius:7px;cursor:pointer;position:relative;
+                    font-family:"Barlow Condensed";font-size:13px;color:var(--snow)}
+  .stop-folder-row:hover{background:rgba(255,255,255,.04)}
+  .stop-folder-row.focused{background:rgba(255,106,61,.12)}
+  .stop-folder-row.dragover{background:rgba(255,106,61,.22);outline:1px dashed var(--coral)}
+  .sf-chevron{width:12px;flex:0 0 12px;text-align:center;color:var(--fog);font-size:10px}
+  .sf-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sf-count{flex:0 0 auto;color:var(--fog);font-size:11px}
+  .sf-more{flex:0 0 auto;background:none;border:none;color:var(--ice);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:5px}
+  .sf-more:hover{background:rgba(255,255,255,.08)}
+  .sf-children{margin-left:16px;border-left:1px solid var(--rim);padding-left:4px}
+  .sf-menu{position:absolute;z-index:80;top:100%;right:4px;background:var(--slate-2);border:1px solid var(--rim);
+           border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.45);min-width:150px;overflow:hidden}
+  .sf-picker{max-height:220px;overflow-y:auto}
+  .sf-menu-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--snow);
+                padding:8px 12px;font-family:"Barlow Condensed";font-size:12px;cursor:pointer}
+  .sf-menu-item:hover{background:rgba(255,255,255,.06)}
   .gp-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:9999;
              font-family:"Barlow Condensed";font-size:14px;font-weight:600;color:var(--night);
              padding:10px 18px;border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.35);
@@ -627,10 +644,14 @@
   </div>
 
   <hr>
-  <div style="display:flex;align-items:center;justify-content:space-between">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
     <label class="k">stops (<span id="zcount">0</span>) — click to edit</label>
-    <button id="coBulkToggle" class="ghost" style="font-size:11px;padding:3px 8px">☐ Bulk assign</button>
+    <div style="display:flex;gap:4px;flex:0 0 auto;position:relative">
+      <button id="coBulkMove" class="ghost" style="font-size:11px;padding:3px 8px" title="Move checked stops to a folder">📁 Move…</button>
+      <button id="coBulkToggle" class="ghost" style="font-size:11px;padding:3px 8px">☐ Bulk assign</button>
+    </div>
   </div>
+  <input id="stopSearch" type="text" placeholder="search stops…" style="width:100%;margin:4px 0 6px;box-sizing:border-box">
   <div id="zlist"></div>
 
   <textarea id="out" style="display:none"></textarea>
@@ -739,7 +760,7 @@ let zones=[];               // rich stop objects (see makeZone)
 let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
 let sel=-1;                 // selected zone index (-1 = none)
 let coBulkMode=false;        // "Bulk assign" mode — shows checkboxes in #zlist
-let coBulkSel=new Set();     // zone indices checked while coBulkMode is on
+let coBulkSel=new Set();     // zone ids checked while coBulkMode is on (ids, not indices — indices shift on delete/reorder)
 // Declared here (not down near loadFromPlatform/publishToPlatform, where it
 // conceptually belongs) because afProjectId() — called synchronously at
 // script-load time by the AudioTree.mount() call below — reads it. `let` is
@@ -923,6 +944,18 @@ function centroidLonLat(coords){
   return [cx/(6*A), cy/(6*A)];
 }
 const slug=s=>(s||"stop").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"stop";
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+// makeZone/pName-rename both derive id from slug(name) — two stops can collide
+// (e.g. delete "Stop 2", add a new one, "zones.length+1" reuses "Stop 3"'s
+// slug, or two stops get renamed to the same thing) since nothing actually
+// checks uniqueness. The stop tree needs a genuinely unique id per zone for
+// drag-and-drop/bulk-select/search to work. Pass the zone being renamed as
+// selfZone so its own (about-to-be-replaced) id doesn't count as a collision.
+function uniqueZoneId(base,selfZone){
+  let id=base, n=2;
+  while(zones.some(z=>z!==selfZone && z.id===id)) id=base+"-"+(n++);
+  return id;
+}
 const LL=p=>[+p[1].toFixed(6),+p[0].toFixed(6)];     // [lon,lat] -> [lat,lon]
 const LonLat=p=>[p[1],p[0]];                          // [lat,lon] -> [lon,lat]
 
@@ -950,14 +983,20 @@ function zoneGenR(z){ const s=z.shape;
 function makeZone(name,shape){
   // Path stops get every field a normal stop has (they fire the full trigger
   // system too) plus their own movement + independent ambient-bed fields.
-  const base={ id:slug(name), name, shape, say:"",
+  const base={ id:uniqueZoneId(slug(name)), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1, loopAudio:true,
            bearingDeg:90, isHazard:false,
            // Per-stop full-volume override — every stop gets its own ring
            // now, not just path stops. null means "use the project
            // default" (unchanged behavior until set).
-           spatialClearM:null };
+           spatialClearM:null,
+           // Which folder this stop lives in, in this project's own stop
+           // tree (stop_folder table — independent of Studio's audio_folder
+           // Act/Scene organization). null means the tree root, matching
+           // legacy/unorganized projects. Purely editor-side; the live
+           // engine never reads this, only exported so it round-trips.
+           folderId:null };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
@@ -1264,6 +1303,7 @@ function finishShape(){
   else if(tool==="tripline") shape={type:"tripline",from:draft[0],to:draft[1]};
   else if(tool==="path") shape={type:"path",coords:draft.slice()};
   const z=makeZone(name,shape);
+  z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as audio uploads
   zones.push(z); draft=[]; tool=null;
   document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
   document.getElementById("circleRow").style.display="none";
@@ -1612,7 +1652,7 @@ function pAudioTogglePlay(){
 }
 document.getElementById("pAudioPlay").addEventListener("click",pAudioTogglePlay);
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
-bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=slug(z.name); });
+bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=uniqueZoneId(slug(z.name),z); });
 bindProp("pSay",z=>{ z.say=document.getElementById("pSay").value; });
 bindProp("pDwell",z=>{ z.dwellS=+document.getElementById("pDwell").value||20; });
 document.getElementById("pMoveMode").addEventListener("input",()=>{
@@ -1854,6 +1894,7 @@ function doAudioRefresh(){
   document.getElementById("afNoOrg").style.display = afOrgId()?"none":"block";
   document.getElementById("afOpenStudio").href=afOpenStudioHref();
   audioTree.refresh({ projectId: afProjectId(), projectLabel: projName()||afProjectId(), orgId: afOrgId() });
+  loadStopFolders();
 }
 
 /* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
@@ -1931,29 +1972,254 @@ document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById(
 document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
 document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); selectZone(-1); };
 
-/* ---- zone list ---- */
+/* ============================================================
+   Stop tree — organizes a project's map stops into folders when there
+   are hundreds of them. Its own table (stop_folder), independent of
+   Studio's Act/Scene audio_folder tree — sharing that tree turned out
+   not to be useful in practice, so this is a separate structure.
+   Folders are server-side (/api/stop-folder); a stop's folderId is
+   just another zone field, unsaved-until-Publish like everything else
+   about a zone.
+   ============================================================ */
+let stopFolders=[];              // flat [{id,parentId,name}] for this project, from GET /api/stop-folder
+let stopTreeExpanded=new Set();  // folder ids the user has expanded
+let focusedStopFolderId=null;    // where new stops land + default bulk-move target
+let stopSearchQuery="";
+
+async function loadStopFolders(){
+  const pid=afProjectId();
+  if(!pid){ stopFolders=[]; drawList(); return; }
+  try{
+    const r=await fetch("/api/stop-folder?projectId="+encodeURIComponent(pid),{headers:{authorization:"Bearer "+getToken()}});
+    const j=r.ok?await r.json():null;
+    stopFolders=(j&&j.folders)||[];
+  }catch(e){ stopFolders=[]; }
+  drawList();
+}
+function stopFolderById(id){ return stopFolders.find(f=>f.id===id); }
+function stopFolderPath(f){
+  if(!f) return "";
+  const parent=f.parentId?stopFolderById(f.parentId):null;
+  return parent?stopFolderPath(parent)+" / "+f.name:f.name;
+}
+function collectStopFolderSubtreeIds(rootId){
+  const ids=[rootId]; let frontier=[rootId];
+  while(frontier.length){
+    const next=stopFolders.filter(f=>frontier.includes(f.parentId)).map(f=>f.id);
+    ids.push(...next); frontier=next;
+  }
+  return ids;
+}
+function buildStopTree(){
+  const byId=new Map();
+  const root={id:null,name:null,parentId:null,children:[],zones:[]};
+  byId.set(null,root);
+  stopFolders.forEach(f=>byId.set(f.id,{id:f.id,name:f.name,parentId:f.parentId,children:[],zones:[]}));
+  stopFolders.forEach(f=>{ const node=byId.get(f.id); (byId.get(f.parentId)||root).children.push(node); });
+  zones.forEach((z,i)=>{ (byId.get(z.folderId)||root).zones.push(i); });
+  (function sortRec(node){
+    node.children.sort((a,b)=>a.name.localeCompare(b.name));
+    node.zones.sort((a,b)=>zones[a].name.localeCompare(zones[b].name));
+    node.children.forEach(sortRec);
+  })(root);
+  return root;
+}
+function stopMatchesSearch(z){ return !stopSearchQuery || z.name.toLowerCase().includes(stopSearchQuery); }
+function folderMatchesSearchDeep(node){
+  if(!stopSearchQuery) return true;
+  if(node.name && node.name.toLowerCase().includes(stopSearchQuery)) return true;
+  if(node.zones.some(i=>stopMatchesSearch(zones[i]))) return true;
+  return node.children.some(folderMatchesSearchDeep);
+}
+function buildZoneRow(i){
+  const z=zones[i];
+  const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
+  const cue=z.shape.type==="path"?"ambient":(z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive"));
+  const hzBadge=z.isHazard?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
+  const coBadge=(z.codeObjects&&z.codeObjects.length)?'<span title="'+z.codeObjects.length+' code object'+(z.codeObjects.length===1?'':'s')+' attached" style="font-size:10px;margin-left:3px;vertical-align:middle">🧩'+(z.codeObjects.length>1?'×'+z.codeObjects.length:'')+'</span>':'';
+  const bulkChk=coBulkMode?'<input type="checkbox" class="co-bulk-chk" style="margin-right:6px;accent-color:var(--coral)" '+(coBulkSel.has(z.id)?"checked":"")+'>':'';
+  d.innerHTML='<div class="t">'+bulkChk+'<b class="cond">'+esc(z.name)+hzBadge+coBadge+'</b>'
+    +'<span class="tag">'+esc(z.shape.type)+' · '+cue+'</span>'
+    +'<button class="del" title="delete">✕</button></div>';
+  d.querySelector(".del").onclick=(ev)=>{ ev.stopPropagation(); zones.splice(i,1); if(sel===i)sel=-1; else if(sel>i)sel--; render(); refreshProps(); };
+  const bulkChkEl=d.querySelector(".co-bulk-chk");
+  if(bulkChkEl) bulkChkEl.onclick=(ev)=>{ ev.stopPropagation();
+    if(bulkChkEl.checked) coBulkSel.add(z.id); else coBulkSel.delete(z.id); };
+  d.onclick=(ev)=>{ if(ev.target.classList.contains("del")||ev.target.classList.contains("co-bulk-chk"))return;
+     focusedStopFolderId=z.folderId||null;
+     selectZone(i); map.flyTo({center:zoneCenterLonLat(z),zoom:17}); };
+  d.draggable=true;
+  d.addEventListener("dragstart",e=>{ e.stopPropagation(); e.dataTransfer.setData("application/x-zone-id",z.id); e.dataTransfer.effectAllowed="move"; });
+  _makeZoneRowDroppable(d,i);
+  return d;
+}
+function reassignZoneFolder(zoneId,folderId){
+  const z=zones.find(zz=>zz.id===zoneId);
+  if(!z) return;
+  z.folderId=folderId;
+  render();
+}
+function collectNodeZoneIds(node){
+  let ids=node.zones.map(i=>zones[i].id);
+  node.children.forEach(c=>{ ids=ids.concat(collectNodeZoneIds(c)); });
+  return ids;
+}
+function buildStopFolderRow(node,depth){
+  const wrap=document.createElement("div");
+  const isRoot=node.id===null;
+  const expanded=isRoot||stopTreeExpanded.has(node.id)||(!!stopSearchQuery&&folderMatchesSearchDeep(node));
+  const row=document.createElement("div"); row.className="stop-folder-row"+(focusedStopFolderId===node.id?" focused":"");
+  if(coBulkMode){
+    const allIds=collectNodeZoneIds(node);
+    const checkedCount=allIds.filter(id=>coBulkSel.has(id)).length;
+    const folderChk=document.createElement("input"); folderChk.type="checkbox"; folderChk.className="co-bulk-chk";
+    folderChk.style.marginRight="4px"; folderChk.style.accentColor="var(--coral)";
+    folderChk.checked=allIds.length>0&&checkedCount===allIds.length;
+    folderChk.indeterminate=checkedCount>0&&checkedCount<allIds.length;
+    folderChk.disabled=allIds.length===0;
+    folderChk.title=allIds.length?"Check/uncheck all "+allIds.length+" stop(s) in this folder (incl. subfolders)":"No stops in this folder";
+    folderChk.onclick=e=>{ e.stopPropagation();
+      if(folderChk.checked) allIds.forEach(id=>coBulkSel.add(id)); else allIds.forEach(id=>coBulkSel.delete(id));
+      drawList(); };
+    row.appendChild(folderChk);
+  }
+  const chevron=document.createElement("span"); chevron.className="sf-chevron"; chevron.textContent=expanded?"▾":"▸";
+  chevron.onclick=e=>{ e.stopPropagation(); if(stopTreeExpanded.has(node.id))stopTreeExpanded.delete(node.id);else stopTreeExpanded.add(node.id); drawList(); };
+  const icon=document.createElement("span"); icon.textContent=isRoot?"📂":"📁";
+  const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.textContent=isRoot?(projName()||"(project root)"):node.name;
+  const count=document.createElement("span"); count.className="sf-count"; count.textContent=node.zones.length;
+  row.appendChild(chevron); row.appendChild(icon); row.appendChild(nameEl); row.appendChild(count);
+  const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯";
+  moreBtn.title=isRoot?"New folder or rename tour":"Rename, move, or delete";
+  moreBtn.onclick=e=>{ e.stopPropagation(); openStopFolderMenu(moreBtn,node); };
+  row.appendChild(moreBtn);
+  row.onclick=()=>{ focusedStopFolderId=node.id; if(!isRoot){ if(stopTreeExpanded.has(node.id))stopTreeExpanded.delete(node.id);else stopTreeExpanded.add(node.id); } drawList(); };
+  row.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("application/x-zone-id")||e.dataTransfer.types.includes("application/x-stop-folder-id")||e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")){ e.preventDefault(); row.classList.add("dragover"); } });
+  row.addEventListener("dragleave",()=>row.classList.remove("dragover"));
+  row.addEventListener("drop",e=>{
+    e.preventDefault(); row.classList.remove("dragover");
+    const zoneId=e.dataTransfer.getData("application/x-zone-id");
+    if(zoneId){ reassignZoneFolder(zoneId,node.id); return; }
+    const folderId=e.dataTransfer.getData("application/x-stop-folder-id");
+    if(folderId && folderId!==node.id) moveStopFolder(folderId,node.id);
+  });
+  if(!isRoot){
+    row.draggable=true;
+    row.addEventListener("dragstart",e=>{ e.stopPropagation(); e.dataTransfer.setData("application/x-stop-folder-id",node.id); e.dataTransfer.effectAllowed="move"; });
+  }
+  wrap.appendChild(row);
+  if(expanded){
+    const kids=document.createElement("div"); kids.className="sf-children";
+    const visibleChildren=stopSearchQuery?node.children.filter(folderMatchesSearchDeep):node.children;
+    const visibleZones=node.zones.filter(i=>stopMatchesSearch(zones[i]));
+    visibleChildren.forEach(child=>kids.appendChild(buildStopFolderRow(child,depth+1)));
+    visibleZones.forEach(i=>kids.appendChild(buildZoneRow(i)));
+    if(!visibleChildren.length && !visibleZones.length){ const e2=document.createElement("div"); e2.className="hint"; e2.style.padding="4px 8px"; e2.textContent="empty"; kids.appendChild(e2); }
+    wrap.appendChild(kids);
+  }
+  return wrap;
+}
+function closeStopFolderMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>m.remove()); }
+document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")) closeStopFolderMenus(); });
+function openStopFolderMenu(anchorBtn,node){
+  closeStopFolderMenus();
+  const isRoot=node.id===null;
+  const menu=document.createElement("div"); menu.className="sf-menu";
+  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
+  mkItem("＋ New subfolder",()=>createStopFolder(node.id));
+  if(isRoot){
+    mkItem("✎ Rename tour",renameProjectRoot);
+  }else{
+    mkItem("✎ Rename",()=>renameStopFolder(node));
+    mkItem("📁 Move to…",()=>{ closeStopFolderMenus(); openStopFolderPicker(anchorBtn,node,targetId=>moveStopFolder(node.id,targetId)); });
+    mkItem("🗑 Delete",()=>deleteStopFolder(node));
+  }
+  anchorBtn.parentElement.appendChild(menu);
+}
+function openStopFolderPicker(anchorBtn,excludeNode,onPick){
+  closeStopFolderMenus();
+  const excludeIds=excludeNode?collectStopFolderSubtreeIds(excludeNode.id):[];
+  const menu=document.createElement("div"); menu.className="sf-menu sf-picker";
+  const rootBtn=document.createElement("button"); rootBtn.className="sf-menu-item"; rootBtn.type="button"; rootBtn.textContent="📁 (project root)";
+  rootBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); onPick(null); };
+  menu.appendChild(rootBtn);
+  stopFolders.filter(f=>!excludeIds.includes(f.id)).sort((a,b)=>stopFolderPath(a).localeCompare(stopFolderPath(b))).forEach(f=>{
+    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent="📁 "+stopFolderPath(f);
+    b.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); onPick(f.id); };
+    menu.appendChild(b);
+  });
+  anchorBtn.parentElement.appendChild(menu);
+}
+async function createStopFolder(parentId){
+  const pid=afProjectId(); if(!pid){ alert("Save/publish this tour first."); return; }
+  const name=(prompt("New folder name:")||"").trim();
+  if(!name) return;
+  try{
+    const r=await fetch("/api/stop-folder",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({projectId:pid,parentId:parentId||null,name})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    focusedStopFolderId=j.id;
+    if(parentId) stopTreeExpanded.add(parentId);
+    await loadStopFolders();
+  }catch(e){ alert("Create folder failed: "+e.message); }
+}
+function renameProjectRoot(){
+  const cur=projName();
+  const name=(prompt("Rename tour:",cur)||"").trim();
+  if(!name||name===cur) return;
+  const el=document.getElementById("projCrumb");
+  el.textContent=name;
+  autoSave();
+  drawList();
+}
+async function renameStopFolder(node){
+  const name=(prompt("Rename folder:",node.name)||"").trim();
+  if(!name||name===node.name) return;
+  try{
+    const r=await fetch("/api/stop-folder/"+node.id,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({name})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    await loadStopFolders();
+  }catch(e){ alert("Rename failed: "+e.message); }
+}
+async function moveStopFolder(folderId,targetParentId){
+  try{
+    const r=await fetch("/api/stop-folder/"+folderId,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({parentId:targetParentId})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    stopTreeExpanded.add(targetParentId);
+    await loadStopFolders();
+  }catch(e){ alert("Move failed: "+e.message); }
+}
+async function deleteStopFolder(node){
+  const subtreeIds=collectStopFolderSubtreeIds(node.id);
+  const affected=zones.filter(z=>z.folderId&&subtreeIds.includes(z.folderId));
+  const msg='Delete "'+node.name+'"'+(affected.length?' and move '+affected.length+' stop(s) up to its parent folder':'')+'? This cannot be undone.';
+  if(!confirm(msg)) return;
+  // Zones aren't backend rows — reassign client-side before the folder itself
+  // is deleted server-side, same as any other unsaved zone edit (takes effect
+  // now, persists on the next Publish).
+  affected.forEach(z=>{ z.folderId=node.parentId||null; });
+  try{
+    const r=await fetch("/api/stop-folder/"+node.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    if(focusedStopFolderId&&subtreeIds.includes(focusedStopFolderId)) focusedStopFolderId=node.parentId||null;
+    await loadStopFolders();
+    render();
+  }catch(e){ alert("Delete failed: "+e.message); }
+}
+function bulkMoveSelectedStops(){
+  if(!coBulkSel.size){ alert("Check one or more stops first."); return; }
+  const anchor=document.getElementById("coBulkToggle");
+  openStopFolderPicker(anchor,null,targetId=>{
+    zones.forEach(z=>{ if(coBulkSel.has(z.id)) z.folderId=targetId; });
+    render();
+  });
+}
 function drawList(){
   const wrap=document.getElementById("zlist"); wrap.innerHTML="";
   document.getElementById("zcount").textContent=zones.length;
-  zones.forEach((z,i)=>{
-    const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
-    const cue=z.shape.type==="path"?"ambient":(z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive"));
-    const hzBadge=z.isHazard?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
-    const coBadge=(z.codeObjects&&z.codeObjects.length)?'<span title="'+z.codeObjects.length+' code object'+(z.codeObjects.length===1?'':'s')+' attached" style="font-size:10px;margin-left:3px;vertical-align:middle">🧩'+(z.codeObjects.length>1?'×'+z.codeObjects.length:'')+'</span>':'';
-    const bulkChk=coBulkMode?'<input type="checkbox" class="co-bulk-chk" style="margin-right:6px;accent-color:var(--coral)" '+(coBulkSel.has(i)?"checked":"")+'>':'';
-    d.innerHTML='<div class="t">'+bulkChk+'<b class="cond">'+z.name+hzBadge+coBadge+'</b>'
-      +'<span class="tag">'+z.shape.type+' · '+cue+'</span>'
-      +'<button class="del" title="delete">✕</button></div>';
-    d.querySelector(".del").onclick=(ev)=>{ ev.stopPropagation(); zones.splice(i,1); if(sel===i)sel=-1; else if(sel>i)sel--; render(); refreshProps(); };
-    const bulkChkEl=d.querySelector(".co-bulk-chk");
-    if(bulkChkEl) bulkChkEl.onclick=(ev)=>{ ev.stopPropagation();
-      if(bulkChkEl.checked) coBulkSel.add(i); else coBulkSel.delete(i); };
-    d.onclick=(ev)=>{ if(ev.target.classList.contains("del")||ev.target.classList.contains("co-bulk-chk"))return;
-       selectZone(i); map.flyTo({center:zoneCenterLonLat(z),zoom:17}); };
-    _makeZoneRowDroppable(d,i);
-    wrap.appendChild(d);
-  });
+  wrap.appendChild(buildStopFolderRow(buildStopTree(),0));
 }
+document.getElementById("stopSearch").addEventListener("input",e=>{ stopSearchQuery=e.target.value.trim().toLowerCase(); drawList(); });
 document.getElementById("coBulkToggle").onclick=()=>{
   coBulkMode=!coBulkMode;
   if(!coBulkMode) coBulkSel.clear();
@@ -1961,6 +2227,7 @@ document.getElementById("coBulkToggle").onclick=()=>{
   document.getElementById("coBulkToggle").classList.toggle("on",coBulkMode);
   drawList();
 };
+document.getElementById("coBulkMove").onclick=bulkMoveSelectedStops;
 
 /* ---- export to the engine's rich BUNDLE ([lat,lon]) ---- */
 function zoneToEngine(z){
@@ -1995,6 +2262,10 @@ function zoneToEngine(z){
   if(z.isHazard) zo.isHazard=true;
   // Per-stop hearing-range override — every stop, not just path stops.
   if(z.spatialClearM!=null) zo.spatialClearM=z.spatialClearM;
+  // Editor-only organization (this project's own stop_folder tree, separate
+  // from Studio's audio_folder) — the live engine never reads this, only
+  // exported so reloading a published bundle restores the same tree layout.
+  if(z.folderId) zo.folderId=z.folderId;
   if(isPath){
     zo.path=s.coords.map(LL);
     zo.movementMode=z.movementMode||"walk";
@@ -2061,6 +2332,9 @@ function engineToZone(zo){
   if(zo.codeObjects&&Array.isArray(zo.codeObjects)) z.codeObjects=zo.codeObjects;
   // Per-stop hearing-range override — every stop, not just path stops.
   z.spatialClearM=zo.spatialClearM??null;
+  // Stop tree folder — resolved against the live folder list at render time
+  // (loadStopFolders/drawList), so a stale/deleted id just falls back to root.
+  z.folderId=zo.folderId||null;
   if(isPath){
     z.movementMode=zo.movementMode||"walk";
     z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
@@ -3311,7 +3585,7 @@ if(typeof CodeObjects!=="undefined"){
     getOrgId:()=>document.getElementById("clientSel").value||null,
     getToken:getToken,
     getTargets:()=>{
-      if(coBulkMode && coBulkSel.size) return [...coBulkSel].map(i=>zones[i]).filter(Boolean);
+      if(coBulkMode && coBulkSel.size) return [...coBulkSel].map(id=>zones.find(z=>z.id===id)).filter(Boolean);
       if(sel>=0 && zones[sel]) return [zones[sel]];
       return [];
     },

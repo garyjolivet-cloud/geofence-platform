@@ -77,11 +77,11 @@
     return kb > 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.round(kb) + " KB";
   }
 
-  function buildTree(scope, scopeId, folders, clips, sessions) {
+  function buildTree(scope, scopeId, folders, clips, sessions, scripts) {
     const byId = new Map();
-    const root = { id: null, name: null, parentId: null, scope, scopeId, children: [], clips: [], sessions: [] };
+    const root = { id: null, name: null, parentId: null, scope, scopeId, children: [], clips: [], sessions: [], scripts: [] };
     byId.set(null, root);
-    (folders || []).forEach(f => byId.set(f.id, { id: f.id, name: f.name, parentId: f.parentId, scope, scopeId, children: [], clips: [], sessions: [] }));
+    (folders || []).forEach(f => byId.set(f.id, { id: f.id, name: f.name, parentId: f.parentId, scope, scopeId, children: [], clips: [], sessions: [], scripts: [] }));
     (folders || []).forEach(f => {
       const node = byId.get(f.id);
       const parent = byId.get(f.parentId) || root;
@@ -95,10 +95,15 @@
       const parent = byId.get(s.folderId) || root;
       parent.sessions.push({ ...s, scope, scopeId });
     });
+    (scripts || []).forEach(s => {
+      const parent = byId.get(s.folderId) || root;
+      parent.scripts.push({ ...s, scope, scopeId });
+    });
     (function sortRec(node) {
       node.children.sort((a, b) => a.name.localeCompare(b.name));
       node.clips.sort((a, b) => a.name.localeCompare(b.name));
       node.sessions.sort((a, b) => a.name.localeCompare(b.name));
+      node.scripts.sort((a, b) => a.name.localeCompare(b.name));
       node.children.forEach(sortRec);
     })(root);
     return root;
@@ -150,7 +155,7 @@
         let qs = "project=" + encodeURIComponent(opts.projectId);
         if (opts.orgId) qs += "&org=" + encodeURIComponent(opts.orgId);
         const j = await api("/api/audio/tree?" + qs);
-        state.projectRoot = buildTree("project", opts.projectId, j.project.folders, j.project.clips, j.project.sessions);
+        state.projectRoot = buildTree("project", opts.projectId, j.project.folders, j.project.clips, j.project.sessions, j.project.scripts);
         state.projectMeta = { scopeId: opts.projectId };
         state.parentById.set("project", new Map((j.project.folders || []).map(f => [f.id, f.parentId])));
         seedRootExpanded("project:root");
@@ -372,6 +377,33 @@
       try { await api("/api/studio-session/" + id, { method: "DELETE" }); await load(); }
       catch (e) { err("Delete failed: " + e.message); }
     }
+    async function renameScript(id, name) {
+      try { await api("/api/chatterbox-script/" + id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) }); await load(); }
+      catch (e) { err("Rename failed: " + e.message); }
+    }
+    async function moveScript(id, target) {
+      try {
+        await api("/api/chatterbox-script/" + id, {
+          method: "PATCH", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ folderId: target.folderId })
+        });
+        await load();
+      } catch (e) { err("Move failed: " + e.message); }
+    }
+    async function copyScript(id, target) {
+      try {
+        await api("/api/chatterbox-script/" + id + "/copy", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ targetFolderId: target.folderId })
+        });
+        await load();
+      } catch (e) { err("Copy failed: " + e.message); }
+    }
+    async function deleteScript(id, name) {
+      if (!confirm('Delete the saved script "' + name + '"? This cannot be undone.')) return;
+      try { await api("/api/chatterbox-script/" + id, { method: "DELETE" }); await load(); }
+      catch (e) { err("Delete failed: " + e.message); }
+    }
 
     function togglePlay(clip, btn) {
       const a = state.sharedAudio;
@@ -433,6 +465,25 @@
       menu.appendChild(moveBtn);
       const delBtn = document.createElement("button"); delBtn.className = "at-menu-item danger"; delBtn.textContent = "🗑 Delete";
       delBtn.onclick = e => { e.stopPropagation(); closeMenu(); deleteSession(session.id, session.name); };
+      menu.appendChild(delBtn);
+      anchorBtn.parentElement.appendChild(menu);
+      state.openMenu = menu;
+    }
+
+    function renderScriptMenu(anchorBtn, script) {
+      closeMenu();
+      const menu = document.createElement("div"); menu.className = "at-menu";
+      const renameBtn = document.createElement("button"); renameBtn.className = "at-menu-item"; renameBtn.textContent = "✎ Rename";
+      renameBtn.onclick = e => { e.stopPropagation(); closeMenu(); const nameEl = anchorBtn.closest(".at-row").querySelector(".at-name"); flipToInput(nameEl, script.name, v => renameScript(script.id, v)); };
+      menu.appendChild(renameBtn);
+      const copyBtn = document.createElement("button"); copyBtn.className = "at-menu-item"; copyBtn.textContent = "⧉ Copy to…";
+      copyBtn.onclick = e => { e.stopPropagation(); openPicker(copyBtn, { filterScope: "project", onPick: t => copyScript(script.id, t) }); };
+      menu.appendChild(copyBtn);
+      const moveBtn = document.createElement("button"); moveBtn.className = "at-menu-item"; moveBtn.textContent = "📁 Move to…";
+      moveBtn.onclick = e => { e.stopPropagation(); openPicker(moveBtn, { filterScope: "project", onPick: t => moveScript(script.id, t) }); };
+      menu.appendChild(moveBtn);
+      const delBtn = document.createElement("button"); delBtn.className = "at-menu-item danger"; delBtn.textContent = "🗑 Delete";
+      delBtn.onclick = e => { e.stopPropagation(); closeMenu(); deleteScript(script.id, script.name); };
       menu.appendChild(delBtn);
       anchorBtn.parentElement.appendChild(menu);
       state.openMenu = menu;
@@ -524,6 +575,34 @@
       return row;
     }
 
+    // A saved Chatterbox script (pasted text + per-line voice tagging +
+    // generated-audio-URL state) — lives in the same folders as the clips it
+    // produced, a straight parallel of renderSessionRow above.
+    function renderScriptRow(script) {
+      const row = document.createElement("div"); row.className = "at-row";
+      row.draggable = true;
+      row.addEventListener("dragstart", e => {
+        e.dataTransfer.setData("application/x-chatterbox-script-id", script.id);
+        e.dataTransfer.effectAllowed = "copy";
+      });
+      const icon = document.createElement("span"); icon.className = "at-icon"; icon.textContent = "📜";
+      const name = document.createElement("span"); name.className = "at-name"; name.textContent = script.name;
+      const meta = document.createElement("span"); meta.className = "at-meta";
+      meta.textContent = script.updatedAt ? new Date(script.updatedAt).toLocaleDateString() : "";
+      row.appendChild(icon); row.appendChild(name); row.appendChild(meta);
+      if (opts.onOpenScript) {
+        const openBtn = document.createElement("button"); openBtn.className = "at-btn"; openBtn.textContent = "Open"; openBtn.title = "Open in Chatterbox";
+        openBtn.onclick = e => { e.stopPropagation(); opts.onOpenScript(script); };
+        row.appendChild(openBtn);
+      }
+      if (!opts.readOnly) {
+        const moreBtn = document.createElement("button"); moreBtn.className = "at-btn"; moreBtn.textContent = "⋯"; moreBtn.title = "Rename, move, copy, or delete";
+        moreBtn.onclick = e => { e.stopPropagation(); renderScriptMenu(moreBtn, script); };
+        row.appendChild(moreBtn);
+      }
+      return row;
+    }
+
     function renderFolderNode(node, scope, scopeId, depth, labelOverride, isRoot) {
       const wrap = document.createElement("div");
       const row = document.createElement("div"); row.className = "at-row";
@@ -584,8 +663,9 @@
         const kids = document.createElement("div"); kids.className = "at-children";
         node.children.forEach(child => kids.appendChild(renderFolderNode(child, scope, scopeId, depth + 1, null, false)));
         node.sessions.forEach(session => kids.appendChild(renderSessionRow(session)));
+        node.scripts.forEach(script => kids.appendChild(renderScriptRow(script)));
         node.clips.forEach(clip => kids.appendChild(renderClipRow(clip)));
-        if (!node.children.length && !node.clips.length && !node.sessions.length) { const e2 = document.createElement("div"); e2.className = "at-empty"; e2.textContent = "empty"; kids.appendChild(e2); }
+        if (!node.children.length && !node.clips.length && !node.sessions.length && !node.scripts.length) { const e2 = document.createElement("div"); e2.className = "at-empty"; e2.textContent = "empty"; kids.appendChild(e2); }
         wrap.appendChild(kids);
       }
       return wrap;
