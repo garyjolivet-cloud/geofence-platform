@@ -897,6 +897,7 @@ async function api(request, env, url) {
     }
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM walking_path WHERE app_id=?").bind(aid).run();
+    await env.DB.prepare("DELETE FROM walking_path_folder WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
     return json({ ok: true, deleted: aid }, 200, AC);
@@ -2316,16 +2317,21 @@ async function api(request, env, url) {
     const A = await auth(request, env);
     const b = await request.json().catch(() => ({}));
     const appId = (b.appId || "").trim(), name = (b.name || "").trim();
+    const folderId = b.folderId || null;
     if (!appId || !name) return json({ error: "appId and name required" }, 400, AC);
     if (!Array.isArray(b.points) || b.points.length < 2) return json({ error: "points (array of [lon,lat]) required" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(folderId, appId).first();
+      if (!folder) return json({ error: "folder not found" }, 404, AC);
+    }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO walking_path (id,app_id,name,points_json,distance_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
-    ).bind(id, appId, name, JSON.stringify(b.points), b.distanceM || 0, now, now).run();
+      "INSERT INTO walking_path (id,app_id,folder_id,name,points_json,distance_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)"
+    ).bind(id, appId, folderId, name, JSON.stringify(b.points), b.distanceM || 0, now, now).run();
     await logAudit(env, request, A, "walkingpath.create", appId + "/" + name);
-    return json({ id, name }, 201, AC);
+    return json({ id, name, folderId }, 201, AC);
   }
 
   if (path === "/api/walking-path" && method === "GET") {
@@ -2334,7 +2340,7 @@ async function api(request, env, url) {
     if (!appId) return json({ error: "appId required" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
     const { results } = await env.DB.prepare(
-      "SELECT id,name,distance_m AS distanceM,updated_at AS updatedAt FROM walking_path WHERE app_id=? ORDER BY name"
+      "SELECT id,folder_id AS folderId,name,distance_m AS distanceM,updated_at AS updatedAt FROM walking_path WHERE app_id=? ORDER BY name"
     ).bind(appId).all();
     return json({ paths: results || [] }, 200, AC);
   }
@@ -2343,7 +2349,7 @@ async function api(request, env, url) {
   if (mWalkingPath && (method === "GET" || method === "PATCH" || method === "DELETE")) {
     const pathId = decodeURIComponent(mWalkingPath[1]);
     const row = await env.DB.prepare(
-      "SELECT app_id AS appId,name,points_json AS pointsJson,distance_m AS distanceM FROM walking_path WHERE id=?"
+      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,distance_m AS distanceM FROM walking_path WHERE id=?"
     ).bind(pathId).first();
     if (!row) return json({ error: "walking path not found" }, 404, AC);
 
@@ -2352,7 +2358,7 @@ async function api(request, env, url) {
       // for a published, path-driven project.
       let points;
       try { points = JSON.parse(row.pointsJson); } catch (e) { return json({ error: "stored path is corrupt" }, 500, AC); }
-      return json({ id: pathId, name: row.name, appId: row.appId, distanceM: row.distanceM, points }, 200, AC);
+      return json({ id: pathId, name: row.name, appId: row.appId, folderId: row.folderId, distanceM: row.distanceM, points }, 200, AC);
     }
 
     const A = await auth(request, env);
@@ -2365,12 +2371,115 @@ async function api(request, env, url) {
     }
 
     const b = await request.json().catch(() => ({}));
-    if (!b.name || !b.name.trim()) return json({ error: "invalid name" }, 400, AC);
-    const name = b.name.trim();
-    await env.DB.prepare("UPDATE walking_path SET name=?, updated_at=? WHERE id=?")
-      .bind(name, new Date().toISOString(), pathId).run();
+    let name = row.name, folderId = row.folderId;
+    if (b.name !== undefined) {
+      if (!b.name.trim()) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.folderId !== undefined) {
+      const newFolderId = b.folderId || null;
+      if (newFolderId) {
+        const folder = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(newFolderId, row.appId).first();
+        if (!folder) return json({ error: "folder not found" }, 404, AC);
+      }
+      folderId = newFolderId;
+    }
+    await env.DB.prepare("UPDATE walking_path SET name=?, folder_id=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, new Date().toISOString(), pathId).run();
     await logAudit(env, request, A, "walkingpath.update", pathId);
-    return json({ id: pathId, name }, 200, AC);
+    return json({ id: pathId, name, folderId }, 200, AC);
+  }
+
+  // --- Walking path folders: same tree shape as stop_folder, but app-scoped
+  // to match walking_path itself (see above). Deleting a folder cascades to
+  // every path inside its subtree, same convention as audio_folder deletes
+  // cascading to clips — move paths out first if they should survive. ---
+  async function collectWalkingPathFolderSubtreeIds(env, rootId) {
+    const ids = [rootId]; let frontier = [rootId];
+    while (frontier.length) {
+      const ph = frontier.map(() => "?").join(",");
+      const { results } = await env.DB.prepare(`SELECT id FROM walking_path_folder WHERE parent_id IN (${ph})`).bind(...frontier).all();
+      frontier = (results || []).map(r => r.id);
+      ids.push(...frontier);
+    }
+    return ids;
+  }
+
+  if (path === "/api/walking-path-folder" && method === "GET") {
+    const A = await auth(request, env);
+    const appId = (url.searchParams.get("appId") || "").trim();
+    if (!appId) return json({ error: "appId required" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,parent_id AS parentId,name FROM walking_path_folder WHERE app_id=? ORDER BY name"
+    ).bind(appId).all();
+    return json({ folders: results || [] }, 200, AC);
+  }
+
+  if (path === "/api/walking-path-folder" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const appId = (b.appId || "").trim(), name = (b.name || "").trim();
+    const parentId = b.parentId || null;
+    if (!appId || !name) return json({ error: "appId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    if (parentId) {
+      const parent = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(parentId, appId).first();
+      if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare("INSERT INTO walking_path_folder (id,app_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+      .bind(id, appId, parentId, name, now, now).run();
+    await logAudit(env, request, A, "walkingpathfolder.create", appId + "/" + name);
+    return json({ id, appId, parentId, name }, 201, AC);
+  }
+
+  const mWalkingPathFolder = path.match(/^\/api\/walking-path-folder\/([^/]+)$/);
+  if (mWalkingPathFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mWalkingPathFolder[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT app_id AS appId,parent_id AS parentId,name FROM walking_path_folder WHERE id=?").bind(folderId).first();
+    if (!row) return json({ error: "folder not found" }, 404, AC);
+    if (!(await appScopeAuthOk(env, A, row.appId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      // Unlike audio_folder (cascade-deletes clips), a walking path is a
+      // physically-recorded field walk — expensive to redo, not just
+      // re-uploadable. Move any paths in the deleted subtree up to this
+      // folder's own parent instead of destroying them, same as
+      // stop_folder does for zones on folder delete.
+      const folderIds = await collectWalkingPathFolderSubtreeIds(env, folderId);
+      const fph = folderIds.map(() => "?").join(",");
+      const { meta } = await env.DB.prepare(
+        `UPDATE walking_path SET folder_id=?, updated_at=? WHERE app_id=? AND folder_id IN (${fph})`
+      ).bind(row.parentId, new Date().toISOString(), row.appId, ...folderIds).run();
+      await env.DB.prepare(`DELETE FROM walking_path_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "walkingpathfolder.delete", folderId + " (" + (meta.changes || 0) + " paths moved up)");
+      return json({ ok: true, deletedFolders: folderIds.length, movedPaths: meta.changes || 0 }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, parentId = row.parentId;
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.parentId !== undefined) {
+      const newParentId = b.parentId || null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(newParentId, row.appId).first();
+        if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+        const subtreeIds = await collectWalkingPathFolderSubtreeIds(env, folderId);
+        if (subtreeIds.includes(newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
+      }
+      parentId = newParentId;
+    }
+    await env.DB.prepare("UPDATE walking_path_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+      .bind(name, parentId, new Date().toISOString(), folderId).run();
+    await logAudit(env, request, A, "walkingpathfolder.update", folderId);
+    return json({ id: folderId, name, parentId }, 200, AC);
   }
 
   // --- Stop folders: organize a project's map stops (zones) into a tree
@@ -2616,11 +2725,21 @@ async function api(request, env, url) {
   if (path === "/api/tts" && method === "POST") {
     if (!env.AI) return json({ error: "AI binding not configured" }, 503, CORS_PUBLIC);
     try {
-      const { text } = await request.json();
+      const { text, voice } = await request.json();
       if (!text || typeof text !== "string") return json({ error: "text required" }, 400, CORS_PUBLIC);
-      const result = await env.AI.run("@cf/deepgram/aura-1", {
-        text: text.slice(0, 600)
-      }, { returnRawResponse: true });
+      // Aura-1 has its own speaker roster, unrelated to Kokoro's af_bella-style
+      // ids — map the same curated voice picker the editor/engine expose so
+      // selection still does something when Kokoro (client-side neural TTS)
+      // fails to load and this Workers AI tier is used instead. Unmapped/
+      // missing voice falls through to Aura's own default (angus).
+      const AURA_SPEAKER = {
+        af_bella: "asteria", af_nicole: "luna", af_sarah: "athena", af_sky: "stella",
+        am_adam: "orion", am_michael: "zeus",
+        bf_emma: "hera", bf_isabella: "perseus", bm_george: "arcas", bm_lewis: "helios"
+      };
+      const ttsInput = { text: text.slice(0, 600) };
+      if (voice && AURA_SPEAKER[voice]) ttsInput.speaker = AURA_SPEAKER[voice];
+      const result = await env.AI.run("@cf/deepgram/aura-1", ttsInput, { returnRawResponse: true });
       return new Response(result.body, {
         status: 200,
         headers: { "content-type": "audio/mpeg", ...CORS_PUBLIC }

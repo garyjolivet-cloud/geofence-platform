@@ -483,6 +483,7 @@
 
     <div class="row" style="margin-top:2px">
       <button id="simWalk" class="ghost" style="flex:1">▶ Walk stops</button>
+      <button id="simDirBtn" class="ghost" style="flex:0 0 auto;padding:8px 10px" title="Walk direction: forward">⏩</button>
       <button id="simPlay" class="ghost" style="flex:0 0 auto;padding:8px 10px">▶</button>
     </div>
     <div style="margin:2px 0">
@@ -631,6 +632,20 @@
 
       <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
       <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
+      <label class="k">voice</label>
+      <select id="pVoice">
+        <option value="">— default (Bella) —</option>
+        <option value="af_bella">Bella (US female)</option>
+        <option value="af_nicole">Nicole (US female)</option>
+        <option value="af_sarah">Sarah (US female)</option>
+        <option value="af_sky">Sky (US female)</option>
+        <option value="am_adam">Adam (US male)</option>
+        <option value="am_michael">Michael (US male)</option>
+        <option value="bf_emma">Emma (UK female)</option>
+        <option value="bf_isabella">Isabella (UK female)</option>
+        <option value="bm_george">George (UK male)</option>
+        <option value="bm_lewis">Lewis (UK male)</option>
+      </select>
       <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
       <hr>
       <label class="k">bearing of interest — visitor faces this direction on arrival</label>
@@ -1004,7 +1019,10 @@ function makeZone(name,shape){
            // Walking Path section below) — constrains dragging to slide
            // along that path instead of free 2D movement. false for every
            // normal stop; only set true by finishShape()'s snap check.
-           onPath:false };
+           onPath:false,
+           // Per-stop Kokoro voice override for TTS (spoken line). null
+           // means "use the default voice" (af_bella).
+           ttsVoice:null };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
@@ -1505,6 +1523,7 @@ function refreshProps(){
   document.getElementById("pLoopAudio").checked = z.loopAudio!==false;
 
   document.getElementById("pSay").value=z.say||"";
+  document.getElementById("pVoice").value=z.ttsVoice||"";
   const isTrip=z.shape.type==="tripline";
   const fires=document.getElementById("pFires");
   fires.value = isTrip ? "enter" : z.fires;
@@ -2001,8 +2020,10 @@ document.getElementById("cmbRender").onclick=async()=>{
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
   document.getElementById("dwellRow").style.display=zones[sel].fires==="dwell"?"flex":"none"; });
+document.getElementById("pVoice").addEventListener("change",()=>{ if(sel<0)return;
+  zones[sel].ttsVoice=document.getElementById("pVoice").value||null; autoSave(); });
 document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById("pSay").value.trim();
-  if(!t)return; simTTS(t); };
+  if(!t)return; simTTS(t, sel>=0?zones[sel].ttsVoice:null); };
 document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
 document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); selectZone(-1); };
 
@@ -2011,20 +2032,58 @@ document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(s
    can select for stops to snap onto/slide along. Deliberately NOT the same
    as the existing shape.type==="path" draw-tool above (a per-zone movable/
    ambient-audio shape) — this is a separate, app-level-scoped, reusable
-   reference route. Flat list, no folders (confirmed with the user).
+   reference route. Organized into its own folder tree (walking_path_folder),
+   same shape as the stop tree below but app-scoped — reuses the .sf-menu/
+   .stop-folder-row/.sf-picker CSS and closeStopFolderMenus()/positionMenuSmart()
+   machinery rather than inventing new widgets.
    ============================================================ */
-let walkingPaths=[];              // [{id,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
+let walkingPaths=[];              // [{id,folderId,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
+let walkingPathFolders=[];        // [{id,parentId,name}] for the current app, from GET /api/walking-path-folder
+let wpTreeExpanded=new Set();     // folder ids expanded in the picker
 let selectedWalkingPathId=null;
 let selectedWalkingPathPoints=null; // [[lon,lat],...] of the currently-selected path, once fetched
 let selectedWalkingPathName=null; // from the fetch itself — the button label no longer needs the (possibly not-yet-loaded) walkingPaths list to show the right name
 async function loadWalkingPaths(){
   const appId=afAppId();
-  if(!appId){ walkingPaths=[]; return; }
+  if(!appId){ walkingPaths=[]; walkingPathFolders=[]; return; }
   try{
-    const r=await fetch("/api/walking-path?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}});
-    const j=r.ok?await r.json():null;
-    walkingPaths=(j&&j.paths)||[];
-  }catch(e){ walkingPaths=[]; }
+    const [rp,rf]=await Promise.all([
+      fetch("/api/walking-path?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}}),
+      fetch("/api/walking-path-folder?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}})
+    ]);
+    const jp=rp.ok?await rp.json():null;
+    const jf=rf.ok?await rf.json():null;
+    walkingPaths=(jp&&jp.paths)||[];
+    walkingPathFolders=(jf&&jf.folders)||[];
+  }catch(e){ walkingPaths=[]; walkingPathFolders=[]; }
+}
+function wpFolderById(id){ return walkingPathFolders.find(f=>f.id===id); }
+function wpFolderPath(f){
+  if(!f) return "";
+  const parent=f.parentId?wpFolderById(f.parentId):null;
+  return parent?wpFolderPath(parent)+" / "+f.name:f.name;
+}
+function collectWpFolderSubtreeIds(rootId){
+  const ids=[rootId]; let frontier=[rootId];
+  while(frontier.length){
+    const next=walkingPathFolders.filter(f=>frontier.includes(f.parentId)).map(f=>f.id);
+    ids.push(...next); frontier=next;
+  }
+  return ids;
+}
+function buildWpTree(){
+  const byId=new Map();
+  const root={id:null,name:null,parentId:null,children:[],paths:[]};
+  byId.set(null,root);
+  walkingPathFolders.forEach(f=>byId.set(f.id,{id:f.id,name:f.name,parentId:f.parentId,children:[],paths:[]}));
+  walkingPathFolders.forEach(f=>{ const node=byId.get(f.id); (byId.get(f.parentId)||root).children.push(node); });
+  walkingPaths.forEach(p=>{ (byId.get(p.folderId)||root).paths.push(p); });
+  (function sortRec(node){
+    node.children.sort((a,b)=>a.name.localeCompare(b.name));
+    node.paths.sort((a,b)=>a.name.localeCompare(b.name));
+    node.children.forEach(sortRec);
+  })(root);
+  return root;
 }
 // Standard nearest-point-on-polyline projection: for each consecutive pair
 // of path points, project lonLat onto that segment (clamped to the segment's
@@ -2087,42 +2146,176 @@ async function selectWalkingPath(id){
     autoSave();
   }catch(e){ alert("Couldn't load that walking path: "+e.message); }
 }
+let _wpPickerAnchor=null; // the toolbar button — kept so any mutation (create/rename/move/delete) can reopen a fresh picker afterward, same pattern the old delete-only button already used
 async function openWalkingPathPicker(anchorBtn){
   closeStopFolderMenus(); // shares the .sf-menu class/click-away-close listener with the stop-folder pickers
+  _wpPickerAnchor=anchorBtn;
   await loadWalkingPaths();
   const menu=document.createElement("div"); menu.className="sf-menu sf-picker wp-picker";
-  const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button";
+  menu.style.maxHeight="400px"; // taller than the default 220px sf-picker cap — a folder/path "⋯" submenu opened near the bottom of a scrolled list would otherwise get clipped by overflow-y:auto
+  const head=document.createElement("div"); head.style.cssText="display:flex;gap:4px;padding:2px 4px 6px";
+  const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button"; noneBtn.style.flex="1";
   noneBtn.textContent=(selectedWalkingPathId?"":"✓ ")+"— none (not path-driven) —";
   noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(null); };
-  menu.appendChild(noneBtn);
-  if(!walkingPaths.length){
+  const newFolderBtn=document.createElement("button"); newFolderBtn.className="ghost sf-more"; newFolderBtn.type="button";
+  newFolderBtn.style.flex="0 0 auto"; newFolderBtn.title="New folder"; newFolderBtn.textContent="＋📁";
+  newFolderBtn.onclick=e=>{ e.stopPropagation(); createWpFolder(null); };
+  head.appendChild(noneBtn); head.appendChild(newFolderBtn);
+  menu.appendChild(head);
+  if(!walkingPaths.length && !walkingPathFolders.length){
     const hint=document.createElement("div"); hint.className="hint"; hint.style.padding="6px 10px"; hint.textContent="no saved paths yet — record one in Field Recorder";
     menu.appendChild(hint);
   }
-  walkingPaths.slice().sort((a,b)=>a.name.localeCompare(b.name)).forEach(p=>{
-    const row=document.createElement("div"); row.style.display="flex"; row.style.alignItems="stretch";
-    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.style.flex="1";
-    b.textContent=(p.id===selectedWalkingPathId?"✓ ":"")+"🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
-    b.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(p.id); };
-    const del=document.createElement("button"); del.className="sf-menu-item"; del.type="button";
-    del.style.flex="0 0 auto"; del.title="Delete this walking path — permanent, and removes it from every project using it";
-    del.textContent="🗑";
-    del.onclick=async e=>{
-      e.stopPropagation();
-      if(!confirm('Delete the walking path "'+p.name+'"? This is permanent and removes it from any project using it.')) return;
-      try{
-        const r=await fetch("/api/walking-path/"+p.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-        if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
-        if(selectedWalkingPathId===p.id) selectWalkingPath(null);
-        closeStopFolderMenus();
-        openWalkingPathPicker(anchorBtn); // reopen with the fresh (shorter) list
-      }catch(err){ alert("Delete failed: "+err.message); }
-    };
-    row.appendChild(b); row.appendChild(del);
-    menu.appendChild(row);
+  const tree=buildWpTree();
+  tree.children.forEach(child=>menu.appendChild(buildWpFolderRow(child)));
+  tree.paths.forEach(p=>menu.appendChild(buildWpPathRow(p)));
+  anchorBtn.parentElement.appendChild(menu);
+  positionMenuSmart(menu);
+}
+function buildWpFolderRow(node){
+  const wrap=document.createElement("div");
+  const expanded=wpTreeExpanded.has(node.id);
+  const row=document.createElement("div"); row.className="stop-folder-row";
+  const chevron=document.createElement("span"); chevron.className="sf-chevron"; chevron.textContent=expanded?"▾":"▸";
+  chevron.onclick=e=>{ e.stopPropagation(); if(wpTreeExpanded.has(node.id))wpTreeExpanded.delete(node.id);else wpTreeExpanded.add(node.id); openWalkingPathPicker(_wpPickerAnchor); };
+  const icon=document.createElement("span"); icon.textContent="📁";
+  const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.textContent=node.name;
+  const count=document.createElement("span"); count.className="sf-count"; count.textContent=node.paths.length;
+  row.appendChild(chevron); row.appendChild(icon); row.appendChild(nameEl); row.appendChild(count);
+  const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯"; moreBtn.title="New subfolder, rename, move, or delete";
+  moreBtn.onclick=e=>{ e.stopPropagation(); openWpFolderMenu(moreBtn,node); };
+  row.appendChild(moreBtn);
+  row.onclick=()=>{ if(wpTreeExpanded.has(node.id))wpTreeExpanded.delete(node.id);else wpTreeExpanded.add(node.id); openWalkingPathPicker(_wpPickerAnchor); };
+  wrap.appendChild(row);
+  if(expanded){
+    const kids=document.createElement("div"); kids.className="sf-children";
+    node.children.forEach(child=>kids.appendChild(buildWpFolderRow(child)));
+    node.paths.forEach(p=>kids.appendChild(buildWpPathRow(p)));
+    if(!node.children.length && !node.paths.length){ const e2=document.createElement("div"); e2.className="hint"; e2.style.padding="4px 8px"; e2.textContent="empty"; kids.appendChild(e2); }
+    wrap.appendChild(kids);
+  }
+  return wrap;
+}
+function buildWpPathRow(p){
+  const row=document.createElement("div"); row.className="stop-folder-row";
+  const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.style.cursor="pointer";
+  nameEl.textContent=(p.id===selectedWalkingPathId?"✓ ":"")+"🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
+  nameEl.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(p.id); };
+  row.appendChild(nameEl);
+  const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯"; moreBtn.title="Rename, move, or delete";
+  moreBtn.onclick=e=>{ e.stopPropagation(); openWpPathMenu(moreBtn,p); };
+  row.appendChild(moreBtn);
+  return row;
+}
+// The wp-picker tree itself is a .sf-menu (so click-away-close and the shared
+// styling work for free) — but that means the global closeStopFolderMenus()
+// would remove it too, along with any nested "⋯" submenu, leaving the
+// submenu appended into a now-detached (invisible) node. These three
+// submenu-opening functions need to close any OTHER open submenu without
+// tearing down the picker they're nested inside of.
+function closeWpSubmenus(){ document.querySelectorAll(".sf-menu").forEach(m=>{ if(!m.classList.contains("wp-picker")) m.remove(); }); }
+function openWpFolderMenu(anchorBtn,node){
+  closeWpSubmenus();
+  const menu=document.createElement("div"); menu.className="sf-menu";
+  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeWpSubmenus(); fn(); }; menu.appendChild(b); };
+  mkItem("＋ New subfolder",()=>createWpFolder(node.id));
+  mkItem("✎ Rename",()=>renameWpFolder(node));
+  mkItem("📁 Move to…",()=>{ closeWpSubmenus(); openWpFolderPicker(anchorBtn,node,targetId=>moveWpFolder(node.id,targetId)); });
+  mkItem("🗑 Delete",()=>deleteWpFolder(node));
+  anchorBtn.parentElement.appendChild(menu);
+  positionMenuSmart(menu);
+}
+function openWpPathMenu(anchorBtn,p){
+  closeWpSubmenus();
+  const menu=document.createElement("div"); menu.className="sf-menu";
+  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeWpSubmenus(); fn(); }; menu.appendChild(b); };
+  mkItem("✎ Rename",()=>renameWpPath(p));
+  mkItem("📁 Move to…",()=>{ closeWpSubmenus(); openWpFolderPicker(anchorBtn,null,targetId=>moveWpPath(p.id,targetId)); });
+  mkItem("🗑 Delete",()=>deleteWpPath(p));
+  anchorBtn.parentElement.appendChild(menu);
+  positionMenuSmart(menu);
+}
+function openWpFolderPicker(anchorBtn,excludeNode,onPick){
+  closeWpSubmenus();
+  const excludeIds=excludeNode?collectWpFolderSubtreeIds(excludeNode.id):[];
+  const menu=document.createElement("div"); menu.className="sf-menu sf-picker";
+  const rootBtn=document.createElement("button"); rootBtn.className="sf-menu-item"; rootBtn.type="button"; rootBtn.textContent="📁 (root)";
+  rootBtn.onclick=e=>{ e.stopPropagation(); closeWpSubmenus(); onPick(null); };
+  menu.appendChild(rootBtn);
+  walkingPathFolders.filter(f=>!excludeIds.includes(f.id)).sort((a,b)=>wpFolderPath(a).localeCompare(wpFolderPath(b))).forEach(f=>{
+    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent="📁 "+wpFolderPath(f);
+    b.onclick=e=>{ e.stopPropagation(); closeWpSubmenus(); onPick(f.id); };
+    menu.appendChild(b);
   });
   anchorBtn.parentElement.appendChild(menu);
   positionMenuSmart(menu);
+}
+async function createWpFolder(parentId){
+  const appId=afAppId(); if(!appId){ alert("Pick a client/app for this tour first."); return; }
+  const name=(prompt("New folder name:")||"").trim();
+  if(!name) return;
+  try{
+    const r=await fetch("/api/walking-path-folder",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({appId,parentId:parentId||null,name})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    if(parentId) wpTreeExpanded.add(parentId);
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(e){ alert("Create folder failed: "+e.message); }
+}
+async function renameWpFolder(node){
+  const name=(prompt("Rename folder:",node.name)||"").trim();
+  if(!name||name===node.name) return;
+  try{
+    const r=await fetch("/api/walking-path-folder/"+node.id,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({name})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(e){ alert("Rename failed: "+e.message); }
+}
+async function moveWpFolder(folderId,targetParentId){
+  try{
+    const r=await fetch("/api/walking-path-folder/"+folderId,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({parentId:targetParentId})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    if(targetParentId) wpTreeExpanded.add(targetParentId);
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(e){ alert("Move failed: "+e.message); }
+}
+async function deleteWpFolder(node){
+  const subtreeIds=collectWpFolderSubtreeIds(node.id);
+  const affected=walkingPaths.filter(p=>p.folderId&&subtreeIds.includes(p.folderId));
+  const msg='Delete "'+node.name+'"'+(affected.length?' and move '+affected.length+' walking path(s) up to its parent folder':'')+'? This cannot be undone.';
+  if(!confirm(msg)) return;
+  try{
+    const r=await fetch("/api/walking-path-folder/"+node.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(e){ alert("Delete failed: "+e.message); }
+}
+async function renameWpPath(p){
+  const name=(prompt("Rename walking path:",p.name)||"").trim();
+  if(!name||name===p.name) return;
+  try{
+    const r=await fetch("/api/walking-path/"+p.id,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({name})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    if(p.id===selectedWalkingPathId){ selectedWalkingPathName=name; updateWalkingPathBtnLabel(); }
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(e){ alert("Rename failed: "+e.message); }
+}
+async function moveWpPath(pathId,targetFolderId){
+  try{
+    const r=await fetch("/api/walking-path/"+pathId,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({folderId:targetFolderId})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    if(targetFolderId) wpTreeExpanded.add(targetFolderId);
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(e){ alert("Move failed: "+e.message); }
+}
+async function deleteWpPath(p){
+  if(!confirm('Delete the walking path "'+p.name+'"? This is permanent and removes it from any project using it.')) return;
+  try{
+    const r=await fetch("/api/walking-path/"+p.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+    if(selectedWalkingPathId===p.id) selectWalkingPath(null);
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(err){ alert("Delete failed: "+err.message); }
 }
 document.getElementById("walkingPathBtn").onclick=e=>{ e.stopPropagation(); openWalkingPathPicker(e.currentTarget); };
 
@@ -2479,6 +2672,7 @@ function zoneToEngine(z){
   // per-stop state) — only exported so a publish+reload doesn't silently
   // drop every stop's snapped-to-path status.
   if(z.onPath) zo.onPath=true;
+  if(z.ttsVoice) zo.ttsVoice=z.ttsVoice;
   if(isPath){
     zo.path=s.coords.map(LL);
     zo.movementMode=z.movementMode||"walk";
@@ -2550,6 +2744,7 @@ function engineToZone(zo){
   // (loadStopFolders/drawList), so a stale/deleted id just falls back to root.
   z.folderId=zo.folderId||null;
   z.onPath=!!zo.onPath;
+  z.ttsVoice=zo.ttsVoice||null;
   if(isPath){
     z.movementMode=zo.movementMode||"walk";
     z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
@@ -3166,7 +3361,7 @@ const SimFencer={state:{},onEvent:null,
     (zone.triggers||[]).forEach(t=>{
       if(t.fires_on===kind&&(!t.layer||t.layer===layer.kind))this._deliver(zone,t,subj);});},
   _deliver(zone,t,subj="visitor"){
-    if(t.say){if(!zone.audioUrl&&simSoundOn) simTTS(t.say);
+    if(t.say){if(!zone.audioUrl&&simSoundOn) simTTS(t.say, zone.ttsVoice);
       if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
   reset(){this.state={};}
 };
@@ -3383,7 +3578,7 @@ const SimAmbient={
 
 /* ---- sim state ---- */
 let simMode=false, simAvatar=null, simBundle=null, simPrev=null, simPrevRaw=null;
-let simPath=[], simPlaying=false, simDist=0, simTimer=null;
+let simPath=[], simPlaying=false, simDist=0, simTimer=null, simDir=1; // simDir: 1 = forward along simPath, -1 = backward
 let simAmbientMarkers={}, simAmbientTimer=null;
 
 // Live marker for each path (moving ambient) stop's current position —
@@ -3581,17 +3776,17 @@ function _ttsPlayPCM(audio, sampleRate){
   buf.getChannelData(0).set(audio);
   const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination); src.start();
 }
-function simTTS(text){
+function simTTS(text, voice){
   if(SimKokoro.tts){
-    SimKokoro.tts.generate(text,{voice:SimKokoro.voice})
+    SimKokoro.tts.generate(text,{voice:voice||SimKokoro.voice})
       .then(r=>_ttsPlayPCM(r.audio,r.sampling_rate))
-      .catch(()=>_ttsWorkers(text));
+      .catch(()=>_ttsWorkers(text,voice));
     return;
   }
-  _ttsWorkers(text);
+  _ttsWorkers(text,voice);
 }
-function _ttsWorkers(text){
-  fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})})
+function _ttsWorkers(text,voice){
+  fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,voice})})
     .then(r=>r.ok?r.arrayBuffer():Promise.reject())
     .then(ab=>{ const ctx=_ttsEnsureCtx(); ctx.decodeAudioData(ab,buf=>{
         const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination); src.start();
@@ -3739,9 +3934,20 @@ function simPathPointAt(s){if(simPath.length<2)return simPath[0]||null;let acc=0
       return[simPath[i-1][0]+t*(simPath[i][0]-simPath[i-1][0]),simPath[i-1][1]+t*(simPath[i][1]-simPath[i-1][1])];}
     acc+=seg;}return simPath[simPath.length-1];}
 function buildSimStopsPath(){
+  const lead=(p,q,m)=>{const len=SimGeo.hav(q,p)||1,k=m/len;return[p[0]+(p[0]-q[0])*k,p[1]+(p[1]-q[1])*k];};
+  // Walk the recorded route itself when one's selected, regardless of stop
+  // order — this is how a path-driven tour is actually walked (GPS
+  // map-matched onto the path as it goes), not a straight line stop-to-stop.
+  if(selectedWalkingPathPoints && selectedWalkingPathPoints.length>=2){
+    const pts=selectedWalkingPathPoints.map(pt=>[pt[1],pt[0]]); // [lon,lat] -> [lat,lon], matching SimGeo's convention
+    const path=[lead(pts[0],pts[1],20)];
+    pts.forEach(p=>path.push(p));
+    path.push(lead(pts[pts.length-1],pts[pts.length-2],20));
+    simPath=path;
+    return simPath.length>=2;
+  }
   const pts=simBundle.zones.filter(z=>z.center).map(z=>z.center);
   if(pts.length<1)return false;
-  const lead=(p,q,m)=>{const len=SimGeo.hav(q,p)||1,k=m/len;return[p[0]+(p[0]-q[0])*k,p[1]+(p[1]-q[1])*k];};
   const path=[];
   if(pts.length>=2)path.push(lead(pts[0],pts[1],20));
   pts.forEach(p=>path.push(p));
@@ -3751,16 +3957,22 @@ function simPlay(){
   if(!simPath.length&&!buildSimStopsPath()){simLogEv("sev-warn","no stops to walk");return;}
   if(simPlaying){simPause();return;}
   if(SimVoice.ctx&&SimVoice.ctx.state==="suspended")SimVoice.ctx.resume();
-  if(simDist>=simPathTotal()){simDist=0;SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;refreshSimChips();}
+  const startTotal=simPathTotal();
+  // Restarting after having already reached the end of the walk in the
+  // current direction — snap back to that direction's own starting point
+  // (0 walking forward, the far end walking backward) rather than resuming
+  // stuck at the boundary.
+  if(simDir>0 && simDist>=startTotal){simDist=0;SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;refreshSimChips();}
+  if(simDir<0 && simDist<=0){simDist=startTotal;SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;refreshSimChips();}
   simPlaying=true;
   document.getElementById("simPlay").textContent="⏸";
   document.getElementById("simPlay").classList.add("on");
   let vT=Date.now();
   simTimer=setInterval(()=>{
     const speed=+document.getElementById("simSpd").value,total=simPathTotal();
-    simDist+=speed;vT+=1000;
-    const ended=simDist>=total;
-    const pt=simPathPointAt(Math.min(simDist,total));
+    simDist=Math.max(0,Math.min(simDist+speed*simDir,total));vT+=1000;
+    const ended=simDir>0?simDist>=total:simDist<=0;
+    const pt=simPathPointAt(simDist);
     const jLat=pt[0]+(Math.random()-.5)*3/111320,jLon=pt[1]+(Math.random()-.5)*3/111320;
     simAvatar.setLngLat([jLon,jLat]);
     feedSim(jLat,jLon,4,vT);
@@ -3791,10 +4003,16 @@ document.getElementById("advToggle").onclick=()=>{
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
-  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
+  SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
+  simDist=simDir>0?0:simPathTotal();
   simPlay();};
 document.getElementById("simPlay").onclick=simPlay;
+document.getElementById("simDirBtn").onclick=(e)=>{
+  simDir=-simDir;
+  e.currentTarget.textContent=simDir>0?"⏩":"⏪";
+  e.currentTarget.title="Walk direction: "+(simDir>0?"forward":"backward");
+};
 document.getElementById("simMute").onclick=(e)=>{simSoundOn=!simSoundOn;
   e.target.textContent=simSoundOn?"Sound ◼":"Muted ◻";e.target.classList.toggle("on",simSoundOn);
   if(!simSoundOn){SimVoice.fadeOut();try{speechSynthesis.cancel();}catch(err){}}};

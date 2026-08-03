@@ -621,20 +621,21 @@ const Audio = {
   },
   say(text, warn, zoneOrDist){
     const clean=text.replace(/–/g,' to ').replace(/°/g,' degrees ');
-    let d=0;
+    let d=0, voice=null;
     if(typeof zoneOrDist==='number') d=zoneOrDist;
     else if(zoneOrDist&&zoneOrDist.center&&HUD.pos) d=Geo.hav([HUD.pos.lat,HUD.pos.lon],zoneOrDist.center);
+    if(zoneOrDist&&zoneOrDist.ttsVoice) voice=zoneOrDist.ttsVoice;
     // Kokoro if loaded, else Workers AI, else browser speechSynthesis
     if(EngineKokoro.tts){
-      EngineKokoro.tts.generate(clean,{voice:EngineKokoro.voice})
+      EngineKokoro.tts.generate(clean,{voice:voice||EngineKokoro.voice})
         .then(r=>{ EngineTTSVoice.play(r.audio,r.sampling_rate,d); })
-        .catch(()=>this._apiTTS(clean,d,warn));
+        .catch(()=>this._apiTTS(clean,d,warn,voice));
     } else {
-      this._apiTTS(clean,d,warn);
+      this._apiTTS(clean,d,warn,voice);
     }
   },
-  _apiTTS(text,d,warn){
-    fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})})
+  _apiTTS(text,d,warn,voice){
+    fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,voice})})
       .then(r=>r.ok?r.arrayBuffer():Promise.reject(r.status))
       .then(ab=>{
         EngineTTSVoice._ensure();
