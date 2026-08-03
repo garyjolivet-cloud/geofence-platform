@@ -2002,7 +2002,7 @@ document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)retur
   zones[sel].fires=document.getElementById("pFires").value;
   document.getElementById("dwellRow").style.display=zones[sel].fires==="dwell"?"flex":"none"; });
 document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById("pSay").value.trim();
-  if(!t)return; try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(t)); }catch(e){} };
+  if(!t)return; simTTS(t); };
 document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
 document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); selectZone(-1); };
 
@@ -2016,6 +2016,7 @@ document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(s
 let walkingPaths=[];              // [{id,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
 let selectedWalkingPathId=null;
 let selectedWalkingPathPoints=null; // [[lon,lat],...] of the currently-selected path, once fetched
+let selectedWalkingPathName=null; // from the fetch itself — the button label no longer needs the (possibly not-yet-loaded) walkingPaths list to show the right name
 async function loadWalkingPaths(){
   const appId=afAppId();
   if(!appId){ walkingPaths=[]; return; }
@@ -2048,24 +2049,39 @@ function nearestPointOnPath(lonLat,pathCoords){
   }
   return { point:best, distM:haversineM(lonLat,best) };
 }
-function renderWalkingPathLine(){
-  const src=map.getSource("walkpath"); if(!src) return;
+// Restoring a published project (loadFromPlatform → importBtn.click() →
+// selectWalkingPath(b.walkingPathId)) can run before the map's own "load"
+// event has finished setting up the walkpath source — map.getSource()
+// silently returns undefined until then, and nothing was retrying, so the
+// line just never appeared even though selectedWalkingPathPoints was
+// already correctly set. Bounded retry (10 × 300ms = 3s) instead of a
+// single silent no-op.
+function renderWalkingPathLine(retriesLeft){
+  retriesLeft = retriesLeft==null ? 10 : retriesLeft;
+  const src=map.getSource("walkpath");
+  if(!src){ if(retriesLeft>0) setTimeout(()=>renderWalkingPathLine(retriesLeft-1),300); return; }
   if(!selectedWalkingPathPoints){ src.setData(fc([])); return; }
   src.setData(fc([{type:"Feature",properties:{},geometry:{type:"LineString",coordinates:selectedWalkingPathPoints}}]));
 }
+// Uses selectedWalkingPathName (captured directly from the GET response in
+// selectWalkingPath) rather than looking the name up in the walkingPaths
+// list — that list is loaded independently (doAudioRefresh) and isn't
+// guaranteed to have finished yet on a fresh page load, which could leave
+// the button showing generic "🥾 Walking Path" even though a path really
+// was restored correctly.
 function updateWalkingPathBtnLabel(){
   const btn=document.getElementById("walkingPathBtn"); if(!btn) return;
-  const p=walkingPaths.find(w=>w.id===selectedWalkingPathId);
-  btn.textContent = p ? ("🥾 "+p.name+" ▾") : "🥾 Walking Path";
+  btn.textContent = selectedWalkingPathId ? ("🥾 "+(selectedWalkingPathName||"…")+" ▾") : "🥾 Walking Path";
 }
 async function selectWalkingPath(id){
-  if(!id){ selectedWalkingPathId=null; selectedWalkingPathPoints=null; renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave(); return; }
+  if(!id){ selectedWalkingPathId=null; selectedWalkingPathPoints=null; selectedWalkingPathName=null; renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave(); return; }
   try{
     const r=await fetch("/api/walking-path/"+id);
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
     const j=await r.json();
     selectedWalkingPathId=id;
     selectedWalkingPathPoints=j.points;
+    selectedWalkingPathName=j.name;
     renderWalkingPathLine();
     updateWalkingPathBtnLabel();
     autoSave();
@@ -2075,7 +2091,8 @@ async function openWalkingPathPicker(anchorBtn){
   closeStopFolderMenus(); // shares the .sf-menu class/click-away-close listener with the stop-folder pickers
   await loadWalkingPaths();
   const menu=document.createElement("div"); menu.className="sf-menu sf-picker wp-picker";
-  const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button"; noneBtn.textContent="— none (not path-driven) —";
+  const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button";
+  noneBtn.textContent=(selectedWalkingPathId?"":"✓ ")+"— none (not path-driven) —";
   noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(null); };
   menu.appendChild(noneBtn);
   if(!walkingPaths.length){
@@ -2083,12 +2100,29 @@ async function openWalkingPathPicker(anchorBtn){
     menu.appendChild(hint);
   }
   walkingPaths.slice().sort((a,b)=>a.name.localeCompare(b.name)).forEach(p=>{
-    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button";
-    b.textContent="🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
+    const row=document.createElement("div"); row.style.display="flex"; row.style.alignItems="stretch";
+    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.style.flex="1";
+    b.textContent=(p.id===selectedWalkingPathId?"✓ ":"")+"🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
     b.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(p.id); };
-    menu.appendChild(b);
+    const del=document.createElement("button"); del.className="sf-menu-item"; del.type="button";
+    del.style.flex="0 0 auto"; del.title="Delete this walking path — permanent, and removes it from every project using it";
+    del.textContent="🗑";
+    del.onclick=async e=>{
+      e.stopPropagation();
+      if(!confirm('Delete the walking path "'+p.name+'"? This is permanent and removes it from any project using it.')) return;
+      try{
+        const r=await fetch("/api/walking-path/"+p.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
+        if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+        if(selectedWalkingPathId===p.id) selectWalkingPath(null);
+        closeStopFolderMenus();
+        openWalkingPathPicker(anchorBtn); // reopen with the fresh (shorter) list
+      }catch(err){ alert("Delete failed: "+err.message); }
+    };
+    row.appendChild(b); row.appendChild(del);
+    menu.appendChild(row);
   });
   anchorBtn.parentElement.appendChild(menu);
+  positionMenuSmart(menu);
 }
 document.getElementById("walkingPathBtn").onclick=e=>{ e.stopPropagation(); openWalkingPathPicker(e.currentTarget); };
 
@@ -2160,8 +2194,8 @@ function buildZoneRow(i){
   const bulkChk=coBulkMode?'<input type="checkbox" class="co-bulk-chk" style="margin-right:6px;accent-color:var(--coral)" '+(coBulkSel.has(z.id)?"checked":"")+'>':'';
   d.innerHTML='<div class="t">'+bulkChk+'<b class="cond">'+esc(z.name)+hzBadge+coBadge+'</b>'
     +'<span class="tag">'+esc(z.shape.type)+' · '+cue+'</span>'
-    +'<button class="del" title="delete">✕</button></div>';
-  d.querySelector(".del").onclick=(ev)=>{ ev.stopPropagation(); zones.splice(i,1); if(sel===i)sel=-1; else if(sel>i)sel--; render(); refreshProps(); };
+    +'<button class="del sf-more" title="Move, copy, or delete">⋯</button></div>';
+  d.querySelector(".del").onclick=(ev)=>{ ev.stopPropagation(); openZoneMenu(ev.currentTarget,z.id); };
   const bulkChkEl=d.querySelector(".co-bulk-chk");
   if(bulkChkEl) bulkChkEl.onclick=(ev)=>{ ev.stopPropagation();
     if(bulkChkEl.checked) coBulkSel.add(z.id); else coBulkSel.delete(z.id); };
@@ -2178,6 +2212,48 @@ function reassignZoneFolder(zoneId,folderId){
   if(!z) return;
   z.folderId=folderId;
   render();
+}
+// Per-stop "⋯" menu (Copy/Move to…/Delete) — replaces the old bare "✕"
+// delete-only button, mirroring the same sf-menu pattern already used for
+// stop folders and every other tree in this app. Looks the zone up by id
+// (not the row's index i) at click time, since indices shift on delete/
+// reorder and the menu can stay open across a re-render.
+function openZoneMenu(anchorBtn,zoneId){
+  closeStopFolderMenus();
+  const menu=document.createElement("div"); menu.className="sf-menu";
+  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
+  mkItem("✎ Rename",()=>renameZone(zoneId));
+  mkItem("⧉ Copy",()=>copyZone(zoneId));
+  mkItem("📁 Move to…",()=>{ closeStopFolderMenus(); openStopFolderPicker(anchorBtn,null,folderId=>reassignZoneFolder(zoneId,folderId)); });
+  mkItem("🗑 Delete",()=>deleteZoneById(zoneId));
+  anchorBtn.parentElement.appendChild(menu);
+  positionMenuSmart(menu);
+}
+// Same rename+re-slug logic as the pName property-panel binding
+// (bindProp("pName",...)) — kept consistent so a stop's id changes the same
+// way regardless of which UI renamed it.
+function renameZone(zoneId){
+  const z=zones.find(zz=>zz.id===zoneId); if(!z) return;
+  const name=(prompt("Rename stop:",z.name)||"").trim();
+  if(!name||name===z.name) return;
+  z.name=name; z.id=uniqueZoneId(slug(z.name),z);
+  if(document.getElementById("pName")&&sel>=0&&zones[sel]===z) document.getElementById("pName").value=z.name;
+  render(); refreshProps();
+}
+function copyZone(zoneId){
+  const idx=zones.findIndex(z=>z.id===zoneId); if(idx<0) return;
+  const copy=JSON.parse(JSON.stringify(zones[idx])); // deep clone every field (shape, say, audio, pipeline, codeObjects, ...)
+  copy.id=uniqueZoneId(slug(copy.name+"-copy"));
+  copy.name=copy.name+" (copy)";
+  zones.splice(idx+1,0,copy);
+  render(); refreshProps();
+  selectZone(zones.findIndex(z=>z.id===copy.id));
+}
+function deleteZoneById(zoneId){
+  const idx=zones.findIndex(z=>z.id===zoneId); if(idx<0) return;
+  zones.splice(idx,1);
+  if(sel===idx) sel=-1; else if(sel>idx) sel--;
+  render(); refreshProps();
 }
 function collectNodeZoneIds(node){
   let ids=node.zones.map(i=>zones[i].id);
@@ -2240,6 +2316,15 @@ function buildStopFolderRow(node,depth){
   return wrap;
 }
 function closeStopFolderMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>m.remove()); }
+// .sf-menu always opens downward (top:100%) by default — for a stop/folder
+// row near the bottom of the (fixed-height, non-page-scrolling) panel, that
+// overflows off-screen with no way to reach it at all. Flip it to open
+// upward instead whenever there isn't room below — same idea already fixed
+// for wheel-picker.js's popovers.
+function positionMenuSmart(menu){
+  const r=menu.getBoundingClientRect();
+  if(r.bottom>window.innerHeight){ menu.style.top="auto"; menu.style.bottom="100%"; }
+}
 document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")) closeStopFolderMenus(); });
 function openStopFolderMenu(anchorBtn,node){
   closeStopFolderMenus();
@@ -2255,6 +2340,7 @@ function openStopFolderMenu(anchorBtn,node){
     mkItem("🗑 Delete",()=>deleteStopFolder(node));
   }
   anchorBtn.parentElement.appendChild(menu);
+  positionMenuSmart(menu);
 }
 function openStopFolderPicker(anchorBtn,excludeNode,onPick){
   closeStopFolderMenus();
@@ -2269,6 +2355,7 @@ function openStopFolderPicker(anchorBtn,excludeNode,onPick){
     menu.appendChild(b);
   });
   anchorBtn.parentElement.appendChild(menu);
+  positionMenuSmart(menu);
 }
 async function createStopFolder(parentId){
   const pid=afProjectId(); if(!pid){ alert("Save/publish this tour first."); return; }
@@ -2386,6 +2473,12 @@ function zoneToEngine(z){
   // from Studio's audio_folder) — the live engine never reads this, only
   // exported so reloading a published bundle restores the same tree layout.
   if(z.folderId) zo.folderId=z.folderId;
+  // Editor-only — whether this stop is snapped onto the project's Walking
+  // Path (constrains dragging to slide along it). The live engine doesn't
+  // need this (map-matching runs against the visitor's own position, not
+  // per-stop state) — only exported so a publish+reload doesn't silently
+  // drop every stop's snapped-to-path status.
+  if(z.onPath) zo.onPath=true;
   if(isPath){
     zo.path=s.coords.map(LL);
     zo.movementMode=z.movementMode||"walk";
@@ -2456,6 +2549,7 @@ function engineToZone(zo){
   // Stop tree folder — resolved against the live folder list at render time
   // (loadStopFolders/drawList), so a stale/deleted id just falls back to root.
   z.folderId=zo.folderId||null;
+  z.onPath=!!zo.onPath;
   if(isPath){
     z.movementMode=zo.movementMode||"walk";
     z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
@@ -2536,7 +2630,22 @@ async function loadFromPlatform(id){
     document.getElementById("importBtn").click();
     document.getElementById("projCrumb").textContent=b.name||id;
     await Promise.all([_appsLoaded,_clientsLoaded]);
-    if(b.appId){ document.getElementById("appSel").value=b.appId; updateClientCrumb(); }
+    let realAppId=b.appId||null;
+    if(!realAppId){
+      // Known drift (see project memory): a bundle published before its
+      // appId field was tracked — or otherwise missing it — leaves #appSel
+      // unset even though the project ROW itself always has the real
+      // appId. This silently broke anything keyed by app (not just orgId),
+      // which the old audio/library trees never were but Walking Paths
+      // now are — GET /api/walking-path needs the real appId, not this
+      // bundle's possibly-stale/absent copy of it. Fall back to the
+      // authoritative project list.
+      try{
+        const pr=await fetch("/api/projects"+(b.orgId?"?org="+encodeURIComponent(b.orgId):""),{headers:{authorization:"Bearer "+getToken()}});
+        if(pr.ok){ const pj=await pr.json(); const match=(pj.projects||[]).find(p=>p.id===id); if(match&&match.appId) realAppId=match.appId; }
+      }catch(e){}
+    }
+    if(realAppId){ document.getElementById("appSel").value=realAppId; updateClientCrumb(); }
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
@@ -3057,7 +3166,7 @@ const SimFencer={state:{},onEvent:null,
     (zone.triggers||[]).forEach(t=>{
       if(t.fires_on===kind&&(!t.layer||t.layer===layer.kind))this._deliver(zone,t,subj);});},
   _deliver(zone,t,subj="visitor"){
-    if(t.say){if(!zone.audioUrl&&simSoundOn)try{const u=new SpeechSynthesisUtterance(t.say);speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
+    if(t.say){if(!zone.audioUrl&&simSoundOn) simTTS(t.say);
       if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
   reset(){this.state={};}
 };
