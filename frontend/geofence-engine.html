@@ -284,6 +284,16 @@ const TUNING = {
 let BUNDLE = { project: null, name: "", zones: [], ref: [0, 0] };
 let _activeLinkToken = null;  // set when visitor arrives via walk link — passed with analytics events
 let _activeLinkGuide = null;  // guide ID from walk link — used to filter live stops to this guide only
+let WALKING_PATH_LATLON = null; // [[lat,lon],...] for the project's selected Walking Path, once fetched (null = not path-driven)
+const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of the path; farther, use the raw/smoothed fix as-is
+async function loadWalkingPath(b){
+  WALKING_PATH_LATLON = null;
+  if(!b || !b.walkingPathId) return;
+  try{
+    const r = await fetch('/api/walking-path/'+b.walkingPathId,{cache:'no-store'});
+    if(r.ok){ const j = await r.json(); WALKING_PATH_LATLON = (j.points||[]).map(pt=>[pt[1],pt[0]]); } // stored [lon,lat] -> this engine's own [lat,lon] convention
+  }catch(e){}
+}
 
 /* ============================ GEO MATH ============================ */
 const Geo = {
@@ -326,6 +336,35 @@ const Geo = {
             const crossed = ((d1>0)!==(d2>0)) && ((d3>0)!==(d4>0));
             return { crossed, side: d2<0 ? "L":"R" }; }
 };
+
+// Map-matching: snaps a GPS fix onto the project's recorded Walking Path
+// (nearest-point-on-polyline, in the same local planar XY frame as every
+// other geometry calc in this engine) for more accurate trigger detection
+// on path-driven tours. Falls back to the raw fix untouched when the
+// nearest point on the path is farther than maxSnapM (confirmed: a visitor
+// who's genuinely left the route — a break, a wrong turn — should not be
+// force-snapped back onto it). Mirrored verbatim (same logic and
+// conventions) in geofence-sim.html and fence-editor.html's own SimFencer
+// test simulator — see project memory's "verbatim mirror" note; a fix here
+// that isn't applied to both would make in-editor testing silently diverge
+// from real visitor behavior.
+function mapMatch(latLon, pathLatLon, ref, maxSnapM){
+  if(!pathLatLon || pathLatLon.length<2) return latLon;
+  const P=Geo.toXY(latLon,ref);
+  let best=null, bestD=Infinity;
+  for(let i=1;i<pathLatLon.length;i++){
+    const A=Geo.toXY(pathLatLon[i-1],ref), B=Geo.toXY(pathLatLon[i],ref);
+    const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
+    const c2=vx*vx+vy*vy;
+    let t = c2>0 ? (vx*wx+vy*wy)/c2 : 0;
+    t=Math.max(0,Math.min(1,t));
+    const qx=A.x+t*vx, qy=A.y+t*vy;
+    const d=Math.hypot(P.x-qx,P.y-qy);
+    if(d<bestD){ bestD=d; best={x:qx,y:qy}; }
+  }
+  if(!best || bestD>maxSnapM) return latLon;
+  return [ ref[0]+best.y/Geo.mPerDegLat, ref[1]+best.x/Geo.mPerDegLon(ref[0]) ];
+}
 
 /* ==================== MOVING (PATH) ZONE POSITION ==================
    A path zone's center isn't fixed — it travels along zone.path at
@@ -429,6 +468,10 @@ const Geofencer = {
   },
 
   update(p, prev, now){
+    if(WALKING_PATH_LATLON){
+      const m=mapMatch([p.lat,p.lon], WALKING_PATH_LATLON, BUNDLE.ref, WALKING_PATH_SNAP_M);
+      if(m[0]!==p.lat || m[1]!==p.lon) p={...p, lat:m[0], lon:m[1]};
+    }
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{
       if(!zone.layers) return; // path (moving) zones with no triggers configured yet still have no layers to evaluate
@@ -474,6 +517,15 @@ const Geofencer = {
               st.delivered["dwell"+t.delayS]=1; this._deliver(zone,t,{});
             }
           });
+          // The pipeline system's trigger.dwell block needs a periodic tick
+          // while inside — PipelineRuntime.tick() was previously only ever
+          // called on enter/exit, so evt.dwellSeconds was always undefined
+          // and any dwell-triggered pipeline could never fire, in the
+          // editor's simulator or here. Scoped to the "target" layer (the
+          // one that represents actually being at the stop, not the outer
+          // approach ring) so a zone with both layers doesn't double-tick
+          // per fix. tick() no-ops safely if this zone has no pipeline.
+          if(layer.kind==="target") PipelineRuntime.tick(zone.id, null, p, { dwellSeconds:(now-st.t0)/1000 });
           if(d>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer
             const dur=(now-st.t0)/1000;
             const flick = st.move<TUNING.MOVE_MIN_M && dur<TUNING.SHORT_VISIT_S;
@@ -1398,7 +1450,16 @@ Geofencer.onEvent=async(e)=>{
        if(e.info.flick) HUD.log('ev-flick','       ^ flicker (barely moved) — ignore');
        Analytics.spatial('EXIT', e.zone); }
   else if(e.kind==='say'){ HUD.log(e.warn?'ev-warn':'ev-say','SAY    "'+e.text+'"'+(e.warn?' [approx]':''));
-       Analytics.delivery(e.zone); Analytics.bearing(e.zone);
+       // This event fires whenever a trigger has t.say text, even when
+       // zone.audioUrl replaces the actual TTS call with a recorded clip
+       // (see Geofencer._deliver's own "recorded voice replaces TTS when
+       // present" comment) — only count the delivery here when TTS is what
+       // actually played. When audioUrl is set, SpatialVoice.playZone()
+       // fires its own Analytics.delivery()/bearing() once the clip is
+       // confirmed to have actually started; counting both here AND there
+       // double-counted every stop authored with both a say line and a
+       // recorded clip (a normal, expected authoring pattern).
+       if(!e.zone.audioUrl){ Analytics.delivery(e.zone); Analytics.bearing(e.zone); }
        const wrap=document.querySelector('.wrap');
        if(wrap){ wrap.style.transition='none'; wrap.style.boxShadow='inset 0 0 0 5px #ff6a3d';
          setTimeout(()=>{ wrap.style.transition='box-shadow .6s ease-out';
@@ -1816,6 +1877,7 @@ EngineKokoro.tryLoad();
       try{ localStorage.removeItem(LKEY); }catch(_){}
       HUD.log('ev-warn','no stops published for this project yet'); return; }
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
+    loadWalkingPath(b);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(!HUD.pos) MapView.recenter(b.ref);
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
@@ -1832,6 +1894,7 @@ EngineKokoro.tryLoad();
     let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
     if(cached){ try{ const b=JSON.parse(cached);
       BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
+      loadWalkingPath(b);
       if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
       if(!HUD.pos) MapView.recenter(b.ref);
       if(document.getElementById('simZones')) buildSimZones();

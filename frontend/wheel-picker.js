@@ -215,9 +215,14 @@ function attachTime(inputEl, opts){
     let h24 = 9, mi = 0;
     const existing = /^(\d{1,2}):(\d{2})/.exec(inputEl.value || "");
     if (existing){ h24 = Number(existing[1]); mi = Number(existing[2]); }
+    // Round minutes to the nearest step BEFORE deriving ap/h12 from h24 — a
+    // value like :58 with a 15-minute step rounds up to 60, which needs to
+    // roll into the next hour, not wrap back to :00 in the same hour (that
+    // silently picked a time an hour earlier than the one being reopened).
+    mi = Math.round(mi / minuteStep) * minuteStep;
+    if (mi >= 60) { mi = 0; h24 = (h24 + 1) % 24; }
     let ap = h24 >= 12 ? "PM" : "AM";
     let h12 = h24 % 12 || 12;
-    mi = Math.round(mi / minuteStep) * minuteStep % 60;
 
     openPopover(inputEl, (pop, close)=>{
       const cols = document.createElement("div"); cols.className = "wp-cols";

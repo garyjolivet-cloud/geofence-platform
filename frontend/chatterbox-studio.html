@@ -683,6 +683,17 @@ function copySelectedLines(remove){
   const body=document.getElementById("scriptBody");
   const orderedDivs=[...body.children].filter(d=>selectedLineDivs.has(d));
   scriptClipboard=extractLinesData(orderedDivs);
+  if(!remove){
+    // Copy (not Cut): a pasted copy must NOT share the same audioClipId/
+    // audioUrl as the original — both spans would end up "generated" and
+    // pointing at the one real clip, and discarding either one (which
+    // deletes the actual server-side file) would silently break the other
+    // with no error anywhere. Cut is a move, not a duplicate, so it's fine
+    // to carry the reference forward there — only one copy of the line
+    // ever exists at a time. A copied line pastes in as tagged-but-not-
+    // generated, same as any newly re-tagged text.
+    scriptClipboard.assignments.forEach(a=>{ a.audioUrl=null; a.audioClipId=null; a.generatedText=null; });
+  }
   try{ localStorage.setItem(SCRIPT_CLIPBOARD_KEY,JSON.stringify(scriptClipboard)); }catch(e){}
   if(remove){
     orderedDivs.forEach(div=>{
@@ -1263,7 +1274,10 @@ async function saveScript(forceAs){
     if(!r.ok) throw new Error(j.error||r.statusText);
     openScriptId=j.id; openScriptName=j.name||name;
     updateScriptButtons();
-    if(audioTree){ await audioTree.refresh(); audioTree.revealFolder("project",j.folderId); }
+    // Fire-and-forget, same as the PATCH branch above and generateRun()'s
+    // own tree refresh — the script is already saved at this point, so a
+    // refresh hiccup must never report back as "Save failed."
+    if(audioTree) audioTree.refresh().then(()=>audioTree.revealFolder("project",j.folderId)).catch(()=>{});
   }catch(e){ alert("Save failed: "+e.message); }
 }
 async function openScript(script){

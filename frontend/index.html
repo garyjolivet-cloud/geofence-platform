@@ -200,6 +200,13 @@
 const mainEl=document.getElementById("main");
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+// For a value embedded inside a single-quoted JS string literal within an
+// inline onclick="..." attribute — esc() alone doesn't help there: the
+// browser HTML-decodes the attribute value (turning &#39; back into ')
+// before the JS parser ever sees it, so an apostrophe in e.g. a client/
+// project name still terminates the string early and throws, silently
+// breaking that button. This escapes for the JS-string context instead.
+function escJs(s){ return String(s==null?"":s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/\n/g,"\\n").replace(/\r/g,""); }
 function when(iso){ if(!iso)return ""; const d=new Date(iso); if(isNaN(d))return "";
   const days=Math.floor((Date.now()-d)/86400000);
   return days<=0?"today":days===1?"yesterday":days+" days ago"; }
@@ -216,7 +223,7 @@ function tourCard(p, appId){
   return `<div class="tour">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
       <div class="tour-name">${esc(p.name||p.id)}</div>
-      <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto">${badge}<button onclick="deleteProject('${id}','${esc(p.name||p.id)}')" title="Delete this project" style="background:none;border:none;color:rgba(255,47,78,.5);font-size:14px;cursor:pointer;padding:0 2px;line-height:1">✕</button></div>
+      <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto">${badge}<button onclick="deleteProject('${id}','${escJs(p.name||p.id)}')" title="Delete this project" style="background:none;border:none;color:rgba(255,47,78,.5);font-size:14px;cursor:pointer;padding:0 2px;line-height:1">✕</button></div>
     </div>
     <div class="tour-meta">${meta}</div>
     <div class="tour-btns">
@@ -228,7 +235,7 @@ function tourCard(p, appId){
 }
 
 function addTourTile(appId){
-  return `<div class="tour add" onclick="newTour('${esc(appId||"")}')"><span>+ New tour</span></div>`;
+  return `<div class="tour add" onclick="newTour('${escJs(appId||"")}')"><span>+ New tour</span></div>`;
 }
 
 function clientBlock(app, tours){
@@ -237,8 +244,8 @@ function clientBlock(app, tours){
   const toursHtml=tours.map(p=>tourCard(p,app.id)).join("")+addTourTile(app.id);
   // Combine/Merge only make sense for a real workspace, not the synthetic
   // "Unsorted" bucket (app.id===null) used as a safety net above.
-  const combineBtn=app.id?`<button onclick="openCombine('${esc(app.id)}','${esc(app.name)}')">Combine</button>`:'';
-  const mergeBtn=app.id?`<button onclick="openMergeWorkspace('${esc(app.id)}','${esc(app.name)}')">Merge</button>`:'';
+  const combineBtn=app.id?`<button onclick="openCombine('${escJs(app.id)}','${escJs(app.name)}')">Combine</button>`:'';
+  const mergeBtn=app.id?`<button onclick="openMergeWorkspace('${escJs(app.id)}','${escJs(app.name)}')">Merge</button>`:'';
   return `<div class="client">
     <div class="client-head">
       <div class="client-icon">${icon}</div>
@@ -250,8 +257,8 @@ function clientBlock(app, tours){
         <a href="/share?asClient=${esc(app.orgId||app.id)}" style="display:inline-block;text-decoration:none">Share</a>
         ${combineBtn}
         ${mergeBtn}
-        <button onclick="renameClient('${esc(app.id)}','${esc(app.name)}')">Rename</button>
-        <button onclick="deleteClient('${esc(app.id)}','${esc(app.name)}')" style="color:rgba(255,47,78,.5);border-color:rgba(255,47,78,.2)">✕</button>
+        <button onclick="renameClient('${escJs(app.id)}','${escJs(app.name)}')">Rename</button>
+        <button onclick="deleteClient('${escJs(app.id)}','${escJs(app.name)}')" style="color:rgba(255,47,78,.5);border-color:rgba(255,47,78,.2)">✕</button>
       </div>
     </div>
     <div class="tours">${toursHtml}</div>

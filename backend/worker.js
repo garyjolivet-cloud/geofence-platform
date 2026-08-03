@@ -123,6 +123,11 @@ async function audioScopeAuthOk(env, A, scope, scopeId) {
   }
   return false;
 }
+// Walking paths are scoped directly to an app (workspace) id, not resolved
+// from a project like audioScopeAuthOk — appId is already the direct key.
+async function appScopeAuthOk(env, A, appId) {
+  return scopeOk(A, "audio", appId) || scopeOk(A, "publish", appId);
+}
 // Would setting `folderId`'s parent to `newParentId` create a cycle? Walks
 // newParentId's own parent chain looking for folderId.
 async function wouldCreateCycle(env, folderId, newParentId) {
@@ -299,7 +304,7 @@ async function auth(request, env) {
     const hash = await sha256hex(tok);
     const row = await env.DB.prepare("SELECT id,appId,scopes FROM api_key WHERE keyHash=? AND revokedAt IS NULL").bind(hash).first();
     if (row) {
-      env.DB.prepare("UPDATE api_key SET lastUsedAt=? WHERE id=?").bind(new Date().toISOString(), row.id).run().catch(() => {});
+      await env.DB.prepare("UPDATE api_key SET lastUsedAt=? WHERE id=?").bind(new Date().toISOString(), row.id).run().catch(() => {});
       return { master: false, appId: row.appId, scopes: row.scopes || "", keyId: row.id };
     }
     const sess = await env.DB.prepare(
@@ -466,11 +471,14 @@ export default {
       await cleanupLiveZones(env);
       return;
     }
-    // Every hour: update real-time cache for Groq context
-    await scrapeWeather(env);
-    // At 15:00 UTC (8am MST): also save daily snow snapshot
+    // At 15:00 UTC (8am MST): saveSnowSnapshot() already calls scrapeWeather()
+    // internally — calling it again here would double-fetch the site and
+    // double-insert into weather_cache for the same reading.
     if (event.cron === "0 15 * * *") {
       await saveSnowSnapshot(env);
+    } else {
+      // Every other hour: just update the real-time cache for Groq context
+      await scrapeWeather(env);
     }
   }
 };
@@ -521,7 +529,7 @@ async function api(request, env, url) {
       return json({ error: "this account isn't part of this client" }, 403, AC);
     }
     const token = await createSession(env, user.id, request.headers.get("cf-connecting-ip") || "");
-    env.DB.prepare("UPDATE user_account SET last_login_at=? WHERE id=?").bind(new Date().toISOString(), user.id).run().catch(() => {});
+    await env.DB.prepare("UPDATE user_account SET last_login_at=? WHERE id=?").bind(new Date().toISOString(), user.id).run().catch(() => {});
     return json({ ok: true, token, user: { id: user.id, email: user.email, name: user.name, role: user.role } }, 200, AC);
   }
 
@@ -808,9 +816,7 @@ async function api(request, env, url) {
     } else {
       const { results: projs } = await env.DB.prepare("SELECT id FROM project WHERE orgId=?").bind(cid).all();
       for (const p of (projs || [])) {
-        await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(p.id).run();
-        await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(p.id).run();
-        await env.DB.prepare("DELETE FROM project WHERE id=?").bind(p.id).run();
+        await deleteProjectRows(env, p.id);
       }
       await env.DB.prepare("DELETE FROM user_session WHERE user_id IN (SELECT id FROM user_account WHERE org_id=?)").bind(cid).run();
       await env.DB.prepare("DELETE FROM user_account WHERE org_id=?").bind(cid).run();
@@ -890,6 +896,7 @@ async function api(request, env, url) {
       if (chk) return json({ error: "remove or reassign this app's projects first, or use cascade=true" }, 409, AC);
     }
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
+    await env.DB.prepare("DELETE FROM walking_path WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
     return json({ ok: true, deleted: aid }, 200, AC);
@@ -2294,6 +2301,76 @@ async function api(request, env, url) {
       .bind(name, folderId, scriptJson, new Date().toISOString(), scriptId).run();
     await logAudit(env, request, A, "chatterbox.script.update", scriptId);
     return json({ id: scriptId, name, folderId }, 200, AC);
+  }
+
+  // --- Walking paths: a recorded, filtered GPS trail (Field Recorder), saved
+  // at the app (workspace) level so one path is reusable across every
+  // project in that workspace — not project-scoped like every other tree in
+  // this app. Flat list, no folders (confirmed with the user). The list
+  // endpoint omits points_json (same "leave the heavy payload out of the
+  // list" convention as studio_session/chatterbox_script); GET by id is
+  // public/no-auth since the anonymous visitor-facing engine needs to fetch
+  // a published project's path with no session token, same as the bundle
+  // read itself. ---
+  if (path === "/api/walking-path" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const appId = (b.appId || "").trim(), name = (b.name || "").trim();
+    if (!appId || !name) return json({ error: "appId and name required" }, 400, AC);
+    if (!Array.isArray(b.points) || b.points.length < 2) return json({ error: "points (array of [lon,lat]) required" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO walking_path (id,app_id,name,points_json,distance_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
+    ).bind(id, appId, name, JSON.stringify(b.points), b.distanceM || 0, now, now).run();
+    await logAudit(env, request, A, "walkingpath.create", appId + "/" + name);
+    return json({ id, name }, 201, AC);
+  }
+
+  if (path === "/api/walking-path" && method === "GET") {
+    const A = await auth(request, env);
+    const appId = (url.searchParams.get("appId") || "").trim();
+    if (!appId) return json({ error: "appId required" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,name,distance_m AS distanceM,updated_at AS updatedAt FROM walking_path WHERE app_id=? ORDER BY name"
+    ).bind(appId).all();
+    return json({ paths: results || [] }, 200, AC);
+  }
+
+  const mWalkingPath = path.match(/^\/api\/walking-path\/([^/]+)$/);
+  if (mWalkingPath && (method === "GET" || method === "PATCH" || method === "DELETE")) {
+    const pathId = decodeURIComponent(mWalkingPath[1]);
+    const row = await env.DB.prepare(
+      "SELECT app_id AS appId,name,points_json AS pointsJson,distance_m AS distanceM FROM walking_path WHERE id=?"
+    ).bind(pathId).first();
+    if (!row) return json({ error: "walking path not found" }, 404, AC);
+
+    if (method === "GET") {
+      // Public — the live engine (no visitor session) needs to fetch this
+      // for a published, path-driven project.
+      let points;
+      try { points = JSON.parse(row.pointsJson); } catch (e) { return json({ error: "stored path is corrupt" }, 500, AC); }
+      return json({ id: pathId, name: row.name, appId: row.appId, distanceM: row.distanceM, points }, 200, AC);
+    }
+
+    const A = await auth(request, env);
+    if (!(await appScopeAuthOk(env, A, row.appId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM walking_path WHERE id=?").bind(pathId).run();
+      await logAudit(env, request, A, "walkingpath.delete", pathId);
+      return json({ ok: true, deleted: pathId }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    if (!b.name || !b.name.trim()) return json({ error: "invalid name" }, 400, AC);
+    const name = b.name.trim();
+    await env.DB.prepare("UPDATE walking_path SET name=?, updated_at=? WHERE id=?")
+      .bind(name, new Date().toISOString(), pathId).run();
+    await logAudit(env, request, A, "walkingpath.update", pathId);
+    return json({ id: pathId, name }, 200, AC);
   }
 
   // --- Stop folders: organize a project's map stops (zones) into a tree

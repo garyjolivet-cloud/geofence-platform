@@ -269,6 +269,11 @@
 const $=id=>document.getElementById(id);
 const state=$("state");
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+// See index.html's escJs() for why this is a separate function — esc()
+// alone doesn't protect a value embedded inside a single-quoted JS string
+// literal within an inline onclick="..." attribute (the browser HTML-
+// decodes &#39; back to ' before the JS parser sees it).
+function escJs(s){return String(s==null?"":s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/\n/g,"\\n").replace(/\r/g,"");}
 function tok(){ return $("tok").value || sessionStorage.getItem("gp.admin") || localStorage.getItem("gp.session") || ""; }
 
 let activeTab = "team";
@@ -592,9 +597,9 @@ async function loadTeam() {
           <td><span class="role-badge ${roleClass}">${esc(u.role)}</span></td>
           <td style="color:var(--fog);font-size:13px">${lastLogin}</td>
           <td style="text-align:right;white-space:nowrap">
-            ${(u.role==='guide'||u.role==='front_desk')?`<button class="sm" onclick="openAssign('${esc(u.id)}','${esc(u.name||u.email)}','${esc(u.role)}')" style="margin-right:6px">Assign projects</button>`:''}
-            <button class="sm" onclick="resendInvite('${esc(u.id)}','${esc(u.email)}')" title="Resend invite" style="margin-right:6px">Resend invite</button>
-            <button class="sm" style="color:var(--hazard);border-color:rgba(255,47,78,.3)" onclick="removeUser('${esc(u.id)}','${esc(u.name||u.email)}')" title="Remove">Remove</button>
+            ${(u.role==='guide'||u.role==='front_desk')?`<button class="sm" onclick="openAssign('${escJs(u.id)}','${escJs(u.name||u.email)}','${escJs(u.role)}')" style="margin-right:6px">Assign projects</button>`:''}
+            <button class="sm" onclick="resendInvite('${escJs(u.id)}','${escJs(u.email)}')" title="Resend invite" style="margin-right:6px">Resend invite</button>
+            <button class="sm" style="color:var(--hazard);border-color:rgba(255,47,78,.3)" onclick="removeUser('${escJs(u.id)}','${escJs(u.name||u.email)}')" title="Remove">Remove</button>
           </td>
         </tr>`
       );
@@ -959,7 +964,7 @@ async function loadLinks(){
           <td style="color:var(--fog);font-size:13px">${new Date(lnk.created_at).toLocaleString()}</td>
           <td style="font-size:13px;color:${expired?'var(--hazard)':'var(--ice)'}">${exp}${expired?' (expired)':''}</td>
           <td><button class="sm" onclick="navigator.clipboard.writeText('${fullUrl.replace(/'/g,"\\'")}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button></td>
-          <td><button class="sm" style="color:var(--hazard);border-color:rgba(255,47,78,.3)" onclick="revokeLink('${esc(lnk.token)}')">Revoke</button></td>
+          <td><button class="sm" style="color:var(--hazard);border-color:rgba(255,47,78,.3)" onclick="revokeLink('${escJs(lnk.token)}')">Revoke</button></td>
         </tr>`
       );
     });

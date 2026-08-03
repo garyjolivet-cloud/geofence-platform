@@ -202,6 +202,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     <div class="mode-toggle">
       <button id="btnModePers" class="mode-btn sel" onclick="setMode('persistent')">Persistent</button>
       <button id="btnModeLive" class="mode-btn"     onclick="setMode('live')">Live ⬤</button>
+      <button id="btnModePath" class="mode-btn"     onclick="setMode('path')">🥾 Path</button>
     </div>
     <div id="activityRow">
       <button id="actWalk"  class="act-btn sel" onclick="setActivity('walk')">🚶</button>
@@ -217,6 +218,11 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
       <button class="fbt" id="btnRec"  disabled>⏺ Record</button>
       <button class="fbt" id="btnLive" disabled>🎙 Start Stop</button>
       <button class="fbt" id="btnCodeObj">🧩 Code</button>
+    </div>
+    <div id="pathBtns" style="display:none;align-items:center;gap:8px">
+      <button class="fbt" id="btnPathToggle" onclick="togglePathRecording()">🥾 Start Walking</button>
+      <div id="pathStats" class="hint" style="flex:1;text-align:center"></div>
+      <button class="fbt" id="btnPathSave" style="display:none" onclick="savePathRecording()">💾 Save Path</button>
     </div>
     <div id="status">Starting up…</div>
   </div>
@@ -357,6 +363,10 @@ let headingBuffer = [];
 let liveMode      = false;
 let liveActivity  = "walk";
 let liveRecState  = "idle"; // "idle" | "recording" | "uploading"
+let pathMode      = false;  // "Walking Path" recording mode — separate from liveMode, mutually exclusive with it
+let pathRecording = false;
+let pathPoints    = [];     // {lat,lon,acc,t} — buffered in memory only; IndexedDB/network untouched until Save
+let currentAppId  = null;   // resolved alongside projectName below — needed to scope a saved walking path
 let liveStops     = [];     // successfully published live stops (in-memory for this session)
 let currentLiveStop = null; // the stop object currently mid-recording in Live mode, if any — lets
                              // the guide attach a code object before "Stop Recording" finalizes it
@@ -375,7 +385,11 @@ function circularMean(degs){
   return Math.round(((Math.atan2(sin, cos) * 180 / Math.PI) + 360) % 360);
 }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
-function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;"); }
+function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+// See index.html's escJs() for why this is separate from esc() — needed
+// wherever a value is embedded inside a single-quoted JS string literal
+// within an inline onclick="..." attribute.
+function escJs(s){ return String(s==null?"":s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/\n/g,"\\n").replace(/\r/g,""); }
 function fmtTime12h(t){
   const m=/^(\d{1,2}):(\d{2})/.exec(t||""); if(!m) return "";
   let h=Number(m[1]); const ap=h>=12?"PM":"AM"; h=h%12||12;
@@ -549,8 +563,8 @@ async function renderSessionsList(){
       <div class="sc-acts">
         <a class="sc-open" href="/field?project=${esc(s.projId)}">Open</a>
         <button class="sc-open" onclick="toggleQr(this,'${location.origin}/field?project=${esc(s.projId)}','.sess-card')">QR</button>
-        ${hasPub?`<button class="sc-pub" onclick="pubFromList('${esc(s.projId)}','${esc(s.name)}')">✓ Pub</button>`:''}
-        <button class="sc-del" onclick="deleteSession('${esc(s.projId)}','${esc(s.name)}')" style="background:none;border:1px solid rgba(255,47,78,.35);color:rgba(255,47,78,.6);border-radius:9px;padding:8px 12px;cursor:pointer;font-family:'Barlow Condensed';font-size:13px;font-weight:600">✕</button>
+        ${hasPub?`<button class="sc-pub" onclick="pubFromList('${escJs(s.projId)}','${escJs(s.name)}')">✓ Pub</button>`:''}
+        <button class="sc-del" onclick="deleteSession('${escJs(s.projId)}','${escJs(s.name)}')" style="background:none;border:1px solid rgba(255,47,78,.35);color:rgba(255,47,78,.6);border-radius:9px;padding:8px 12px;cursor:pointer;font-family:'Barlow Condensed';font-size:13px;font-weight:600">✕</button>
       </div>
     </div>`;
   }).join("");
@@ -847,7 +861,7 @@ function renderStopList(){
   panel.innerHTML = allItems.map(s => {
     const audioUrl = s._live || s._published ? s.audioUrl : clips.find(c=>c.id===s.clipId&&c.audioUrl)?.audioUrl;
     const playBtn  = audioUrl
-      ? `<button class="sp-play" onclick="playStopAudio('${esc(audioUrl)}')">▶</button>`
+      ? `<button class="sp-play" onclick="playStopAudio('${escJs(audioUrl)}')">▶</button>`
       : "";
     const coBadge = (s.codeObjects && s.codeObjects.length)
       ? `<span title="${s.codeObjects.length} code object${s.codeObjects.length===1?"":"s"} attached">🧩${s.codeObjects.length>1?"×"+s.codeObjects.length:""}</span>`
@@ -855,7 +869,7 @@ function renderStopList(){
     // Only locally-held stops (not yet finalized live, not already published)
     // are editable here — those go through openCodeObjectPickerForId().
     const coBtn = (!s._live && !s._published)
-      ? `<button class="sp-play" title="Code objects" onclick="openCodeObjectPickerForId('${esc(s.id)}')">🧩</button>`
+      ? `<button class="sp-play" title="Code objects" onclick="openCodeObjectPickerForId('${escJs(s.id)}')">🧩</button>`
       : "";
     if(s._live){
       const rem  = Math.max(0, s.expiresAt - now);
@@ -969,6 +983,80 @@ function haversineM(lat1,lon1,lat2,lon2){
   return 2*R*Math.asin(Math.sqrt(a));
 }
 
+/* ============================================================
+   Walking Path recording — a continuous GPS trail (distinct from the
+   Mark-Stop/Record persistent+live modes above), later saved to the
+   app-level walking-path store for the Fence Editor to snap/slide stops
+   onto and the live engine to map-match against. Points buffer in plain
+   memory (not IndexedDB) — a multi-km walk is at most a few thousand
+   points, and the DB/network are only touched once, at Save.
+   ============================================================ */
+function togglePathRecording(){
+  if(pathRecording){
+    pathRecording = false;
+    document.getElementById("btnPathToggle").textContent = "🥾 Start Walking";
+    document.getElementById("btnPathSave").style.display = pathPoints.length>=2 ? "" : "none";
+    setStatus(pathPoints.length+" point(s) recorded — review and save, or start again");
+  } else {
+    pathPoints = [];
+    pathRecording = true;
+    document.getElementById("btnPathToggle").textContent = "⏹ Stop Walking";
+    document.getElementById("btnPathSave").style.display = "none";
+    updatePathStatsUI();
+    setStatus("Recording walking path…");
+  }
+}
+function pathDistanceM(points){
+  let d=0;
+  for(let i=1;i<points.length;i++) d += haversineM(points[i-1].lat,points[i-1].lon,points[i].lat,points[i].lon);
+  return d;
+}
+function updatePathStatsUI(){
+  const el=document.getElementById("pathStats"); if(!el) return;
+  const km=(pathDistanceM(pathPoints)/1000).toFixed(2);
+  el.textContent=pathPoints.length+" pts · "+km+" km";
+}
+// Drops any point implying a speed faster than humanly possible at walking/
+// hiking pace (default 8 m/s ≈ 29 km/h — generous enough to cover a brisk
+// jog or a downhill running section, well below a real GPS teleport spike).
+// Compares each point against the last KEPT point, not the last raw one, so
+// a single bad fix can't cascade into rejecting everything that follows it.
+function filterImpossibleJumps(points, maxSpeedMps){
+  maxSpeedMps = maxSpeedMps || 8;
+  if(points.length < 2) return points.slice();
+  const kept=[points[0]];
+  for(let i=1;i<points.length;i++){
+    const prev=kept[kept.length-1], cur=points[i];
+    const dt=(cur.t-prev.t)/1000;
+    if(dt<=0){ continue; } // duplicate/out-of-order timestamp — skip rather than divide by zero
+    const speed=haversineM(prev.lat,prev.lon,cur.lat,cur.lon)/dt;
+    if(speed<=maxSpeedMps) kept.push(cur);
+  }
+  return kept;
+}
+async function savePathRecording(){
+  if(pathPoints.length<2){ alert("Not enough points recorded yet."); return; }
+  if(!currentAppId){ alert("Couldn't determine this project's workspace — try reloading the page."); return; }
+  const filtered=filterImpossibleJumps(pathPoints);
+  const droppedCount=pathPoints.length-filtered.length;
+  const distanceM=pathDistanceM(filtered);
+  const name=(prompt("Name this walking path:"+(droppedCount?" ("+droppedCount+" bad point(s) will be filtered out)":""))||"").trim();
+  if(!name) return;
+  try{
+    const r=await fetch("/api/walking-path",{
+      method:"POST",
+      headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({appId:currentAppId, name, points:filtered.map(p=>[p.lon,p.lat]), distanceM})
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    setStatus('Saved walking path "'+name+'" ('+filtered.length+' pts, '+(distanceM/1000).toFixed(2)+' km)');
+    pathPoints=[];
+    document.getElementById("btnPathSave").style.display="none";
+    updatePathStatsUI();
+  }catch(e){ alert("Save failed: "+e.message); }
+}
+
 // Field Recorder was recording-only — no way to hear a stop's audio just by
 // walking near it like the real walk engine does, so a project's own author
 // couldn't verify newly published content without a separate walk-test
@@ -1011,6 +1099,13 @@ function checkProximityAudio(lat, lon){
 
 /* ── mode & activity ────────────────────────────────── */
 function setMode(mode){
+  if(mode === "path"){
+    pathMode = true;
+    liveMode = false;
+    updateModeUI();
+    return;
+  }
+  pathMode = false;
   if(mode === "live"){
     const tok = getToken();
     if(!tok){
@@ -1042,10 +1137,13 @@ function setActivity(act){
 
 function updateModeUI(){
   const isLive = liveMode;
-  document.getElementById("btnModePers").classList.toggle("sel", !isLive);
-  document.getElementById("btnModeLive").classList.toggle("sel",  isLive);
-  document.getElementById("activityRow").classList.toggle("show", isLive);
+  document.getElementById("btnModePers").classList.toggle("sel", !isLive && !pathMode);
+  document.getElementById("btnModeLive").classList.toggle("sel",  isLive && !pathMode);
+  document.getElementById("btnModePath").classList.toggle("sel",  pathMode);
+  document.getElementById("activityRow").classList.toggle("show", isLive && !pathMode);
   // Footer buttons
+  document.getElementById("ftrBtns").style.display  = pathMode ? "none" : "flex";
+  document.getElementById("pathBtns").style.display = pathMode ? "flex" : "none";
   document.getElementById("btnMark").style.display = isLive ? "none" : "flex";
   document.getElementById("btnRec").style.display  = isLive ? "none" : "flex";
   document.getElementById("btnLive").style.display = isLive ? "flex" : "none";
@@ -1080,6 +1178,7 @@ async function initPermissions(){
         headingBuffer.push(heading);
         if(headingBuffer.length > 10) headingBuffer.shift();
       }
+      if(pathRecording){ pathPoints.push({lat,lon,acc,t:pos.timestamp}); updatePathStatsUI(); }
       document.getElementById("btnMark").disabled = false;
       refreshMap();
       // refreshPublishedZones() only ever got one shot (map 'load' event) and
@@ -1667,6 +1766,7 @@ async function init(){
       const proj = (data.projects||[]).find(p=>p.id===projId);
       if(proj){
         projectName = proj.name;
+        currentAppId = proj.appId || null;
       } else {
         // Project not found on server (e.g. after nuke) — clear local data and redirect
         const localStops = (await dbGetAll("stops")).filter(s=>s.projId===projId);

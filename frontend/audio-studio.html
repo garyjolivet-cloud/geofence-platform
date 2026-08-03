@@ -936,11 +936,18 @@ function buildTrackRow(t,laneW){
   lane.addEventListener("dragleave",()=>lane.classList.remove("dragover"));
   lane.addEventListener("drop",e=>{
     e.preventDefault(); lane.classList.remove("dragover");
-    const url=e.dataTransfer.getData("audiourl"), key=e.dataTransfer.getData("audiokey");
-    if(!url) return;
     const rect=lane.getBoundingClientRect();
     const offsetSec=Math.max(0,(e.clientX-rect.left)/pxPerSec);
-    addClipToTimeline({url,key},t,offsetSec);
+    // Prefer the full clip object (scope/scopeId/folderId/name) — without
+    // it, a dragged-in clip's spatial-filter bake-back silently defaulted
+    // to "current project" even for a Library clip, and the status line
+    // showed "loading undefined…". Fall back to the bare url/key for any
+    // older/other drag source that only sets those two.
+    const clipJson=e.dataTransfer.getData("application/x-audio-clip-json");
+    if(clipJson){ try{ addClipToTimeline(JSON.parse(clipJson),t,offsetSec); return; }catch(err){} }
+    const url=e.dataTransfer.getData("audiourl"), key=e.dataTransfer.getData("audiokey");
+    if(!url) return;
+    addClipToTimeline({url,key,name:"clip"},t,offsetSec);
   });
   lane.addEventListener("mousedown",e=>{ if(e.target===lane){ beginScrub(e,lane); } });
   t.segments.forEach(s=>lane.appendChild(buildSegmentEl(s,t)));
@@ -1183,9 +1190,13 @@ document.getElementById("btnRecord").onclick=()=>{
   document.getElementById("recToggle").textContent="● Start recording";
   document.getElementById("recTimer").textContent="0:00";
 };
+function _recReleaseMic(){
+  if(_recStream){ _recStream.getTracks().forEach(t=>t.stop()); _recStream=null; }
+}
 document.getElementById("recCancel").onclick=()=>{
   if(_recRec&&_recRec.state==="recording") _recRec.stop();
   document.getElementById("recOverlay").classList.remove("show");
+  _recReleaseMic();
 };
 document.getElementById("recOverlay").addEventListener("click",e=>{ if(e.target===document.getElementById("recOverlay")&&!(_recRec&&_recRec.state==="recording")) document.getElementById("recOverlay").classList.remove("show"); });
 document.getElementById("recToggle").onclick=async()=>{
@@ -1209,6 +1220,7 @@ document.getElementById("recToggle").onclick=async()=>{
     const blob=new Blob(_recChunks,{type:_recRec.mimeType||"audio/mp4"});
     document.getElementById("recOverlay").classList.remove("show");
     document.getElementById("recToggle").textContent="● Start recording";
+    _recReleaseMic(); // getUserMedia's stream was never stopped otherwise — the browser's mic-in-use indicator stayed lit for the rest of the session after the first recording
     try{
       const ab=await blob.arrayBuffer();
       const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab); await tmp.close();

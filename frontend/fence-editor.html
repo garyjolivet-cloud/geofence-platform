@@ -518,6 +518,9 @@
     <button data-tool="tripline">／ Tripline</button>
     <button data-tool="path">〜 Path</button>
   </div>
+  <div class="row" style="position:relative">
+    <button id="walkingPathBtn" style="flex:1" title="Pick a recorded walking path for this project — stops can snap onto and slide along it">🥾 Walking Path</button>
+  </div>
   <div class="row" id="circleRow" style="display:none">
     <label class="k" style="flex:0 0 auto;align-self:center;margin:0">reveal radius m</label>
     <input id="newRadius" type="number" value="12" min="3" style="flex:1">
@@ -996,7 +999,12 @@ function makeZone(name,shape){
            // Act/Scene organization). null means the tree root, matching
            // legacy/unorganized projects. Purely editor-side; the live
            // engine never reads this, only exported so it round-trips.
-           folderId:null };
+           folderId:null,
+           // Snapped onto the project's selected Walking Path (see the
+           // Walking Path section below) — constrains dragging to slide
+           // along that path instead of free 2D movement. false for every
+           // normal stop; only set true by finishShape()'s snap check.
+           onPath:false };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
@@ -1122,6 +1130,9 @@ function render(){
 map.on("load",()=>{
   map.addSource("fences",{type:"geojson",data:fc([])});
   map.addSource("draft",{type:"geojson",data:fc([])});
+  map.addSource("walkpath",{type:"geojson",data:fc([])});
+  map.addLayer({id:"walkpath-line",type:"line",source:"walkpath",
+     paint:{"line-color":"#ffc24d","line-width":3,"line-opacity":0.55,"line-dasharray":[1,1.4]}});
   map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==","kind","fill"],
      paint:{"fill-color":["case",["get","sel"],"#38e0a6",["get","isHazard"],"rgba(255,47,78,0.5)","#ff6a3d"],"fill-opacity":0.22}});
   map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==","kind","fill"],
@@ -1235,7 +1246,19 @@ map.on("mousemove",e=>{
   if(!_zoneDrag.moved&&Math.abs(dLng)<0.000015&&Math.abs(dLat)<0.000015) return;
   _zoneDrag.moved=true;
   const z=zones[_zoneDrag.zIdx], s=_zoneDrag.snap;
-  if(z.shape.type==="circle")    z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
+  if(z.shape.type==="circle"){
+    // A stop snapped onto the Walking Path stays constrained to it — drag
+    // motion is projected onto the nearest point of the path line instead
+    // of applying a free 2D offset. Every other stop (onPath false, or no
+    // path selected at all) keeps today's free-drag behavior unchanged.
+    if(z.onPath && selectedWalkingPathPoints){
+      const raw=[s.center[0]+dLng, s.center[1]+dLat];
+      const match=nearestPointOnPath(raw,selectedWalkingPathPoints);
+      if(match) z.shape.center=match.point;
+    } else {
+      z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
+    }
+  }
   else if(z.shape.type==="polygon"||z.shape.type==="path") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
   else { z.shape.from=[s.from[0]+dLng,s.from[1]+dLat]; z.shape.to=[s.to[0]+dLng,s.to[1]+dLat]; }
   // select this zone if not already selected
@@ -1295,6 +1318,7 @@ document.getElementById("cancelBtn").onclick=()=>{ draft=[]; tool=null;
   document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
   document.getElementById("circleRow").style.display="none"; render(); };
 
+const WALKING_PATH_SNAP_M=15; // how close a new/dragged circle stop must be to the walking path to snap onto it
 function finishShape(){
   const name="Stop "+(zones.length+1);
   let shape;
@@ -1304,6 +1328,14 @@ function finishShape(){
   else if(tool==="path") shape={type:"path",coords:draft.slice()};
   const z=makeZone(name,shape);
   z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as audio uploads
+  // Snap onto the walking path only if placed near it — off-path stops
+  // remain fully allowed (confirmed with the user); this just makes a
+  // deliberately-near placement land exactly on the line instead of just
+  // beside it, and marks it for constrained along-path dragging afterward.
+  if(tool==="circle" && selectedWalkingPathPoints){
+    const match=nearestPointOnPath(shape.center,selectedWalkingPathPoints);
+    if(match && match.distM<=WALKING_PATH_SNAP_M){ shape.center=match.point; z.onPath=true; }
+  }
   zones.push(z); draft=[]; tool=null;
   document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
   document.getElementById("circleRow").style.display="none";
@@ -1443,7 +1475,7 @@ function selectZone(i){ sel=i; render(); refreshProps(); }
 function refreshProps(){
   const box=document.getElementById("props");
   const _osLink=document.getElementById("afOpenStudio"); if(_osLink) _osLink.href=afOpenStudioHref();
-  if(sel<0 || !zones[sel]){ box.style.display="none"; return; }
+  if(sel<0 || !zones[sel]){ box.style.display="none"; pAudioStopPlay(); return; }
   const z=zones[sel]; box.style.display="block";
   document.getElementById("pTitle").textContent=z.shape.type.toUpperCase()+" stop";
   document.getElementById("pName").value=z.name;
@@ -1827,6 +1859,7 @@ document.getElementById("pAudioClear").onclick=async()=>{
    a stop, plus a read-only folder browser and a deep link into Studio. ---- */
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
+function afAppId(){ const el=document.getElementById("appSel"); return (el&&el.value)||null; }
 
 function afOpenStudioHref(){
   const pid=afProjectId(); if(!pid) return "/studio";
@@ -1895,6 +1928,7 @@ function doAudioRefresh(){
   document.getElementById("afOpenStudio").href=afOpenStudioHref();
   audioTree.refresh({ projectId: afProjectId(), projectLabel: projName()||afProjectId(), orgId: afOrgId() });
   loadStopFolders();
+  loadWalkingPaths().then(updateWalkingPathBtnLabel);
 }
 
 /* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
@@ -1971,6 +2005,92 @@ document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById(
   if(!t)return; try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(t)); }catch(e){} };
 document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
 document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); selectZone(-1); };
+
+/* ============================================================
+   Walking Path — a recorded, filtered GPS trail (Field Recorder) a project
+   can select for stops to snap onto/slide along. Deliberately NOT the same
+   as the existing shape.type==="path" draw-tool above (a per-zone movable/
+   ambient-audio shape) — this is a separate, app-level-scoped, reusable
+   reference route. Flat list, no folders (confirmed with the user).
+   ============================================================ */
+let walkingPaths=[];              // [{id,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
+let selectedWalkingPathId=null;
+let selectedWalkingPathPoints=null; // [[lon,lat],...] of the currently-selected path, once fetched
+async function loadWalkingPaths(){
+  const appId=afAppId();
+  if(!appId){ walkingPaths=[]; return; }
+  try{
+    const r=await fetch("/api/walking-path?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}});
+    const j=r.ok?await r.json():null;
+    walkingPaths=(j&&j.paths)||[];
+  }catch(e){ walkingPaths=[]; }
+}
+// Standard nearest-point-on-polyline projection: for each consecutive pair
+// of path points, project lonLat onto that segment (clamped to the segment's
+// own bounds), keep whichever segment's projection is closest. The
+// comparison itself works in raw [lon,lat] degree-space (fine for picking
+// the closest of several nearby segments at the sub-city scale a project
+// operates at); the returned distM is a real haversineM measurement on the
+// winning point, for threshold checks against an actual meter value.
+function nearestPointOnPath(lonLat,pathCoords){
+  if(!pathCoords||pathCoords.length<2) return null;
+  let best=null,bestDegSq=Infinity;
+  for(let i=1;i<pathCoords.length;i++){
+    const a=pathCoords[i-1],b=pathCoords[i];
+    const abx=b[0]-a[0],aby=b[1]-a[1];
+    const lenSq=abx*abx+aby*aby;
+    let t=lenSq>0?((lonLat[0]-a[0])*abx+(lonLat[1]-a[1])*aby)/lenSq:0;
+    t=Math.max(0,Math.min(1,t));
+    const px=a[0]+abx*t, py=a[1]+aby*t;
+    const dx=lonLat[0]-px, dy=lonLat[1]-py;
+    const degSq=dx*dx+dy*dy;
+    if(degSq<bestDegSq){ bestDegSq=degSq; best=[px,py]; }
+  }
+  return { point:best, distM:haversineM(lonLat,best) };
+}
+function renderWalkingPathLine(){
+  const src=map.getSource("walkpath"); if(!src) return;
+  if(!selectedWalkingPathPoints){ src.setData(fc([])); return; }
+  src.setData(fc([{type:"Feature",properties:{},geometry:{type:"LineString",coordinates:selectedWalkingPathPoints}}]));
+}
+function updateWalkingPathBtnLabel(){
+  const btn=document.getElementById("walkingPathBtn"); if(!btn) return;
+  const p=walkingPaths.find(w=>w.id===selectedWalkingPathId);
+  btn.textContent = p ? ("🥾 "+p.name+" ▾") : "🥾 Walking Path";
+}
+async function selectWalkingPath(id){
+  if(!id){ selectedWalkingPathId=null; selectedWalkingPathPoints=null; renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave(); return; }
+  try{
+    const r=await fetch("/api/walking-path/"+id);
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+    const j=await r.json();
+    selectedWalkingPathId=id;
+    selectedWalkingPathPoints=j.points;
+    renderWalkingPathLine();
+    updateWalkingPathBtnLabel();
+    autoSave();
+  }catch(e){ alert("Couldn't load that walking path: "+e.message); }
+}
+async function openWalkingPathPicker(anchorBtn){
+  closeStopFolderMenus(); // shares the .sf-menu class/click-away-close listener with the stop-folder pickers
+  await loadWalkingPaths();
+  const menu=document.createElement("div"); menu.className="sf-menu sf-picker wp-picker";
+  const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button"; noneBtn.textContent="— none (not path-driven) —";
+  noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(null); };
+  menu.appendChild(noneBtn);
+  if(!walkingPaths.length){
+    const hint=document.createElement("div"); hint.className="hint"; hint.style.padding="6px 10px"; hint.textContent="no saved paths yet — record one in Field Recorder";
+    menu.appendChild(hint);
+  }
+  walkingPaths.slice().sort((a,b)=>a.name.localeCompare(b.name)).forEach(p=>{
+    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button";
+    b.textContent="🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
+    b.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(p.id); };
+    menu.appendChild(b);
+  });
+  anchorBtn.parentElement.appendChild(menu);
+}
+document.getElementById("walkingPathBtn").onclick=e=>{ e.stopPropagation(); openWalkingPathPicker(e.currentTarget); };
 
 /* ============================================================
    Stop tree — organizes a project's map stops into folders when there
@@ -2094,7 +2214,7 @@ function buildStopFolderRow(node,depth){
   moreBtn.onclick=e=>{ e.stopPropagation(); openStopFolderMenu(moreBtn,node); };
   row.appendChild(moreBtn);
   row.onclick=()=>{ focusedStopFolderId=node.id; if(!isRoot){ if(stopTreeExpanded.has(node.id))stopTreeExpanded.delete(node.id);else stopTreeExpanded.add(node.id); } drawList(); };
-  row.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("application/x-zone-id")||e.dataTransfer.types.includes("application/x-stop-folder-id")||e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")){ e.preventDefault(); row.classList.add("dragover"); } });
+  row.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("application/x-zone-id")||e.dataTransfer.types.includes("application/x-stop-folder-id")){ e.preventDefault(); row.classList.add("dragover"); } });
   row.addEventListener("dragleave",()=>row.classList.remove("dragover"));
   row.addEventListener("drop",e=>{
     e.preventDefault(); row.classList.remove("dragover");
@@ -2202,8 +2322,8 @@ async function deleteStopFolder(node){
     const r=await fetch("/api/stop-folder/"+node.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
     if(focusedStopFolderId&&subtreeIds.includes(focusedStopFolderId)) focusedStopFolderId=node.parentId||null;
-    await loadStopFolders();
-    render();
+    await loadStopFolders(); // already redraws the list — a full render() here just repeated that work
+    autoSave(); // still needed on its own: the reassigned zones' folderId above must persist to the draft
   }catch(e){ alert("Delete failed: "+e.message); }
 }
 function bulkMoveSelectedStops(){
@@ -2293,6 +2413,7 @@ function exportBundle(){
               guideId:null,
               liveTtlMs:+document.getElementById("liveTtlMs").value,
               audioRetriggerDelayS:+document.getElementById("audioRetriggerDelayS").value,
+              walkingPathId:selectedWalkingPathId||null,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -2349,6 +2470,14 @@ document.getElementById("importBtn").onclick=()=>{
   try{ const b=JSON.parse(raw);
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
     zones=b.zones.map(engineToZone); sel=-1; tool=null; draft=[];
+    // engineToZone() takes the incoming bundle's zo.id verbatim (needed to
+    // round-trip a project we exported ourselves) — but a hand-edited or
+    // externally-produced bundle can have two zones sharing an id, which
+    // breaks every id-keyed lookup in this file (bulk-select, stop-tree
+    // drag/drop, Code Objects targeting). Dedupe against the same
+    // uniqueZoneId() helper every other id-assignment path already uses.
+    { const seenIds=new Set();
+      zones.forEach(z=>{ if(seenIds.has(z.id)) z.id=uniqueZoneId(z.id,z); seenIds.add(z.id); }); }
     if(b.name) document.getElementById("projCrumb").textContent=b.name;
     if(b.spatialRangeM){ document.getElementById("audioRange").value=b.spatialRangeM; document.getElementById("audioRangeV").textContent=b.spatialRangeM; }
     if(b.spatialClearM){ document.getElementById("audioClear").value=b.spatialClearM; document.getElementById("audioClearV").textContent=b.spatialClearM; }
@@ -2357,6 +2486,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
     if(b.liveTtlMs) document.getElementById("liveTtlMs").value=String(b.liveTtlMs);
     if(b.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=String(b.audioRetriggerDelayS);
+    if(b.walkingPathId) selectWalkingPath(b.walkingPathId); else selectWalkingPath(null);
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
@@ -2764,6 +2894,38 @@ const SimGeo={
     const d1=ccw(C,D,A),d2=ccw(C,D,B),d3=ccw(A,B,C),d4=ccw(A,B,D);
     return{crossed:((d1>0)!==(d2>0))&&((d3>0)!==(d4>0)),side:d2<0?"L":"R"};}
 };
+// Map-matching — verbatim mirror of geofence-engine.html's mapMatch() (same
+// logic/conventions, inlined to match SimGeo's own style rather than named
+// mPerDegLat/mPerDegLon constants); see that copy's comment for the full
+// rationale. Reads the editor's own already-loaded selectedWalkingPathPoints
+// directly (no fetch needed — this is the same page that loaded them for
+// the map/picker), converted from [lon,lat] to this simulator's [lat,lon]
+// convention on the fly each call (cheap relative to the projection loop
+// itself; avoids needing to cache-and-invalidate across every place
+// simBundle gets rebuilt). Any fix here must also go into
+// geofence-engine.html and geofence-sim.html's copies.
+function mapMatch(latLon,pathLatLon,ref,maxSnapM){
+  if(!pathLatLon||pathLatLon.length<2) return latLon;
+  const P=SimGeo.toXY(latLon,ref);
+  let best=null,bestD=Infinity;
+  for(let i=1;i<pathLatLon.length;i++){
+    const A=SimGeo.toXY(pathLatLon[i-1],ref), B=SimGeo.toXY(pathLatLon[i],ref);
+    const vx=B.x-A.x,vy=B.y-A.y,wx=P.x-A.x,wy=P.y-A.y;
+    const c2=vx*vx+vy*vy;
+    let t=c2>0?(vx*wx+vy*wy)/c2:0;
+    t=Math.max(0,Math.min(1,t));
+    const qx=A.x+t*vx,qy=A.y+t*vy;
+    const d=Math.hypot(P.x-qx,P.y-qy);
+    if(d<bestD){bestD=d;best={x:qx,y:qy};}
+  }
+  if(!best||bestD>maxSnapM) return latLon;
+  return [ ref[0]+best.y/111320, ref[1]+best.x/(111320*Math.cos(ref[0]*Math.PI/180)) ];
+}
+// Distinct from WALKING_PATH_SNAP_M (15m — how close a NEW/dragged stop
+// must be to snap onto the path in the editor UI); this is how far the
+// simulated visitor's position may wander from the path before map-matching
+// stops applying — same 20m value and purpose as the live engine's copy.
+const WALKING_PATH_MAPMATCH_SNAP_M=20;
 // Path (moving ambient) stop position in Test Mode — same shared-real-world-
 // clock model as centerNow() in geofence-engine.html/geofence-sim.html.
 function simPathCumLens(pathLatLon){
@@ -2863,8 +3025,20 @@ const SimFencer={state:{},onEvent:null,
       (zone.triggers||[]).forEach(t=>{
         if(t.fires_on==="dwell"&&t.delayS&&(now-st.t0)/1000>=t.delayS&&!st.delivered["dwell"+t.delayS]){
           st.delivered["dwell"+t.delayS]=1;this._deliver(zone,t,subj);}});
+      // Mirrors the same fix in geofence-engine.html's Geofencer.update() —
+      // trigger.dwell pipeline blocks need a periodic tick while inside,
+      // or evt.dwellSeconds stays undefined forever and a dwell-triggered
+      // pipeline never fires, not even in this test simulator. Scoped to
+      // the target layer so a zone with both layers doesn't double-tick.
+      if(layer.kind==="target"&&typeof PipelineRuntime!=="undefined") PipelineRuntime.tick(zone.id,null,{lat:0,lon:0},{dwellSeconds:(now-st.t0)/1000});
       if(sd>SIM_TUNING.EXIT_BUFFER_M){this._fire(zone,layer,"exit",{dur:(now-st.t0)/1000},subj);st.phase="out";}}},
-  update(p,prev,now){const active=[];
+  update(p,prev,now){
+    if(selectedWalkingPathPoints && selectedWalkingPathPoints.length>=2){
+      const pathLatLon=selectedWalkingPathPoints.map(pt=>[pt[1],pt[0]]);
+      const m=mapMatch([p.lat,p.lon],pathLatLon,simBundle.ref,WALKING_PATH_MAPMATCH_SNAP_M);
+      if(m[0]!==p.lat||m[1]!==p.lon) p={...p,lat:m[0],lon:m[1]};
+    }
+    const active=[];
     /* visitor vs all zones */
     simBundle.zones.forEach(zone=>{zone.layers.forEach((layer,i)=>{
       const k="visitor:"+this.key(zone,layer,i);
@@ -3012,7 +3186,12 @@ const SimVoice={
       if(s&&s._el){s._el.pause();s._el.src='';try{s.disconnect();}catch(e){}}
       else{try{s.stop();}catch(e){}};},650);
     this.playing=false;this.currentUrl=null;this.currentZoneId=null;this.src=null;},
-  stop(){this.fadeOut();this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;
+  stop(){this.fadeOut();
+    // Safari's fMP4 decode fallback (below) caches a blob URL per clip on
+    // this.buffers — revoke before wiping, or every Test-mode session that
+    // touched such a clip leaks its blob for the rest of the page's life.
+    Object.values(this.buffers).forEach(b=>{ if(b&&b._objUrl) URL.revokeObjectURL(b._objUrl); });
+    this.buffers={};this._dead=new Set();this._warned=new Set();this.loadingUrl=null;
     // Reset per-zone replay-delay history too — otherwise clicking "Reset"
     // to start a fresh test walk doesn't actually give you a fresh walk: a
     // "once per trigger" stop already played in the previous pass stays

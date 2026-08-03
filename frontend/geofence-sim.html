@@ -147,6 +147,16 @@ input[type=range]{width:100%;accent-color:var(--coral)}
 
 /* ----- sim-side globals the core reads ----- */
 let BUNDLE = { ref:[0,0], zones:[] };
+let WALKING_PATH_LATLON = null; // [[lat,lon],...] for BUNDLE's selected Walking Path, once fetched (null = not path-driven)
+const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of the path; farther, use the raw/smoothed fix as-is
+async function loadWalkingPath(b){
+  WALKING_PATH_LATLON = null;
+  if(!b || !b.walkingPathId) return;
+  try{
+    const r = await fetch('/api/walking-path/'+b.walkingPathId,{cache:'no-store'});
+    if(r.ok){ const j = await r.json(); WALKING_PATH_LATLON = (j.points||[]).map(pt=>[pt[1],pt[0]]); } // stored [lon,lat] -> this sim's own [lat,lon] convention
+  }catch(e){}
+}
 const Audio = {
   on:true, ctx:null, keepAlive:null,
   unlock(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
@@ -291,6 +301,29 @@ const Geo = {
             return { crossed, side: d2<0 ? "L":"R" }; }
 };
 
+// Map-matching — verbatim mirror of geofence-engine.html's mapMatch() (same
+// logic/conventions); see that copy's comment for the full rationale. Any
+// fix to this must be applied identically in both places (and in
+// fence-editor.html's SimFencer), or this simulator silently diverges from
+// real visitor behavior.
+function mapMatch(latLon, pathLatLon, ref, maxSnapM){
+  if(!pathLatLon || pathLatLon.length<2) return latLon;
+  const P=Geo.toXY(latLon,ref);
+  let best=null, bestD=Infinity;
+  for(let i=1;i<pathLatLon.length;i++){
+    const A=Geo.toXY(pathLatLon[i-1],ref), B=Geo.toXY(pathLatLon[i],ref);
+    const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
+    const c2=vx*vx+vy*vy;
+    let t = c2>0 ? (vx*wx+vy*wy)/c2 : 0;
+    t=Math.max(0,Math.min(1,t));
+    const qx=A.x+t*vx, qy=A.y+t*vy;
+    const d=Math.hypot(P.x-qx,P.y-qy);
+    if(d<bestD){ bestD=d; best={x:qx,y:qy}; }
+  }
+  if(!best || bestD>maxSnapM) return latLon;
+  return [ ref[0]+best.y/Geo.mPerDegLat, ref[1]+best.x/Geo.mPerDegLon(ref[0]) ];
+}
+
 /* Path (moving ambient) stop position — mirrors geofence-engine.html's
    centerNow() exactly (same shared-real-world-clock model), so what you see
    animate here matches what a real visitor's engine session would compute. */
@@ -382,6 +415,10 @@ const Geofencer = {
   },
 
   update(p, prev, now){
+    if(WALKING_PATH_LATLON){
+      const m=mapMatch([p.lat,p.lon], WALKING_PATH_LATLON, BUNDLE.ref, WALKING_PATH_SNAP_M);
+      if(m[0]!==p.lat || m[1]!==p.lon) p={...p, lat:m[0], lon:m[1]};
+    }
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{
       if(!zone.layers) return;
@@ -696,6 +733,7 @@ function loadBundle(b,srcLabel){
   if(!b || !Array.isArray(b.zones)){ log("ev-warn","that doesn't look like a bundle (need a zones array)"); return; }
   BUNDLE = b;
   if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
+  loadWalkingPath(b);
   Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
   AmbientClip.stop();
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);

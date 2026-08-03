@@ -145,9 +145,15 @@
     }
 
     function closeMenu() { if (state.openMenu) { state.openMenu.remove(); state.openMenu = null; } }
-    document.addEventListener("mousedown", e => {
+    // Named + removed in destroy() — every mount() call used to add its own
+    // permanent document-level listener with no way to remove it, so a page
+    // that remounts on every project/client switch (chatterbox-studio.html
+    // does, on every dropdown change) leaked one closure (holding the whole
+    // old state/DOM) per switch for the rest of the session.
+    function onDocMousedown(e) {
       if (state.openMenu && !state.openMenu.contains(e.target)) closeMenu();
-    });
+    }
+    document.addEventListener("mousedown", onDocMousedown);
 
     async function load() {
       if (opts.mode === "project") {
@@ -520,6 +526,15 @@
         e.dataTransfer.setData("audiourl", clip.url);
         e.dataTransfer.setData("audiokey", clip.r2Key || clip.id);
         e.dataTransfer.setData("application/x-audio-clip-id", clip.id);
+        // Full clip metadata, for drop targets (Audio Studio's timeline
+        // lanes) that need scope/scopeId/folderId/name to correctly track
+        // where the dropped clip actually came from — audiourl/audiokey
+        // alone aren't enough for that, and dropping previously silently
+        // defaulted to "current project" regardless of the clip's real
+        // scope (e.g. a Library clip), breaking spatial-filter bake-back.
+        e.dataTransfer.setData("application/x-audio-clip-json", JSON.stringify({
+          name: clip.name, r2Key: clip.r2Key, scope: clip.scope, scopeId: clip.scopeId, folderId: clip.folderId || null, url: clip.url
+        }));
         e.dataTransfer.effectAllowed = "copyMove";
       });
       if (opts.selectable) {
@@ -697,7 +712,7 @@
       getSelectedClips() { return [...state.selectedClips.values()]; },
       clearSelection() { state.selectedClips.clear(); render(); },
       revealFolder(scope, folderId) { revealFolder(scope, folderId); },
-      destroy() { el.innerHTML = ""; }
+      destroy() { document.removeEventListener("mousedown", onDocMousedown); el.innerHTML = ""; }
     };
   }
 
