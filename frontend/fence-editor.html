@@ -511,7 +511,6 @@
   <hr>
   <div class="row" style="margin-bottom:4px">
     <label class="k" style="margin:0;align-self:center;flex:1">add a stop — pick a shape</label>
-    <button id="clearAllBtn" class="ghost" style="flex:0 0 auto;color:var(--fog);border-color:var(--rim)" title="Clear all stops and reset map state">✕ Clear all</button>
   </div>
   <div class="row">
     <button data-tool="circle">● Circle</button>
@@ -3003,13 +3002,6 @@ document.getElementById("publishBtn").onclick=publishToPlatform;
 // — project deletion lives on the homepage project cards; app deletion and
 // nuke are master-only operations that don't belong in the day-to-day
 // per-tour editing view.
-
-// clear all stops + reset map state
-document.getElementById("clearAllBtn").onclick=()=>{
-  if(zones.length && !confirm("Clear all "+zones.length+" stops from the map?")) return;
-  zones=[]; sel=-1; tool=null; draft=[]; try{localStorage.removeItem(DRAFT_KEY);}catch(e){} render(); refreshProps();
-  document.getElementById("status").textContent="map cleared";
-};
 
 const _qs=new URLSearchParams(location.search);
 const _pid=_qs.get("project"); if(_pid) loadFromPlatform(_pid);
