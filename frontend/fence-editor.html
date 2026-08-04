@@ -2181,7 +2181,13 @@ async function openWalkingPathPicker(anchorBtn){
   const newFolderBtn=document.createElement("button"); newFolderBtn.className="ghost sf-more"; newFolderBtn.type="button";
   newFolderBtn.style.flex="0 0 auto"; newFolderBtn.title="New folder"; newFolderBtn.textContent="＋📁";
   newFolderBtn.onclick=e=>{ e.stopPropagation(); createWpFolder(null); };
-  head.appendChild(noneBtn); head.appendChild(newFolderBtn);
+  const importBtn=document.createElement("button"); importBtn.className="ghost sf-more"; importBtn.type="button";
+  importBtn.style.flex="0 0 auto"; importBtn.title="Import a GPX track from another app"; importBtn.textContent="⬆GPX";
+  const importInput=document.createElement("input"); importInput.type="file"; importInput.accept=".gpx,application/gpx+xml";
+  importInput.style.display="none";
+  importInput.onchange=()=>{ const f=importInput.files[0]; importInput.value=""; if(f) importWpFromGPX(f); };
+  importBtn.onclick=e=>{ e.stopPropagation(); importInput.click(); };
+  head.appendChild(noneBtn); head.appendChild(newFolderBtn); head.appendChild(importBtn); head.appendChild(importInput);
   menu.appendChild(head);
   if(!walkingPaths.length && !walkingPathFolders.length){
     const hint=document.createElement("div"); hint.className="hint"; hint.style.padding="6px 10px"; hint.textContent="no saved paths yet — record one in Field Recorder";
@@ -2252,6 +2258,7 @@ function openWpPathMenu(anchorBtn,p){
   const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeWpSubmenus(); fn(); }; menu.appendChild(b); };
   mkItem("✎ Rename",()=>renameWpPath(p));
   mkItem("📁 Move to…",()=>{ closeWpSubmenus(); openWpFolderPicker(anchorBtn,null,targetId=>moveWpPath(p.id,targetId)); });
+  mkItem("⬇ Export GPX",()=>exportWpAsGPX(p));
   mkItem("🗑 Delete",()=>deleteWpPath(p));
   anchorBtn.parentElement.appendChild(menu);
   positionMenuSmart(menu);
@@ -2337,6 +2344,96 @@ async function deleteWpPath(p){
     if(selectedWalkingPathId===p.id) selectWalkingPath(null);
     openWalkingPathPicker(_wpPickerAnchor);
   }catch(err){ alert("Delete failed: "+err.message); }
+}
+
+/* ---- GPX export/import — interop with paths recorded by other apps
+   (Strava, Gaia GPS, AllTrails, Garmin Connect, ...). GPX's <trkpt lat lon>
+   + optional <ele> maps directly onto our [lon,lat,elevM] point shape, so
+   no lossy conversion either direction. ---- */
+function pointsToGPX(name, points){
+  const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const trkpts=points.map(p=>{
+    const lon=p[0], lat=p[1], ele=p[2];
+    return '      <trkpt lat="'+lat.toFixed(6)+'" lon="'+lon.toFixed(6)+'">'+(ele!=null?'<ele>'+ele+'</ele>':'')+'</trkpt>';
+  }).join('\n');
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'+
+    '<gpx version="1.1" creator="Chase Life Geofence Platform" xmlns="http://www.topografix.com/GPX/1/1">\n'+
+    '  <trk>\n    <name>'+esc(name)+'</name>\n    <trkseg>\n'+trkpts+'\n    </trkseg>\n  </trk>\n</gpx>\n';
+}
+async function exportWpAsGPX(p){
+  try{
+    const r=await fetch("/api/walking-path/"+p.id);
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+    const j=await r.json();
+    const gpx=pointsToGPX(j.name, j.points||[]);
+    const blob=new Blob([gpx],{type:"application/gpx+xml"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=(j.name||"walking-path").replace(/[^a-z0-9\-_]+/gi,"_")+".gpx";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(e){ alert("Export failed: "+e.message); }
+}
+// Accepts a <trk>/<trkseg>/<trkpt> track (the common case for a recorded
+// walk) or falls back to a <rte>/<rtept> route if that's all the file has —
+// some apps export routes instead of tracks. Bare <wpt> waypoint-only files
+// aren't a walked path and are rejected with a clear error rather than
+// silently producing a nonsensical single/sparse-point "path".
+function parseGPX(xmlText){
+  const doc=new DOMParser().parseFromString(xmlText,"application/xml");
+  if(doc.querySelector("parsererror")) throw new Error("couldn't parse this file as GPX/XML");
+  let nodes=[...doc.querySelectorAll("trkpt")];
+  if(!nodes.length) nodes=[...doc.querySelectorAll("rtept")];
+  if(!nodes.length) throw new Error("no track or route points found in this GPX file");
+  const points=nodes.map(n=>{
+    const lat=parseFloat(n.getAttribute("lat")), lon=parseFloat(n.getAttribute("lon"));
+    const eleEl=n.querySelector("ele");
+    const ele=eleEl?parseFloat(eleEl.textContent):NaN;
+    return [lon,lat,isNaN(ele)?null:ele];
+  }).filter(p=>!isNaN(p[0])&&!isNaN(p[1]));
+  if(points.length<2) throw new Error("not enough valid points in this GPX file");
+  const nameEl=doc.querySelector("trk > name")||doc.querySelector("rte > name")||doc.querySelector("metadata > name");
+  return { points, name: nameEl?nameEl.textContent.trim():"" };
+}
+// Same 2m noise-floor threshold-diff as Field Recorder's elevGainLoss() —
+// kept consistent so an imported GPX's gain/loss numbers are comparable to a
+// path recorded directly in this app, not wildly different just because the
+// source app's own altitude noise characteristics differ.
+function gpxElevGainLoss(points, noiseFloorM){
+  noiseFloorM = noiseFloorM==null ? 2 : noiseFloorM;
+  let gainM=0, lossM=0, ref=null;
+  for(const p of points){
+    const e=p[2];
+    if(e==null) continue;
+    if(ref==null){ ref=e; continue; }
+    const d=e-ref;
+    if(Math.abs(d)>=noiseFloorM){ if(d>0) gainM+=d; else lossM-=d; ref=e; }
+  }
+  return { gainM:Math.round(gainM), lossM:Math.round(lossM) };
+}
+function gpxDistanceM(points){
+  let d=0;
+  for(let i=1;i<points.length;i++) d+=haversineM(points[i-1],points[i]);
+  return d;
+}
+async function importWpFromGPX(file){
+  const appId=afAppId();
+  if(!appId){ alert("Pick a client/app for this tour first."); return; }
+  try{
+    const text=await file.text();
+    const {points,name:gpxName}=parseGPX(text);
+    const defaultName=gpxName||file.name.replace(/\.gpx$/i,"");
+    const name=(prompt("Name this walking path:",defaultName)||"").trim();
+    if(!name) return;
+    const distanceM=gpxDistanceM(points);
+    const {gainM,lossM}=gpxElevGainLoss(points);
+    const r=await fetch("/api/walking-path",{
+      method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({appId,name,points,distanceM,elevGainM:gainM,elevLossM:lossM})
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    openWalkingPathPicker(_wpPickerAnchor);
+  }catch(e){ alert("Import failed: "+e.message); }
 }
 document.getElementById("walkingPathBtn").onclick=e=>{ e.stopPropagation(); openWalkingPathPicker(e.currentTarget); };
 
