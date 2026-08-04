@@ -1032,9 +1032,34 @@ function makeZone(name,shape){
 /* ---- render committed fences (target + approach ring) + draft ---- */
 function fc(features){ return {type:"FeatureCollection",features}; }
 
+// Temporary diagnostic wrapper: the per-zone try/catch inside the forEach
+// below only covers errors while building each zone's OWN features — it
+// can't catch an error from setData() itself choking on the accumulated
+// FeatureCollection (a single malformed geometry among many valid features
+// can fail geojson-vt's processing for the WHOLE source, not just the bad
+// feature), or from the project-rings/bearing-arrows/draft sections after
+// it. Wrapping the whole function surfaces exactly that class of failure
+// directly in the status line instead of silently doing nothing, so a
+// report can include the real error text instead of another guess.
 function renderSources(){
+  try{ renderSourcesInner(); }
+  catch(e){
+    console.error("renderSources failed:",e);
+    const st=document.getElementById("status");
+    if(st) st.textContent="render error: "+e.message+" — check browser console (F12) and report the full message";
+  }
+}
+function renderSourcesInner(){
   const feats=[];
   zones.forEach((z,i)=>{
+    // One zone's geometry throwing here (a malformed shape, a divide-by-zero
+    // in a fade calc, whatever) used to abort this whole forEach — which
+    // meant map.getSource("fences").setData() below never ran at all, so
+    // EVERY zone's rings (not just the broken one's) silently vanished from
+    // the map until the offending zone was deleted. Isolating each zone in
+    // its own try/catch means a single bad zone loses only its own
+    // features — every other zone keeps rendering normally.
+    try{
     const s=z.shape, selected=(i===sel);
     const isPath=s.type==="path";
     // While testing, a path (moving ambient) stop's own rings track its
@@ -1075,7 +1100,7 @@ function renderSources(){
         geometry:{type:"Polygon",coordinates:[circleRing(s.center,s.radiusM,64)]}});
     else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",zIdx:i,sel:selected,name:z.name,isHazard:hz},
         geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
-    else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name},
+    else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:false},
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
     else if(s.type==="path") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:true},
         geometry:{type:"LineString",coordinates:s.coords}});
@@ -1083,6 +1108,7 @@ function renderSources(){
     const _lp={kind:"label",name:z.name,zIdx:i};
     if(z[zoneAudioField(z)]) _lp.hasAudio=true;
     feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
+    }catch(e){ console.error("renderSources: skipping zone",z&&z.id,e); }
   });
   if(map.getSource("fences")) map.getSource("fences").setData(fc(feats));
 
@@ -1130,7 +1156,15 @@ function renderSources(){
 
   // draft
   const d=[];
-  if((tool==="polygon"||tool==="tripline"||tool==="path")&&draft.length) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
+  // A LineString needs 2+ coordinates — with only the first point placed
+  // (e.g. right after starting a tripline), draft.length is 1, and pushing
+  // a 1-point "LineString" is invalid GeoJSON. Submitted together with the
+  // valid point marker(s) in one setData() call below, that single bad
+  // feature was enough to fail the whole update — which silently dropped
+  // not just the draft's own point marker, but (since a thrown/rejected
+  // setData mid-render-cycle could leave the map's internal source-update
+  // pipeline in a bad state) other zones' rings on the "fences" source too.
+  if((tool==="polygon"||tool==="tripline"||tool==="path")&&draft.length>=2) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
   if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
         geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
@@ -2038,7 +2072,7 @@ document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(s
    ============================================================ */
 let walkingPaths=[];              // [{id,folderId,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
 let walkingPathFolders=[];        // [{id,parentId,name}] for the current app, from GET /api/walking-path-folder
-let wpTreeExpanded=new Set();     // folder ids expanded in the picker
+let wpTreeExpanded=new Set([null]); // folder ids expanded in the picker — root (id null) starts expanded, collapsible like any other folder
 let selectedWalkingPathId=null;
 let selectedWalkingPathPoints=null; // [[lon,lat],...] of the currently-selected path, once fetched
 let selectedWalkingPathName=null; // from the fetch itself — the button label no longer needs the (possibly not-yet-loaded) walkingPaths list to show the right name
@@ -2192,25 +2226,30 @@ async function openWalkingPathPicker(anchorBtn){
     const hint=document.createElement("div"); hint.className="hint"; hint.style.padding="6px 10px"; hint.textContent="no saved paths yet — record one in Field Recorder";
     menu.appendChild(hint);
   }
-  const tree=buildWpTree();
-  tree.children.forEach(child=>menu.appendChild(buildWpFolderRow(child)));
-  tree.paths.forEach(p=>menu.appendChild(buildWpPathRow(p)));
+  menu.appendChild(buildWpFolderRow(buildWpTree()));
   anchorBtn.parentElement.appendChild(menu);
   positionMenuSmart(menu);
 }
+// Root (id null) renders as a collapsible row too, same as the stop tree's
+// root — collapsing it hides every top-level folder/path at once, which
+// matters here since this whole tree lives inside a floating picker over
+// the map rather than a fixed-height side panel.
 function buildWpFolderRow(node){
+  const isRoot=node.id===null;
   const wrap=document.createElement("div");
   const expanded=wpTreeExpanded.has(node.id);
   const row=document.createElement("div"); row.className="stop-folder-row";
   const chevron=document.createElement("span"); chevron.className="sf-chevron"; chevron.textContent=expanded?"▾":"▸";
   chevron.onclick=e=>{ e.stopPropagation(); if(wpTreeExpanded.has(node.id))wpTreeExpanded.delete(node.id);else wpTreeExpanded.add(node.id); openWalkingPathPicker(_wpPickerAnchor); };
-  const icon=document.createElement("span"); icon.textContent="📁";
-  const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.textContent=node.name;
+  const icon=document.createElement("span"); icon.textContent=isRoot?"📂":"📁";
+  const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.textContent=isRoot?"All paths":node.name;
   const count=document.createElement("span"); count.className="sf-count"; count.textContent=node.paths.length;
   row.appendChild(chevron); row.appendChild(icon); row.appendChild(nameEl); row.appendChild(count);
-  const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯"; moreBtn.title="New subfolder, rename, move, or delete";
-  moreBtn.onclick=e=>{ e.stopPropagation(); openWpFolderMenu(moreBtn,node); };
-  row.appendChild(moreBtn);
+  if(!isRoot){
+    const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯"; moreBtn.title="New subfolder, rename, move, or delete";
+    moreBtn.onclick=e=>{ e.stopPropagation(); openWpFolderMenu(moreBtn,node); };
+    row.appendChild(moreBtn);
+  }
   row.onclick=()=>{ if(wpTreeExpanded.has(node.id))wpTreeExpanded.delete(node.id);else wpTreeExpanded.add(node.id); openWalkingPathPicker(_wpPickerAnchor); };
   wrap.appendChild(row);
   if(expanded){
