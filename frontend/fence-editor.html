@@ -2237,46 +2237,69 @@ function buildWpPathRow(p){
 // The wp-picker tree itself is a .sf-menu (so click-away-close and the shared
 // styling work for free) — but that means the global closeStopFolderMenus()
 // would remove it too, along with any nested "⋯" submenu, leaving the
-// submenu appended into a now-detached (invisible) node. These three
-// submenu-opening functions need to close any OTHER open submenu without
-// tearing down the picker they're nested inside of.
-function closeWpSubmenus(){ document.querySelectorAll(".sf-menu").forEach(m=>{ if(!m.classList.contains("wp-picker")) m.remove(); }); }
+// submenu appended into a now-detached (invisible) node. Used wherever a
+// "⋯" menu might be opened from inside another already-open .sf-menu (the
+// walking-path picker); harmless to call from the persistent stop tree too
+// (nothing there is .wp-picker-classed, so it just behaves like a normal
+// close-other-menus).
+function closeNestedMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>{ if(!m.classList.contains("wp-picker")) m.remove(); }); }
+// Shared by every "⋯"/picker menu in this file (stop tree, stop folders,
+// walking-path tree). Two real bugs this fixes, both hit in practice:
+// (1) a menu's anchor button often isn't a direct child of anything with
+// position:relative (e.g. the stop row's own "⋯" lives inside a plain
+// flex wrapper div, not the positioned .zone row) — position:absolute then
+// resolves against whatever distant ancestor IS positioned, which can put
+// the menu anywhere, including pinned near the top of the page. (2) even
+// when the anchor's parent IS positioned, a scrollable ancestor
+// (overflow-y:auto — the stop tree panel and the walking-path picker both
+// scroll) clips any absolutely-positioned descendant to its own bounds
+// regardless of z-index. Rendering into document.body with position:fixed
+// coordinates computed from the anchor's own getBoundingClientRect() sidesteps
+// both — the menu no longer depends on its anchor's positioning context or
+// which scrollable container it happens to be inside.
+function openPortalMenu(anchorBtn, cls, buildFn, keepPickerOpen){
+  if(keepPickerOpen) closeNestedMenus(); else closeStopFolderMenus();
+  const menu=document.createElement("div"); menu.className="sf-menu "+cls;
+  menu.style.position="fixed"; menu.style.top="0"; menu.style.left="0"; menu.style.right="auto"; menu.style.visibility="hidden";
+  buildFn(menu);
+  document.body.appendChild(menu);
+  const ar=anchorBtn.getBoundingClientRect(), mr=menu.getBoundingClientRect();
+  let top=ar.bottom+4;
+  if(top+mr.height>window.innerHeight) top=Math.max(4, ar.top-mr.height-4);
+  let left=Math.min(ar.left, window.innerWidth-mr.width-4);
+  menu.style.top=top+"px"; menu.style.left=Math.max(4,left)+"px"; menu.style.visibility="visible";
+  return menu;
+}
 function openWpFolderMenu(anchorBtn,node){
-  closeWpSubmenus();
-  const menu=document.createElement("div"); menu.className="sf-menu";
-  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeWpSubmenus(); fn(); }; menu.appendChild(b); };
-  mkItem("＋ New subfolder",()=>createWpFolder(node.id));
-  mkItem("✎ Rename",()=>renameWpFolder(node));
-  mkItem("📁 Move to…",()=>{ closeWpSubmenus(); openWpFolderPicker(anchorBtn,node,targetId=>moveWpFolder(node.id,targetId)); });
-  mkItem("🗑 Delete",()=>deleteWpFolder(node));
-  anchorBtn.parentElement.appendChild(menu);
-  positionMenuSmart(menu);
+  openPortalMenu(anchorBtn, "", menu=>{
+    const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeNestedMenus(); fn(); }; menu.appendChild(b); };
+    mkItem("＋ New subfolder",()=>createWpFolder(node.id));
+    mkItem("✎ Rename",()=>renameWpFolder(node));
+    mkItem("📁 Move to…",()=>{ closeNestedMenus(); openWpFolderPicker(anchorBtn,node,targetId=>moveWpFolder(node.id,targetId)); });
+    mkItem("🗑 Delete",()=>deleteWpFolder(node));
+  }, true);
 }
 function openWpPathMenu(anchorBtn,p){
-  closeWpSubmenus();
-  const menu=document.createElement("div"); menu.className="sf-menu";
-  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeWpSubmenus(); fn(); }; menu.appendChild(b); };
-  mkItem("✎ Rename",()=>renameWpPath(p));
-  mkItem("📁 Move to…",()=>{ closeWpSubmenus(); openWpFolderPicker(anchorBtn,null,targetId=>moveWpPath(p.id,targetId)); });
-  mkItem("⬇ Export GPX",()=>exportWpAsGPX(p));
-  mkItem("🗑 Delete",()=>deleteWpPath(p));
-  anchorBtn.parentElement.appendChild(menu);
-  positionMenuSmart(menu);
+  openPortalMenu(anchorBtn, "", menu=>{
+    const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeNestedMenus(); fn(); }; menu.appendChild(b); };
+    mkItem("✎ Rename",()=>renameWpPath(p));
+    mkItem("📁 Move to…",()=>{ closeNestedMenus(); openWpFolderPicker(anchorBtn,null,targetId=>moveWpPath(p.id,targetId)); });
+    mkItem("⬇ Export GPX",()=>exportWpAsGPX(p));
+    mkItem("🗑 Delete",()=>deleteWpPath(p));
+  }, true);
 }
 function openWpFolderPicker(anchorBtn,excludeNode,onPick){
-  closeWpSubmenus();
   const excludeIds=excludeNode?collectWpFolderSubtreeIds(excludeNode.id):[];
-  const menu=document.createElement("div"); menu.className="sf-menu sf-picker";
-  const rootBtn=document.createElement("button"); rootBtn.className="sf-menu-item"; rootBtn.type="button"; rootBtn.textContent="📁 (root)";
-  rootBtn.onclick=e=>{ e.stopPropagation(); closeWpSubmenus(); onPick(null); };
-  menu.appendChild(rootBtn);
-  walkingPathFolders.filter(f=>!excludeIds.includes(f.id)).sort((a,b)=>wpFolderPath(a).localeCompare(wpFolderPath(b))).forEach(f=>{
-    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent="📁 "+wpFolderPath(f);
-    b.onclick=e=>{ e.stopPropagation(); closeWpSubmenus(); onPick(f.id); };
-    menu.appendChild(b);
-  });
-  anchorBtn.parentElement.appendChild(menu);
-  positionMenuSmart(menu);
+  openPortalMenu(anchorBtn, "sf-picker", menu=>{
+    const rootBtn=document.createElement("button"); rootBtn.className="sf-menu-item"; rootBtn.type="button"; rootBtn.textContent="📁 (root)";
+    rootBtn.onclick=e=>{ e.stopPropagation(); closeNestedMenus(); onPick(null); };
+    menu.appendChild(rootBtn);
+    walkingPathFolders.filter(f=>!excludeIds.includes(f.id)).sort((a,b)=>wpFolderPath(a).localeCompare(wpFolderPath(b))).forEach(f=>{
+      const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent="📁 "+wpFolderPath(f);
+      b.onclick=e=>{ e.stopPropagation(); closeNestedMenus(); onPick(f.id); };
+      menu.appendChild(b);
+    });
+  }, true);
 }
 async function createWpFolder(parentId){
   const appId=afAppId(); if(!appId){ alert("Pick a client/app for this tour first."); return; }
@@ -2447,7 +2470,7 @@ document.getElementById("walkingPathBtn").onclick=e=>{ e.stopPropagation(); open
    about a zone.
    ============================================================ */
 let stopFolders=[];              // flat [{id,parentId,name}] for this project, from GET /api/stop-folder
-let stopTreeExpanded=new Set();  // folder ids the user has expanded
+let stopTreeExpanded=new Set([null]);  // folder ids the user has expanded — root (id null) starts expanded, same as before this was toggleable, but can now be collapsed like any other folder
 let focusedStopFolderId=null;    // where new stops land + default bulk-move target
 let stopSearchQuery="";
 
@@ -2530,15 +2553,13 @@ function reassignZoneFolder(zoneId,folderId){
 // (not the row's index i) at click time, since indices shift on delete/
 // reorder and the menu can stay open across a re-render.
 function openZoneMenu(anchorBtn,zoneId){
-  closeStopFolderMenus();
-  const menu=document.createElement("div"); menu.className="sf-menu";
-  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
-  mkItem("✎ Rename",()=>renameZone(zoneId));
-  mkItem("⧉ Copy",()=>copyZone(zoneId));
-  mkItem("📁 Move to…",()=>{ closeStopFolderMenus(); openStopFolderPicker(anchorBtn,null,folderId=>reassignZoneFolder(zoneId,folderId)); });
-  mkItem("🗑 Delete",()=>deleteZoneById(zoneId));
-  anchorBtn.parentElement.appendChild(menu);
-  positionMenuSmart(menu);
+  openPortalMenu(anchorBtn, "", menu=>{
+    const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
+    mkItem("✎ Rename",()=>renameZone(zoneId));
+    mkItem("⧉ Copy",()=>copyZone(zoneId));
+    mkItem("📁 Move to…",()=>{ closeStopFolderMenus(); openStopFolderPicker(anchorBtn,null,folderId=>reassignZoneFolder(zoneId,folderId)); });
+    mkItem("🗑 Delete",()=>deleteZoneById(zoneId));
+  });
 }
 // Same rename+re-slug logic as the pName property-panel binding
 // (bindProp("pName",...)) — kept consistent so a stop's id changes the same
@@ -2574,7 +2595,7 @@ function collectNodeZoneIds(node){
 function buildStopFolderRow(node,depth){
   const wrap=document.createElement("div");
   const isRoot=node.id===null;
-  const expanded=isRoot||stopTreeExpanded.has(node.id)||(!!stopSearchQuery&&folderMatchesSearchDeep(node));
+  const expanded=stopTreeExpanded.has(node.id)||(!!stopSearchQuery&&folderMatchesSearchDeep(node));
   const row=document.createElement("div"); row.className="stop-folder-row"+(focusedStopFolderId===node.id?" focused":"");
   if(coBulkMode){
     const allIds=collectNodeZoneIds(node);
@@ -2600,7 +2621,7 @@ function buildStopFolderRow(node,depth){
   moreBtn.title=isRoot?"New folder or rename tour":"Rename, move, or delete";
   moreBtn.onclick=e=>{ e.stopPropagation(); openStopFolderMenu(moreBtn,node); };
   row.appendChild(moreBtn);
-  row.onclick=()=>{ focusedStopFolderId=node.id; if(!isRoot){ if(stopTreeExpanded.has(node.id))stopTreeExpanded.delete(node.id);else stopTreeExpanded.add(node.id); } drawList(); };
+  row.onclick=()=>{ focusedStopFolderId=node.id; if(stopTreeExpanded.has(node.id))stopTreeExpanded.delete(node.id);else stopTreeExpanded.add(node.id); drawList(); };
   row.addEventListener("dragover",e=>{ if(e.dataTransfer.types.includes("application/x-zone-id")||e.dataTransfer.types.includes("application/x-stop-folder-id")){ e.preventDefault(); row.classList.add("dragover"); } });
   row.addEventListener("dragleave",()=>row.classList.remove("dragover"));
   row.addEventListener("drop",e=>{
@@ -2638,35 +2659,31 @@ function positionMenuSmart(menu){
 }
 document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")) closeStopFolderMenus(); });
 function openStopFolderMenu(anchorBtn,node){
-  closeStopFolderMenus();
   const isRoot=node.id===null;
-  const menu=document.createElement("div"); menu.className="sf-menu";
-  const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
-  mkItem("＋ New subfolder",()=>createStopFolder(node.id));
-  if(isRoot){
-    mkItem("✎ Rename tour",renameProjectRoot);
-  }else{
-    mkItem("✎ Rename",()=>renameStopFolder(node));
-    mkItem("📁 Move to…",()=>{ closeStopFolderMenus(); openStopFolderPicker(anchorBtn,node,targetId=>moveStopFolder(node.id,targetId)); });
-    mkItem("🗑 Delete",()=>deleteStopFolder(node));
-  }
-  anchorBtn.parentElement.appendChild(menu);
-  positionMenuSmart(menu);
+  openPortalMenu(anchorBtn, "", menu=>{
+    const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
+    mkItem("＋ New subfolder",()=>createStopFolder(node.id));
+    if(isRoot){
+      mkItem("✎ Rename tour",renameProjectRoot);
+    }else{
+      mkItem("✎ Rename",()=>renameStopFolder(node));
+      mkItem("📁 Move to…",()=>{ closeStopFolderMenus(); openStopFolderPicker(anchorBtn,node,targetId=>moveStopFolder(node.id,targetId)); });
+      mkItem("🗑 Delete",()=>deleteStopFolder(node));
+    }
+  });
 }
 function openStopFolderPicker(anchorBtn,excludeNode,onPick){
-  closeStopFolderMenus();
   const excludeIds=excludeNode?collectStopFolderSubtreeIds(excludeNode.id):[];
-  const menu=document.createElement("div"); menu.className="sf-menu sf-picker";
-  const rootBtn=document.createElement("button"); rootBtn.className="sf-menu-item"; rootBtn.type="button"; rootBtn.textContent="📁 (project root)";
-  rootBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); onPick(null); };
-  menu.appendChild(rootBtn);
-  stopFolders.filter(f=>!excludeIds.includes(f.id)).sort((a,b)=>stopFolderPath(a).localeCompare(stopFolderPath(b))).forEach(f=>{
-    const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent="📁 "+stopFolderPath(f);
-    b.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); onPick(f.id); };
-    menu.appendChild(b);
+  openPortalMenu(anchorBtn, "sf-picker", menu=>{
+    const rootBtn=document.createElement("button"); rootBtn.className="sf-menu-item"; rootBtn.type="button"; rootBtn.textContent="📁 (project root)";
+    rootBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); onPick(null); };
+    menu.appendChild(rootBtn);
+    stopFolders.filter(f=>!excludeIds.includes(f.id)).sort((a,b)=>stopFolderPath(a).localeCompare(stopFolderPath(b))).forEach(f=>{
+      const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent="📁 "+stopFolderPath(f);
+      b.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); onPick(f.id); };
+      menu.appendChild(b);
+    });
   });
-  anchorBtn.parentElement.appendChild(menu);
-  positionMenuSmart(menu);
 }
 async function createStopFolder(parentId){
   const pid=afProjectId(); if(!pid){ alert("Save/publish this tour first."); return; }
