@@ -149,12 +149,35 @@ input[type=range]{width:100%;accent-color:var(--coral)}
 let BUNDLE = { ref:[0,0], zones:[] };
 let WALKING_PATH_LATLON = null; // [[lat,lon],...] for BUNDLE's selected Walking Path, once fetched (null = not path-driven)
 const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of the path; farther, use the raw/smoothed fix as-is
+// Progress-tracking state (distance/elevation/ETA along the path) — feeds
+// PipelineRuntime.setPathProgress() when that module is present. Mirrored
+// verbatim from geofence-engine.html/fence-editor.html's SimFencer — see
+// project memory's "verbatim mirror" note.
+let WALKING_PATH_CUM = null, WALKING_PATH_ELEV = null;
+let WALKING_PATH_CUM_GAIN = null, WALKING_PATH_CUM_LOSS = null;
+let WALKING_PATH_TOTAL_GAIN_M = 0, WALKING_PATH_TOTAL_LOSS_M = 0;
+let _pathWalkStartT = null, _pathWalkStartDistM = null;
 async function loadWalkingPath(b){
-  WALKING_PATH_LATLON = null;
+  WALKING_PATH_LATLON = null; WALKING_PATH_CUM = null; WALKING_PATH_ELEV = null;
+  WALKING_PATH_CUM_GAIN = null; WALKING_PATH_CUM_LOSS = null;
+  WALKING_PATH_TOTAL_GAIN_M = 0; WALKING_PATH_TOTAL_LOSS_M = 0;
+  _pathWalkStartT = null; _pathWalkStartDistM = null;
+  if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress(null);
   if(!b || !b.walkingPathId) return;
   try{
     const r = await fetch('/api/walking-path/'+b.walkingPathId,{cache:'no-store'});
-    if(r.ok){ const j = await r.json(); WALKING_PATH_LATLON = (j.points||[]).map(pt=>[pt[1],pt[0]]); } // stored [lon,lat] -> this sim's own [lat,lon] convention
+    if(r.ok){
+      const j = await r.json();
+      WALKING_PATH_LATLON = (j.points||[]).map(pt=>[pt[1],pt[0]]); // stored [lon,lat] -> this sim's own [lat,lon] convention
+      WALKING_PATH_ELEV = (j.points||[]).map(pt=>pt[2]==null?null:pt[2]);
+      if(WALKING_PATH_LATLON.length>=2){
+        WALKING_PATH_CUM = pathCumLens(WALKING_PATH_LATLON);
+        const ce = pathCumElev(WALKING_PATH_ELEV);
+        WALKING_PATH_CUM_GAIN = ce.gain; WALKING_PATH_CUM_LOSS = ce.loss;
+      }
+      WALKING_PATH_TOTAL_GAIN_M = j.elevGainM || 0;
+      WALKING_PATH_TOTAL_LOSS_M = j.elevLossM || 0;
+    }
   }catch(e){}
 }
 const Audio = {
@@ -301,15 +324,14 @@ const Geo = {
             return { crossed, side: d2<0 ? "L":"R" }; }
 };
 
-// Map-matching — verbatim mirror of geofence-engine.html's mapMatch() (same
-// logic/conventions); see that copy's comment for the full rationale. Any
-// fix to this must be applied identically in both places (and in
-// fence-editor.html's SimFencer), or this simulator silently diverges from
-// real visitor behavior.
-function mapMatch(latLon, pathLatLon, ref, maxSnapM){
-  if(!pathLatLon || pathLatLon.length<2) return latLon;
+// Nearest-point-on-polyline detail — verbatim mirror of geofence-engine.html's
+// nearestOnPath() (same logic/conventions); see that copy's comment for the
+// full rationale. Any fix to this must be applied identically in both places
+// (and in fence-editor.html's SimFencer), or this simulator silently
+// diverges from real visitor behavior.
+function nearestOnPath(latLon, pathLatLon, ref){
   const P=Geo.toXY(latLon,ref);
-  let best=null, bestD=Infinity;
+  let best=null, bestD=Infinity, bestI=0, bestT=0;
   for(let i=1;i<pathLatLon.length;i++){
     const A=Geo.toXY(pathLatLon[i-1],ref), B=Geo.toXY(pathLatLon[i],ref);
     const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
@@ -318,10 +340,16 @@ function mapMatch(latLon, pathLatLon, ref, maxSnapM){
     t=Math.max(0,Math.min(1,t));
     const qx=A.x+t*vx, qy=A.y+t*vy;
     const d=Math.hypot(P.x-qx,P.y-qy);
-    if(d<bestD){ bestD=d; best={x:qx,y:qy}; }
+    if(d<bestD){ bestD=d; best={x:qx,y:qy}; bestI=i-1; bestT=t; }
   }
-  if(!best || bestD>maxSnapM) return latLon;
-  return [ ref[0]+best.y/Geo.mPerDegLat, ref[1]+best.x/Geo.mPerDegLon(ref[0]) ];
+  if(!best) return null;
+  return { point:[ ref[0]+best.y/Geo.mPerDegLat, ref[1]+best.x/Geo.mPerDegLon(ref[0]) ], distM:bestD, segIdx:bestI, t:bestT };
+}
+function mapMatch(latLon, pathLatLon, ref, maxSnapM){
+  if(!pathLatLon || pathLatLon.length<2) return latLon;
+  const m=nearestOnPath(latLon, pathLatLon, ref);
+  if(!m || m.distM>maxSnapM) return latLon;
+  return m.point;
 }
 
 /* Path (moving ambient) stop position — mirrors geofence-engine.html's
@@ -331,6 +359,51 @@ function pathCumLens(pathLatLon){
   const cum=[0];
   for(let i=1;i<pathLatLon.length;i++) cum.push(cum[i-1]+Geo.hav(pathLatLon[i-1],pathLatLon[i]));
   return cum;
+}
+// Cumulative elevation gain/loss — verbatim mirror of geofence-engine.html's
+// pathCumElev(). See that copy's comment for the rationale.
+function pathCumElev(elevArr, noiseFloorM){
+  noiseFloorM = noiseFloorM==null ? 2 : noiseFloorM;
+  const gain=[0], loss=[0];
+  let ref = elevArr.length ? elevArr[0] : null;
+  for(let i=1;i<elevArr.length;i++){
+    let g=gain[i-1], l=loss[i-1];
+    const e=elevArr[i];
+    if(e!=null){
+      if(ref!=null){
+        const d=e-ref;
+        if(Math.abs(d)>=noiseFloorM){ if(d>0) g+=d; else l-=d; ref=e; }
+      } else ref=e;
+    }
+    gain.push(g); loss.push(l);
+  }
+  return { gain, loss };
+}
+// Walk-progress tracking — verbatim mirror of geofence-engine.html's
+// updateWalkingPathProgress(). See that copy's comment for the rationale.
+function updateWalkingPathProgress(nm, nowMs){
+  if(!WALKING_PATH_CUM) return;
+  const cum=WALKING_PATH_CUM, totalM=cum[cum.length-1];
+  const distAlongM = cum[nm.segIdx] + nm.t*((cum[nm.segIdx+1]??cum[nm.segIdx])-cum[nm.segIdx]);
+  if(_pathWalkStartT==null){ _pathWalkStartT=nowMs; _pathWalkStartDistM=distAlongM; }
+  const elapsedS=(nowMs-_pathWalkStartT)/1000;
+  const coveredSinceStartM=Math.max(0, distAlongM-_pathWalkStartDistM);
+  const paceMps = (elapsedS>3 && coveredSinceStartM>2) ? coveredSinceStartM/elapsedS : null;
+  const remainingM=Math.max(0, totalM-distAlongM);
+  let elevGainSoFarM=null, elevLossSoFarM=null;
+  if(WALKING_PATH_CUM_GAIN){
+    const g0=WALKING_PATH_CUM_GAIN[nm.segIdx], g1=WALKING_PATH_CUM_GAIN[nm.segIdx+1]??g0;
+    const l0=WALKING_PATH_CUM_LOSS[nm.segIdx], l1=WALKING_PATH_CUM_LOSS[nm.segIdx+1]??l0;
+    elevGainSoFarM = Math.round(g0+nm.t*(g1-g0));
+    elevLossSoFarM = Math.round(l0+nm.t*(l1-l0));
+  }
+  if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress({
+    distanceCoveredM: Math.round(distAlongM), distanceRemainingM: Math.round(remainingM),
+    totalDistanceM: Math.round(totalM), pctComplete: totalM>0 ? Math.round(distAlongM/totalM*1000)/10 : null,
+    elevGainSoFarM, elevLossSoFarM,
+    totalElevGainM: WALKING_PATH_TOTAL_GAIN_M, totalElevLossM: WALKING_PATH_TOTAL_LOSS_M,
+    etaSeconds: paceMps ? Math.round(remainingM/paceMps) : null
+  });
 }
 function pathPointAtDist(pathLatLon, cum, distM){
   const L=cum[cum.length-1];
@@ -416,8 +489,11 @@ const Geofencer = {
 
   update(p, prev, now){
     if(WALKING_PATH_LATLON){
-      const m=mapMatch([p.lat,p.lon], WALKING_PATH_LATLON, BUNDLE.ref, WALKING_PATH_SNAP_M);
-      if(m[0]!==p.lat || m[1]!==p.lon) p={...p, lat:m[0], lon:m[1]};
+      const nm=nearestOnPath([p.lat,p.lon], WALKING_PATH_LATLON, BUNDLE.ref);
+      if(nm && nm.distM<=WALKING_PATH_SNAP_M){
+        p={...p, lat:nm.point[0], lon:nm.point[1]};
+        updateWalkingPathProgress(nm, now);
+      }
     }
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{

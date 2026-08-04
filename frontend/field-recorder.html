@@ -1011,10 +1011,46 @@ function pathDistanceM(points){
   for(let i=1;i<points.length;i++) d += haversineM(points[i-1].lat,points[i-1].lon,points[i].lat,points[i].lon);
   return d;
 }
+// Phone GPS altitude is noisy (+/-10-30m without a barometer) — smoothing
+// with a short moving average, then only counting a delta once it clears a
+// noise floor in elevGainLoss(), keeps gain/loss numbers meaningful instead
+// of inflated by jitter. Smoothing happens once, here — the smoothed value
+// is what actually gets stored per point (see savePathRecording), so the
+// live engines' cumulative-progress math can threshold-diff already-clean
+// values instead of re-implementing this smoothing three times.
+function smoothElevation(points, windowSize){
+  windowSize = windowSize || 5;
+  const known = points.filter(p=>p.alt!=null).length;
+  if(known < points.length*0.5) return points.map(p=>({...p, elevM:null})); // too sparse to trust
+  let lastKnown=null;
+  const held = points.map(p=>{ if(p.alt!=null) lastKnown=p.alt; return lastKnown; }); // hold last known across null gaps
+  const half=Math.floor(windowSize/2);
+  return points.map((p,i)=>{
+    const lo=Math.max(0,i-half), hi=Math.min(held.length-1,i+half);
+    let sum=0,n=0;
+    for(let j=lo;j<=hi;j++){ if(held[j]!=null){ sum+=held[j]; n++; } }
+    return {...p, elevM: n?Math.round(sum/n*10)/10 : null};
+  });
+}
+function elevGainLoss(smoothedPoints, noiseFloorM){
+  noiseFloorM = noiseFloorM==null ? 2 : noiseFloorM;
+  let gainM=0, lossM=0, ref=null;
+  for(const p of smoothedPoints){
+    if(p.elevM==null) continue;
+    if(ref==null){ ref=p.elevM; continue; }
+    const d=p.elevM-ref;
+    if(Math.abs(d)>=noiseFloorM){
+      if(d>0) gainM+=d; else lossM-=d;
+      ref=p.elevM;
+    }
+  }
+  return {gainM:Math.round(gainM), lossM:Math.round(lossM)};
+}
 function updatePathStatsUI(){
   const el=document.getElementById("pathStats"); if(!el) return;
   const km=(pathDistanceM(pathPoints)/1000).toFixed(2);
-  el.textContent=pathPoints.length+" pts · "+km+" km";
+  const {gainM,lossM}=elevGainLoss(smoothElevation(pathPoints));
+  el.textContent=pathPoints.length+" pts · "+km+" km"+((gainM||lossM)?" · ▲"+gainM+"m ▼"+lossM+"m":"");
 }
 // Drops any point implying a speed faster than humanly possible at walking/
 // hiking pace (default 8 m/s ≈ 29 km/h — generous enough to cover a brisk
@@ -1040,17 +1076,19 @@ async function savePathRecording(){
   const filtered=filterImpossibleJumps(pathPoints);
   const droppedCount=pathPoints.length-filtered.length;
   const distanceM=pathDistanceM(filtered);
+  const smoothed=smoothElevation(filtered);
+  const {gainM,lossM}=elevGainLoss(smoothed);
   const name=(prompt("Name this walking path:"+(droppedCount?" ("+droppedCount+" bad point(s) will be filtered out)":""))||"").trim();
   if(!name) return;
   try{
     const r=await fetch("/api/walking-path",{
       method:"POST",
       headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
-      body:JSON.stringify({appId:currentAppId, name, points:filtered.map(p=>[p.lon,p.lat]), distanceM})
+      body:JSON.stringify({appId:currentAppId, name, points:smoothed.map(p=>[p.lon,p.lat,p.elevM]), distanceM, elevGainM:gainM, elevLossM:lossM})
     });
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.error||r.statusText);
-    setStatus('Saved walking path "'+name+'" ('+filtered.length+' pts, '+(distanceM/1000).toFixed(2)+' km)');
+    setStatus('Saved walking path "'+name+'" ('+filtered.length+' pts, '+(distanceM/1000).toFixed(2)+' km'+((gainM||lossM)?', ▲'+gainM+'m ▼'+lossM+'m':'')+')');
     pathPoints=[];
     document.getElementById("btnPathSave").style.display="none";
     updatePathStatsUI();
@@ -1171,14 +1209,18 @@ async function initPermissions(){
 
   navigator.geolocation.watchPosition(
     pos => {
-      const {latitude:lat,longitude:lon,accuracy:acc,heading,speed} = pos.coords;
+      const {latitude:lat,longitude:lon,accuracy:acc,heading,speed,altitude,altitudeAccuracy} = pos.coords;
       const first = !lastPos;
       lastPos = {lat,lon,acc};
       if(heading != null && !isNaN(heading) && (speed||0) > 0.5){
         headingBuffer.push(heading);
         if(headingBuffer.length > 10) headingBuffer.shift();
       }
-      if(pathRecording){ pathPoints.push({lat,lon,acc,t:pos.timestamp}); updatePathStatsUI(); }
+      // altitude is null on many devices/browsers (no barometer, or a fix that
+      // hasn't resolved vertical position yet) — carried through as-is; the
+      // elevation profile below simply treats a path with no altitude data as
+      // "no elevation available" rather than guessing.
+      if(pathRecording){ pathPoints.push({lat,lon,acc,alt:(altitude!=null&&!isNaN(altitude))?altitude:null,t:pos.timestamp}); updatePathStatsUI(); }
       document.getElementById("btnMark").disabled = false;
       refreshMap();
       // refreshPublishedZones() only ever got one shot (map 'load' event) and

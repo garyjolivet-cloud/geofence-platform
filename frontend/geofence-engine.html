@@ -286,12 +286,36 @@ let _activeLinkToken = null;  // set when visitor arrives via walk link — pass
 let _activeLinkGuide = null;  // guide ID from walk link — used to filter live stops to this guide only
 let WALKING_PATH_LATLON = null; // [[lat,lon],...] for the project's selected Walking Path, once fetched (null = not path-driven)
 const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of the path; farther, use the raw/smoothed fix as-is
+// Progress-tracking state (distance/elevation/ETA along the path) — feeds
+// PipelineRuntime.setPathProgress(), read by any zone's data.walking_path_progress
+// block. WALKING_PATH_CUM/_ELEV/_CUM_GAIN/_CUM_LOSS are precomputed once per
+// path load; _pathWalkStart* lock in when the visitor actually starts walking
+// the route (first on-path fix), not page load, so pace reflects real walking.
+let WALKING_PATH_CUM = null, WALKING_PATH_ELEV = null;
+let WALKING_PATH_CUM_GAIN = null, WALKING_PATH_CUM_LOSS = null;
+let WALKING_PATH_TOTAL_GAIN_M = 0, WALKING_PATH_TOTAL_LOSS_M = 0;
+let _pathWalkStartT = null, _pathWalkStartDistM = null;
 async function loadWalkingPath(b){
-  WALKING_PATH_LATLON = null;
+  WALKING_PATH_LATLON = null; WALKING_PATH_CUM = null; WALKING_PATH_ELEV = null;
+  WALKING_PATH_CUM_GAIN = null; WALKING_PATH_CUM_LOSS = null;
+  WALKING_PATH_TOTAL_GAIN_M = 0; WALKING_PATH_TOTAL_LOSS_M = 0;
+  _pathWalkStartT = null; _pathWalkStartDistM = null;
+  if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress(null);
   if(!b || !b.walkingPathId) return;
   try{
     const r = await fetch('/api/walking-path/'+b.walkingPathId,{cache:'no-store'});
-    if(r.ok){ const j = await r.json(); WALKING_PATH_LATLON = (j.points||[]).map(pt=>[pt[1],pt[0]]); } // stored [lon,lat] -> this engine's own [lat,lon] convention
+    if(r.ok){
+      const j = await r.json();
+      WALKING_PATH_LATLON = (j.points||[]).map(pt=>[pt[1],pt[0]]); // stored [lon,lat] -> this engine's own [lat,lon] convention
+      WALKING_PATH_ELEV = (j.points||[]).map(pt=>pt[2]==null?null:pt[2]);
+      if(WALKING_PATH_LATLON.length>=2){
+        WALKING_PATH_CUM = pathCumLens(WALKING_PATH_LATLON);
+        const ce = pathCumElev(WALKING_PATH_ELEV);
+        WALKING_PATH_CUM_GAIN = ce.gain; WALKING_PATH_CUM_LOSS = ce.loss;
+      }
+      WALKING_PATH_TOTAL_GAIN_M = j.elevGainM || 0;
+      WALKING_PATH_TOTAL_LOSS_M = j.elevLossM || 0;
+    }
   }catch(e){}
 }
 
@@ -337,21 +361,17 @@ const Geo = {
             return { crossed, side: d2<0 ? "L":"R" }; }
 };
 
-// Map-matching: snaps a GPS fix onto the project's recorded Walking Path
-// (nearest-point-on-polyline, in the same local planar XY frame as every
-// other geometry calc in this engine) for more accurate trigger detection
-// on path-driven tours. Falls back to the raw fix untouched when the
-// nearest point on the path is farther than maxSnapM (confirmed: a visitor
-// who's genuinely left the route — a break, a wrong turn — should not be
-// force-snapped back onto it). Mirrored verbatim (same logic and
-// conventions) in geofence-sim.html and fence-editor.html's own SimFencer
-// test simulator — see project memory's "verbatim mirror" note; a fix here
-// that isn't applied to both would make in-editor testing silently diverge
-// from real visitor behavior.
-function mapMatch(latLon, pathLatLon, ref, maxSnapM){
-  if(!pathLatLon || pathLatLon.length<2) return latLon;
+// Nearest-point-on-polyline detail (segment index + interpolation t, not
+// just the snapped point) — shared by mapMatch() below (trigger-detection
+// accuracy) and updateWalkingPathProgress() (distance-along-path needs t to
+// interpolate within the winning segment). Mirrored verbatim (same logic
+// and conventions) in geofence-sim.html and fence-editor.html's own
+// SimFencer test simulator — see project memory's "verbatim mirror" note; a
+// fix here that isn't applied to both would make in-editor testing silently
+// diverge from real visitor behavior.
+function nearestOnPath(latLon, pathLatLon, ref){
   const P=Geo.toXY(latLon,ref);
-  let best=null, bestD=Infinity;
+  let best=null, bestD=Infinity, bestI=0, bestT=0;
   for(let i=1;i<pathLatLon.length;i++){
     const A=Geo.toXY(pathLatLon[i-1],ref), B=Geo.toXY(pathLatLon[i],ref);
     const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
@@ -360,10 +380,21 @@ function mapMatch(latLon, pathLatLon, ref, maxSnapM){
     t=Math.max(0,Math.min(1,t));
     const qx=A.x+t*vx, qy=A.y+t*vy;
     const d=Math.hypot(P.x-qx,P.y-qy);
-    if(d<bestD){ bestD=d; best={x:qx,y:qy}; }
+    if(d<bestD){ bestD=d; best={x:qx,y:qy}; bestI=i-1; bestT=t; }
   }
-  if(!best || bestD>maxSnapM) return latLon;
-  return [ ref[0]+best.y/Geo.mPerDegLat, ref[1]+best.x/Geo.mPerDegLon(ref[0]) ];
+  if(!best) return null;
+  return { point:[ ref[0]+best.y/Geo.mPerDegLat, ref[1]+best.x/Geo.mPerDegLon(ref[0]) ], distM:bestD, segIdx:bestI, t:bestT };
+}
+// Map-matching: snaps a GPS fix onto the project's recorded Walking Path for
+// more accurate trigger detection on path-driven tours. Falls back to the
+// raw fix untouched when the nearest point on the path is farther than
+// maxSnapM (confirmed: a visitor who's genuinely left the route — a break, a
+// wrong turn — should not be force-snapped back onto it).
+function mapMatch(latLon, pathLatLon, ref, maxSnapM){
+  if(!pathLatLon || pathLatLon.length<2) return latLon;
+  const m=nearestOnPath(latLon, pathLatLon, ref);
+  if(!m || m.distM>maxSnapM) return latLon;
+  return m.point;
 }
 
 /* ==================== MOVING (PATH) ZONE POSITION ==================
@@ -380,6 +411,65 @@ function pathCumLens(pathLatLon){
   const cum=[0];
   for(let i=1;i<pathLatLon.length;i++) cum.push(cum[i-1]+Geo.hav(pathLatLon[i-1],pathLatLon[i]));
   return cum; // cum[last] === total path length L
+}
+// Cumulative elevation gain/loss at each Walking Path point, threshold-diffed
+// over the already-smoothed per-point elevation Field Recorder stores (see
+// smoothElevation()/elevGainLoss() there) — same 2m noise floor, just kept as
+// a running array instead of one final total, so "gain/loss so far" mid-walk
+// can be read by interpolating within whichever segment the visitor is on.
+function pathCumElev(elevArr, noiseFloorM){
+  noiseFloorM = noiseFloorM==null ? 2 : noiseFloorM;
+  const gain=[0], loss=[0];
+  let ref = elevArr.length ? elevArr[0] : null;
+  for(let i=1;i<elevArr.length;i++){
+    let g=gain[i-1], l=loss[i-1];
+    const e=elevArr[i];
+    if(e!=null){
+      if(ref!=null){
+        const d=e-ref;
+        if(Math.abs(d)>=noiseFloorM){ if(d>0) g+=d; else l-=d; ref=e; }
+      } else ref=e;
+    }
+    gain.push(g); loss.push(l);
+  }
+  return { gain, loss };
+}
+// Walk-progress tracking — distance covered/remaining, elevation gain/loss
+// so far, and a pace-based ETA, pushed to PipelineRuntime.setPathProgress()
+// so any zone's data.walking_path_progress block can read it. nm is the
+// nearestOnPath() result from the map-match that just ran on this tick's
+// fix (already on-path, within WALKING_PATH_SNAP_M — callers only invoke
+// this when that's true). "Walk start" locks in on the first on-path fix
+// rather than page load, so pace reflects the actual walk, not idle time
+// before the visitor reached the route. Sticky across a brief off-path
+// tick (caller simply doesn't call this) rather than resetting — a GPS
+// blip or short detour shouldn't blank out progress that was just shown.
+function updateWalkingPathProgress(nm, nowMs){
+  if(!WALKING_PATH_CUM) return;
+  const cum=WALKING_PATH_CUM, totalM=cum[cum.length-1];
+  const distAlongM = cum[nm.segIdx] + nm.t*((cum[nm.segIdx+1]??cum[nm.segIdx])-cum[nm.segIdx]);
+  if(_pathWalkStartT==null){ _pathWalkStartT=nowMs; _pathWalkStartDistM=distAlongM; }
+  const elapsedS=(nowMs-_pathWalkStartT)/1000;
+  const coveredSinceStartM=Math.max(0, distAlongM-_pathWalkStartDistM);
+  // Require a little history before trusting a pace estimate — the first
+  // few ticks after locking in a walk start would otherwise produce a wild
+  // ETA off a near-zero elapsed time/distance.
+  const paceMps = (elapsedS>3 && coveredSinceStartM>2) ? coveredSinceStartM/elapsedS : null;
+  const remainingM=Math.max(0, totalM-distAlongM);
+  let elevGainSoFarM=null, elevLossSoFarM=null;
+  if(WALKING_PATH_CUM_GAIN){
+    const g0=WALKING_PATH_CUM_GAIN[nm.segIdx], g1=WALKING_PATH_CUM_GAIN[nm.segIdx+1]??g0;
+    const l0=WALKING_PATH_CUM_LOSS[nm.segIdx], l1=WALKING_PATH_CUM_LOSS[nm.segIdx+1]??l0;
+    elevGainSoFarM = Math.round(g0+nm.t*(g1-g0));
+    elevLossSoFarM = Math.round(l0+nm.t*(l1-l0));
+  }
+  if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress({
+    distanceCoveredM: Math.round(distAlongM), distanceRemainingM: Math.round(remainingM),
+    totalDistanceM: Math.round(totalM), pctComplete: totalM>0 ? Math.round(distAlongM/totalM*1000)/10 : null,
+    elevGainSoFarM, elevLossSoFarM,
+    totalElevGainM: WALKING_PATH_TOTAL_GAIN_M, totalElevLossM: WALKING_PATH_TOTAL_LOSS_M,
+    etaSeconds: paceMps ? Math.round(remainingM/paceMps) : null
+  });
 }
 function pointAtDistance(pathLatLon, cum, distM){
   const L=cum[cum.length-1];
@@ -469,8 +559,11 @@ const Geofencer = {
 
   update(p, prev, now){
     if(WALKING_PATH_LATLON){
-      const m=mapMatch([p.lat,p.lon], WALKING_PATH_LATLON, BUNDLE.ref, WALKING_PATH_SNAP_M);
-      if(m[0]!==p.lat || m[1]!==p.lon) p={...p, lat:m[0], lon:m[1]};
+      const nm=nearestOnPath([p.lat,p.lon], WALKING_PATH_LATLON, BUNDLE.ref);
+      if(nm && nm.distM<=WALKING_PATH_SNAP_M){
+        p={...p, lat:nm.point[0], lon:nm.point[1]};
+        updateWalkingPathProgress(nm, now);
+      }
     }
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{

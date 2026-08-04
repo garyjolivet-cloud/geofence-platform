@@ -60,6 +60,23 @@ const BLOCKS = {
     outputs: [{ id: "bearingDeg", type: "number" }, { id: "isHazard", type: "gate" }, { id: "id", type: "text" }],
     params: []
   },
+  // Only populated when the project has a Walking Path selected — see
+  // PipelineRuntime.setPathProgress(), called once per GPS tick by whichever
+  // host (geofence-engine.html, geofence-sim.html, fence-editor.html's
+  // SimFencer) owns the live position + map-matching. All ports are null
+  // when no path is active, or before the visitor has map-matched onto it.
+  "data.walking_path_progress": {
+    label: "Walking Path Progress", category: "data",
+    inputs: [],
+    outputs: [
+      { id: "distanceCoveredM", type: "number" }, { id: "distanceRemainingM", type: "number" },
+      { id: "totalDistanceM", type: "number" }, { id: "pctComplete", type: "number" },
+      { id: "elevGainSoFarM", type: "number" }, { id: "elevLossSoFarM", type: "number" },
+      { id: "totalElevGainM", type: "number" }, { id: "totalElevLossM", type: "number" },
+      { id: "etaSeconds", type: "number" }
+    ],
+    params: []
+  },
   "logic.compare": {
     label: "Compare", category: "logic",
     inputs: [{ id: "in", type: "number" }, { id: "gate", type: "gate" }],
@@ -145,6 +162,12 @@ const compiled = {};
 let dataCache = {}; // { weather:{...}, snowHistory:{...} } — shared across zones, refreshed on an interval
 let dataTimer = null;
 let callbacks = {};
+
+// Path-level (not per-zone) progress along the project's selected Walking
+// Path — pushed in by the host once per GPS tick via setPathProgress(),
+// since only the host owns live position + the path's map-matching/profile
+// data. null until a path is active and the visitor has map-matched onto it.
+let pathProgress = null;
 
 // objectId@version -> {template:{v,nodes,edges}, paramSchema} — fetched once,
 // cached forever per page load (a given version's definition is immutable).
@@ -262,6 +285,15 @@ const PipelineRuntime = {
     delete compiled[zoneId];
   },
 
+  // p: {distanceCoveredM,distanceRemainingM,totalDistanceM,pctComplete,
+  //     elevGainSoFarM,elevLossSoFarM,totalElevGainM,totalElevLossM,etaSeconds}
+  // or null (no path active / not yet map-matched onto it). Call once per GPS
+  // tick, before tick() — every zone's data.walking_path_progress block reads
+  // the same shared value, same pattern as weather's refreshDataCache().
+  setPathProgress(p) {
+    pathProgress = p;
+  },
+
   // fix: {lat,lon,speed,headingTravel,acc,t}; smoothedPos: Smoother output for this tick
   // evt: { entered:bool, exited:bool, dwellSeconds:number|null }
   tick(zoneId, fix, smoothedPos, evt) {
@@ -307,6 +339,19 @@ const PipelineRuntime = {
           break;
         }
         case "data.dwell_time": cache[id].seconds = evt.dwellSeconds ?? null; break;
+        case "data.walking_path_progress": {
+          const p = pathProgress || {};
+          cache[id].distanceCoveredM = p.distanceCoveredM ?? null;
+          cache[id].distanceRemainingM = p.distanceRemainingM ?? null;
+          cache[id].totalDistanceM = p.totalDistanceM ?? null;
+          cache[id].pctComplete = p.pctComplete ?? null;
+          cache[id].elevGainSoFarM = p.elevGainSoFarM ?? null;
+          cache[id].elevLossSoFarM = p.elevLossSoFarM ?? null;
+          cache[id].totalElevGainM = p.totalElevGainM ?? null;
+          cache[id].totalElevLossM = p.totalElevLossM ?? null;
+          cache[id].etaSeconds = p.etaSeconds ?? null;
+          break;
+        }
         case "data.zone_props": {
           cache[id].bearingDeg = (g.zone && g.zone.bearingDeg != null) ? g.zone.bearingDeg : null;
           cache[id].isHazard = !!(g.zone && g.zone.isHazard);

@@ -2328,8 +2328,8 @@ async function api(request, env, url) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO walking_path (id,app_id,folder_id,name,points_json,distance_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)"
-    ).bind(id, appId, folderId, name, JSON.stringify(b.points), b.distanceM || 0, now, now).run();
+      "INSERT INTO walking_path (id,app_id,folder_id,name,points_json,distance_m,elev_gain_m,elev_loss_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+    ).bind(id, appId, folderId, name, JSON.stringify(b.points), b.distanceM || 0, b.elevGainM || 0, b.elevLossM || 0, now, now).run();
     await logAudit(env, request, A, "walkingpath.create", appId + "/" + name);
     return json({ id, name, folderId }, 201, AC);
   }
@@ -2340,7 +2340,7 @@ async function api(request, env, url) {
     if (!appId) return json({ error: "appId required" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
     const { results } = await env.DB.prepare(
-      "SELECT id,folder_id AS folderId,name,distance_m AS distanceM,updated_at AS updatedAt FROM walking_path WHERE app_id=? ORDER BY name"
+      "SELECT id,folder_id AS folderId,name,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM,updated_at AS updatedAt FROM walking_path WHERE app_id=? ORDER BY name"
     ).bind(appId).all();
     return json({ paths: results || [] }, 200, AC);
   }
@@ -2349,7 +2349,7 @@ async function api(request, env, url) {
   if (mWalkingPath && (method === "GET" || method === "PATCH" || method === "DELETE")) {
     const pathId = decodeURIComponent(mWalkingPath[1]);
     const row = await env.DB.prepare(
-      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,distance_m AS distanceM FROM walking_path WHERE id=?"
+      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM FROM walking_path WHERE id=?"
     ).bind(pathId).first();
     if (!row) return json({ error: "walking path not found" }, 404, AC);
 
@@ -2358,7 +2358,7 @@ async function api(request, env, url) {
       // for a published, path-driven project.
       let points;
       try { points = JSON.parse(row.pointsJson); } catch (e) { return json({ error: "stored path is corrupt" }, 500, AC); }
-      return json({ id: pathId, name: row.name, appId: row.appId, folderId: row.folderId, distanceM: row.distanceM, points }, 200, AC);
+      return json({ id: pathId, name: row.name, appId: row.appId, folderId: row.folderId, distanceM: row.distanceM, elevGainM: row.elevGainM, elevLossM: row.elevLossM, points }, 200, AC);
     }
 
     const A = await auth(request, env);

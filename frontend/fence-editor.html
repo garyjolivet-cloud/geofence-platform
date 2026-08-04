@@ -2043,6 +2043,13 @@ let wpTreeExpanded=new Set();     // folder ids expanded in the picker
 let selectedWalkingPathId=null;
 let selectedWalkingPathPoints=null; // [[lon,lat],...] of the currently-selected path, once fetched
 let selectedWalkingPathName=null; // from the fetch itself — the button label no longer needs the (possibly not-yet-loaded) walkingPaths list to show the right name
+// Progress-tracking state for Test Mode's simulated walk — cached at select
+// time (not recomputed per tick, unlike the mapMatch conversion above, since
+// this is real O(n) precompute work) and consumed by SimFencer.update()'s
+// walk-progress tracking, mirrored from geofence-engine.html/geofence-sim.html.
+let selectedWalkingPathElev=null;   // [elevM|null,...] parallel to selectedWalkingPathPoints
+let _wpCumM=null, _wpCumGainM=null, _wpCumLossM=null, _wpTotalGainM=0, _wpTotalLossM=0;
+let _pathWalkStartT=null, _pathWalkStartDistM=null; // locked in on the first on-path tick each walk; cleared by SimFencer.reset()
 async function loadWalkingPaths(){
   const appId=afAppId();
   if(!appId){ walkingPaths=[]; walkingPathFolders=[]; return; }
@@ -2133,7 +2140,12 @@ function updateWalkingPathBtnLabel(){
   btn.textContent = selectedWalkingPathId ? ("🥾 "+(selectedWalkingPathName||"…")+" ▾") : "🥾 Walking Path";
 }
 async function selectWalkingPath(id){
-  if(!id){ selectedWalkingPathId=null; selectedWalkingPathPoints=null; selectedWalkingPathName=null; renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave(); return; }
+  if(!id){
+    selectedWalkingPathId=null; selectedWalkingPathPoints=null; selectedWalkingPathName=null;
+    selectedWalkingPathElev=null; _wpCumM=null; _wpCumGainM=null; _wpCumLossM=null; _wpTotalGainM=0; _wpTotalLossM=0;
+    if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
+    renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave(); return;
+  }
   try{
     const r=await fetch("/api/walking-path/"+id);
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
@@ -2141,6 +2153,15 @@ async function selectWalkingPath(id){
     selectedWalkingPathId=id;
     selectedWalkingPathPoints=j.points;
     selectedWalkingPathName=j.name;
+    selectedWalkingPathElev=(j.points||[]).map(pt=>pt[2]==null?null:pt[2]);
+    if(selectedWalkingPathPoints.length>=2){
+      const pathLatLon=selectedWalkingPathPoints.map(pt=>[pt[1],pt[0]]);
+      _wpCumM=simPathCumLens(pathLatLon);
+      const ce=simPathCumElev(selectedWalkingPathElev);
+      _wpCumGainM=ce.gain; _wpCumLossM=ce.loss;
+    } else { _wpCumM=null; _wpCumGainM=null; _wpCumLossM=null; }
+    _wpTotalGainM=j.elevGainM||0; _wpTotalLossM=j.elevLossM||0;
+    if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
     renderWalkingPathLine();
     updateWalkingPathBtnLabel();
     autoSave();
@@ -3198,20 +3219,14 @@ const SimGeo={
     const d1=ccw(C,D,A),d2=ccw(C,D,B),d3=ccw(A,B,C),d4=ccw(A,B,D);
     return{crossed:((d1>0)!==(d2>0))&&((d3>0)!==(d4>0)),side:d2<0?"L":"R"};}
 };
-// Map-matching — verbatim mirror of geofence-engine.html's mapMatch() (same
-// logic/conventions, inlined to match SimGeo's own style rather than named
-// mPerDegLat/mPerDegLon constants); see that copy's comment for the full
-// rationale. Reads the editor's own already-loaded selectedWalkingPathPoints
-// directly (no fetch needed — this is the same page that loaded them for
-// the map/picker), converted from [lon,lat] to this simulator's [lat,lon]
-// convention on the fly each call (cheap relative to the projection loop
-// itself; avoids needing to cache-and-invalidate across every place
-// simBundle gets rebuilt). Any fix here must also go into
+// Nearest-point-on-polyline detail — verbatim mirror of geofence-engine.html's
+// nearestOnPath() (same logic/conventions, inlined to match SimGeo's own
+// style rather than named mPerDegLat/mPerDegLon constants); see that copy's
+// comment for the full rationale. Any fix here must also go into
 // geofence-engine.html and geofence-sim.html's copies.
-function mapMatch(latLon,pathLatLon,ref,maxSnapM){
-  if(!pathLatLon||pathLatLon.length<2) return latLon;
+function nearestOnPath(latLon,pathLatLon,ref){
   const P=SimGeo.toXY(latLon,ref);
-  let best=null,bestD=Infinity;
+  let best=null,bestD=Infinity,bestI=0,bestT=0;
   for(let i=1;i<pathLatLon.length;i++){
     const A=SimGeo.toXY(pathLatLon[i-1],ref), B=SimGeo.toXY(pathLatLon[i],ref);
     const vx=B.x-A.x,vy=B.y-A.y,wx=P.x-A.x,wy=P.y-A.y;
@@ -3220,10 +3235,20 @@ function mapMatch(latLon,pathLatLon,ref,maxSnapM){
     t=Math.max(0,Math.min(1,t));
     const qx=A.x+t*vx,qy=A.y+t*vy;
     const d=Math.hypot(P.x-qx,P.y-qy);
-    if(d<bestD){bestD=d;best={x:qx,y:qy};}
+    if(d<bestD){bestD=d;best={x:qx,y:qy};bestI=i-1;bestT=t;}
   }
-  if(!best||bestD>maxSnapM) return latLon;
-  return [ ref[0]+best.y/111320, ref[1]+best.x/(111320*Math.cos(ref[0]*Math.PI/180)) ];
+  if(!best) return null;
+  return { point:[ ref[0]+best.y/111320, ref[1]+best.x/(111320*Math.cos(ref[0]*Math.PI/180)) ], distM:bestD, segIdx:bestI, t:bestT };
+}
+// Reads the editor's own already-loaded selectedWalkingPathPoints directly
+// (no fetch needed — this is the same page that loaded them for the
+// map/picker), converted from [lon,lat] to this simulator's [lat,lon]
+// convention on the fly each call.
+function mapMatch(latLon,pathLatLon,ref,maxSnapM){
+  if(!pathLatLon||pathLatLon.length<2) return latLon;
+  const m=nearestOnPath(latLon,pathLatLon,ref);
+  if(!m||m.distM>maxSnapM) return latLon;
+  return m.point;
 }
 // Distinct from WALKING_PATH_SNAP_M (15m — how close a NEW/dragged stop
 // must be to snap onto the path in the editor UI); this is how far the
@@ -3236,6 +3261,54 @@ function simPathCumLens(pathLatLon){
   const cum=[0];
   for(let i=1;i<pathLatLon.length;i++) cum.push(cum[i-1]+SimGeo.hav(pathLatLon[i-1],pathLatLon[i]));
   return cum;
+}
+// Cumulative elevation gain/loss — verbatim mirror of geofence-engine.html's
+// pathCumElev(). See that copy's comment for the rationale.
+function simPathCumElev(elevArr,noiseFloorM){
+  noiseFloorM = noiseFloorM==null ? 2 : noiseFloorM;
+  const gain=[0], loss=[0];
+  let ref = elevArr.length ? elevArr[0] : null;
+  for(let i=1;i<elevArr.length;i++){
+    let g=gain[i-1], l=loss[i-1];
+    const e=elevArr[i];
+    if(e!=null){
+      if(ref!=null){
+        const d=e-ref;
+        if(Math.abs(d)>=noiseFloorM){ if(d>0) g+=d; else l-=d; ref=e; }
+      } else ref=e;
+    }
+    gain.push(g); loss.push(l);
+  }
+  return { gain, loss };
+}
+// Walk-progress tracking for Test Mode's simulated walk — verbatim mirror of
+// geofence-engine.html's updateWalkingPathProgress(). nowMs here is the
+// simulator's own vT clock (see simPlay()), not real wall time — fine, since
+// this only cares about elapsed-time-vs-distance ratios, which stay
+// self-consistent regardless of what clock feeds them.
+function updateWalkingPathProgress(nm, nowMs){
+  if(!_wpCumM) return;
+  const cum=_wpCumM, totalM=cum[cum.length-1];
+  const distAlongM = cum[nm.segIdx] + nm.t*((cum[nm.segIdx+1]??cum[nm.segIdx])-cum[nm.segIdx]);
+  if(_pathWalkStartT==null){ _pathWalkStartT=nowMs; _pathWalkStartDistM=distAlongM; }
+  const elapsedS=(nowMs-_pathWalkStartT)/1000;
+  const coveredSinceStartM=Math.max(0, distAlongM-_pathWalkStartDistM);
+  const paceMps = (elapsedS>3 && coveredSinceStartM>2) ? coveredSinceStartM/elapsedS : null;
+  const remainingM=Math.max(0, totalM-distAlongM);
+  let elevGainSoFarM=null, elevLossSoFarM=null;
+  if(_wpCumGainM){
+    const g0=_wpCumGainM[nm.segIdx], g1=_wpCumGainM[nm.segIdx+1]??g0;
+    const l0=_wpCumLossM[nm.segIdx], l1=_wpCumLossM[nm.segIdx+1]??l0;
+    elevGainSoFarM = Math.round(g0+nm.t*(g1-g0));
+    elevLossSoFarM = Math.round(l0+nm.t*(l1-l0));
+  }
+  if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress({
+    distanceCoveredM: Math.round(distAlongM), distanceRemainingM: Math.round(remainingM),
+    totalDistanceM: Math.round(totalM), pctComplete: totalM>0 ? Math.round(distAlongM/totalM*1000)/10 : null,
+    elevGainSoFarM, elevLossSoFarM,
+    totalElevGainM: _wpTotalGainM, totalElevLossM: _wpTotalLossM,
+    etaSeconds: paceMps ? Math.round(remainingM/paceMps) : null
+  });
 }
 function simPointAtDistance(pathLatLon,cum,distM){
   const L=cum[cum.length-1];
@@ -3339,8 +3412,11 @@ const SimFencer={state:{},onEvent:null,
   update(p,prev,now){
     if(selectedWalkingPathPoints && selectedWalkingPathPoints.length>=2){
       const pathLatLon=selectedWalkingPathPoints.map(pt=>[pt[1],pt[0]]);
-      const m=mapMatch([p.lat,p.lon],pathLatLon,simBundle.ref,WALKING_PATH_MAPMATCH_SNAP_M);
-      if(m[0]!==p.lat||m[1]!==p.lon) p={...p,lat:m[0],lon:m[1]};
+      const nm=nearestOnPath([p.lat,p.lon],pathLatLon,simBundle.ref);
+      if(nm && nm.distM<=WALKING_PATH_MAPMATCH_SNAP_M){
+        p={...p,lat:nm.point[0],lon:nm.point[1]};
+        updateWalkingPathProgress(nm, now);
+      }
     }
     const active=[];
     /* visitor vs all zones */
@@ -3363,7 +3439,7 @@ const SimFencer={state:{},onEvent:null,
   _deliver(zone,t,subj="visitor"){
     if(t.say){if(!zone.audioUrl&&simSoundOn) simTTS(t.say, zone.ttsVoice);
       if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
-  reset(){this.state={};}
+  reset(){this.state={}; _pathWalkStartT=null; _pathWalkStartDistM=null;}
 };
 
 /* ---- spatial audio (mirror of engine's SpatialVoice + minimal Clarity) ---- */
