@@ -16,10 +16,12 @@
   html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow)}
   #map{position:absolute;inset:0}
   .cond{font-family:"Barlow Condensed",sans-serif}
-  .panel{position:absolute;top:10px;left:10px;width:312px;max-height:calc(100vh - 20px);overflow-y:auto;
+  .panel{position:absolute;top:10px;left:10px;width:312px;min-width:260px;min-height:200px;
+         max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
          background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
-         backdrop-filter:blur(6px);transition:width .2s,padding .2s}
-  .panel.mini{width:36px;padding:8px 6px;overflow:hidden}
+         backdrop-filter:blur(6px);display:flex;flex-direction:column}
+  .panel.mini{width:36px!important;height:auto!important;padding:8px 6px;overflow:hidden;resize:none}
+  .panel-body{flex:1 1 auto;overflow-y:auto;min-height:0}
   /* Audio palette — floats independently of .panel so it never blocks map stops */
   #audioPalette{position:absolute;top:10px;right:10px;width:280px;height:380px;min-width:220px;min-height:160px;
                 max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
@@ -83,6 +85,9 @@
   .sf-menu-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--snow);
                 padding:8px 12px;font-family:"Barlow Condensed";font-size:12px;cursor:pointer}
   .sf-menu-item:hover{background:rgba(255,255,255,.06)}
+  .proj-settings-popover{position:fixed;z-index:80;width:280px;max-height:75vh;overflow-y:auto;
+           display:flex;flex-direction:column;gap:2px;background:var(--slate-2);border:1px solid var(--rim);
+           border-radius:10px;box-shadow:0 8px 20px rgba(0,0,0,.45);padding:12px}
   .gp-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:9999;
              font-family:"Barlow Condensed";font-size:14px;font-weight:600;color:var(--night);
              padding:10px 18px;border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.35);
@@ -365,12 +370,17 @@
 <div class="panel" id="mainPanel">
   <!-- collapse/expand buttons -->
   <button id="panelExpandBtn" onclick="document.getElementById('mainPanel').classList.remove('mini')" title="Expand panel">▶</button>
-  <!-- breadcrumb: Home › Client (project name lives below, large + bold) -->
-  <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-family:'Barlow Condensed';font-size:12px">
+  <!-- breadcrumb: Home › Client (project name lives below, large + bold) — also the panel's draggable header.
+       Bled out to the panel's outer edge (negative margin) with its own padding/border/background so it reads
+       as a distinct titlebar, same as #audioPaletteHead — a plain inset row with no visual boundary was easy
+       to miss as a drag handle. -->
+  <div id="mainPanelHead" style="display:flex;align-items:center;gap:6px;margin:-12px -12px 8px -12px;padding:9px 12px;border-bottom:1px solid var(--rim);border-radius:14px 14px 0 0;background:rgba(255,255,255,.03);font-family:'Barlow Condensed';font-size:12px;cursor:move;user-select:none" title="Drag to move this panel">
+    <span aria-hidden="true" style="color:var(--fog);letter-spacing:-2px;font-size:14px">⋮⋮</span>
     <a href="/" style="color:var(--fog);text-decoration:none;transition:.12s" onmouseover="this.style.color='var(--ice)'" onmouseout="this.style.color='var(--fog)'">← Home</a>
     <span style="color:var(--rim)">›</span>
     <span id="clientCrumb" style="color:var(--fog)">—</span>
-    <button id="panelMinBtn" style="margin-left:auto" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
+    <button id="projSettingsBtn" class="ghost" style="margin-left:auto;flex:0 0 auto;padding:3px 8px;font-size:13px" title="Project settings — customer, template, audio ranges" onclick="event.stopPropagation();toggleProjectSettingsPopover(this)">⚙</button>
+    <button id="panelMinBtn" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
   </div>
   <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
@@ -385,71 +395,9 @@
           title="click to rename">new tour</span>
     <!-- shared status line — publish/upload/delete feedback lands here throughout the editor -->
     <div class="hint" id="platStatus" style="margin:0 0 4px">sign in required for Load, Publish</div>
-    <!-- customer picker — which client this project belongs to; Publish applies it -->
-    <label class="k" style="margin:2px 0 0">customer (Publish assigns this project to it)</label>
-    <div class="row" style="margin:0 0 4px;gap:6px">
-      <select id="clientSel" style="flex:1" title="Publish will assign this project to whichever customer is selected"><option value="">— unassigned —</option></select>
-    </div>
-    <label class="chk" style="margin:0 0 4px" title="A template is a reusable master copy — front desk picks it to stamp out dated, guide-assigned tours from it. It is never run directly.">
-      <input type="checkbox" id="isTemplateChk"> this is a template (not a specific dated tour)
-    </label>
     <!-- publish -->
     <div class="row" style="margin:0">
       <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
-    </div>
-    <!-- project settings -->
-    <div style="margin-top:6px">
-      <button id="projCfgToggle" class="ghost" style="width:100%;font-size:11px;text-align:left;padding:6px 10px">▸ Project Settings</button>
-      <div id="projCfgBody" style="display:none;padding-top:6px;flex-direction:column;gap:6px">
-        <!-- dot buttons — click to reveal slider -->
-        <div class="proj-dot-row">
-          <button class="proj-dot-btn" id="pdVoiceBtn" onclick="openProjSlider('voice')">
-            <span class="proj-dot-icon" style="background:#b96fff"></span>
-            <span class="proj-dot-val"><span id="audioRangeV">64</span> m</span>
-            <span class="proj-dot-name">voice range</span>
-          </button>
-          <button class="proj-dot-btn" id="pdClearBtn" onclick="openProjSlider('clear')">
-            <span class="proj-dot-icon" style="background:#9b3fd4"></span>
-            <span class="proj-dot-val"><span id="audioClearV">8</span> m</span>
-            <span class="proj-dot-name">full vol</span>
-          </button>
-          <button class="proj-dot-btn" id="pdVisitorBtn" onclick="openProjSlider('visitor')">
-            <span class="proj-dot-icon" style="background:#00e5ff;border-style:dashed"></span>
-            <span class="proj-dot-val"><span id="visitorRadiusV">15</span> m</span>
-            <span class="proj-dot-name">visitor</span>
-          </button>
-          <button class="proj-dot-btn" id="pdStopsBtn" onclick="openProjSlider('stopvis')">
-            <span class="proj-dot-icon" style="background:#ff4da6;border-style:dashed"></span>
-            <span class="proj-dot-val"><span id="stopVisRadiusV">150</span> m</span>
-            <span class="proj-dot-name">stop visibility</span>
-          </button>
-        </div>
-        <!-- hidden sliders — shown one at a time by openProjSlider() -->
-        <div id="projSliderWrap" style="display:none" class="proj-slider-wrap">
-          <span class="proj-slider-label" id="projSliderLabel"></span>
-          <input type="range" id="audioRange"    min="6"  max="160" value="64" step="2"  style="width:100%;accent-color:var(--coral);display:none">
-          <input type="range" id="audioClear"    min="2"  max="40"  value="8"  step="1"  style="width:100%;accent-color:var(--coral);display:none">
-          <input type="range" id="visitorRadius" min="5"  max="80"  value="15" step="1"  style="width:100%;accent-color:var(--coral);display:none">
-          <input type="range" id="stopVisRadius" min="20" max="500" value="150" step="10" style="width:100%;accent-color:var(--coral);display:none">
-        </div>
-        <label class="k" style="margin-top:2px">live stop duration</label>
-        <select id="liveTtlMs">
-          <option value="120000">2 min</option>
-          <option value="300000" selected>5 min (default)</option>
-          <option value="600000">10 min</option>
-          <option value="900000">15 min</option>
-          <option value="1800000">30 min</option>
-          <option value="3600000">60 min</option>
-        </select>
-        <label class="k" style="margin-top:6px">audio replay delay — how long before a "loop audio: off" stop can play again</label>
-        <select id="audioRetriggerDelayS">
-          <option value="0">no delay (always replay)</option>
-          <option value="60" selected>1 min (default)</option>
-          <option value="300">5 min</option>
-          <option value="600">10 min</option>
-          <option value="1800">30 min</option>
-        </select>
-      </div>
     </div>
   </div>
 
@@ -509,27 +457,18 @@
 
   <div id="editSection">
   <hr>
-  <div class="row" style="margin-bottom:4px">
-    <label class="k" style="margin:0;align-self:center;flex:1">add a stop — pick a shape</label>
-  </div>
-  <div class="row">
-    <button data-tool="circle">● Circle</button>
-    <button data-tool="polygon">⬡ Polygon</button>
-    <button data-tool="tripline">／ Tripline</button>
-    <button data-tool="path">〜 Path</button>
-  </div>
   <div class="row" style="position:relative">
-    <button id="walkingPathBtn" style="flex:1" title="Pick a recorded walking path for this project — stops can snap onto and slide along it">🥾 Walking Path</button>
+    <button id="shapePickerBtn" style="flex:1">add a stop — pick a shape ▾</button>
   </div>
   <div class="row" id="circleRow" style="display:none">
     <label class="k" style="flex:0 0 auto;align-self:center;margin:0">reveal radius m</label>
     <input id="newRadius" type="number" value="12" min="3" style="flex:1">
   </div>
-  <div class="row">
+  <div class="row" id="finishCancelRow" style="display:none">
     <button id="finishBtn" class="ghost" style="flex:1">Finish polygon</button>
     <button id="cancelBtn" class="ghost" style="flex:0 0 auto">✕</button>
   </div>
-  <div class="hint" id="drawHint">pick a shape to start drawing</div>
+  <div class="hint" id="drawHint" style="display:none">pick a shape to start drawing</div>
 
   <!-- PROPERTIES of the selected stop -->
   <div class="props" id="props" style="display:none">
@@ -661,15 +600,17 @@
   </div>
 
   <hr>
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
-    <label class="k">stops (<span id="zcount">0</span>) — click to edit</label>
-    <div style="display:flex;gap:4px;flex:0 0 auto;position:relative">
+  <button id="stopsToggleBtn" class="ghost" style="width:100%;text-align:left;display:flex;align-items:center;gap:6px">
+    <span id="stopsToggleChevron">▸</span> stops (<span id="zcount">0</span>) — click to edit
+  </button>
+  <div id="stopsBody" style="display:none">
+    <div class="row" style="margin-top:6px;position:relative">
       <button id="coBulkMove" class="ghost" style="font-size:11px;padding:3px 8px" title="Move checked stops to a folder">📁 Move…</button>
       <button id="coBulkToggle" class="ghost" style="font-size:11px;padding:3px 8px">☐ Bulk assign</button>
     </div>
+    <input id="stopSearch" type="text" placeholder="search stops…" style="width:100%;margin:4px 0 6px;box-sizing:border-box">
+    <div id="zlist"></div>
   </div>
-  <input id="stopSearch" type="text" placeholder="search stops…" style="width:100%;margin:4px 0 6px;box-sizing:border-box">
-  <div id="zlist"></div>
 
   <textarea id="out" style="display:none"></textarea>
   <button id="importBtn" style="display:none">Import</button>
@@ -680,6 +621,77 @@
   </div><!-- /editSection -->
   </div><!-- /panel-body -->
 </div><!-- /mainPanel -->
+
+<!-- Project settings popover — customer/template/audio-range config that used
+     to sit inline above the shape picker, permanently eating panel space for
+     settings only touched once in a while. Now a persistent (never destroyed —
+     these ids are real singletons the rest of the app binds to) fixed-position
+     panel toggled by the ⚙ button, positioned like openPortalMenu's popovers
+     but managed separately since openPortalMenu's menus get .remove()'d on
+     every close, which would delete these elements instead of just hiding them.
+     Deliberately a sibling of #mainPanel, not nested inside it — .panel has
+     backdrop-filter, which creates a new containing block for position:fixed
+     descendants, so a fixed popover nested inside it would position itself
+     relative to the panel instead of the viewport (same reason #audioPalette
+     below is also a top-level sibling, not nested in .panel). -->
+<div id="projSettingsPopover" class="proj-settings-popover" style="display:none">
+  <label class="k" style="margin:0">customer (Publish assigns this project to it)</label>
+  <div class="row" style="margin:0 0 4px;gap:6px">
+    <select id="clientSel" style="flex:1" title="Publish will assign this project to whichever customer is selected"><option value="">— unassigned —</option></select>
+  </div>
+  <label class="chk" style="margin:0 0 4px" title="A template is a reusable master copy — front desk picks it to stamp out dated, guide-assigned tours from it. It is never run directly.">
+    <input type="checkbox" id="isTemplateChk"> this is a template (not a specific dated tour)
+  </label>
+  <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
+  <!-- dot buttons — click to reveal slider -->
+  <div class="proj-dot-row">
+    <button class="proj-dot-btn" id="pdVoiceBtn" onclick="openProjSlider('voice')">
+      <span class="proj-dot-icon" style="background:#b96fff"></span>
+      <span class="proj-dot-val"><span id="audioRangeV">64</span> m</span>
+      <span class="proj-dot-name">voice range</span>
+    </button>
+    <button class="proj-dot-btn" id="pdClearBtn" onclick="openProjSlider('clear')">
+      <span class="proj-dot-icon" style="background:#9b3fd4"></span>
+      <span class="proj-dot-val"><span id="audioClearV">8</span> m</span>
+      <span class="proj-dot-name">full vol</span>
+    </button>
+    <button class="proj-dot-btn" id="pdVisitorBtn" onclick="openProjSlider('visitor')">
+      <span class="proj-dot-icon" style="background:#00e5ff;border-style:dashed"></span>
+      <span class="proj-dot-val"><span id="visitorRadiusV">15</span> m</span>
+      <span class="proj-dot-name">visitor</span>
+    </button>
+    <button class="proj-dot-btn" id="pdStopsBtn" onclick="openProjSlider('stopvis')">
+      <span class="proj-dot-icon" style="background:#ff4da6;border-style:dashed"></span>
+      <span class="proj-dot-val"><span id="stopVisRadiusV">150</span> m</span>
+      <span class="proj-dot-name">stop visibility</span>
+    </button>
+  </div>
+  <!-- hidden sliders — shown one at a time by openProjSlider() -->
+  <div id="projSliderWrap" style="display:none" class="proj-slider-wrap">
+    <span class="proj-slider-label" id="projSliderLabel"></span>
+    <input type="range" id="audioRange"    min="6"  max="160" value="64" step="2"  style="width:100%;accent-color:var(--coral);display:none">
+    <input type="range" id="audioClear"    min="2"  max="40"  value="8"  step="1"  style="width:100%;accent-color:var(--coral);display:none">
+    <input type="range" id="visitorRadius" min="5"  max="80"  value="15" step="1"  style="width:100%;accent-color:var(--coral);display:none">
+    <input type="range" id="stopVisRadius" min="20" max="500" value="150" step="10" style="width:100%;accent-color:var(--coral);display:none">
+  </div>
+  <label class="k" style="margin-top:2px">live stop duration</label>
+  <select id="liveTtlMs">
+    <option value="120000">2 min</option>
+    <option value="300000" selected>5 min (default)</option>
+    <option value="600000">10 min</option>
+    <option value="900000">15 min</option>
+    <option value="1800000">30 min</option>
+    <option value="3600000">60 min</option>
+  </select>
+  <label class="k" style="margin-top:6px">audio replay delay — how long before a "loop audio: off" stop can play again</label>
+  <select id="audioRetriggerDelayS">
+    <option value="0">no delay (always replay)</option>
+    <option value="60" selected>1 min (default)</option>
+    <option value="300">5 min</option>
+    <option value="600">10 min</option>
+    <option value="1800">30 min</option>
+  </select>
+</div>
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
      move/delete/combine/upload) lives in Audio Studio — "Open in Studio"
@@ -772,6 +784,7 @@ function styleFor(k){ return {version:8,
 
 const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16});
 map.addControl(new maplibregl.NavigationControl());
+map.doubleClickZoom.disable(); // dblclick on a stop opens the rename/copy/delete menu instead of zooming (map-wide trade-off, MapLibre has no per-layer dblclick-zoom toggle)
 
 let zones=[];               // rich stop objects (see makeZone)
 let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
@@ -1516,14 +1529,40 @@ window.addEventListener("mouseup",()=>{
   map.dragPan.enable();
   map.getCanvas().style.cursor="grab";
   if(!_zoneDrag.moved){
-    // click: select zone, fly to it
-    selectZone(_zoneDrag.zIdx);
+    // click: select zone, fly to it. Skip the (expensive — rebuilds every
+    // map source + the stop list) full render when this zone is already
+    // selected, so repeat clicks on the same stop — most notably the two
+    // clicks that make up a double-click — don't each pay for a redundant
+    // re-render on top of the map's own flyTo animation and the context
+    // menu that a dblclick opens right after; that stacking was visible as
+    // a multi-second UI freeze on a project with several zones.
+    if(sel!==_zoneDrag.zIdx) selectZone(_zoneDrag.zIdx);
     map.flyTo({center:zoneCenterLonLat(zones[_zoneDrag.zIdx]),zoom:Math.max(map.getZoom(),17)});
   } else {
     // drag: full render (repositions handles too) + autosave
     sel=_zoneDrag.zIdx; render(); refreshProps();
   }
   _zoneDrag=null;
+});
+
+// right-click / double-click a stop: rename/copy/move/delete, reusing the
+// same openZoneMenu the stop-tree's "⋯" button already opens. Fakes an
+// anchor element at the cursor's viewport position since openPortalMenu
+// only ever calls .getBoundingClientRect() on whatever anchor it's given.
+function pointAnchor(clientX,clientY){
+  return { getBoundingClientRect:()=>({left:clientX,top:clientY,right:clientX,bottom:clientY,width:0,height:0}) };
+}
+function _zoneContextTrigger(e){
+  if(tool) return; // don't pop the menu mid-draw
+  e.preventDefault();
+  const feat=e.features&&e.features[0]; if(!feat) return;
+  const zIdx=feat.properties.zIdx; if(zIdx==null||!zones[zIdx]) return;
+  if(sel!==zIdx) selectZone(zIdx); // already selected by the two clicks that compose this dblclick — don't re-render
+  openZoneMenu(pointAnchor(e.originalEvent.clientX, e.originalEvent.clientY), zones[zIdx].id);
+}
+["fence-fill","fence-line","trip-hit"].forEach(lid=>{
+  map.on("contextmenu",lid,_zoneContextTrigger);
+  map.on("dblclick",lid,_zoneContextTrigger);
 });
 
 // click empty space to deselect
@@ -1542,9 +1581,22 @@ map.on("click",e=>{
 });
 
 /* ---- tools ---- */
-function setTool(t){ tool=t; draft=[];
-  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.toggle("on",x.dataset.tool===t));
+function resetShapePickerBtn(){
+  document.getElementById("shapePickerBtn").classList.remove("on");
+  updateWalkingPathBtnLabel();
+}
+// Finish/Cancel + the draw-hint text only take up panel space while a shape
+// is actually being drawn — collapsed the rest of the time, same as circleRow.
+function updateDrawUiVisibility(t){
   document.getElementById("circleRow").style.display = t==="circle"?"flex":"none";
+  document.getElementById("finishCancelRow").style.display = t?"flex":"none";
+  document.getElementById("drawHint").style.display = t?"block":"none";
+}
+function setTool(t){ tool=t; draft=[];
+  const shapeLabel={circle:"● Circle",polygon:"⬡ Polygon",tripline:"／ Tripline",path:"〜 Path"}[t];
+  if(shapeLabel){ document.getElementById("shapePickerBtn").textContent=shapeLabel+" — drawing…"; document.getElementById("shapePickerBtn").classList.add("on"); }
+  else resetShapePickerBtn();
+  updateDrawUiVisibility(t);
   document.getElementById("finishBtn").textContent = t==="path"?"Finish path":"Finish polygon";
   document.getElementById("drawHint").textContent={
     circle:"click the center on the map (reveal radius set above)",
@@ -1553,14 +1605,24 @@ function setTool(t){ tool=t; draft=[];
     path:"click each point along the route; press Finish when done (2+ points)"}[t]||"pick a shape to start drawing";
   render();
 }
-document.querySelectorAll("[data-tool]").forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
+function openShapePicker(anchorBtn){
+  openPortalMenu(anchorBtn, "", menu=>{
+    const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
+    mkItem("● Circle",()=>setTool("circle"));
+    mkItem("⬡ Polygon",()=>setTool("polygon"));
+    mkItem("／ Tripline",()=>setTool("tripline"));
+    mkItem("〜 Path",()=>setTool("path"));
+    mkItem("🥾 Walking Path",()=>openWalkingPathPicker(anchorBtn));
+  });
+}
+document.getElementById("shapePickerBtn").onclick=e=>{ e.stopPropagation(); openShapePicker(e.currentTarget); };
 document.getElementById("finishBtn").onclick=()=>{
   if(tool==="polygon"&&draft.length>=3) finishShape();
   else if(tool==="path"&&draft.length>=2) finishShape();
 };
 document.getElementById("cancelBtn").onclick=()=>{ draft=[]; tool=null;
-  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
-  document.getElementById("circleRow").style.display="none"; render(); };
+  resetShapePickerBtn();
+  updateDrawUiVisibility(null); render(); };
 
 const WALKING_PATH_SNAP_M=15; // how close a new/dragged circle stop must be to the walking path to snap onto it
 function finishShape(){
@@ -1581,9 +1643,8 @@ function finishShape(){
     if(match && match.distM<=WALKING_PATH_SNAP_M){ shape.center=match.point; z.onPath=true; }
   }
   zones.push(z); draft=[]; tool=null;
-  document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));
-  document.getElementById("circleRow").style.display="none";
-  document.getElementById("drawHint").textContent="stop added — set what it says below, or draw another";
+  resetShapePickerBtn();
+  updateDrawUiVisibility(null);
   selectZone(zones.length-1);
 }
 
@@ -2027,10 +2088,6 @@ function openProjSlider(type){
     document.getElementById(cfg.btnId).classList.add("active");
     document.getElementById("projSliderLabel").textContent=cfg.label;
     document.getElementById("projSliderWrap").style.display="block";
-    // open the project settings section if collapsed
-    const body=document.getElementById("projCfgBody");
-    if(body.style.display==="none"){ body.style.display="flex";
-      document.getElementById("projCfgToggle").textContent="▾ Project Settings"; }
   }
   renderSources(); // show/hide ring
 }
@@ -2149,6 +2206,22 @@ document.getElementById("audioPaletteMin").onclick=e=>{
       const maxLeft=window.innerWidth-40, maxTop=window.innerHeight-40;
       pal.style.left=Math.min(maxLeft,Math.max(0,startLeft+(me.clientX-startX)))+"px";
       pal.style.top=Math.min(maxTop,Math.max(0,startTop+(me.clientY-startY)))+"px";
+    };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+})();
+(function(){
+  const head=document.getElementById("mainPanelHead"), pnl=document.getElementById("mainPanel");
+  head.addEventListener("mousedown",e=>{
+    if(e.target.closest("button")) return; // don't drag when clicking collapse/expand
+    const rect=pnl.getBoundingClientRect();
+    pnl.style.left=rect.left+"px"; pnl.style.top=rect.top+"px";
+    const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
+    const onMove=me=>{
+      const maxLeft=window.innerWidth-40, maxTop=window.innerHeight-40;
+      pnl.style.left=Math.min(maxLeft,Math.max(0,startLeft+(me.clientX-startX)))+"px";
+      pnl.style.top=Math.min(maxTop,Math.max(0,startTop+(me.clientY-startY)))+"px";
     };
     const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
     document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
@@ -2362,8 +2435,12 @@ function renderWalkingPathLine(retriesLeft){
 // the button showing generic "🥾 Walking Path" even though a path really
 // was restored correctly.
 function updateWalkingPathBtnLabel(){
-  const btn=document.getElementById("walkingPathBtn"); if(!btn) return;
-  btn.textContent = selectedWalkingPathId ? ("🥾 "+(selectedWalkingPathName||"…")+" ▾") : "🥾 Walking Path";
+  // The dedicated Walking Path button was folded into the shape-picker menu
+  // (see openShapePicker); the trigger button's idle label absorbs this
+  // "which path is selected" feedback instead, so it isn't silently lost.
+  if(tool) return; // mid-draw label ("● Circle — drawing…" etc.) takes priority
+  const btn=document.getElementById("shapePickerBtn"); if(!btn) return;
+  btn.textContent = selectedWalkingPathId ? ("add a stop — pick a shape ▾  (🥾 "+(selectedWalkingPathName||"…")+")") : "add a stop — pick a shape ▾";
 }
 async function selectWalkingPath(id){
   if(!id){
@@ -2501,6 +2578,40 @@ function openPortalMenu(anchorBtn, cls, buildFn, keepPickerOpen){
   menu.style.top=top+"px"; menu.style.left=Math.max(4,left)+"px"; menu.style.visibility="visible";
   return menu;
 }
+// Project settings popover — same position-under-anchor math as
+// openPortalMenu above, but the panel itself is a real persistent element
+// (never document.body.appendChild'd/removed) since its children are
+// functional singletons (clientSel, isTemplateChk, the dot-sliders, …) that
+// the rest of the app binds to directly; closeStopFolderMenus()'s blanket
+// ".sf-menu".remove() would otherwise delete them the moment any other
+// popup in the app opened.
+function closeProjectSettingsPopover(){
+  const pop=document.getElementById("projSettingsPopover");
+  if(pop) pop.style.display="none";
+}
+function toggleProjectSettingsPopover(anchorBtn){
+  const pop=document.getElementById("projSettingsPopover");
+  if(pop.style.display!=="none"){ closeProjectSettingsPopover(); return; }
+  closeStopFolderMenus();
+  pop.style.display="flex"; pop.style.visibility="hidden";
+  const ar=anchorBtn.getBoundingClientRect(), mr=pop.getBoundingClientRect();
+  let top=ar.bottom+4;
+  if(top+mr.height>window.innerHeight) top=Math.max(4, ar.top-mr.height-4);
+  let left=Math.min(ar.left, window.innerWidth-mr.width-4);
+  pop.style.top=top+"px"; pop.style.left=Math.max(4,left)+"px"; pop.style.visibility="visible";
+}
+// click-away close uses "click", not "mousedown" like the .sf-menu popups
+// elsewhere in this file — this popover is the first one with real <select>
+// dropdowns in it, and picking a native <select> option fires its mousedown
+// on the browser's own OS-rendered option list (outside the page's DOM), so
+// a document-level "mousedown" listener sees that as an outside click and
+// closes the popover before the selection even lands. "click" fires on the
+// <select> element itself once the pick completes, so it's the right event
+// for a container that hosts native form controls.
+document.addEventListener("click",e=>{
+  const pop=document.getElementById("projSettingsPopover");
+  if(pop && pop.style.display!=="none" && !e.target.closest("#projSettingsPopover") && !e.target.closest("#projSettingsBtn")) closeProjectSettingsPopover();
+});
 function openWpFolderMenu(anchorBtn,node){
   openPortalMenu(anchorBtn, "", menu=>{
     const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeNestedMenus(); fn(); }; menu.appendChild(b); };
@@ -2689,7 +2800,6 @@ async function importWpFromGPX(file){
     openWalkingPathPicker(_wpPickerAnchor);
   }catch(e){ alert("Import failed: "+e.message); }
 }
-document.getElementById("walkingPathBtn").onclick=e=>{ e.stopPropagation(); openWalkingPathPicker(e.currentTarget); };
 
 /* ============================================================
    Stop tree — organizes a project's map stops into folders when there
@@ -2878,7 +2988,7 @@ function buildStopFolderRow(node,depth){
   }
   return wrap;
 }
-function closeStopFolderMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>m.remove()); }
+function closeStopFolderMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>m.remove()); closeProjectSettingsPopover(); }
 // .sf-menu always opens downward (top:100%) by default — for a stop/folder
 // row near the bottom of the (fixed-height, non-page-scrolling) panel, that
 // overflows off-screen with no way to reach it at all. Flip it to open
@@ -2888,7 +2998,7 @@ function positionMenuSmart(menu){
   const r=menu.getBoundingClientRect();
   if(r.bottom>window.innerHeight){ menu.style.top="auto"; menu.style.bottom="100%"; }
 }
-document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")) closeStopFolderMenus(); });
+document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")&&!e.target.closest("#projSettingsPopover")&&!e.target.closest("#projSettingsBtn")) closeStopFolderMenus(); });
 function openStopFolderMenu(anchorBtn,node){
   const isRoot=node.id===null;
   openPortalMenu(anchorBtn, "", menu=>{
@@ -2994,6 +3104,12 @@ document.getElementById("coBulkToggle").onclick=()=>{
   drawList();
 };
 document.getElementById("coBulkMove").onclick=bulkMoveSelectedStops;
+document.getElementById("stopsToggleBtn").onclick=()=>{
+  const body=document.getElementById("stopsBody");
+  const open=body.style.display!=="none";
+  body.style.display=open?"none":"block";
+  document.getElementById("stopsToggleChevron").textContent=open?"▸":"▾";
+};
 
 /* ---- export to the engine's rich BUNDLE ([lat,lon]) ---- */
 function zoneToEngine(z){
@@ -4329,7 +4445,7 @@ function enterTestMode(){
   if(!zones.length){alert("Add at least one stop before testing.");return;}
   simMode=true;
   // cancel any edit in progress
-  if(tool){draft=[];tool=null;document.querySelectorAll("[data-tool]").forEach(x=>x.classList.remove("on"));render();}
+  if(tool){draft=[];tool=null;resetShapePickerBtn();updateDrawUiVisibility(null);render();}
   selectZone(-1);
   simBundle=editorToSimBundle();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
@@ -4442,13 +4558,6 @@ function simPause(){simPlaying=false;if(simTimer){clearInterval(simTimer);simTim
   document.getElementById("simPlay").classList.remove("on");}
 
 /* ---- UI wiring ---- */
-/* ---- project settings toggle ---- */
-document.getElementById("projCfgToggle").onclick=()=>{
-  const b=document.getElementById("projCfgBody");
-  const open=b.style.display==="flex";
-  b.style.display=open?"none":"flex";
-  document.getElementById("projCfgToggle").textContent=(open?"▸":"▾")+" Project Settings";
-};
 // visitorRadius oninput is wired above (with renderSources)
 document.getElementById("mapKeyBtn").onclick=()=>document.getElementById("mapKeyOverlay").classList.toggle("open");
 document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.target===e.currentTarget) e.currentTarget.classList.remove("open"); });
