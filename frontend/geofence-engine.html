@@ -284,39 +284,43 @@ const TUNING = {
 let BUNDLE = { project: null, name: "", zones: [], ref: [0, 0] };
 let _activeLinkToken = null;  // set when visitor arrives via walk link — passed with analytics events
 let _activeLinkGuide = null;  // guide ID from walk link — used to filter live stops to this guide only
-let WALKING_PATH_LATLON = null; // [[lat,lon],...] for the project's selected Walking Path, once fetched (null = not path-driven)
-const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of the path; farther, use the raw/smoothed fix as-is
-// Progress-tracking state (distance/elevation/ETA along the path) — feeds
-// PipelineRuntime.setPathProgress(), read by any zone's data.walking_path_progress
-// block. WALKING_PATH_CUM/_ELEV/_CUM_GAIN/_CUM_LOSS are precomputed once per
-// path load; _pathWalkStart* lock in when the visitor actually starts walking
-// the route (first on-path fix), not page load, so pace reflects real walking.
-let WALKING_PATH_CUM = null, WALKING_PATH_ELEV = null;
-let WALKING_PATH_CUM_GAIN = null, WALKING_PATH_CUM_LOSS = null;
-let WALKING_PATH_TOTAL_GAIN_M = 0, WALKING_PATH_TOTAL_LOSS_M = 0;
-let _pathWalkStartT = null, _pathWalkStartDistM = null;
-async function loadWalkingPath(b){
-  WALKING_PATH_LATLON = null; WALKING_PATH_CUM = null; WALKING_PATH_ELEV = null;
-  WALKING_PATH_CUM_GAIN = null; WALKING_PATH_CUM_LOSS = null;
-  WALKING_PATH_TOTAL_GAIN_M = 0; WALKING_PATH_TOTAL_LOSS_M = 0;
-  _pathWalkStartT = null; _pathWalkStartDistM = null;
+// A project can have several Walking Paths active at once — WALKING_PATHS
+// holds one entry per active path (each with its own precomputed geometry +
+// progress-tracking arrays); the visitor snaps onto whichever active path is
+// nearest, if any is within WALKING_PATH_SNAP_M (see Geofencer.update()).
+let WALKING_PATHS = []; // [{id,latlon,elev,cum,cumGain,cumLoss,totalGainM,totalLossM},...]
+const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of a path; farther, use the raw/smoothed fix as-is
+// Progress-tracking state (distance/elevation/ETA along the CURRENTLY
+// snapped-to path) — feeds PipelineRuntime.setPathProgress(), read by any
+// zone's data.walking_path_progress block. _pathWalkStart* lock in when the
+// visitor actually starts walking a route (first on-path fix), not page
+// load, so pace reflects real walking; _pathWalkStartPathId tracks WHICH
+// path that anchor belongs to, so switching to a different active path
+// resets pace/ETA instead of carrying over a stale anchor from another path.
+let _pathWalkStartT = null, _pathWalkStartDistM = null, _pathWalkStartPathId = null;
+async function loadWalkingPaths(b){
+  WALKING_PATHS = [];
+  _pathWalkStartT = null; _pathWalkStartDistM = null; _pathWalkStartPathId = null;
   if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress(null);
-  if(!b || !b.walkingPathId) return;
-  try{
-    const r = await fetch('/api/walking-path/'+b.walkingPathId,{cache:'no-store'});
-    if(r.ok){
+  const ids = b && Array.isArray(b.walkingPathIds) ? b.walkingPathIds : (b && b.walkingPathId ? [b.walkingPathId] : []);
+  if(!ids.length) return;
+  await Promise.all(ids.map(async id=>{
+    try{
+      const r = await fetch('/api/walking-path/'+id,{cache:'no-store'});
+      if(!r.ok) return;
       const j = await r.json();
-      WALKING_PATH_LATLON = (j.points||[]).map(pt=>[pt[1],pt[0]]); // stored [lon,lat] -> this engine's own [lat,lon] convention
-      WALKING_PATH_ELEV = (j.points||[]).map(pt=>pt[2]==null?null:pt[2]);
-      if(WALKING_PATH_LATLON.length>=2){
-        WALKING_PATH_CUM = pathCumLens(WALKING_PATH_LATLON);
-        const ce = pathCumElev(WALKING_PATH_ELEV);
-        WALKING_PATH_CUM_GAIN = ce.gain; WALKING_PATH_CUM_LOSS = ce.loss;
+      const latlon = (j.points||[]).map(pt=>[pt[1],pt[0]]); // stored [lon,lat] -> this engine's own [lat,lon] convention
+      const elev = (j.points||[]).map(pt=>pt[2]==null?null:pt[2]);
+      let cum=null, cumGain=null, cumLoss=null;
+      if(latlon.length>=2){
+        cum = pathCumLens(latlon);
+        const ce = pathCumElev(elev);
+        cumGain = ce.gain; cumLoss = ce.loss;
       }
-      WALKING_PATH_TOTAL_GAIN_M = j.elevGainM || 0;
-      WALKING_PATH_TOTAL_LOSS_M = j.elevLossM || 0;
-    }
-  }catch(e){}
+      WALKING_PATHS.push({ id, latlon, elev, cum, cumGain, cumLoss, totalGainM: j.elevGainM||0, totalLossM: j.elevLossM||0 });
+    }catch(e){} // a single path failing to load just skips that one, matches the old single-path silent-degrade behavior
+  }));
+  WALKING_PATHS.sort((a,b2)=>ids.indexOf(a.id)-ids.indexOf(b2.id)); // stable order regardless of fetch-completion timing
 }
 
 /* ============================ GEO MATH ============================ */
@@ -439,14 +443,18 @@ function pathCumElev(elevArr, noiseFloorM){
 // so any zone's data.walking_path_progress block can read it. nm is the
 // nearestOnPath() result from the map-match that just ran on this tick's
 // fix (already on-path, within WALKING_PATH_SNAP_M — callers only invoke
-// this when that's true). "Walk start" locks in on the first on-path fix
-// rather than page load, so pace reflects the actual walk, not idle time
-// before the visitor reached the route. Sticky across a brief off-path
-// tick (caller simply doesn't call this) rather than resetting — a GPS
-// blip or short detour shouldn't blank out progress that was just shown.
-function updateWalkingPathProgress(nm, nowMs){
-  if(!WALKING_PATH_CUM) return;
-  const cum=WALKING_PATH_CUM, totalM=cum[cum.length-1];
+// this when that's true); path is the specific WALKING_PATHS entry that
+// won the nearest-of-several-active-paths check. "Walk start" locks in on
+// the first on-path fix rather than page load, so pace reflects the actual
+// walk, not idle time before the visitor reached the route. Sticky across a
+// brief off-path tick (caller simply doesn't call this) rather than
+// resetting — a GPS blip or short detour shouldn't blank out progress that
+// was just shown; only switching to a genuinely DIFFERENT active path resets
+// it (tracked via _pathWalkStartPathId).
+function updateWalkingPathProgress(nm, nowMs, path){
+  if(!path || !path.cum) return;
+  if(_pathWalkStartPathId!==path.id){ _pathWalkStartPathId=path.id; _pathWalkStartT=null; _pathWalkStartDistM=null; }
+  const cum=path.cum, totalM=cum[cum.length-1];
   const distAlongM = cum[nm.segIdx] + nm.t*((cum[nm.segIdx+1]??cum[nm.segIdx])-cum[nm.segIdx]);
   if(_pathWalkStartT==null){ _pathWalkStartT=nowMs; _pathWalkStartDistM=distAlongM; }
   const elapsedS=(nowMs-_pathWalkStartT)/1000;
@@ -457,9 +465,9 @@ function updateWalkingPathProgress(nm, nowMs){
   const paceMps = (elapsedS>3 && coveredSinceStartM>2) ? coveredSinceStartM/elapsedS : null;
   const remainingM=Math.max(0, totalM-distAlongM);
   let elevGainSoFarM=null, elevLossSoFarM=null;
-  if(WALKING_PATH_CUM_GAIN){
-    const g0=WALKING_PATH_CUM_GAIN[nm.segIdx], g1=WALKING_PATH_CUM_GAIN[nm.segIdx+1]??g0;
-    const l0=WALKING_PATH_CUM_LOSS[nm.segIdx], l1=WALKING_PATH_CUM_LOSS[nm.segIdx+1]??l0;
+  if(path.cumGain){
+    const g0=path.cumGain[nm.segIdx], g1=path.cumGain[nm.segIdx+1]??g0;
+    const l0=path.cumLoss[nm.segIdx], l1=path.cumLoss[nm.segIdx+1]??l0;
     elevGainSoFarM = Math.round(g0+nm.t*(g1-g0));
     elevLossSoFarM = Math.round(l0+nm.t*(l1-l0));
   }
@@ -467,7 +475,7 @@ function updateWalkingPathProgress(nm, nowMs){
     distanceCoveredM: Math.round(distAlongM), distanceRemainingM: Math.round(remainingM),
     totalDistanceM: Math.round(totalM), pctComplete: totalM>0 ? Math.round(distAlongM/totalM*1000)/10 : null,
     elevGainSoFarM, elevLossSoFarM,
-    totalElevGainM: WALKING_PATH_TOTAL_GAIN_M, totalElevLossM: WALKING_PATH_TOTAL_LOSS_M,
+    totalElevGainM: path.totalGainM, totalElevLossM: path.totalLossM,
     etaSeconds: paceMps ? Math.round(remainingM/paceMps) : null
   });
 }
@@ -558,12 +566,17 @@ const Geofencer = {
   },
 
   update(p, prev, now){
-    if(WALKING_PATH_LATLON){
-      const nm=nearestOnPath([p.lat,p.lon], WALKING_PATH_LATLON, BUNDLE.ref);
-      if(nm && nm.distM<=WALKING_PATH_SNAP_M){
-        p={...p, lat:nm.point[0], lon:nm.point[1]};
-        updateWalkingPathProgress(nm, now);
-      }
+    // Snap onto whichever active path is nearest, if any is within
+    // threshold — nearestOnPath itself is unchanged; multi-path support is
+    // just running it once per active path and keeping the closest match.
+    let winner=null;
+    for(const path of WALKING_PATHS){
+      const nm=nearestOnPath([p.lat,p.lon], path.latlon, BUNDLE.ref);
+      if(nm && nm.distM<=WALKING_PATH_SNAP_M && (!winner||nm.distM<winner.nm.distM)) winner={path,nm};
+    }
+    if(winner){
+      p={...p, lat:winner.nm.point[0], lon:winner.nm.point[1]};
+      updateWalkingPathProgress(winner.nm, now, winner.path);
     }
     const active=[];                       // zones with any active ring (for the needle)
     BUNDLE.zones.forEach(zone=>{
@@ -2012,7 +2025,7 @@ EngineKokoro.tryLoad();
       try{ localStorage.removeItem(LKEY); }catch(_){}
       HUD.log('ev-warn','no stops published for this project yet'); return; }
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
-    loadWalkingPath(b);
+    loadWalkingPaths(b);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(!HUD.pos) MapView.recenter(b.ref);
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
@@ -2029,7 +2042,7 @@ EngineKokoro.tryLoad();
     let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
     if(cached){ try{ const b=JSON.parse(cached);
       BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
-      loadWalkingPath(b);
+      loadWalkingPaths(b);
       if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
       if(!HUD.pos) MapView.recenter(b.ref);
       if(document.getElementById('simZones')) buildSimZones();

@@ -1133,11 +1133,12 @@ function makeZone(name,shape){
            // legacy/unorganized projects. Purely editor-side; the live
            // engine never reads this, only exported so it round-trips.
            folderId:null,
-           // Snapped onto the project's selected Walking Path (see the
-           // Walking Path section below) — constrains dragging to slide
-           // along that path instead of free 2D movement. false for every
-           // normal stop; only set true by finishShape()'s snap check.
-           onPath:false,
+           // Snapped onto one of the project's active Walking Paths (see the
+           // Walking Path section below), by that path's own id — constrains
+           // dragging to slide along that SPECIFIC path instead of free 2D
+           // movement (never "whichever path happens to be loaded"). null
+           // for every normal stop; only set by finishShape()'s snap check.
+           onPathId:null,
            // Per-stop Kokoro voice override for TTS (spoken line). null
            // means "use the default voice" (af_bella).
            ttsVoice:null };
@@ -1376,7 +1377,7 @@ map.on("load",()=>{
   map.addSource("draft",{type:"geojson",data:fc([])});
   map.addSource("walkpath",{type:"geojson",data:fc([])});
   map.addLayer({id:"walkpath-line",type:"line",source:"walkpath",
-     paint:{"line-color":"#ffc24d","line-width":3,"line-opacity":0.55,"line-dasharray":[1,1.4]}});
+     paint:{"line-color":["get","color"],"line-width":3,"line-opacity":0.55,"line-dasharray":[1,1.4]}});
   map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==","kind","fill"],
      paint:{"fill-color":["case",["get","sel"],"#38e0a6",["get","isHazard"],"rgba(255,47,78,0.5)","#ff6a3d"],"fill-opacity":0.22}});
   map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==","kind","fill"],
@@ -1504,13 +1505,17 @@ map.on("mousemove",e=>{
   _zoneDrag.moved=true;
   const z=zones[_zoneDrag.zIdx], s=_zoneDrag.snap;
   if(z.shape.type==="circle"){
-    // A stop snapped onto the Walking Path stays constrained to it — drag
-    // motion is projected onto the nearest point of the path line instead
-    // of applying a free 2D offset. Every other stop (onPath false, or no
-    // path selected at all) keeps today's free-drag behavior unchanged.
-    if(z.onPath && selectedWalkingPathPoints){
+    // A stop snapped onto a Walking Path stays constrained to that SPECIFIC
+    // path (by onPathId) — drag motion is projected onto the nearest point
+    // of that path's own line, never "whichever path happens to be active
+    // right now" (that used to be the same bug as the reported "second path
+    // load breaks the first path's stops": onPath was a bare boolean with no
+    // path reference). If the stop's own path isn't currently active, fall
+    // back to free drag rather than silently snapping onto an unrelated one.
+    const onPath=z.onPathId?walkingPathsActive.find(w=>w.id===z.onPathId):null;
+    if(onPath){
       const raw=[s.center[0]+dLng, s.center[1]+dLat];
-      const match=nearestPointOnPath(raw,selectedWalkingPathPoints);
+      const match=nearestPointOnPath(raw,onPath.points);
       if(match) z.shape.center=match.point;
     } else {
       z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
@@ -1634,13 +1639,19 @@ function finishShape(){
   else if(tool==="path") shape={type:"path",coords:draft.slice()};
   const z=makeZone(name,shape);
   z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as audio uploads
-  // Snap onto the walking path only if placed near it — off-path stops
-  // remain fully allowed (confirmed with the user); this just makes a
-  // deliberately-near placement land exactly on the line instead of just
-  // beside it, and marks it for constrained along-path dragging afterward.
-  if(tool==="circle" && selectedWalkingPathPoints){
-    const match=nearestPointOnPath(shape.center,selectedWalkingPathPoints);
-    if(match && match.distM<=WALKING_PATH_SNAP_M){ shape.center=match.point; z.onPath=true; }
+  // Snap onto the nearest active walking path only if placed near it —
+  // off-path stops remain fully allowed (confirmed with the user); this just
+  // makes a deliberately-near placement land exactly on the line instead of
+  // just beside it, and marks (via onPathId) which specific path it should
+  // stay constrained to when dragged afterward. With several paths active,
+  // pick whichever one the placement is actually closest to.
+  if(tool==="circle" && walkingPathsActive.length){
+    let winner=null;
+    for(const path of walkingPathsActive){
+      const match=nearestPointOnPath(shape.center,path.points);
+      if(match && match.distM<=WALKING_PATH_SNAP_M && (!winner||match.distM<winner.match.distM)) winner={path,match};
+    }
+    if(winner){ shape.center=winner.match.point; z.onPathId=winner.path.id; }
   }
   zones.push(z); draft=[]; tool=null;
   resetShapePickerBtn();
@@ -2339,16 +2350,17 @@ document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(s
 let walkingPaths=[];              // [{id,folderId,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
 let walkingPathFolders=[];        // [{id,parentId,name}] for the current app, from GET /api/walking-path-folder
 let wpTreeExpanded=new Set([null]); // folder ids expanded in the picker — root (id null) starts expanded, collapsible like any other folder
-let selectedWalkingPathId=null;
-let selectedWalkingPathPoints=null; // [[lon,lat],...] of the currently-selected path, once fetched
-let selectedWalkingPathName=null; // from the fetch itself — the button label no longer needs the (possibly not-yet-loaded) walkingPaths list to show the right name
-// Progress-tracking state for Test Mode's simulated walk — cached at select
-// time (not recomputed per tick, unlike the mapMatch conversion above, since
-// this is real O(n) precompute work) and consumed by SimFencer.update()'s
-// walk-progress tracking, mirrored from geofence-engine.html/geofence-sim.html.
-let selectedWalkingPathElev=null;   // [elevM|null,...] parallel to selectedWalkingPathPoints
-let _wpCumM=null, _wpCumGainM=null, _wpCumLossM=null, _wpTotalGainM=0, _wpTotalLossM=0;
-let _pathWalkStartT=null, _pathWalkStartDistM=null; // locked in on the first on-path tick each walk; cleared by SimFencer.reset()
+// Multiple walking paths can be active on a project at once (checkbox
+// multi-select in the picker, not a single radio pick). selectedWalkingPathIds
+// is the ordered list of active ids (order = selection order; index 0 is the
+// "primary" path Test Mode's auto-walk follows, see buildSimStopsPath).
+// walkingPathsActive holds the full fetched geometry + precomputed
+// progress-tracking arrays + a stable display color for each active path,
+// mirrored from geofence-engine.html/geofence-sim.html's WALKING_PATHS.
+const WP_COLOR_PALETTE=["#ffc24d","#38e0a6","#5eb1ff","#ff6a9d","#c792ff","#ffab5e","#5ee6e6","#ff8c66"]; // first entry matches the old single-path amber, so one active path looks unchanged
+let selectedWalkingPathIds=[];
+let walkingPathsActive=[]; // [{id,name,points,elev,cumM,cumGainM,cumLossM,totalGainM,totalLossM,color},...]
+let _pathWalkStartT=null, _pathWalkStartDistM=null, _pathWalkStartPathId=null; // locked in on the first on-path tick each walk; reset when the snapped-to path changes; cleared by SimFencer.reset()
 async function loadWalkingPaths(){
   const appId=afAppId();
   if(!appId){ walkingPaths=[]; walkingPathFolders=[]; return; }
@@ -2415,60 +2427,89 @@ function nearestPointOnPath(lonLat,pathCoords){
   return { point:best, distM:haversineM(lonLat,best) };
 }
 // Restoring a published project (loadFromPlatform → importBtn.click() →
-// selectWalkingPath(b.walkingPathId)) can run before the map's own "load"
-// event has finished setting up the walkpath source — map.getSource()
+// loadActiveWalkingPathData(b.walkingPathIds)) can run before the map's own
+// "load" event has finished setting up the walkpath source — map.getSource()
 // silently returns undefined until then, and nothing was retrying, so the
-// line just never appeared even though selectedWalkingPathPoints was
-// already correctly set. Bounded retry (10 × 300ms = 3s) instead of a
-// single silent no-op.
+// line just never appeared even though walkingPathsActive was already
+// correctly set. Bounded retry (10 × 300ms = 3s) instead of a single silent
+// no-op.
 function renderWalkingPathLine(retriesLeft){
   retriesLeft = retriesLeft==null ? 10 : retriesLeft;
   const src=map.getSource("walkpath");
   if(!src){ if(retriesLeft>0) setTimeout(()=>renderWalkingPathLine(retriesLeft-1),300); return; }
-  if(!selectedWalkingPathPoints){ src.setData(fc([])); return; }
-  src.setData(fc([{type:"Feature",properties:{},geometry:{type:"LineString",coordinates:selectedWalkingPathPoints}}]));
+  if(!walkingPathsActive.length){ src.setData(fc([])); return; }
+  src.setData(fc(walkingPathsActive.map(path=>({type:"Feature",properties:{id:path.id,color:path.color},geometry:{type:"LineString",coordinates:path.points}}))));
 }
-// Uses selectedWalkingPathName (captured directly from the GET response in
-// selectWalkingPath) rather than looking the name up in the walkingPaths
-// list — that list is loaded independently (doAudioRefresh) and isn't
-// guaranteed to have finished yet on a fresh page load, which could leave
-// the button showing generic "🥾 Walking Path" even though a path really
-// was restored correctly.
+// Uses each active path's own cached name (captured directly from the GET
+// response, same reasoning as before) rather than looking names up in the
+// walkingPaths list — that list is loaded independently (doAudioRefresh) and
+// isn't guaranteed to have finished yet on a fresh page load.
 function updateWalkingPathBtnLabel(){
   // The dedicated Walking Path button was folded into the shape-picker menu
   // (see openShapePicker); the trigger button's idle label absorbs this
-  // "which path is selected" feedback instead, so it isn't silently lost.
+  // "which path(s) are selected" feedback instead, so it isn't silently lost.
   if(tool) return; // mid-draw label ("● Circle — drawing…" etc.) takes priority
   const btn=document.getElementById("shapePickerBtn"); if(!btn) return;
-  btn.textContent = selectedWalkingPathId ? ("add a stop — pick a shape ▾  (🥾 "+(selectedWalkingPathName||"…")+")") : "add a stop — pick a shape ▾";
+  let suffix="";
+  if(walkingPathsActive.length===1) suffix="  (🥾 "+(walkingPathsActive[0].name||"…")+")";
+  else if(walkingPathsActive.length>1) suffix="  (🥾 "+walkingPathsActive.length+" paths)";
+  btn.textContent = "add a stop — pick a shape ▾"+suffix;
 }
-async function selectWalkingPath(id){
-  if(!id){
-    selectedWalkingPathId=null; selectedWalkingPathPoints=null; selectedWalkingPathName=null;
-    selectedWalkingPathElev=null; _wpCumM=null; _wpCumGainM=null; _wpCumLossM=null; _wpTotalGainM=0; _wpTotalLossM=0;
-    if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
-    renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave(); return;
+// Shared fetch+precompute for one path's full geometry/progress data — used
+// by both toggleWalkingPath (one at a time, from the picker) and
+// loadActiveWalkingPathData (many at once, restoring a saved selection).
+// Color is assigned by the caller, not here, since it depends on how many
+// other paths are already active/being loaded alongside this one.
+async function fetchWalkingPathEntry(id){
+  const r=await fetch("/api/walking-path/"+id);
+  if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+  const j=await r.json();
+  const points=j.points||[];
+  const elev=points.map(pt=>pt[2]==null?null:pt[2]);
+  let cumM=null,cumGainM=null,cumLossM=null;
+  if(points.length>=2){
+    const pathLatLon=points.map(pt=>[pt[1],pt[0]]);
+    cumM=simPathCumLens(pathLatLon);
+    const ce=simPathCumElev(elev);
+    cumGainM=ce.gain; cumLossM=ce.loss;
   }
-  try{
-    const r=await fetch("/api/walking-path/"+id);
-    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
-    const j=await r.json();
-    selectedWalkingPathId=id;
-    selectedWalkingPathPoints=j.points;
-    selectedWalkingPathName=j.name;
-    selectedWalkingPathElev=(j.points||[]).map(pt=>pt[2]==null?null:pt[2]);
-    if(selectedWalkingPathPoints.length>=2){
-      const pathLatLon=selectedWalkingPathPoints.map(pt=>[pt[1],pt[0]]);
-      _wpCumM=simPathCumLens(pathLatLon);
-      const ce=simPathCumElev(selectedWalkingPathElev);
-      _wpCumGainM=ce.gain; _wpCumLossM=ce.loss;
-    } else { _wpCumM=null; _wpCumGainM=null; _wpCumLossM=null; }
-    _wpTotalGainM=j.elevGainM||0; _wpTotalLossM=j.elevLossM||0;
-    if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
-    renderWalkingPathLine();
-    updateWalkingPathBtnLabel();
-    autoSave();
-  }catch(e){ alert("Couldn't load that walking path: "+e.message); }
+  return {id,name:j.name,points,elev,cumM,cumGainM,cumLossM,totalGainM:j.elevGainM||0,totalLossM:j.elevLossM||0};
+}
+async function toggleWalkingPath(id,active){
+  if(active){
+    if(walkingPathsActive.some(w=>w.id===id)) return; // already active
+    let entry;
+    try{ entry=await fetchWalkingPathEntry(id); }
+    catch(e){ alert("Couldn't load that walking path: "+e.message); return; }
+    entry.color=WP_COLOR_PALETTE[selectedWalkingPathIds.length%WP_COLOR_PALETTE.length];
+    selectedWalkingPathIds.push(id);
+    walkingPathsActive.push(entry);
+  } else {
+    selectedWalkingPathIds=selectedWalkingPathIds.filter(x=>x!==id);
+    walkingPathsActive=walkingPathsActive.filter(w=>w.id!==id);
+  }
+  if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
+  renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave();
+}
+// Bulk restore (project load / import) — fetches every id in parallel but
+// assigns colors by each id's position in the target list (not fetch-
+// completion order), then re-sorts walkingPathsActive back into that same
+// order, so results are deterministic regardless of network timing.
+async function loadActiveWalkingPathData(ids){
+  selectedWalkingPathIds=(ids||[]).slice();
+  walkingPathsActive=[];
+  if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
+  await Promise.all(selectedWalkingPathIds.map(async id=>{
+    try{
+      const entry=await fetchWalkingPathEntry(id);
+      entry.color=WP_COLOR_PALETTE[selectedWalkingPathIds.indexOf(id)%WP_COLOR_PALETTE.length];
+      walkingPathsActive.push(entry);
+    }catch(e){ /* skip this one path, matches the old single-path silent-degrade behavior */ }
+  }));
+  walkingPathsActive.sort((a,b)=>selectedWalkingPathIds.indexOf(a.id)-selectedWalkingPathIds.indexOf(b.id));
+  renderWalkingPathLine();
+  updateWalkingPathBtnLabel();
+  autoSave();
 }
 let _wpPickerAnchor=null; // the toolbar button — kept so any mutation (create/rename/move/delete) can reopen a fresh picker afterward, same pattern the old delete-only button already used
 async function openWalkingPathPicker(anchorBtn){
@@ -2479,8 +2520,8 @@ async function openWalkingPathPicker(anchorBtn){
   menu.style.maxHeight="400px"; // taller than the default 220px sf-picker cap — a folder/path "⋯" submenu opened near the bottom of a scrolled list would otherwise get clipped by overflow-y:auto
   const head=document.createElement("div"); head.style.cssText="display:flex;gap:4px;padding:2px 4px 6px";
   const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button"; noneBtn.style.flex="1";
-  noneBtn.textContent=(selectedWalkingPathId?"":"✓ ")+"— none (not path-driven) —";
-  noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(null); };
+  noneBtn.textContent=(selectedWalkingPathIds.length?"":"✓ ")+"— none (not path-driven) —"; noneBtn.title="Clear all selected paths";
+  noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); loadActiveWalkingPathData([]); };
   const newFolderBtn=document.createElement("button"); newFolderBtn.className="ghost sf-more"; newFolderBtn.type="button";
   newFolderBtn.style.flex="0 0 auto"; newFolderBtn.title="New folder"; newFolderBtn.textContent="＋📁";
   newFolderBtn.onclick=e=>{ e.stopPropagation(); createWpFolder(null); };
@@ -2533,9 +2574,16 @@ function buildWpFolderRow(node){
 }
 function buildWpPathRow(p){
   const row=document.createElement("div"); row.className="stop-folder-row";
+  // Multi-select checkbox — same pattern as the stop-tree's "Bulk assign"
+  // checkboxes (co-bulk-chk): stopPropagation on the checkbox's own click so
+  // the row's outer click doesn't also fire, toggling twice.
+  const chk=document.createElement("input"); chk.type="checkbox"; chk.style.marginRight="6px"; chk.style.accentColor="var(--coral)";
+  chk.checked=selectedWalkingPathIds.includes(p.id);
+  chk.onclick=e=>{ e.stopPropagation(); toggleWalkingPath(p.id,chk.checked); };
+  row.appendChild(chk);
   const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.style.cursor="pointer";
-  nameEl.textContent=(p.id===selectedWalkingPathId?"✓ ":"")+"🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
-  nameEl.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); selectWalkingPath(p.id); };
+  nameEl.textContent="🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
+  nameEl.onclick=e=>{ e.stopPropagation(); chk.checked=!chk.checked; toggleWalkingPath(p.id,chk.checked); };
   row.appendChild(nameEl);
   const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯"; moreBtn.title="Rename, move, or delete";
   moreBtn.onclick=e=>{ e.stopPropagation(); openWpPathMenu(moreBtn,p); };
@@ -2689,7 +2737,8 @@ async function renameWpPath(p){
   try{
     const r=await fetch("/api/walking-path/"+p.id,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({name})});
     if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
-    if(p.id===selectedWalkingPathId){ selectedWalkingPathName=name; updateWalkingPathBtnLabel(); }
+    const active=walkingPathsActive.find(w=>w.id===p.id);
+    if(active){ active.name=name; updateWalkingPathBtnLabel(); }
     openWalkingPathPicker(_wpPickerAnchor);
   }catch(e){ alert("Rename failed: "+e.message); }
 }
@@ -2706,7 +2755,7 @@ async function deleteWpPath(p){
   try{
     const r=await fetch("/api/walking-path/"+p.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
-    if(selectedWalkingPathId===p.id) selectWalkingPath(null);
+    if(selectedWalkingPathIds.includes(p.id)) await toggleWalkingPath(p.id,false);
     openWalkingPathPicker(_wpPickerAnchor);
   }catch(err){ alert("Delete failed: "+err.message); }
 }
@@ -3148,12 +3197,12 @@ function zoneToEngine(z){
   // from Studio's audio_folder) — the live engine never reads this, only
   // exported so reloading a published bundle restores the same tree layout.
   if(z.folderId) zo.folderId=z.folderId;
-  // Editor-only — whether this stop is snapped onto the project's Walking
-  // Path (constrains dragging to slide along it). The live engine doesn't
-  // need this (map-matching runs against the visitor's own position, not
-  // per-stop state) — only exported so a publish+reload doesn't silently
-  // drop every stop's snapped-to-path status.
-  if(z.onPath) zo.onPath=true;
+  // Editor-only — which of the project's active Walking Paths (if any) this
+  // stop is snapped onto (constrains dragging to slide along that specific
+  // path). The live engine doesn't need this (map-matching runs against the
+  // visitor's own position, not per-stop state) — only exported so a
+  // publish+reload doesn't silently drop every stop's snapped-to-path status.
+  if(z.onPathId) zo.onPathId=z.onPathId;
   if(z.ttsVoice) zo.ttsVoice=z.ttsVoice;
   if(isPath){
     zo.path=s.coords.map(LL);
@@ -3182,7 +3231,7 @@ function exportBundle(){
               guideId:null,
               liveTtlMs:+document.getElementById("liveTtlMs").value,
               audioRetriggerDelayS:+document.getElementById("audioRetriggerDelayS").value,
-              walkingPathId:selectedWalkingPathId||null,
+              walkingPathIds:selectedWalkingPathIds.slice(),
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -3193,7 +3242,7 @@ document.getElementById("copyBtn").onclick=()=>{ exportBundle();
   document.getElementById("status").textContent="bundle copied to clipboard"; };
 
 /* ---- import an existing bundle to edit (reverse of export) ---- */
-function engineToZone(zo){
+function engineToZone(zo,legacyPathId){
   const isPath=Array.isArray(zo.path)&&zo.path.length>=2;
   let shape;
   if(isPath){
@@ -3225,7 +3274,11 @@ function engineToZone(zo){
   // Stop tree folder — resolved against the live folder list at render time
   // (loadStopFolders/drawList), so a stale/deleted id just falls back to root.
   z.folderId=zo.folderId||null;
-  z.onPath=!!zo.onPath;
+  // zo.onPathId is the current format; zo.onPath (a bare boolean, from
+  // before multi-path support) only tells us THAT a stop was on-path, not
+  // WHICH path — the caller resolves that ambiguity for us by passing the
+  // bundle's own (single, legacy) walkingPathId as legacyPathId.
+  z.onPathId = zo.onPathId || (zo.onPath ? (legacyPathId||null) : null);
   z.ttsVoice=zo.ttsVoice||null;
   if(isPath){
     z.movementMode=zo.movementMode||"walk";
@@ -3240,7 +3293,11 @@ document.getElementById("importBtn").onclick=()=>{
   if(!raw){ document.getElementById("status").textContent="paste a bundle into the box first, then Import"; return; }
   try{ const b=JSON.parse(raw);
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
-    zones=b.zones.map(engineToZone); sel=-1; tool=null; draft=[];
+    // Pre-multi-path bundles only have a single bundle-level walkingPathId
+    // and per-stop zo.onPath booleans (no per-stop path reference) — thread
+    // that single id through as the fallback every on-path stop resolves to.
+    const legacyPathId=(b.walkingPathIds&&b.walkingPathIds[0])||b.walkingPathId||null;
+    zones=b.zones.map(zo=>engineToZone(zo,legacyPathId)); sel=-1; tool=null; draft=[];
     // engineToZone() takes the incoming bundle's zo.id verbatim (needed to
     // round-trip a project we exported ourselves) — but a hand-edited or
     // externally-produced bundle can have two zones sharing an id, which
@@ -3257,7 +3314,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
     if(b.liveTtlMs) document.getElementById("liveTtlMs").value=String(b.liveTtlMs);
     if(b.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=String(b.audioRetriggerDelayS);
-    if(b.walkingPathId) selectWalkingPath(b.walkingPathId); else selectWalkingPath(null);
+    loadActiveWalkingPathData(Array.isArray(b.walkingPathIds)?b.walkingPathIds:(b.walkingPathId?[b.walkingPathId]:[]));
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
@@ -3694,10 +3751,9 @@ function nearestOnPath(latLon,pathLatLon,ref){
   if(!best) return null;
   return { point:[ ref[0]+best.y/111320, ref[1]+best.x/(111320*Math.cos(ref[0]*Math.PI/180)) ], distM:bestD, segIdx:bestI, t:bestT };
 }
-// Reads the editor's own already-loaded selectedWalkingPathPoints directly
-// (no fetch needed — this is the same page that loaded them for the
-// map/picker), converted from [lon,lat] to this simulator's [lat,lon]
-// convention on the fly each call.
+// Unused today — SimFencer.update() inlines this same threshold check
+// itself (kept, like the engine/sim copies, in case a future caller wants
+// a plain single-path snap-or-passthrough helper).
 function mapMatch(latLon,pathLatLon,ref,maxSnapM){
   if(!pathLatLon||pathLatLon.length<2) return latLon;
   const m=nearestOnPath(latLon,pathLatLon,ref);
@@ -3740,9 +3796,14 @@ function simPathCumElev(elevArr,noiseFloorM){
 // simulator's own vT clock (see simPlay()), not real wall time — fine, since
 // this only cares about elapsed-time-vs-distance ratios, which stay
 // self-consistent regardless of what clock feeds them.
-function updateWalkingPathProgress(nm, nowMs){
-  if(!_wpCumM) return;
-  const cum=_wpCumM, totalM=cum[cum.length-1];
+function updateWalkingPathProgress(nm, nowMs, path){
+  if(!path||!path.cumM) return;
+  // Switching to a DIFFERENT path than whichever one the walk-start anchor
+  // was last locked to resets pace/ETA tracking (starting fresh on a new
+  // path) — but briefly leaving every path's threshold and coming back to
+  // the SAME one does not reset (a GPS blip shouldn't restart the clock).
+  if(_pathWalkStartPathId!==path.id){ _pathWalkStartPathId=path.id; _pathWalkStartT=null; _pathWalkStartDistM=null; }
+  const cum=path.cumM, totalM=cum[cum.length-1];
   const distAlongM = cum[nm.segIdx] + nm.t*((cum[nm.segIdx+1]??cum[nm.segIdx])-cum[nm.segIdx]);
   if(_pathWalkStartT==null){ _pathWalkStartT=nowMs; _pathWalkStartDistM=distAlongM; }
   const elapsedS=(nowMs-_pathWalkStartT)/1000;
@@ -3750,9 +3811,9 @@ function updateWalkingPathProgress(nm, nowMs){
   const paceMps = (elapsedS>3 && coveredSinceStartM>2) ? coveredSinceStartM/elapsedS : null;
   const remainingM=Math.max(0, totalM-distAlongM);
   let elevGainSoFarM=null, elevLossSoFarM=null;
-  if(_wpCumGainM){
-    const g0=_wpCumGainM[nm.segIdx], g1=_wpCumGainM[nm.segIdx+1]??g0;
-    const l0=_wpCumLossM[nm.segIdx], l1=_wpCumLossM[nm.segIdx+1]??l0;
+  if(path.cumGainM){
+    const g0=path.cumGainM[nm.segIdx], g1=path.cumGainM[nm.segIdx+1]??g0;
+    const l0=path.cumLossM[nm.segIdx], l1=path.cumLossM[nm.segIdx+1]??l0;
     elevGainSoFarM = Math.round(g0+nm.t*(g1-g0));
     elevLossSoFarM = Math.round(l0+nm.t*(l1-l0));
   }
@@ -3760,7 +3821,7 @@ function updateWalkingPathProgress(nm, nowMs){
     distanceCoveredM: Math.round(distAlongM), distanceRemainingM: Math.round(remainingM),
     totalDistanceM: Math.round(totalM), pctComplete: totalM>0 ? Math.round(distAlongM/totalM*1000)/10 : null,
     elevGainSoFarM, elevLossSoFarM,
-    totalElevGainM: _wpTotalGainM, totalElevLossM: _wpTotalLossM,
+    totalElevGainM: path.totalGainM, totalElevLossM: path.totalLossM,
     etaSeconds: paceMps ? Math.round(remainingM/paceMps) : null
   });
 }
@@ -3864,13 +3925,19 @@ const SimFencer={state:{},onEvent:null,
       if(layer.kind==="target"&&typeof PipelineRuntime!=="undefined") PipelineRuntime.tick(zone.id,null,{lat:0,lon:0},{dwellSeconds:(now-st.t0)/1000});
       if(sd>SIM_TUNING.EXIT_BUFFER_M){this._fire(zone,layer,"exit",{dur:(now-st.t0)/1000},subj);st.phase="out";}}},
   update(p,prev,now){
-    if(selectedWalkingPathPoints && selectedWalkingPathPoints.length>=2){
-      const pathLatLon=selectedWalkingPathPoints.map(pt=>[pt[1],pt[0]]);
-      const nm=nearestOnPath([p.lat,p.lon],pathLatLon,simBundle.ref);
-      if(nm && nm.distM<=WALKING_PATH_MAPMATCH_SNAP_M){
-        p={...p,lat:nm.point[0],lon:nm.point[1]};
-        updateWalkingPathProgress(nm, now);
-      }
+    // Snap to whichever active path is nearest, if any is within threshold —
+    // verbatim-mirrored decision logic as geofence-engine.html/geofence-sim.html's
+    // Geofencer.update(), just sourced from the editor's own in-memory
+    // walkingPathsActive instead of a fetched WALKING_PATHS collection.
+    let winner=null;
+    for(const path of walkingPathsActive){
+      if(!path.latlon) path.latlon=path.points.map(pt=>[pt[1],pt[0]]); // precompute once, not every tick
+      const nm=nearestOnPath([p.lat,p.lon],path.latlon,simBundle.ref);
+      if(nm && nm.distM<=WALKING_PATH_MAPMATCH_SNAP_M && (!winner||nm.distM<winner.nm.distM)) winner={path,nm};
+    }
+    if(winner){
+      p={...p,lat:winner.nm.point[0],lon:winner.nm.point[1]};
+      updateWalkingPathProgress(winner.nm, now, winner.path);
     }
     const active=[];
     /* visitor vs all zones */
@@ -3893,7 +3960,7 @@ const SimFencer={state:{},onEvent:null,
   _deliver(zone,t,subj="visitor"){
     if(t.say){if(!zone.audioUrl&&simSoundOn) simTTS(t.say, zone.ttsVoice);
       if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
-  reset(){this.state={}; _pathWalkStartT=null; _pathWalkStartDistM=null;}
+  reset(){this.state={}; _pathWalkStartT=null; _pathWalkStartDistM=null; _pathWalkStartPathId=null;}
 };
 
 /* ---- spatial audio (mirror of engine's SpatialVoice + minimal Clarity) ---- */
@@ -4513,8 +4580,15 @@ function buildSimStopsPath(){
   // Walk the recorded route itself when one's selected, regardless of stop
   // order — this is how a path-driven tour is actually walked (GPS
   // map-matched onto the path as it goes), not a straight line stop-to-stop.
-  if(selectedWalkingPathPoints && selectedWalkingPathPoints.length>=2){
-    const pts=selectedWalkingPathPoints.map(pt=>[pt[1],pt[0]]); // [lon,lat] -> [lat,lon], matching SimGeo's convention
+  // Auto-walk only follows ONE path at a time — it's parametrized as a
+  // single scalar distance along one polyline (see simPathPointAt), so
+  // there's no well-defined notion of walking two paths simultaneously.
+  // With multiple paths active, the first-selected one is the "primary"
+  // path walked (same convention as its color/button-label being first).
+  const primary=walkingPathsActive[0];
+  if(primary && primary.points.length>=2){
+    if(walkingPathsActive.length>1) simLogEv("sev-sys","walking along: "+primary.name+" (1 of "+walkingPathsActive.length+" selected paths)");
+    const pts=primary.points.map(pt=>[pt[1],pt[0]]); // [lon,lat] -> [lat,lon], matching SimGeo's convention
     const path=[lead(pts[0],pts[1],20)];
     pts.forEach(p=>path.push(p));
     path.push(lead(pts[pts.length-1],pts[pts.length-2],20));
