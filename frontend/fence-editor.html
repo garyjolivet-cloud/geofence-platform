@@ -2580,7 +2580,14 @@ function buildWpPathRow(p){
   // Multi-select checkbox — same pattern as the stop-tree's "Bulk assign"
   // checkboxes (co-bulk-chk): stopPropagation on the checkbox's own click so
   // the row's outer click doesn't also fire, toggling twice.
-  const chk=document.createElement("input"); chk.type="checkbox"; chk.style.marginRight="6px"; chk.style.accentColor="var(--coral)";
+  const chk=document.createElement("input"); chk.type="checkbox";
+  // The global `input,textarea,select{width:100%}` rule (meant for text
+  // inputs/selects) also matches bare <input type=checkbox> elements unless
+  // overridden — this app's other checkboxes dodge it by living inside a
+  // `label.chk` (which has its own `input{width:auto}` rule); this one isn't,
+  // so it needs the override directly or it stretches to fill the row,
+  // squeezing the name text next to it down to nothing.
+  chk.style.cssText="width:auto;flex:0 0 auto;margin-right:6px;accent-color:var(--coral)";
   chk.checked=selectedWalkingPathIds.includes(p.id);
   chk.onclick=e=>{ e.stopPropagation(); toggleWalkingPath(p.id,chk.checked); };
   row.appendChild(chk);
