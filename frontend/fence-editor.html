@@ -81,7 +81,7 @@
   .sf-children{margin-left:16px;border-left:1px solid var(--rim);padding-left:4px}
   .sf-menu{position:absolute;z-index:80;top:100%;right:4px;background:var(--slate-2);border:1px solid var(--rim);
            border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.45);min-width:150px;overflow:hidden}
-  .sf-picker{max-height:220px;overflow-y:auto}
+  .sf-picker{max-height:calc(100vh - 40px);overflow-y:auto}
   .sf-menu-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--snow);
                 padding:8px 12px;font-family:"Barlow Condensed";font-size:12px;cursor:pointer}
   .sf-menu-item:hover{background:rgba(255,255,255,.06)}
@@ -2344,7 +2344,7 @@ document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(s
    ambient-audio shape) — this is a separate, app-level-scoped, reusable
    reference route. Organized into its own folder tree (walking_path_folder),
    same shape as the stop tree below but app-scoped — reuses the .sf-menu/
-   .stop-folder-row/.sf-picker CSS and closeStopFolderMenus()/positionMenuSmart()
+   .stop-folder-row/.sf-picker CSS and closeStopFolderMenus()/openPortalMenu()
    machinery rather than inventing new widgets.
    ============================================================ */
 let walkingPaths=[];              // [{id,folderId,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
@@ -2513,33 +2513,36 @@ async function loadActiveWalkingPathData(ids){
 }
 let _wpPickerAnchor=null; // the toolbar button — kept so any mutation (create/rename/move/delete) can reopen a fresh picker afterward, same pattern the old delete-only button already used
 async function openWalkingPathPicker(anchorBtn){
-  closeStopFolderMenus(); // shares the .sf-menu class/click-away-close listener with the stop-folder pickers
+  closeStopFolderMenus(); // hide any stale picker immediately, before the await below
   _wpPickerAnchor=anchorBtn;
   await loadWalkingPaths();
-  const menu=document.createElement("div"); menu.className="sf-menu sf-picker wp-picker";
-  menu.style.maxHeight="400px"; // taller than the default 220px sf-picker cap — a folder/path "⋯" submenu opened near the bottom of a scrolled list would otherwise get clipped by overflow-y:auto
-  const head=document.createElement("div"); head.style.cssText="display:flex;gap:4px;padding:2px 4px 6px";
-  const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button"; noneBtn.style.flex="1";
-  noneBtn.textContent=(selectedWalkingPathIds.length?"":"✓ ")+"— none (not path-driven) —"; noneBtn.title="Clear all selected paths";
-  noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); loadActiveWalkingPathData([]); };
-  const newFolderBtn=document.createElement("button"); newFolderBtn.className="ghost sf-more"; newFolderBtn.type="button";
-  newFolderBtn.style.flex="0 0 auto"; newFolderBtn.title="New folder"; newFolderBtn.textContent="＋📁";
-  newFolderBtn.onclick=e=>{ e.stopPropagation(); createWpFolder(null); };
-  const importBtn=document.createElement("button"); importBtn.className="ghost sf-more"; importBtn.type="button";
-  importBtn.style.flex="0 0 auto"; importBtn.title="Import a GPX track from another app"; importBtn.textContent="⬆GPX";
-  const importInput=document.createElement("input"); importInput.type="file"; importInput.accept=".gpx,application/gpx+xml";
-  importInput.style.display="none";
-  importInput.onchange=()=>{ const f=importInput.files[0]; importInput.value=""; if(f) importWpFromGPX(f); };
-  importBtn.onclick=e=>{ e.stopPropagation(); importInput.click(); };
-  head.appendChild(noneBtn); head.appendChild(newFolderBtn); head.appendChild(importBtn); head.appendChild(importInput);
-  menu.appendChild(head);
-  if(!walkingPaths.length && !walkingPathFolders.length){
-    const hint=document.createElement("div"); hint.className="hint"; hint.style.padding="6px 10px"; hint.textContent="no saved paths yet — record one in Field Recorder";
-    menu.appendChild(hint);
-  }
-  menu.appendChild(buildWpFolderRow(buildWpTree()));
-  anchorBtn.parentElement.appendChild(menu);
-  positionMenuSmart(menu);
+  // Built via openPortalMenu (document.body + position:fixed), same as every
+  // other picker/menu in this file — NOT anchorBtn.parentElement (the old
+  // approach here), since that nests the menu inside #mainPanel's own
+  // scrollable box and gets clipped by its overflow the moment the tree is
+  // taller than the visible panel, instead of floating freely over the map.
+  openPortalMenu(anchorBtn, "sf-picker wp-picker", menu=>{
+    const head=document.createElement("div"); head.style.cssText="display:flex;gap:4px;padding:2px 4px 6px";
+    const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button"; noneBtn.style.flex="1";
+    noneBtn.textContent=(selectedWalkingPathIds.length?"":"✓ ")+"— none (not path-driven) —"; noneBtn.title="Clear all selected paths";
+    noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); loadActiveWalkingPathData([]); };
+    const newFolderBtn=document.createElement("button"); newFolderBtn.className="ghost sf-more"; newFolderBtn.type="button";
+    newFolderBtn.style.flex="0 0 auto"; newFolderBtn.title="New folder"; newFolderBtn.textContent="＋📁";
+    newFolderBtn.onclick=e=>{ e.stopPropagation(); createWpFolder(null); };
+    const importBtn=document.createElement("button"); importBtn.className="ghost sf-more"; importBtn.type="button";
+    importBtn.style.flex="0 0 auto"; importBtn.title="Import a GPX track from another app"; importBtn.textContent="⬆GPX";
+    const importInput=document.createElement("input"); importInput.type="file"; importInput.accept=".gpx,application/gpx+xml";
+    importInput.style.display="none";
+    importInput.onchange=()=>{ const f=importInput.files[0]; importInput.value=""; if(f) importWpFromGPX(f); };
+    importBtn.onclick=e=>{ e.stopPropagation(); importInput.click(); };
+    head.appendChild(noneBtn); head.appendChild(newFolderBtn); head.appendChild(importBtn); head.appendChild(importInput);
+    menu.appendChild(head);
+    if(!walkingPaths.length && !walkingPathFolders.length){
+      const hint=document.createElement("div"); hint.className="hint"; hint.style.padding="6px 10px"; hint.textContent="no saved paths yet — record one in Field Recorder";
+      menu.appendChild(hint);
+    }
+    menu.appendChild(buildWpFolderRow(buildWpTree()));
+  });
 }
 // Root (id null) renders as a collapsible row too, same as the stop tree's
 // root — collapsing it hides every top-level folder/path at once, which
@@ -3038,15 +3041,6 @@ function buildStopFolderRow(node,depth){
   return wrap;
 }
 function closeStopFolderMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>m.remove()); closeProjectSettingsPopover(); }
-// .sf-menu always opens downward (top:100%) by default — for a stop/folder
-// row near the bottom of the (fixed-height, non-page-scrolling) panel, that
-// overflows off-screen with no way to reach it at all. Flip it to open
-// upward instead whenever there isn't room below — same idea already fixed
-// for wheel-picker.js's popovers.
-function positionMenuSmart(menu){
-  const r=menu.getBoundingClientRect();
-  if(r.bottom>window.innerHeight){ menu.style.top="auto"; menu.style.bottom="100%"; }
-}
 document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")&&!e.target.closest("#projSettingsPopover")&&!e.target.closest("#projSettingsBtn")) closeStopFolderMenus(); });
 function openStopFolderMenu(anchorBtn,node){
   const isRoot=node.id===null;
