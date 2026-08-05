@@ -225,11 +225,15 @@ Every zone shows an amber bearing arrow at all times. When a zone is **selected*
 
 Each handle shows a floating label on hover that updates live while dragging (e.g. `approach: 45 m`).
 
-**Zone body interaction:** Click any zone to select + fly to it. Drag any zone body to move the entire zone. Click empty map to deselect.
+**Zone body interaction:** Click any zone to select + fly to it. Drag any zone body to move the entire zone. Click empty map to deselect. **Right-click or double-click a zone** opens a Rename/Copy/Move to…/Delete menu (`openZoneMenu`, same function the stop-tree's "⋯" button uses) positioned at the cursor; double-click-to-zoom is disabled map-wide as a result (MapLibre has no per-layer toggle for it).
 
-**Global settings** (Project Settings section): three dot-badge buttons (voice range, full vol, visitor). Click a dot → inline slider opens + ghost ring appears on map centered on all zones. Click again to close.
+**Add-a-stop picker:** the Circle/Polygon/Tripline/Path tools and the Walking Path picker are collapsed behind one "add a stop — pick a shape" button (`#shapePickerBtn`) instead of separate always-visible buttons.
 
-**Panel minimize:** ◀ button collapses panel to 36px strip; ▶ expands.
+**Stop list:** the search box, Bulk-assign/Move… controls, and the stop-folder tree are collapsed behind a "stops (n) — click to edit" toggle button (`#stopsToggleBtn`/`#stopsBody`).
+
+**Project settings:** customer picker, "this is a template" checkbox, and four dot-badge buttons (voice range, full vol, visitor, stop visibility) live in a popover opened from the ⚙ button in the panel header (`#projSettingsPopover`, toggled via `#projSettingsBtn`) — not inline in the panel body. Click a dot → inline slider opens + ghost ring appears on map centered on all zones. Click again to close. Any future fixed-position popover here must be a **top-level sibling of `#mainPanel`**, never nested inside it — `.panel` uses `backdrop-filter`, which creates a new CSS containing block for `position:fixed` descendants, so a popover nested inside it positions/clips relative to the panel's own box instead of the viewport.
+
+**Panel is floating and resizable:** drag the header (breadcrumb row, `#mainPanelHead`) to move `#mainPanel` anywhere; resize from the bottom-right corner (native `resize:both`, matching `#audioPalette`'s existing pattern). ◀ button collapses panel to 36px strip; ▶ expands.
 
 **Map Key:** ⬤ Key button (top-right, below base selector) opens modal legend describing all handles.
 
