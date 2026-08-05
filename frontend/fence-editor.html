@@ -878,7 +878,9 @@ function fadeGain(f){
 // the range boundary itself, this just gives the exponential smoother a
 // little room to settle before fadeOut() tears the node down.
 const FADE_RELEASE_MULT=1.3;
-function fadeBandFeatures(center,farM,clearM){
+// ringFn: (radiusM) => closedRing — circleRing/rectRing/polygonOffsetRing,
+// chosen per-zone by the caller in renderSourcesInner() based on shape type.
+function fadeBandFeatures(ringFn,farM,clearM){
   const feats=[];
   for(let i=0;i<FADE_BANDS;i++){
     const r0=clearM+(farM-clearM)*i/FADE_BANDS;
@@ -887,22 +889,25 @@ function fadeBandFeatures(center,farM,clearM){
     const f=Math.max(0,Math.min(1,(mid-clearM)/Math.max(1,farM-clearM)));
     const gain=fadeGain(f);
     feats.push({type:"Feature",properties:{kind:"fadegrad",op:gain*FADE_MAX_OPACITY},
-      geometry:{type:"Polygon",coordinates:[circleRing(center,r1,48),circleRing(center,r0,48)]}});
+      geometry:{type:"Polygon",coordinates:[ringFn(r1),ringFn(r0)]}});
   }
   return feats;
 }
 // renderSources() runs on every drag-frame mousemove for every zone, not
 // just the one being dragged — without this cache, every other zone's 24
-// annulus bands (2 circleRing(...,48) calls each) got regenerated from
-// scratch on every frame even though nothing about them had changed.
-// Keyed by zone id; only recomputes when this zone's own center/farM/clearM
-// actually changed since the last call.
+// annulus bands (2 ring-builder calls each) got regenerated from scratch on
+// every frame even though nothing about them had changed. Keyed by zone id;
+// only recomputes when this zone's own ringKey/farM/clearM actually changed
+// since the last call. ringKey identifies the zone's current shape (center
+// point for circle/path, endpoints for tripline, vertex list for polygon —
+// see renderSourcesInner()) since there's no single "center" scalar for a
+// tripline/polygon's ring anymore.
 const _fadeBandCache=new Map();
-function cachedFadeBandFeatures(zoneId,center,farM,clearM){
-  const key=center[0]+","+center[1]+","+farM+","+clearM;
+function cachedFadeBandFeatures(zoneId,ringFn,ringKey,farM,clearM){
+  const key=ringKey+","+farM+","+clearM;
   const hit=_fadeBandCache.get(zoneId);
   if(hit&&hit.key===key) return hit.feats;
-  const feats=fadeBandFeatures(center,farM,clearM);
+  const feats=fadeBandFeatures(ringFn,farM,clearM);
   _fadeBandCache.set(zoneId,{key,feats});
   return feats;
 }
@@ -911,7 +916,7 @@ function cachedFadeBandFeatures(zoneId,center,farM,clearM){
 // dead center, darkening toward the clearM edge) instead of leaving that
 // area empty. No audio/engine meaning, unlike fadeBandFeatures() above.
 const SPEAKER_BANDS=16, SPEAKER_LIGHT=[235,235,235], SPEAKER_DARK=[55,55,55], SPEAKER_OPACITY=0.65;
-function speakerConeFeatures(center,clearM){
+function speakerConeFeatures(ringFn,clearM){
   const feats=[];
   for(let i=0;i<SPEAKER_BANDS;i++){
     const r0=clearM*i/SPEAKER_BANDS;
@@ -920,16 +925,16 @@ function speakerConeFeatures(center,clearM){
     const rgb=SPEAKER_LIGHT.map((v,k)=>Math.round(v+(SPEAKER_DARK[k]-v)*t));
     const col=`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
     feats.push({type:"Feature",properties:{kind:"speakercone",col},
-      geometry:{type:"Polygon",coordinates:[circleRing(center,r1,48),circleRing(center,r0,48)]}});
+      geometry:{type:"Polygon",coordinates:[ringFn(r1),ringFn(r0)]}});
   }
   return feats;
 }
 const _speakerConeCache=new Map();
-function cachedSpeakerConeFeatures(zoneId,center,clearM){
-  const key=center[0]+","+center[1]+","+clearM;
+function cachedSpeakerConeFeatures(zoneId,ringFn,ringKey,clearM){
+  const key=ringKey+","+clearM;
   const hit=_speakerConeCache.get(zoneId);
   if(hit&&hit.key===key) return hit.feats;
-  const feats=speakerConeFeatures(center,clearM);
+  const feats=speakerConeFeatures(ringFn,clearM);
   _speakerConeCache.set(zoneId,{key,feats});
   return feats;
 }
@@ -960,6 +965,107 @@ function centroidLonLat(coords){
     return [coords.reduce((s,c)=>s+c[0],0)/n, coords.reduce((s,c)=>s+c[1],0)/n]; }
   return [cx/(6*A), cy/(6*A)];
 }
+// ---- shape-aware audio-fade/full-volume/general-radius ring builders ----
+// Purely cosmetic/visual: at runtime (geofence-engine.html) audio gain for
+// EVERY zone shape is still plain circular distance from zoneCenterLonLat(z)
+// — these rings make the editor's picture match the zone's own drawn shape,
+// they don't change what the engine actually computes.
+//
+// Closed rectangle ring (5 pts, first repeated last — same contract as
+// circleRing) around a tripline's from->to segment, half-width R on each
+// side, NOT extended past the endpoints (a true rectangle, not a rounded
+// "stadium"). Built via bearingTo/destPoint like every other radial
+// construct in this file — no new trig primitives.
+function rectRing(from,to,R){
+  const len=haversineM(from,to);
+  if(!(len>1e-6)){
+    // Degenerate zero-length tripline (from===to) — no direction to build
+    // a rectangle around; fall back to an axis-aligned square of side 2R.
+    const d=R*Math.SQRT2;
+    return [destPoint(from,d,45),destPoint(from,d,135),destPoint(from,d,225),destPoint(from,d,315),destPoint(from,d,45)];
+  }
+  const brg=bearingTo(from,to);
+  const c1=destPoint(from,R,brg+90), c2=destPoint(to,R,brg+90);
+  const c3=destPoint(to,R,brg+270), c4=destPoint(from,R,brg+270);
+  return [c1,c2,c3,c4,c1];
+}
+// Polygon offset ("equal polygon" — same shape, uniformly larger). Standard
+// mitered-edge-offset with a miter-limit fallback for sharp/reflex corners
+// — not a bulletproof general-purpose buffer (no self-intersection cleanup
+// for highly concave source polygons), which is an accepted tradeoff for a
+// cosmetic ring on typically-simple, hand-drawn walking-tour zones.
+// Done in a local planar XY frame (meters, centered on the polygon's own
+// centroid — same convention as Geo.toXY/SimGeo.toXY in the engine files)
+// so "outward by R meters" is a real uniform offset, not degree-space
+// arithmetic (a degree of longitude isn't the same ground distance as a
+// degree of latitude, and that ratio itself changes with latitude).
+function _lineIntersect(p1,d1,p2,d2){
+  const denom=d1[0]*d2[1]-d1[1]*d2[0];
+  if(Math.abs(denom)<1e-9) return null;
+  const t=((p2[0]-p1[0])*d2[1]-(p2[1]-p1[1])*d2[0])/denom;
+  return [p1[0]+t*d1[0], p1[1]+t*d1[1]];
+}
+// One-time per-polygon setup (edge/normal table) — split out from the
+// per-radius offset step below because fadeBandFeatures/speakerConeFeatures
+// call the ring builder up to 24+16=40 times for one zone; rebuilding this
+// from scratch on every one of those calls would be exactly the kind of
+// per-frame waste _fadeBandCache already exists to avoid (see its comment).
+function buildPolygonOffsetContext(coords){
+  const n=coords.length;
+  if(n<3) return {degenerate:true,coords};
+  const ref=centroidLonLat(coords);
+  const mPerLon=111320*Math.cos(ref[1]*Math.PI/180);
+  const toXY=p=>[(p[0]-ref[0])*mPerLon,(p[1]-ref[1])*111320];
+  const toLL=p=>[ref[0]+p[0]/mPerLon, ref[1]+p[1]/111320];
+  const pts=coords.map(toXY);
+  // Signed area (shoelace) determines winding, so "outward" normals are
+  // chosen correctly regardless of whether the user drew the polygon
+  // clockwise or counterclockwise.
+  let area=0;
+  for(let i=0;i<n;i++){ const a=pts[i],b=pts[(i+1)%n]; area+=a[0]*b[1]-b[0]*a[1]; }
+  const sign=area>=0?1:-1;
+  const edges=new Array(n);
+  for(let i=0;i<n;i++){
+    const a=pts[i],b=pts[(i+1)%n], dx=b[0]-a[0],dy=b[1]-a[1], len=Math.hypot(dx,dy);
+    edges[i]= len<1e-9 ? null : {a,b,dir:[dx/len,dy/len],normal:[sign*dy/len,-sign*dx/len]};
+  }
+  return {degenerate:false,n,pts,edges,toLL};
+}
+const MITER_LIMIT_MULT=4; // same order of magnitude as SVG/Canvas's default miterLimit
+// Apply an outward offset of R meters to a precomputed polygon context,
+// returning a CLOSED ring (n+1 pts, first repeated last) — same contract as
+// circleRing/rectRing.
+function offsetRingFromContext(ctx,R){
+  if(ctx.degenerate) return ctx.coords.concat([ctx.coords[0]]);
+  const {n,pts,edges,toLL}=ctx, out=new Array(n);
+  for(let i=0;i<n;i++){
+    const prev=edges[(i-1+n)%n], next=edges[i], p=pts[i];
+    if(!prev&&!next){ out[i]=p; continue; }               // fully degenerate vertex
+    if(!prev||!next){                                     // one neighbor edge is zero-length: no miter
+      const e=prev||next; out[i]=[p[0]+R*e.normal[0],p[1]+R*e.normal[1]]; continue;
+    }
+    // True miter: intersect the two adjacent edges' offset lines (each
+    // edge's own infinite line, shifted outward by R along its own normal).
+    const l0=[prev.b[0]+R*prev.normal[0],prev.b[1]+R*prev.normal[1]];
+    const l1=[next.a[0]+R*next.normal[0],next.a[1]+R*next.normal[1]];
+    const hit=_lineIntersect(l0,prev.dir,l1,next.dir);
+    const avgNx=prev.normal[0]+next.normal[0], avgNy=prev.normal[1]+next.normal[1], avgLen=Math.hypot(avgNx,avgNy);
+    let pt=null;
+    if(hit && Math.hypot(hit[0]-p[0],hit[1]-p[1])<=MITER_LIMIT_MULT*Math.max(R,1e-6)) pt=hit;
+    if(!pt){
+      // Fallback: bevel point using the averaged normal — covers both the
+      // "parallel/ill-conditioned intersection" case (hit===null) and the
+      // "miter point too far away" (sharp reflex vertex) case. If the two
+      // normals nearly cancel (a ~180° reflex spike), avgLen~0 makes
+      // averaging meaningless — arbitrarily but stably fall back to the
+      // previous edge's normal alone.
+      pt = avgLen>1e-6 ? [p[0]+R*avgNx/avgLen,p[1]+R*avgNy/avgLen] : [p[0]+R*prev.normal[0],p[1]+R*prev.normal[1]];
+    }
+    out[i]=pt;
+  }
+  const ring=out.map(toLL); ring.push(ring[0]); return ring;
+}
+function polygonOffsetRing(coords,R){ return offsetRingFromContext(buildPolygonOffsetContext(coords),R); }
 const slug=s=>(s||"stop").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"stop";
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 // makeZone/pName-rename both derive id from slug(name) — two stops can collide
@@ -1049,6 +1155,12 @@ function renderSources(){
     if(st) st.textContent="render error: "+e.message+" — check browser console (F12) and report the full message";
   }
 }
+// Perpendicular half-width (meters) of the invisible click-hit rectangle
+// built around every tripline — independent of audioM so the hit area
+// stays a small, predictable size regardless of how the fade radius is
+// configured (unlike the visual audio-fade rectangle, which does scale
+// with audioM).
+const TRIPLINE_HIT_HALF_WIDTH_M=10;
 function renderSourcesInner(){
   const feats=[];
   zones.forEach((z,i)=>{
@@ -1075,11 +1187,34 @@ function renderSourcesInner(){
         c=[live[1],live[0]];
       }
     }
+    // Ring-shape builder for this zone's audio-fade/full-volume/(polygon-
+    // only) general-radius rings. circle + path zones keep the original
+    // circular ring; tripline gets a rectangle around from->to; polygon
+    // gets a uniformly outward-offset copy of its own drawn outline ("equal
+    // polygon"). All three ringFn(R) return a CLOSED ring (circleRing's
+    // existing contract), so everything below never needs to know which
+    // shape produced it. Purely visual — see rectRing/polygonOffsetRing's
+    // own comments for why the runtime engine's audio gain is unaffected.
+    let ringFn, ringKey;
+    if(s.type==="tripline"){
+      ringFn=R=>rectRing(s.from,s.to,R);
+      ringKey="t:"+s.from[0].toFixed(7)+","+s.from[1].toFixed(7)+"|"+s.to[0].toFixed(7)+","+s.to[1].toFixed(7);
+    }else if(s.type==="polygon"){
+      // Built once per zone per render call — fadeBandFeatures/
+      // speakerConeFeatures below can call ringFn up to 24+16=40 times for
+      // this one zone; see buildPolygonOffsetContext's own comment.
+      const _polyCtx=buildPolygonOffsetContext(s.coords);
+      ringFn=R=>offsetRingFromContext(_polyCtx,R);
+      ringKey="p:"+s.coords.map(p=>p[0].toFixed(7)+","+p[1].toFixed(7)).join(";");
+    }else{
+      ringFn=R=>circleRing(c,R,48);
+      ringKey="c:"+c[0].toFixed(7)+","+c[1].toFixed(7);
+    }
     // audio fade ring — trigger-system ring, shown for every zone type
     // including path stops (path stops fire triggers too now, at whatever
     // point along the route they currently occupy at runtime)
     if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
-      geometry:{type:"Polygon",coordinates:[circleRing(c,z.audioM,48)]}});
+      geometry:{type:"Polygon",coordinates:[ringFn(z.audioM)]}});
     // hearing-range rings (audio fade / full volume) — every stop now, not
     // just path stops. Falls back from this stop's own audio-fade ring to
     // the project defaults — exactly like actual playback (zoneFadeGeom
@@ -1087,12 +1222,44 @@ function renderSourcesInner(){
     // band between the two.
     const fg=zoneFadeGeom(z);
     if(fg){
-      feats.push(...cachedFadeBandFeatures(z.id,c,fg.farM,fg.clearM));
-      feats.push(...cachedSpeakerConeFeatures(z.id,c,fg.clearM));
+      // For a polygon, ringFn(0) is the polygon's own boundary (not a
+      // point like a circle's center) — so the 16 speaker-cone bands below
+      // (built as annuli between ringFn(r0) and ringFn(r1)) only ever cover
+      // the area OUTSIDE the polygon's edge; the polygon's own interior is
+      // a hole in every one of them. On its own that reads as "shading
+      // starts at the edge and ramps further out," never touching the
+      // zone's own body — not the "starts at center, ramps out" look a
+      // circle zone's shading has. Filling the interior in the same
+      // lightest speaker-cone color (t=0 — the same color a circle's own
+      // dead center uses) makes the shading visually continuous from the
+      // zone's body outward instead of floating disconnected from it.
+      if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"speakercone",col:"rgb("+SPEAKER_LIGHT.join(",")+")"},
+        geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
+      feats.push(...cachedFadeBandFeatures(z.id,ringFn,ringKey,fg.farM,fg.clearM));
+      feats.push(...cachedSpeakerConeFeatures(z.id,ringFn,ringKey,fg.clearM));
       feats.push({type:"Feature",properties:{kind:"prange",sel:selected},
-        geometry:{type:"Polygon",coordinates:[circleRing(c,fg.farM,48)]}});
+        geometry:{type:"Polygon",coordinates:[ringFn(fg.farM)]}});
       feats.push({type:"Feature",properties:{kind:"pclear",sel:selected},
-        geometry:{type:"Polygon",coordinates:[circleRing(c,fg.clearM,48)]}});
+        geometry:{type:"Polygon",coordinates:[ringFn(fg.clearM)]}});
+    }
+    // Polygon-only third ring: the "general"/approach trigger boundary,
+    // drawn in the same offset-polygon style. Deliberately z.approachM
+    // directly, NOT zoneGenR(z) — zoneGenR pads approachM up to at least
+    // (centroid-to-farthest-vertex + 5m) so a CIRCLE centered on the
+    // centroid still fully encloses the polygon (that's what it's used for
+    // at publish time, zoneToEngine's radial "general" layer). Offsetting
+    // the polygon's own EDGE outward already unconditionally encloses the
+    // whole shape — reusing zoneGenR's centroid-padded value here double-
+    // counts the polygon's own footprint on top of the edge offset,
+    // pushing the ring far past where the real approach buffer is meant to
+    // be (this was a real bug, not just a visual surprise — confirmed after
+    // a report that the ring didn't correspond to where the trigger
+    // actually happens). z.approachM alone is the right edge-relative
+    // quantity. Tripline deliberately does not get this ring — it has no
+    // separate "general" trigger concept beyond its own hearing-range rings.
+    if(s.type==="polygon"){
+      feats.push({type:"Feature",properties:{kind:"genring",sel:selected},
+        geometry:{type:"Polygon",coordinates:[ringFn(z.approachM)]}});
     }
     // target shape — zIdx lets map clicks identify the zone
     const hz=!!z.isHazard;
@@ -1100,8 +1267,21 @@ function renderSourcesInner(){
         geometry:{type:"Polygon",coordinates:[circleRing(s.center,s.radiusM,64)]}});
     else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",zIdx:i,sel:selected,name:z.name,isHazard:hz},
         geometry:{type:"Polygon",coordinates:[s.coords.concat([s.coords[0]])]}});
-    else if(s.type==="tripline") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:false},
+    else if(s.type==="tripline"){
+      feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:false},
         geometry:{type:"LineString",coordinates:[s.from,s.to]}});
+      // A raw LineString is only a few px wide, hit-testable only right on
+      // top of the rendered stroke — hard to click precisely, and only
+      // ever "easy" near wherever the user happens to aim along it (often
+      // the visual midpoint, where the label sits). An invisible wider
+      // rectangle spanning the line's full length gives a forgiving click
+      // target the whole way along it, not just directly on the pixel-thin
+      // line. Same rectRing() used for the visual audio-fade ring, just at
+      // a small fixed width independent of audioM so the hit area stays
+      // predictable regardless of how that's configured.
+      feats.push({type:"Feature",properties:{kind:"triphit",zIdx:i},
+        geometry:{type:"Polygon",coordinates:[rectRing(s.from,s.to,TRIPLINE_HIT_HALF_WIDTH_M)]}});
+    }
     else if(s.type==="path") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:true},
         geometry:{type:"LineString",coordinates:s.coords}});
     // label
@@ -1191,6 +1371,12 @@ map.on("load",()=>{
   map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==","kind","line"],
      paint:{"line-color":["case",["get","sel"],"#38e0a6",["get","isPath"],"#8fd6ff","#ff6a3d"],"line-width":3.2,
             "line-dasharray":["case",["get","isPath"],["literal",[3,1.5]],["literal",[2,1.2]]]}});
+  // Invisible wider click target for tripline (see TRIPLINE_HIT_HALF_WIDTH_M) —
+  // fill-opacity 0 so it's never seen, but still hit-tested like any other
+  // fill layer, giving the whole line's length a forgiving click area
+  // instead of only the pixel-thin rendered stroke above.
+  map.addLayer({id:"trip-hit",type:"fill",source:"fences",filter:["==","kind","triphit"],
+     paint:{"fill-opacity":0}});
   map.addLayer({id:"fence-lbl",type:"symbol",source:"fences",filter:["==","kind","label"],
      layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.4}});
@@ -1242,6 +1428,12 @@ map.on("load",()=>{
      paint:{"line-color":"#b96fff","line-width":1.2,"line-dasharray":[4,3],"line-opacity":0.6}});
   map.addLayer({id:"path-clear-ring",type:"line",source:"fences",filter:["==","kind","pclear"],
      paint:{"line-color":"#9b3fd4","line-width":1.5,"line-opacity":0.55}});
+  // polygon-only "general"/approach trigger boundary — amber to read as
+  // "the outer approach edge," distinct from the audio-fade blue and the
+  // prange/pclear purple family. Reuses the amber already established
+  // elsewhere in this file for bearing arrows/walking-path lines.
+  map.addLayer({id:"gen-ring",type:"line",source:"fences",filter:["==","kind","genring"],
+     paint:{"line-color":"#ffc24d","line-width":1.2,"line-dasharray":[1,2],"line-opacity":0.5}});
   // project-level rings (voice range, full volume, visitor)
   map.addSource("project-rings",{type:"geojson",data:fc([])});
   map.addLayer({id:"proj-range-ring",type:"line",source:"project-rings",filter:["==","pkind","range"],
@@ -1264,7 +1456,7 @@ map.on("mousemove",e=>{ document.getElementById("status").textContent=
    "lat "+e.lngLat.lat.toFixed(6)+", lon "+e.lngLat.lng.toFixed(6)+"  ·  zoom "+map.getZoom().toFixed(1); });
 
 // hover cursor on zone fills and lines
-["fence-fill","fence-line"].forEach(lid=>{
+["fence-fill","fence-line","trip-hit"].forEach(lid=>{
   map.on("mouseenter",lid,()=>{ if(!tool) map.getCanvas().style.cursor="grab"; });
   map.on("mouseleave",lid,()=>{ if(!tool&&!_zoneDrag) map.getCanvas().style.cursor=""; });
 });
@@ -1289,6 +1481,7 @@ function _zoneMousedown(e){
 }
 map.on("mousedown","fence-fill",_zoneMousedown);
 map.on("mousedown","fence-line",_zoneMousedown);
+map.on("mousedown","trip-hit",_zoneMousedown);
 
 // mousemove: apply offset to zone geometry while dragging
 map.on("mousemove",e=>{
@@ -1344,7 +1537,7 @@ map.on("click",e=>{
     return;
   }
   // deselect when clicking empty map (zone mousedown handles zone clicks)
-  const hit=map.queryRenderedFeatures(e.point,{layers:["fence-fill","fence-line"]});
+  const hit=map.queryRenderedFeatures(e.point,{layers:["fence-fill","fence-line","trip-hit"]});
   if(!hit.length) selectZone(-1);
 });
 
@@ -3672,7 +3865,22 @@ const SimVoice={
     if(loaded._isElement){
       const el=new Audio(loaded._objUrl);el.loop=false;
       src=this.ctx.createMediaElementSource(el);src._el=el;
-      src.connect(this.nodes.mono);el.play().catch(()=>{});
+      src.connect(this.nodes.mono);
+      el.play().catch((err)=>{
+        // A rejected play() (the browser can decide this call isn't "close
+        // enough" to the original gesture — this is several awaits removed
+        // from the drag/click that kicked off this whole async chain) used
+        // to be silently swallowed while playing/currentUrl/currentZoneId
+        // were already set below as if it had succeeded — permanently
+        // blocking every future playZone() call for this exact zone (the
+        // top-of-function "already playing" guard saw playing=true
+        // forever, since onended never fires for a source that never
+        // actually started) with nothing audible and no log line to
+        // explain why. Reset state so the next attempt gets a clean shot.
+        if(this.src!==src) return;
+        this.playing=false;this.currentUrl=null;this.currentZoneId=null;this.src=null;
+        simLogEv("sev-warn","audio play() blocked: "+(err&&err.message||err));
+      });
       // Reset playing state when the clip finishes on its own (not via an
       // explicit stop()/fadeOut()) — without this, `playing` stayed true
       // forever after a one-shot clip ended, so a lingering visitor never
@@ -3891,6 +4099,24 @@ function simZoneRangeClear(z){
   const desiredClearM=z.spatialClearM!=null?z.spatialClearM:8;
   return {range, clearM:Math.min(desiredClearM, range*0.9)};
 }
+// A tripline's own "hearable from" distance needs to be measured from the
+// NEAREST POINT ON THE LINE, not from z.center (the line's midpoint) — a
+// recorded clip attached to a long tripline was only ever audible near the
+// midpoint, since anywhere past ~range meters from the midpoint (even a
+// spot right next to the line itself, near either end) never satisfied
+// nearestD<range at all. The crossing trigger itself (SimFencer) was never
+// affected by this — only this proximity-based recorded-clip playback path
+// was. Mirrors geofence-engine.html's zoneNearestDistM().
+function simZoneNearestDistM(z,raw){
+  const targetLayer=(z.layers||[]).find(l=>l.kind==="target"&&l.geometry&&l.geometry.type==="tripline");
+  if(targetLayer){
+    const P=SimGeo.toXY([raw.lat,raw.lon],simBundle.ref);
+    const A=SimGeo.toXY(targetLayer.geometry.from,simBundle.ref);
+    const B=SimGeo.toXY(targetLayer.geometry.to,simBundle.ref);
+    return SimGeo.segDist(P,A,B);
+  }
+  return SimGeo.hav([raw.lat,raw.lon],z.center);
+}
 
 function feedSim(lat,lon,acc,t){
   acc=acc||5; t=t||Date.now();
@@ -3909,28 +4135,40 @@ function feedSim(lat,lon,acc,t){
   // position for a couple seconds), which silently blocked the next stop
   // from ever starting since nearestD stayed above its range the whole time.
   let nearest=null,nearestD=Infinity;
-  simBundle.zones.forEach(z=>{if(!z.center)return;const d=SimGeo.hav([raw.lat,raw.lon],z.center);if(d<nearestD){nearestD=d;nearest=z;}});
-  if(nearest){
+  simBundle.zones.forEach(z=>{
+    if(!z.center)return;
+    const d=simZoneNearestDistM(z,raw);
+    if(d<nearestD){nearestD=d;nearest=z;}
+  });
+  if(nearest && nearest.audioUrl && simSoundOn){
     const {range,clearM}=simZoneRangeClear(nearest);
-    if(!nearest.audioUrl||!simSoundOn){
-      SimVoice.fadeOut();
-    }else if(nearestD<range){
+    if(nearestD<range){
       SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
       SimVoice.playZone(nearest);
     }
   }
+  if(!simSoundOn) SimVoice.fadeOut();
   // Drive update()/fadeOut() off whichever zone is ACTUALLY playing
   // (SimVoice.currentZoneId), not off `nearest` — nearest can flip to a
   // different, still-out-of-range zone while a previous zone's clip is
   // still sounding, and using nearest's distance/range there fed the wrong
   // zone's gain/pan into the source that's actually loaded, and could fade
   // it out early (or late) based on unrelated nearby-zone geometry.
+  //
+  // pd — the distance actually driving volume here — used to come from
+  // SimGeo.hav([raw.lat,raw.lon],playingZone.center), the same
+  // distance-to-midpoint bug simZoneNearestDistM() was written to fix for
+  // the "should this start playing" check above. This was the *real*
+  // remaining cause of "loudest in the middle, fades out toward either
+  // end" even after that fix landed — the START gate got fixed, but the
+  // ONGOING volume/pan while already playing was still reading the old,
+  // wrong distance the whole time.
   if(SimVoice.playing && SimVoice.currentZoneId){
     const playingZone=simBundle.zones.find(z=>z.id===SimVoice.currentZoneId);
     if(playingZone){
       const {range,clearM}=simZoneRangeClear(playingZone);
       SimVoice.tuning.farM=range; SimVoice.tuning.clearM=clearM;
-      const pd=SimGeo.hav([raw.lat,raw.lon],playingZone.center);
+      const pd=simZoneNearestDistM(playingZone,raw);
       // Keep feeding the *real* (possibly beyond-range) distance to update()
       // for as long as something is actually playing, instead of switching
       // to a fixed real-time fadeOut() ramp the instant distance crosses

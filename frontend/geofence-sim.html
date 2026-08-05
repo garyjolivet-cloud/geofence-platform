@@ -758,6 +758,20 @@ function refreshZones(){
   labelMarkers.forEach((m,idx)=>{ const z=BUNDLE.zones[idx]; if(!z||!z.center) return; });
 }
 
+// A tripline's "nearest" distance needs to be measured from the nearest
+// point ON THE LINE, not from z.center (the line's midpoint) — verbatim
+// mirror of geofence-engine.html's zoneNearestDistM(), see its comment.
+function zoneNearestDistM(z,p,nowMs){
+  const targetLayer=(z.layers||[]).find(l=>l.kind==="target"&&l.geometry&&l.geometry.type==="tripline");
+  if(targetLayer){
+    const P=Geo.toXY([p.lat,p.lon],BUNDLE.ref);
+    const A=Geo.toXY(targetLayer.geometry.from,BUNDLE.ref);
+    const B=Geo.toXY(targetLayer.geometry.to,BUNDLE.ref);
+    return Geo.segDist(P,A,B);
+  }
+  const zc=z.path?ambientCenterNow(z,nowMs):z.center;
+  return Geo.hav([p.lat,p.lon],zc);
+}
 /* =========================== ENGINE PIPELINE =========================== */
 /* mirrors HUD.onFix: smooth -> geofence -> needle pick */
 let prevP=null, fixCount=0;
@@ -772,7 +786,7 @@ function feed(lat,lon,acc,t){
   active.forEach(a=>{ if(a.d<best){best=a.d;pick=a;} });
   if(!pick){ BUNDLE.zones.forEach(z=>{ if(!z.center) return;
       const zc=z.path?ambientCenterNow(z,t):z.center;
-      const d=Geo.hav([p.lat,p.lon],zc); if(d<best){best=d;pick={zone:z,d,center:zc};} }); }
+      const d=zoneNearestDistM(z,p,t); if(d<best){best=d;pick={zone:z,d,center:zc};} }); }
   // ghost = where the engine thinks you are (smoothed)
   if(map.getSource("ghost")) map.getSource("ghost").setData(fc([{type:"Feature",properties:{},geometry:{type:"Point",coordinates:[p.lon,p.lat]}}]));
   // HUD

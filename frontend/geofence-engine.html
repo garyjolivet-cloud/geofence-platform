@@ -1035,7 +1035,22 @@ const SpatialVoice = {
       const el=new Audio(loaded._objUrl); el.loop=false;
       src=c.createMediaElementSource(el);
       src._el=el; src.connect(this.nodes.mono);
-      el.play().catch(()=>{});
+      el.play().catch((err)=>{
+        // A rejected play() (the browser can decide this call isn't "close
+        // enough" to the original gesture, several awaits removed from
+        // whatever unlocked audio) used to be silently swallowed while
+        // playing/currentUrl/currentZoneId were already set below as if it
+        // had succeeded — permanently blocking every future playZone()
+        // call for this exact zone for the rest of the visitor's session
+        // (the top-of-function "already playing" guard saw playing=true
+        // forever, since onended never fires for a source that never
+        // actually started), with nothing audible and no way to recover
+        // short of a full page reload. Reset state so the next approach
+        // gets a clean shot instead of being stuck silent indefinitely.
+        if(this.src!==src) return;
+        this.playing=false; this.currentUrl=null; this.currentZoneId=null; this.src=null;
+        HUD.log('ev-warn','audio play() blocked: '+(err&&err.message||err));
+      });
       // Reset playing state when the clip finishes on its own (not via an
       // explicit stop()/fadeOut()) — without this, `playing` stayed true
       // forever after a one-shot clip ended, so a lingering visitor never
@@ -1176,7 +1191,15 @@ const AmbientVoice = {
       const el=new Audio(loaded._objUrl); el.loop=true;   // ambient beds loop, unlike one-shot dialogue clips
       src=c.createMediaElementSource(el);
       src._el=el; src.connect(this.nodes.mono);
-      el.play().catch(()=>{});
+      el.play().catch((err)=>{
+        // Same rejected-play() stuck-state risk as SpatialVoice.playZone()
+        // above — here it's worse, since a looping ambient bed has no
+        // onended to ever naturally recover through. Reset so tick() gets
+        // a clean shot on the next pass instead of being stuck silent.
+        if(this.src!==src) return;
+        this.playing=false; this.currentUrl=null; this.currentZoneId=null; this.src=null;
+        HUD.log('ev-warn','ambient play() blocked: '+(err&&err.message||err));
+      });
     } else {
       src=c.createBufferSource(); src.buffer=loaded; src.loop=true;
       src.connect(this.nodes.mono); src.start();
@@ -1245,6 +1268,26 @@ const AmbientVoice = {
   }
 };
 
+// A tripline's own "hearable from" distance needs to be measured from the
+// NEAREST POINT ON THE LINE, not from z.center (the line's midpoint,
+// zoneToEngine's zo.center) — a recorded clip attached to a long tripline
+// was only ever audible near the midpoint, since anywhere past ~range
+// meters from the midpoint (even a spot right next to the line itself,
+// near either end) never satisfied d<range at all. The crossing trigger
+// itself (Geofencer.update's lineCross check) was never affected by this —
+// only this proximity-based recorded-clip playback selection was. Mirrored
+// verbatim in geofence-sim.html and fence-editor.html's feedSim().
+function zoneNearestDistM(z,p,nowMs){
+  const targetLayer=(z.layers||[]).find(l=>l.kind==="target"&&l.geometry&&l.geometry.type==="tripline");
+  if(targetLayer){
+    const P=Geo.toXY([p.lat,p.lon],BUNDLE.ref);
+    const A=Geo.toXY(targetLayer.geometry.from,BUNDLE.ref);
+    const B=Geo.toXY(targetLayer.geometry.to,BUNDLE.ref);
+    return Geo.segDist(P,A,B);
+  }
+  const zc=z.path?centerNow(z,nowMs):z.center;
+  return Geo.hav([p.lat,p.lon],zc);
+}
 /* ============================== HUD ============================== */
 // Smoothed position for the current tick — set by HUD.onFix() before it calls
 // Geofencer.update(), so Geofencer.onEvent (fired synchronously from inside
@@ -1274,7 +1317,7 @@ const HUD = {
     if(!pick){ // nothing active: aim at nearest zone's current position for "next stop"
       BUNDLE.zones.forEach(z=>{ if(!z.center) return;
         const zc=z.path?centerNow(z,fix.t):z.center;
-        const d=Geo.hav([p.lat,p.lon],zc); if(d<best){best=d;pick={zone:z,d,center:zc};} });
+        const d=zoneNearestDistM(z,p,fix.t); if(d<best){best=d;pick={zone:z,d,center:zc};} });
     }
 
     // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it).
@@ -1284,16 +1327,14 @@ const HUD = {
     if(Clarity.on){
       let aD=Infinity, aIn=false;
       BUNDLE.zones.forEach(z=>{ if(!z.center||z.audio===false||z.audioUrl) return;
-        const zc=z.path?centerNow(z,fix.t):z.center;
-        const d=Geo.hav([p.lat,p.lon],zc), range=z.audibleFromM||60;
+        const d=zoneNearestDistM(z,p,fix.t), range=z.audibleFromM||60;
         if(d<range && d<aD){ aD=d; aIn=true; } });
       Clarity.update(aD, aIn);
     }
 
     // spatial recorded voice: nearest stop with an audioUrl, over its wide approach range
     if(pick && pick.zone && pick.zone.audioUrl){
-      const pc=centerNow(pick.zone, fix.t);
-      const dv=Geo.hav([p.lat,p.lon],pc), range=SpatialVoice.spatialRange(pick.zone);
+      const dv=zoneNearestDistM(pick.zone,p,fix.t), range=SpatialVoice.spatialRange(pick.zone);
       if(dv<range) SpatialVoice.playZone(pick.zone);
     }
     // Drive update()/fadeOut() off whichever zone is ACTUALLY playing
@@ -1314,7 +1355,7 @@ const HUD = {
       const playingZone=BUNDLE.zones.find(z=>z.id===SpatialVoice.currentZoneId);
       if(playingZone){
         const ppc=centerNow(playingZone, fix.t);
-        const pdv=Geo.hav([p.lat,p.lon],ppc);
+        const pdv=zoneNearestDistM(playingZone,p,fix.t);
         const brg=Geo.bearing([p.lat,p.lon],ppc);
         const headingOk=(TravelHeading.heading!=null);   // not moving yet / no fix history → centred, not wrong-way
         const az=((brg-(TravelHeading.heading||0))*Math.PI/180);
