@@ -3199,12 +3199,17 @@ document.getElementById("stopsToggleBtn").onclick=()=>{
     // Closing the stop tree: if the panel was manually dragged bigger just to
     // see it (the resize handle at its bottom-right corner), shrink back to
     // whatever size it was before it opened, freeing the map space back up.
+    // Restoring the *raw* pre-open inline style (not a computed fallback) —
+    // if the panel had never been manually resized (no inline style at all),
+    // this correctly clears back to "" instead of pinning it at whatever
+    // size it happened to be, which would otherwise stop it auto-growing
+    // for anything else in the panel from this point on.
     body.style.display="none";
-    if(panel.dataset.preStopsW){ panel.style.width=panel.dataset.preStopsW; delete panel.dataset.preStopsW; }
-    if(panel.dataset.preStopsH){ panel.style.height=panel.dataset.preStopsH; delete panel.dataset.preStopsH; }
+    if("preStopsW" in panel.dataset){ panel.style.width=panel.dataset.preStopsW; delete panel.dataset.preStopsW; }
+    if("preStopsH" in panel.dataset){ panel.style.height=panel.dataset.preStopsH; delete panel.dataset.preStopsH; }
   }else{
-    panel.dataset.preStopsW=panel.style.width||getComputedStyle(panel).width;
-    panel.dataset.preStopsH=panel.style.height||getComputedStyle(panel).height;
+    panel.dataset.preStopsW=panel.style.width||"";
+    panel.dataset.preStopsH=panel.style.height||"";
     body.style.display="block";
   }
   document.getElementById("stopsToggleChevron").textContent=open?"▸":"▾";

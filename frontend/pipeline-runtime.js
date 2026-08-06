@@ -68,7 +68,14 @@ const BLOCKS = {
   "data.position": {
     label: "Position", category: "data",
     inputs: [],
-    outputs: [{ id: "speedKmh", type: "number", label: "Speed (km/h)" }, { id: "headingDeg", type: "number", label: "Heading (°)" }, { id: "distFromZoneCenterM", type: "number", label: "Distance from Zone Center (m)" }],
+    // distFromZoneCenterM was removed (2026-08-06) — no tick() call site in
+    // either geofence-engine.html or fence-editor.html's simulator ever set
+    // evt.distFromZoneCenterM, so it always resolved to null/empty. It had
+    // been quietly dead code until the chip-token Insert-value picker made
+    // it a normal-looking, selectable option — worse than just missing, an
+    // option that looks like it works but silently doesn't. Re-add only
+    // alongside real wiring at the tick() call sites, not just a label.
+    outputs: [{ id: "speedKmh", type: "number", label: "Speed (km/h)" }, { id: "headingDeg", type: "number", label: "Heading (°)" }],
     params: []
   },
   "data.dwell_time": {
@@ -345,7 +352,6 @@ function evalGraph(g, fix, smoothedPos, evt) {
         // 12-digit decimal tail reads as an endless run of digits.
         cache[id].speedKmh = smoothedPos && smoothedPos.speed != null ? Math.round(smoothedPos.speed * 3.6 * 10) / 10 : null;
         cache[id].headingDeg = smoothedPos && smoothedPos.headingTravel != null ? Math.round(smoothedPos.headingTravel) : null;
-        cache[id].distFromZoneCenterM = evt.distFromZoneCenterM != null ? Math.round(evt.distFromZoneCenterM) : null;
         break;
       }
       case "data.dwell_time": cache[id].seconds = evt.dwellSeconds ?? null; break;

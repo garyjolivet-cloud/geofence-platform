@@ -536,12 +536,26 @@ function renderChipField(field, text){
 }
 // Reverse of the above — walks the live DOM back into {{id.port}} text, the
 // only form findBrokenRefs()/the runtime's interpolate() understand.
+// Recurses into anything that isn't a text node or a chip — a bare
+// contenteditable div wraps Enter-created lines in a new <div> (Chrome/
+// Edge/Safari) or inserts a <br> (Firefox), and a paste can drop in
+// arbitrary rich-HTML wrapper elements too. The original version only
+// understood direct text/chip children, so any of those silently vanished
+// from what got saved — walking every descendant instead means nothing
+// typed is ever dropped, regardless of how the browser chose to structure
+// it. Block elements (<div>/<p>) imply a line break before their own
+// content, same as a literal <br>.
 function serializeChipField(field){
   let out = "";
-  field.childNodes.forEach(node => {
-    if (node.nodeType === 3) out += node.nodeValue;
-    else if (node.classList && node.classList.contains("chip")) out += chipRefText(node.dataset.nodeId, node.dataset.portId);
-  });
+  function walk(node){
+    if (node.nodeType === 3) { out += node.nodeValue; return; }
+    if (node.nodeType !== 1) return; // comments etc. — nothing to save
+    if (node.classList && node.classList.contains("chip")) { out += chipRefText(node.dataset.nodeId, node.dataset.portId); return; }
+    if (node.tagName === "BR") { out += "\n"; return; }
+    if ((node.tagName === "DIV" || node.tagName === "P") && out && !out.endsWith("\n")) out += "\n";
+    node.childNodes.forEach(walk);
+  }
+  field.childNodes.forEach(walk);
   return out;
 }
 function chipAdjacentToCursor(range, dir){
@@ -702,7 +716,15 @@ function renderProps(){
       requestAnimationFrame(autoGrow); // sized correctly even before the first keystroke, once it's actually in the DOM
     }
     let warnEl = null;
-    if (p.interpolatable) {
+    // Gated on isChipField, not p.interpolatable directly — this UI (and
+    // serializeChipField(input) below) only makes sense when renderProps
+    // actually built a chip-field for this param. Today they're always in
+    // sync (only action.speak's text param, type "text", is interpolatable,
+    // and "text" always falls into the chip-field branch above) — but
+    // interpolatable is only read *after* the type-specific branches, so an
+    // interpolatable param of type select/zoneSelect/boolean/number would
+    // otherwise get this UI wired to a plain input that can't hold a chip.
+    if (isChipField) {
       warnEl = document.createElement("div");
       warnEl.className = "field-warn"; warnEl.style.display = "none";
       const refreshWarn = () => {
@@ -721,7 +743,7 @@ function renderProps(){
       });
     }
     el.appendChild(input);
-    if (p.interpolatable) {
+    if (isChipField) {
       const row = document.createElement("div"); row.className = "insert-row";
       const btn = document.createElement("button"); btn.type = "button"; btn.className = "ghost";
       btn.textContent = "➕ Insert value";
