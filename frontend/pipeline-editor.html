@@ -24,8 +24,9 @@
          padding:8px 14px;cursor:pointer}
   button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
   button.ghost{background:none}
-  input,select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
+  input,select,textarea{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px 10px;width:100%}
+  textarea{min-height:60px;resize:vertical;line-height:1.4}
   label.field{display:block;font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;
          letter-spacing:.5px;color:var(--fog);margin:10px 0 4px}
   .layout{display:flex;height:calc(100% - 52px)}
@@ -114,8 +115,10 @@ const zoneId = qs.get("zone");
 let codeObjectId = qs.get("codeObject");
 let libraryOrgId = qs.get("org") || (window.ClientPicker && ClientPicker.resolve()) || "";
 // The library is now inline on this same screen (no separate page to have
-// come from), so the back link always just goes to the Fence Editor.
-document.getElementById("backLink").href = "/editor";
+// come from), so the back link always just goes to the Fence Editor — but
+// if we arrived (or navigated within the library) with a project in view,
+// carry it back so the editor reopens the same project instead of blank.
+document.getElementById("backLink").href = "/editor" + (projectId ? "?project=" + encodeURIComponent(projectId) : "");
 
 let bundle = null, zone = null, pipeline = { v: 1, nodes: [], edges: [] };
 let selectedId = null;
@@ -156,7 +159,7 @@ function showLibrary(){
       getToken,
       onCardClick: (id) => {
         codeObjectId = id;
-        history.pushState(null, "", "/pipeline?codeObject=" + encodeURIComponent(id) + "&org=" + encodeURIComponent(libraryOrgId || ""));
+        history.pushState(null, "", "/pipeline?codeObject=" + encodeURIComponent(id) + "&org=" + encodeURIComponent(libraryOrgId || "") + (projectId ? "&project=" + encodeURIComponent(projectId) : ""));
         loadCodeObject();
       }
     });
@@ -179,7 +182,7 @@ document.getElementById("btnNewCodeObject").onclick = async () => {
     if (!r.ok) { alert("Create failed: " + ((await r.json().catch(() => ({}))).error || r.status)); return; }
     const created = await r.json();
     codeObjectId = created.id;
-    history.pushState(null, "", "/pipeline?codeObject=" + encodeURIComponent(created.id) + "&org=" + encodeURIComponent(libraryOrgId));
+    history.pushState(null, "", "/pipeline?codeObject=" + encodeURIComponent(created.id) + "&org=" + encodeURIComponent(libraryOrgId) + (projectId ? "&project=" + encodeURIComponent(projectId) : ""));
     await loadCodeObject(); // showLibrary() inside this also refreshes the sidebar so the new card appears
   } catch (e) { alert("Create failed: " + e.message); }
 };
@@ -543,7 +546,17 @@ function renderProps(){
     } else if (p.type === "number") {
       input = document.createElement("input"); input.type = "number"; input.value = node.params[p.id] ?? p.default;
     } else {
-      input = document.createElement("input"); input.type = "text"; input.value = node.params[p.id] ?? p.default ?? "";
+      // textarea, not a single-line input — a Speak line (or any other text
+      // param) is easy to lose the end of in a 240px-wide panel otherwise.
+      // Auto-grows with content (see the "input" listener below) and still
+      // has a manual resize handle (CSS textarea{resize:vertical}) as a
+      // fallback/floor.
+      input = document.createElement("textarea"); input.rows = 2; input.value = node.params[p.id] ?? p.default ?? "";
+    }
+    if (input.tagName === "TEXTAREA") {
+      const autoGrow = () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; };
+      input.addEventListener("input", autoGrow);
+      requestAnimationFrame(autoGrow); // sized correctly even before the first keystroke, once it's actually in the DOM
     }
     let warnEl = null;
     if (p.interpolatable) {

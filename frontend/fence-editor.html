@@ -4778,6 +4778,7 @@ const AudioLab = {
 if(typeof CodeObjects!=="undefined"){
   CodeObjects.mount(document.body, {
     getOrgId:()=>document.getElementById("clientSel").value||null,
+    getProjectId:()=>afProjectId(),
     getToken:getToken,
     getTargets:()=>{
       if(coBulkMode && coBulkSel.size) return [...coBulkSel].map(id=>zones.find(z=>z.id===id)).filter(Boolean);

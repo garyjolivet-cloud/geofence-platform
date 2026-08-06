@@ -118,10 +118,14 @@
       background:var(--slate-2,#1b2738);border:1px solid var(--rim,#2e3f58);border-radius:12px;
       box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:'Barlow Condensed',sans-serif;
       color:var(--snow,#eef4fb);user-select:none}
-    .co-float-head{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;
+    .co-float-head{display:flex;align-items:center;gap:8px;padding:8px 10px;
       border-bottom:1px solid var(--rim,#2e3f58);cursor:grab;font-size:13px;font-weight:600;
       letter-spacing:.5px;text-transform:uppercase;color:var(--coral,#ff6a3d)}
+    .co-float-head .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .co-float-head button{background:none;border:none;color:var(--fog,#8aa5bf);cursor:pointer;font-size:14px;padding:0 2px}
+    .co-open-library{flex:0 0 auto;font-size:11px;font-weight:600;text-transform:none;letter-spacing:normal;
+      color:var(--coral,#ff6a3d);text-decoration:none;white-space:nowrap}
+    .co-open-library:hover{text-decoration:underline}
     .co-float-body{padding:8px;max-height:320px;overflow-y:auto}
     .co-float.collapsed .co-float-body{display:none}
     .co-float.embedded{position:static;width:100%;height:100%;display:flex;flex-direction:column;
@@ -178,7 +182,7 @@
   function makeHeaderDraggable(float, head) {
     let dragging = null;
     head.addEventListener("mousedown", (e) => {
-      if (e.target.tagName === "BUTTON") return;
+      if (e.target.tagName === "BUTTON" || e.target.tagName === "A") return;
       const r = float.getBoundingClientRect();
       dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
       float.style.right = "auto";
@@ -495,9 +499,23 @@
     injectStyle();
     const float = document.createElement("div");
     float.className = opts.embedded ? "co-float embedded" : "co-float";
+    // Deep-links straight into the right org's library (same pattern as the
+    // Audio Palette's "Open in Studio" link) — the org/project are baked in
+    // at mount time, so if the host's selection changes later this stays
+    // pointed at whichever was active when the palette first mounted, same
+    // known limitation the Audio Palette's own static link already has.
+    // project= round-trips back to the Fence Editor too — pipeline-editor.html's
+    // own "← Back to Fence Editor" link reads it back off the URL, so leaving
+    // the palette to build/edit an object and coming back lands on the same
+    // project instead of a blank editor.
+    const libraryOrgId = opts.getOrgId ? (opts.getOrgId() || "") : "";
+    const libraryProjectId = opts.getProjectId ? (opts.getProjectId() || "") : "";
+    const libraryHref = "/pipeline?org=" + encodeURIComponent(libraryOrgId) + (libraryProjectId ? "&project=" + encodeURIComponent(libraryProjectId) : "");
     float.innerHTML = opts.embedded
       ? '<div class="co-float-body"></div>'
-      : '<div class="co-float-head">🧩 Code Objects<button class="co-toggle" title="collapse">–</button></div>' +
+      : '<div class="co-float-head"><span class="ttl">🧩 Code Objects</span>' +
+        '<a href="' + libraryHref + '" class="co-open-library" title="Build or edit code objects">Code Library &rarr;</a>' +
+        '<button class="co-toggle" title="collapse">–</button></div>' +
         '<div class="co-float-body"><div class="co-empty">loading…</div></div>';
     (container || document.body).appendChild(float);
 
