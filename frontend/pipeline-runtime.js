@@ -195,7 +195,6 @@ const compiled = {};
 let globalCompiled = null;
 let dataCache = {}; // { weather:{...}, snowHistory:{...} } — shared across zones, refreshed on an interval
 let dataTimer = null;
-let callbacks = {};
 
 // Path-level (not per-zone) progress along the project's selected Walking
 // Path — pushed in by the host once per GPS tick via setPathProgress(),
@@ -296,6 +295,14 @@ async function refreshDataCache() {
 // evt: { entered:bool, exited:bool, dwellSeconds:number|null } — {} for a global graph
 function evalGraph(g, fix, smoothedPos, evt) {
   const cache = {}; // nodeId -> { portId: value }
+  // Callbacks live on the compiled graph itself, not a shared module-level
+  // variable — see load()/loadGlobal() below. A single shared `callbacks`
+  // used to mean whichever zone (or the global graph) called load() most
+  // recently won, for every other already-loaded zone too: on a multi-stop
+  // walk, entering zone B after zone A silently switched zone A's still-
+  // loaded Speak nodes onto zone B's voice (or lack of one) the next time
+  // they ticked — the reported "voice is still default" bug.
+  const callbacks = g.callbacks || {};
   g.order.forEach(id => {
     const node = g.byId[id];
     const def = BLOCKS[node.type];
@@ -416,9 +423,15 @@ const PipelineRuntime = {
   BLOCKS, topoSort, // exposed for pipeline-editor.html's validation/property-panel use
 
   async load(zone, opts) {
-    callbacks = opts || {};
+    // Captured in this call's own closure and attached only to the graph
+    // this call produces — compile() below awaits a (possibly cached, but
+    // still async) fetch, so a second load() for a different zone can start
+    // and finish before this one resolves. A shared module-level variable
+    // here previously meant whichever call finished last won for every
+    // compiled graph, not just its own.
+    const cb = opts || {};
     const g = await compile(zone);
-    if (g) compiled[zone.id] = g;
+    if (g) { g.callbacks = cb; compiled[zone.id] = g; }
     if (!dataTimer) {
       refreshDataCache();
       dataTimer = setInterval(refreshDataCache, 5 * 60 * 1000);
@@ -433,8 +446,9 @@ const PipelineRuntime = {
   // uses. Pass an empty array (or null) to clear it. Call once per bundle/
   // session load, same lifecycle as prefetch() below.
   async loadGlobal(globalCodeObjectRefs, opts) {
-    callbacks = opts || callbacks || {};
+    const cb = opts || (globalCompiled && globalCompiled.callbacks) || {};
     const g = await compile({ id: "__global__", codeObjects: globalCodeObjectRefs || [], pipeline: null });
+    if (g) g.callbacks = cb;
     globalCompiled = g; // g is null when there's nothing wired in — tickGlobal() no-ops on null
     if (!dataTimer) {
       refreshDataCache();
