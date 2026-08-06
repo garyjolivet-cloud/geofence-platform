@@ -85,7 +85,8 @@
   .sf-menu-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--snow);
                 padding:8px 12px;font-family:"Barlow Condensed";font-size:12px;cursor:pointer}
   .sf-menu-item:hover{background:rgba(255,255,255,.06)}
-  .proj-settings-popover{position:fixed;z-index:80;width:280px;max-height:75vh;overflow-y:auto;
+  .proj-settings-popover{position:fixed;z-index:80;width:280px;height:auto;min-width:240px;min-height:120px;
+           max-width:92vw;max-height:75vh;resize:both;overflow-y:auto;
            display:flex;flex-direction:column;gap:2px;background:var(--slate-2);border:1px solid var(--rim);
            border-radius:10px;box-shadow:0 8px 20px rgba(0,0,0,.45);padding:12px}
   .gp-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:9999;
@@ -3182,8 +3183,20 @@ document.getElementById("coBulkToggle").onclick=()=>{
 document.getElementById("coBulkMove").onclick=bulkMoveSelectedStops;
 document.getElementById("stopsToggleBtn").onclick=()=>{
   const body=document.getElementById("stopsBody");
+  const panel=document.getElementById("mainPanel");
   const open=body.style.display!=="none";
-  body.style.display=open?"none":"block";
+  if(open){
+    // Closing the stop tree: if the panel was manually dragged bigger just to
+    // see it (the resize handle at its bottom-right corner), shrink back to
+    // whatever size it was before it opened, freeing the map space back up.
+    body.style.display="none";
+    if(panel.dataset.preStopsW){ panel.style.width=panel.dataset.preStopsW; delete panel.dataset.preStopsW; }
+    if(panel.dataset.preStopsH){ panel.style.height=panel.dataset.preStopsH; delete panel.dataset.preStopsH; }
+  }else{
+    panel.dataset.preStopsW=panel.style.width||getComputedStyle(panel).width;
+    panel.dataset.preStopsH=panel.style.height||getComputedStyle(panel).height;
+    body.style.display="block";
+  }
   document.getElementById("stopsToggleChevron").textContent=open?"▸":"▾";
 };
 

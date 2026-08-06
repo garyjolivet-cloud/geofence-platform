@@ -114,11 +114,14 @@
   }
 
   const STYLE = `
-    .co-float{position:fixed;z-index:400;bottom:16px;right:16px;width:220px;
+    .co-float{position:fixed;z-index:400;bottom:16px;right:16px;width:220px;height:380px;
+      min-width:200px;min-height:160px;max-width:92vw;max-height:calc(100vh - 20px);
+      resize:both;overflow:auto;display:flex;flex-direction:column;
       background:var(--slate-2,#1b2738);border:1px solid var(--rim,#2e3f58);border-radius:12px;
       box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:'Barlow Condensed',sans-serif;
       color:var(--snow,#eef4fb);user-select:none}
-    .co-float-head{display:flex;align-items:center;gap:8px;padding:8px 10px;
+    .co-float.collapsed{resize:none}
+    .co-float-head{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 10px;
       border-bottom:1px solid var(--rim,#2e3f58);cursor:grab;font-size:13px;font-weight:600;
       letter-spacing:.5px;text-transform:uppercase;color:var(--coral,#ff6a3d)}
     .co-float-head .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -126,10 +129,10 @@
     .co-open-library{flex:0 0 auto;font-size:11px;font-weight:600;text-transform:none;letter-spacing:normal;
       color:var(--coral,#ff6a3d);text-decoration:none;white-space:nowrap}
     .co-open-library:hover{text-decoration:underline}
-    .co-float-body{padding:8px;max-height:320px;overflow-y:auto}
+    .co-float-body{padding:8px;flex:1 1 auto;overflow-y:auto;min-height:0}
     .co-float.collapsed .co-float-body{display:none}
     .co-float.embedded{position:static;width:100%;height:100%;display:flex;flex-direction:column;
-      box-shadow:none;border:none;border-radius:0;background:none}
+      resize:none;box-shadow:none;border:none;border-radius:0;background:none}
     .co-float.embedded .co-float-body{max-height:none;flex:1 1 auto;padding:0}
     .co-card{display:flex;align-items:center;gap:6px;padding:7px 8px;margin-bottom:6px;border-radius:8px;
       background:rgba(255,255,255,.03);border:1px solid var(--rim,#2e3f58);cursor:grab;font-size:13px}
@@ -525,7 +528,13 @@
       makeHeaderDraggable(float, head);
       head.querySelector(".co-toggle").onclick = () => {
         float.classList.toggle("collapsed");
-        head.querySelector(".co-toggle").textContent = float.classList.contains("collapsed") ? "+" : "–";
+        const collapsed = float.classList.contains("collapsed");
+        head.querySelector(".co-toggle").textContent = collapsed ? "+" : "–";
+        // Collapsing hides the tree/card list, so any manual resize made to
+        // browse it (drag the bottom-right corner) is no longer doing
+        // anything useful — drop back to the default footprint instead of
+        // leaving a big empty box parked over the map.
+        if (collapsed) { float.style.width = ""; float.style.height = ""; }
       };
     }
 

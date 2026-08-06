@@ -189,8 +189,13 @@ document.getElementById("btnNewCodeObject").onclick = async () => {
 
 async function load(){
   if (codeObjectId) return loadCodeObject();
-  if (projectId || zoneId) {
-    if (!projectId || !zoneId){ showErr("Missing ?project= or ?zone= in URL"); return; }
+  // zoneId is the actual gate for raw-zone-pipeline mode — projectId alone
+  // (no zoneId) means we arrived from the Code Objects palette's "Code
+  // Library" link, which passes ?project= just to carry context for the
+  // back link, not to open one zone's pipeline. That case falls through to
+  // the library browser below like the fully-blank landing does.
+  if (zoneId) {
+    if (!projectId){ showErr("Missing ?project= in URL"); return; }
     const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle");
     if (!r.ok){ showErr("Could not load bundle for project " + projectId); return; }
     bundle = await r.json();
@@ -203,7 +208,8 @@ async function load(){
     render();
     return;
   }
-  // Landed with no params at all — just browse the library until a card is picked.
+  // No zone in view — either landed blank, or arrived with just ?project=
+  // for context — browse the library either way.
   document.getElementById("ctxLabel").textContent = "pick an object from the library to start editing";
   showLibrary();
   renderPalette();
