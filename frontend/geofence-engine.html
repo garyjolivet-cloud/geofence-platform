@@ -725,12 +725,16 @@ const Audio = {
       });
     }catch(e){}
   },
-  say(text, warn, zoneOrDist){
+  // voiceOverride lets a caller pick a voice without also handing over a
+  // zone/distance to compute panning from (pipelineCallbacks below needs
+  // exactly that — a pipeline's Speak node has no distance of its own, but
+  // should still honor its owning zone's Voice picker).
+  say(text, warn, zoneOrDist, voiceOverride){
     const clean=text.replace(/–/g,' to ').replace(/°/g,' degrees ');
-    let d=0, voice=null;
+    let d=0, voice=voiceOverride||null;
     if(typeof zoneOrDist==='number') d=zoneOrDist;
     else if(zoneOrDist&&zoneOrDist.center&&HUD.pos) d=Geo.hav([HUD.pos.lat,HUD.pos.lon],zoneOrDist.center);
-    if(zoneOrDist&&zoneOrDist.ttsVoice) voice=zoneOrDist.ttsVoice;
+    if(!voice && zoneOrDist&&zoneOrDist.ttsVoice) voice=zoneOrDist.ttsVoice;
     // Kokoro if loaded, else Workers AI, else browser speechSynthesis
     if(EngineKokoro.tts){
       EngineKokoro.tts.generate(clean,{voice:voice||EngineKokoro.voice})
@@ -1600,8 +1604,14 @@ try{ window.addEventListener('online', ()=>Analytics.sync());
 // load, or null/omitted for the global one (webhookFn's payload/log line
 // degrade to a zone-less "global" label in that case).
 function pipelineCallbacks(zoneCtx){
+  // A pipeline's Speak node has no voice control of its own — it inherits
+  // whichever voice is picked in the owning zone's "Voices & Audio" section
+  // (#pVoice in fence-editor.html, stored as zone.ttsVoice), same voice the
+  // zone's own plain say text already uses. A global (zone-less) pipeline
+  // has no zone to inherit from, so it falls back to the default voice.
+  const voice=(zoneCtx&&zoneCtx.zone&&zoneCtx.zone.ttsVoice)||null;
   return {
-    sayFn:(text)=>Audio.say(text,false,0),
+    sayFn:(text)=>Audio.say(text,false,0,voice),
     guideStartFn:(targetZone)=>{
       GuidanceBot.start({
         targetZone,

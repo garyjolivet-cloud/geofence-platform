@@ -4522,9 +4522,15 @@ function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)ret
 // Shared sayFn/guideStartFn/webhookFn closures for PipelineRuntime.load()
 // (per-zone) and .loadGlobal() (project-wide global functions) in Test
 // Mode — factored out so both call sites build identical callbacks.
-function simPipelineCallbacks(){
+// zoneCtx ({zone}) is passed for the per-zone load so Speak nodes honor
+// that zone's own Voice picker (zone.ttsVoice), same as its plain say text
+// already does (mirrors geofence-engine.html's pipelineCallbacks) — omitted
+// for the global-functions load, which has no owning zone to borrow a
+// voice from and just uses the default.
+function simPipelineCallbacks(zoneCtx){
+  const voice=(zoneCtx&&zoneCtx.zone&&zoneCtx.zone.ttsVoice)||null;
   return {
-    sayFn:(text)=>{ simLogEv("sev-say","[pipeline] SAY \""+text+"\""); if(simSoundOn) simTTS(text); },
+    sayFn:(text)=>{ simLogEv("sev-say","[pipeline] SAY \""+text+"\""); if(simSoundOn) simTTS(text,voice); },
     guideStartFn:(targetZone)=>{ simLogEv("sev-sys","[pipeline] guide_to_zone → "+targetZone.name); simStartGuidance(targetZone); },
     webhookFn:(url)=>{ simLogEv("sev-sys","[pipeline] webhook → "+url); },
     allZones: simBundle.zones
@@ -4542,7 +4548,7 @@ SimFencer.onEvent=async e=>{
         // load() is async (it may fetch attached code-object definitions) —
         // must await before the first tick() or zone_enter could fire before
         // the compiled graph exists yet.
-        await PipelineRuntime.load(e.zone, simPipelineCallbacks());
+        await PipelineRuntime.load(e.zone, simPipelineCallbacks({zone:e.zone}));
         PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { entered:true });
       }
     }
