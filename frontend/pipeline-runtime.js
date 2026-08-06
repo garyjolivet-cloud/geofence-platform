@@ -7,6 +7,12 @@
 (function(global){
 "use strict";
 
+// Must match migrations/0026_hazard_code_object.sql's seeded id — duplicated
+// here rather than imported since this file loads standalone in the browser,
+// same as fence-editor.html's and guidance-bot.js's own copies of this
+// constant (this codebase's existing verbatim-mirror convention).
+const HAZARD_CODE_OBJECT_ID="hazard-zone";
+
 /* ===================== BLOCK REGISTRY ===================== */
 // Each block declares its ports (gate = pulse-only boolean, anything else = a named
 // data value) and, for data/logic/action blocks, an eval(ctx) used by the runtime.
@@ -26,6 +32,17 @@ const BLOCKS = {
     label: "On Dwell", category: "trigger",
     inputs: [], outputs: [{ id: "out", type: "gate" }],
     params: [{ id: "seconds", type: "number", default: 10, label: "Seconds" }]
+  },
+  // For project-wide "global" pipelines only (attached via drag-onto-the-map
+  // in fence-editor.html, not tied to any one zone) — zone_enter/exit/dwell
+  // have no meaning with no owning zone to enter/exit, so a global pipeline's
+  // only trigger is "evaluated every GPS tick, unconditionally." There's no
+  // built-in rate limiting: wiring this straight into action.speak fires on
+  // every tick (several times a second) — gate it through logic.* first.
+  "trigger.always": {
+    label: "On Every Tick", category: "trigger",
+    inputs: [], outputs: [{ id: "out", type: "gate" }],
+    params: []
   },
   "data.weather": {
     label: "Weather", category: "data",
@@ -159,6 +176,12 @@ function interpolate(text, cache) {
 /* ===================== RUNTIME ===================== */
 // One compiled graph per active zone, keyed by zone id.
 const compiled = {};
+// The project's global functions (Code Objects dropped on the map rather
+// than a stop) — at most one compiled graph, ticked every GPS fix
+// unconditionally rather than being gated by any zone's enter/exit/dwell.
+// Compiled the same way a zone is (compile() below), just against a
+// synthetic zone-less shape — see loadGlobal().
+let globalCompiled = null;
 let dataCache = {}; // { weather:{...}, snowHistory:{...} } — shared across zones, refreshed on an interval
 let dataTimer = null;
 let callbacks = {};
@@ -253,6 +276,125 @@ async function refreshDataCache() {
   } catch (e) { /* keep last-known value */ }
 }
 
+// Shared by tick() (per-zone, gated by enter/exit/dwell evt) and tickGlobal()
+// (the project-wide graph, evaluated every fix with an empty evt) — the only
+// difference between the two call sites is which compiled graph g they pass
+// and what evt looks like; the node-by-node evaluation itself doesn't care
+// whether g.zone is a real zone or null.
+// fix: {lat,lon,speed,headingTravel,acc,t}; smoothedPos: Smoother output for this tick
+// evt: { entered:bool, exited:bool, dwellSeconds:number|null } — {} for a global graph
+function evalGraph(g, fix, smoothedPos, evt) {
+  const cache = {}; // nodeId -> { portId: value }
+  g.order.forEach(id => {
+    const node = g.byId[id];
+    const def = BLOCKS[node.type];
+    if (!def) return;
+    cache[id] = {};
+    const getIn = (portId) => {
+      const e = findSourceEdge(g.edges, id, portId);
+      if (!e) return undefined;
+      const src = cache[e.from.n];
+      return src ? src[e.from.p] : undefined;
+    };
+
+    switch (node.type) {
+      case "trigger.zone_enter": cache[id].out = !!evt.entered; break;
+      case "trigger.zone_exit": cache[id].out = !!evt.exited; break;
+      case "trigger.always": cache[id].out = true; break;
+      case "trigger.dwell": {
+        const need = (node.params && node.params.seconds) || 10;
+        cache[id].out = evt.dwellSeconds != null && evt.dwellSeconds >= need;
+        break;
+      }
+      case "data.weather": {
+        const w = dataCache.weather || {};
+        cache[id].tempC = w.ww_temp_c ?? null; cache[id].windKph = w.ww_wind_spd_kph ?? null;
+        cache[id].windDirDeg = w.ww_wind_dir_deg ?? null; cache[id].precip1hMm = w.hour_precip_mm ?? null;
+        cache[id].precip24hMm = w.precip_24hr_mm ?? null;
+        break;
+      }
+      case "data.snow_history": {
+        const s = dataCache.snowHistory || {};
+        cache[id].hn24Cm = s.hn24_cm ?? null; cache[id].precip24hMm = s.precip_24hr_mm ?? null; cache[id].tempC = s.ww_temp_c ?? null;
+        break;
+      }
+      case "data.position": {
+        cache[id].speedKmh = smoothedPos && smoothedPos.speed != null ? smoothedPos.speed * 3.6 : null;
+        cache[id].headingDeg = smoothedPos ? smoothedPos.headingTravel : null;
+        cache[id].distFromZoneCenterM = evt.distFromZoneCenterM ?? null;
+        break;
+      }
+      case "data.dwell_time": cache[id].seconds = evt.dwellSeconds ?? null; break;
+      case "data.walking_path_progress": {
+        const p = pathProgress || {};
+        cache[id].distanceCoveredM = p.distanceCoveredM ?? null;
+        cache[id].distanceRemainingM = p.distanceRemainingM ?? null;
+        cache[id].totalDistanceM = p.totalDistanceM ?? null;
+        cache[id].pctComplete = p.pctComplete ?? null;
+        cache[id].elevGainSoFarM = p.elevGainSoFarM ?? null;
+        cache[id].elevLossSoFarM = p.elevLossSoFarM ?? null;
+        cache[id].totalElevGainM = p.totalElevGainM ?? null;
+        cache[id].totalElevLossM = p.totalElevLossM ?? null;
+        cache[id].etaSeconds = p.etaSeconds ?? null;
+        break;
+      }
+      case "data.zone_props": {
+        cache[id].bearingDeg = (g.zone && g.zone.bearingDeg != null) ? g.zone.bearingDeg : null;
+        cache[id].isHazard = !!(g.zone && (g.zone.isHazard || (g.zone.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID)));
+        cache[id].id = g.zone ? g.zone.id : null;
+        break;
+      }
+      case "logic.aspect_load": {
+        const windDirDeg = getIn("windDirDeg"); const bearingDeg = getIn("bearingDeg");
+        const tol = (node.params && node.params.toleranceDeg) || 90;
+        let pass = false;
+        if (windDirDeg != null && bearingDeg != null) {
+          // "Loaded" aspect is the leeward side — roughly opposite the direction wind blows from.
+          const leewardDeg = (windDirDeg + 180) % 360;
+          let diff = Math.abs(bearingDeg - leewardDeg) % 360;
+          if (diff > 180) diff = 360 - diff;
+          pass = diff <= tol / 2;
+        }
+        cache[id].out = pass;
+        break;
+      }
+      case "logic.compare": {
+        const inVal = getIn("in"); const gate = getIn("gate");
+        const op = (node.params && node.params.op) || "gt";
+        const val = (node.params && node.params.value) || 0;
+        let pass = false;
+        if (inVal != null) {
+          pass = op === "gt" ? inVal > val : op === "lt" ? inVal < val : inVal === val;
+        }
+        cache[id].out = !!gate && pass;
+        break;
+      }
+      case "logic.and": cache[id].out = !!getIn("a") && !!getIn("b"); break;
+      case "logic.or": cache[id].out = !!getIn("a") || !!getIn("b"); break;
+      case "action.speak": {
+        if (getIn("in") && callbacks.sayFn) {
+          callbacks.sayFn(interpolate((node.params && node.params.text) || "", cache));
+        }
+        break;
+      }
+      case "action.guide_to_zone": {
+        if (getIn("in") && callbacks.guideStartFn) {
+          const targetId = node.params && node.params.targetZoneId;
+          const targetZone = (callbacks.allZones || []).find(z => z.id === targetId);
+          if (targetZone) callbacks.guideStartFn(targetZone);
+        }
+        break;
+      }
+      case "action.webhook": {
+        if (getIn("in") && callbacks.webhookFn) {
+          callbacks.webhookFn(node.params && node.params.url, node.params && node.params.includeDevice);
+        }
+        break;
+      }
+    }
+  });
+}
+
 const PipelineRuntime = {
   BLOCKS, topoSort, // exposed for pipeline-editor.html's validation/property-panel use
 
@@ -260,6 +402,23 @@ const PipelineRuntime = {
     callbacks = opts || {};
     const g = await compile(zone);
     if (g) compiled[zone.id] = g;
+    if (!dataTimer) {
+      refreshDataCache();
+      dataTimer = setInterval(refreshDataCache, 5 * 60 * 1000);
+    }
+  },
+
+  // Compiles the project's global functions (Code Objects dropped on the map,
+  // not on any stop) into one graph, reusing compile()/resolveCodeObjects()
+  // against a synthetic zone-less shape — its data.zone_props block (if one's
+  // wired in) just reads null/false off a zone that doesn't exist, same
+  // null-propagation convention every other missing-data case here already
+  // uses. Pass an empty array (or null) to clear it. Call once per bundle/
+  // session load, same lifecycle as prefetch() below.
+  async loadGlobal(globalCodeObjectRefs, opts) {
+    callbacks = opts || callbacks || {};
+    const g = await compile({ id: "__global__", codeObjects: globalCodeObjectRefs || [], pipeline: null });
+    globalCompiled = g; // g is null when there's nothing wired in — tickGlobal() no-ops on null
     if (!dataTimer) {
       refreshDataCache();
       dataTimer = setInterval(refreshDataCache, 5 * 60 * 1000);
@@ -299,114 +458,16 @@ const PipelineRuntime = {
   tick(zoneId, fix, smoothedPos, evt) {
     const g = compiled[zoneId];
     if (!g) return;
-    const cache = {}; // nodeId -> { portId: value }
-    g.order.forEach(id => {
-      const node = g.byId[id];
-      const def = BLOCKS[node.type];
-      if (!def) return;
-      cache[id] = {};
-      const getIn = (portId) => {
-        const e = findSourceEdge(g.edges, id, portId);
-        if (!e) return undefined;
-        const src = cache[e.from.n];
-        return src ? src[e.from.p] : undefined;
-      };
+    evalGraph(g, fix, smoothedPos, evt);
+  },
 
-      switch (node.type) {
-        case "trigger.zone_enter": cache[id].out = !!evt.entered; break;
-        case "trigger.zone_exit": cache[id].out = !!evt.exited; break;
-        case "trigger.dwell": {
-          const need = (node.params && node.params.seconds) || 10;
-          cache[id].out = evt.dwellSeconds != null && evt.dwellSeconds >= need;
-          break;
-        }
-        case "data.weather": {
-          const w = dataCache.weather || {};
-          cache[id].tempC = w.ww_temp_c ?? null; cache[id].windKph = w.ww_wind_spd_kph ?? null;
-          cache[id].windDirDeg = w.ww_wind_dir_deg ?? null; cache[id].precip1hMm = w.hour_precip_mm ?? null;
-          cache[id].precip24hMm = w.precip_24hr_mm ?? null;
-          break;
-        }
-        case "data.snow_history": {
-          const s = dataCache.snowHistory || {};
-          cache[id].hn24Cm = s.hn24_cm ?? null; cache[id].precip24hMm = s.precip_24hr_mm ?? null; cache[id].tempC = s.ww_temp_c ?? null;
-          break;
-        }
-        case "data.position": {
-          cache[id].speedKmh = smoothedPos && smoothedPos.speed != null ? smoothedPos.speed * 3.6 : null;
-          cache[id].headingDeg = smoothedPos ? smoothedPos.headingTravel : null;
-          cache[id].distFromZoneCenterM = evt.distFromZoneCenterM ?? null;
-          break;
-        }
-        case "data.dwell_time": cache[id].seconds = evt.dwellSeconds ?? null; break;
-        case "data.walking_path_progress": {
-          const p = pathProgress || {};
-          cache[id].distanceCoveredM = p.distanceCoveredM ?? null;
-          cache[id].distanceRemainingM = p.distanceRemainingM ?? null;
-          cache[id].totalDistanceM = p.totalDistanceM ?? null;
-          cache[id].pctComplete = p.pctComplete ?? null;
-          cache[id].elevGainSoFarM = p.elevGainSoFarM ?? null;
-          cache[id].elevLossSoFarM = p.elevLossSoFarM ?? null;
-          cache[id].totalElevGainM = p.totalElevGainM ?? null;
-          cache[id].totalElevLossM = p.totalElevLossM ?? null;
-          cache[id].etaSeconds = p.etaSeconds ?? null;
-          break;
-        }
-        case "data.zone_props": {
-          cache[id].bearingDeg = (g.zone && g.zone.bearingDeg != null) ? g.zone.bearingDeg : null;
-          cache[id].isHazard = !!(g.zone && g.zone.isHazard);
-          cache[id].id = g.zone ? g.zone.id : null;
-          break;
-        }
-        case "logic.aspect_load": {
-          const windDirDeg = getIn("windDirDeg"); const bearingDeg = getIn("bearingDeg");
-          const tol = (node.params && node.params.toleranceDeg) || 90;
-          let pass = false;
-          if (windDirDeg != null && bearingDeg != null) {
-            // "Loaded" aspect is the leeward side — roughly opposite the direction wind blows from.
-            const leewardDeg = (windDirDeg + 180) % 360;
-            let diff = Math.abs(bearingDeg - leewardDeg) % 360;
-            if (diff > 180) diff = 360 - diff;
-            pass = diff <= tol / 2;
-          }
-          cache[id].out = pass;
-          break;
-        }
-        case "logic.compare": {
-          const inVal = getIn("in"); const gate = getIn("gate");
-          const op = (node.params && node.params.op) || "gt";
-          const val = (node.params && node.params.value) || 0;
-          let pass = false;
-          if (inVal != null) {
-            pass = op === "gt" ? inVal > val : op === "lt" ? inVal < val : inVal === val;
-          }
-          cache[id].out = !!gate && pass;
-          break;
-        }
-        case "logic.and": cache[id].out = !!getIn("a") && !!getIn("b"); break;
-        case "logic.or": cache[id].out = !!getIn("a") || !!getIn("b"); break;
-        case "action.speak": {
-          if (getIn("in") && callbacks.sayFn) {
-            callbacks.sayFn(interpolate((node.params && node.params.text) || "", cache));
-          }
-          break;
-        }
-        case "action.guide_to_zone": {
-          if (getIn("in") && callbacks.guideStartFn) {
-            const targetId = node.params && node.params.targetZoneId;
-            const targetZone = (callbacks.allZones || []).find(z => z.id === targetId);
-            if (targetZone) callbacks.guideStartFn(targetZone);
-          }
-          break;
-        }
-        case "action.webhook": {
-          if (getIn("in") && callbacks.webhookFn) {
-            callbacks.webhookFn(node.params && node.params.url, node.params && node.params.includeDevice);
-          }
-          break;
-        }
-      }
-    });
+  // Runs the project's global graph (see loadGlobal()) for this GPS fix, with
+  // no enter/exit/dwell lifecycle — call once per fix, same cadence as the
+  // per-zone tick() calls, independent of which (if any) zone the visitor is
+  // currently inside.
+  tickGlobal(fix, smoothedPos) {
+    if (!globalCompiled) return;
+    evalGraph(globalCompiled, fix, smoothedPos, {});
   }
 };
 

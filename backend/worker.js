@@ -443,7 +443,7 @@ export default {
       "/chatterbox": "/chatterbox-studio.html",
       "/field": "/field-recorder.html",
       "/pipeline": "/pipeline-editor.html",
-      "/code-library": "/code-library.html",
+      "/code-library": "/pipeline-editor.html", // retired standalone page — the library is now an inline sidebar on /pipeline
       "/login": "/login.html",
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
@@ -2865,6 +2865,94 @@ async function api(request, env, url) {
     }
   }
 
+  // --- Code Object folders: same tree shape as walking_path_folder, but
+  // org-scoped to match code_object itself (see codeObjectScopeOk above).
+  // Deleting a folder moves objects in its subtree up to the parent instead
+  // of destroying them — a hand-authored object is as expensive to redo as
+  // a recorded walk, same reasoning walking_path_folder's delete uses.
+  async function collectCodeObjectFolderSubtreeIds(env, rootId) {
+    const ids = [rootId]; let frontier = [rootId];
+    while (frontier.length) {
+      const ph = frontier.map(() => "?").join(",");
+      const { results } = await env.DB.prepare(`SELECT id FROM code_object_folder WHERE parent_id IN (${ph})`).bind(...frontier).all();
+      frontier = (results || []).map(r => r.id);
+      ids.push(...frontier);
+    }
+    return ids;
+  }
+
+  if (path === "/api/code-object-folder" && method === "GET") {
+    const A = await auth(request, env);
+    const orgId = (url.searchParams.get("org") || "").trim();
+    if (!orgId) return json({ error: "org required" }, 400, AC);
+    if (!(await codeObjectScopeOk(env, A, orgId))) return json({ error: "forbidden" }, 403, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,parent_id AS parentId,name FROM code_object_folder WHERE org_id=? ORDER BY name"
+    ).bind(orgId).all();
+    return json({ folders: results || [] }, 200, AC);
+  }
+
+  if (path === "/api/code-object-folder" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const orgId = (b.orgId || "").trim(), name = (b.name || "").trim();
+    const parentId = b.parentId || null;
+    if (!orgId || !name) return json({ error: "orgId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
+    if (!(await codeObjectScopeOk(env, A, orgId))) return json({ error: "forbidden" }, 403, AC);
+    if (parentId) {
+      const parent = await env.DB.prepare("SELECT id FROM code_object_folder WHERE id=? AND org_id=?").bind(parentId, orgId).first();
+      if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare("INSERT INTO code_object_folder (id,org_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+      .bind(id, orgId, parentId, name, now, now).run();
+    await logAudit(env, request, A, "codeobjectfolder.create", orgId + "/" + name);
+    return json({ id, orgId, parentId, name }, 201, AC);
+  }
+
+  const mCodeObjectFolder = path.match(/^\/api\/code-object-folder\/([^/]+)$/);
+  if (mCodeObjectFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mCodeObjectFolder[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT org_id AS orgId,parent_id AS parentId,name FROM code_object_folder WHERE id=?").bind(folderId).first();
+    if (!row) return json({ error: "folder not found" }, 404, AC);
+    if (!(await codeObjectScopeOk(env, A, row.orgId))) return json({ error: "forbidden" }, 403, AC);
+
+    if (method === "DELETE") {
+      const folderIds = await collectCodeObjectFolderSubtreeIds(env, folderId);
+      const fph = folderIds.map(() => "?").join(",");
+      const { meta } = await env.DB.prepare(
+        `UPDATE code_object SET folder_id=?, updated_at=? WHERE org_id=? AND folder_id IN (${fph})`
+      ).bind(row.parentId, new Date().toISOString(), row.orgId, ...folderIds).run();
+      await env.DB.prepare(`DELETE FROM code_object_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "codeobjectfolder.delete", folderId + " (" + (meta.changes || 0) + " objects moved up)");
+      return json({ ok: true, deletedFolders: folderIds.length, movedObjects: meta.changes || 0 }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, parentId = row.parentId;
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.parentId !== undefined) {
+      const newParentId = b.parentId || null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM code_object_folder WHERE id=? AND org_id=?").bind(newParentId, row.orgId).first();
+        if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+        const subtreeIds = await collectCodeObjectFolderSubtreeIds(env, folderId);
+        if (subtreeIds.includes(newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
+      }
+      parentId = newParentId;
+    }
+    await env.DB.prepare("UPDATE code_object_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+      .bind(name, parentId, new Date().toISOString(), folderId).run();
+    await logAudit(env, request, A, "codeobjectfolder.update", folderId);
+    return json({ id: folderId, name, parentId }, 200, AC);
+  }
+
   // --- code objects ---
   // GET /:id stays public/unauthenticated on purpose: it's fetched by
   // pipeline-runtime.js from an anonymous visitor's browser during a live
@@ -2883,15 +2971,20 @@ async function api(request, env, url) {
     // built-ins — master's bypass is of the entitlement check, not of org
     // scoping, so it still sees every built-in regardless of grants.
     const rows = A.master
-      ? await env.DB.prepare("SELECT id,org_id,name,description,icon,category,version,param_schema,feature_key FROM code_object WHERE org_id IS NULL OR org_id=? ORDER BY name").bind(orgId).all()
+      ? await env.DB.prepare("SELECT id,org_id,name,description,icon,category,version,param_schema,feature_key,folder_id AS folderId FROM code_object WHERE org_id IS NULL OR org_id=? ORDER BY name").bind(orgId).all()
       : await env.DB.prepare(
-          "SELECT co.id,co.org_id,co.name,co.description,co.icon,co.category,co.version,co.param_schema,co.feature_key FROM code_object co " +
-          "JOIN org_entitlement oe ON oe.feature_key=co.feature_key AND oe.org_id=? " +
-          "WHERE co.org_id IS NULL OR co.org_id=? ORDER BY co.name"
+          // LEFT JOIN (not INNER) + the 'hazard-zone' OR-exemption below: Hazard
+          // was previously a free, always-on checkbox with no entitlement concept
+          // at all — gating it behind org_entitlement like every other built-in
+          // would silently break it for every org that hasn't been granted it.
+          "SELECT co.id,co.org_id,co.name,co.description,co.icon,co.category,co.version,co.param_schema,co.feature_key,co.folder_id AS folderId FROM code_object co " +
+          "LEFT JOIN org_entitlement oe ON oe.feature_key=co.feature_key AND oe.org_id=? " +
+          "WHERE (co.org_id IS NULL OR co.org_id=?) AND (oe.org_id IS NOT NULL OR co.id='hazard-zone') ORDER BY co.name"
         ).bind(orgId, orgId).all();
     return json((rows.results || []).map(row => ({
       id: row.id, orgId: row.org_id, name: row.name, description: row.description, icon: row.icon,
-      category: row.category, version: row.version, paramSchema: JSON.parse(row.param_schema), featureKey: row.feature_key
+      category: row.category, version: row.version, paramSchema: JSON.parse(row.param_schema), featureKey: row.feature_key,
+      folderId: row.folderId
     })), 200, AC);
   }
   if (path === "/api/code-objects" && method === "POST") {
@@ -2901,6 +2994,11 @@ async function api(request, env, url) {
     if (!orgId) return json({ error: "orgId required" }, 400, AC);
     if (!(await codeObjectScopeOk(env, A, orgId))) return json({ error: "forbidden" }, 403, AC);
     if (!b.name || !b.template || !Array.isArray(b.template.nodes)) return json({ error: "name and template required" }, 400, AC);
+    let folderId = b.folderId || null;
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM code_object_folder WHERE id=? AND org_id=?").bind(folderId, orgId).first();
+      if (!folder) return json({ error: "folder not found" }, 404, AC);
+    }
     const slug = b.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "object";
     // id/featureKey are always server-generated, never taken from the client:
     // feature_key is the exact key self-entitled to this org two lines below,
@@ -2913,10 +3011,10 @@ async function api(request, env, url) {
     const featureKey = id;
     const now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO code_object (id,org_id,built_in,name,description,icon,category,version,template,param_schema,feature_key,created_at,updated_at) " +
-      "VALUES (?,?,0,?,?,?,?,1,?,?,?,?,?)"
+      "INSERT INTO code_object (id,org_id,built_in,name,description,icon,category,version,template,param_schema,feature_key,folder_id,created_at,updated_at) " +
+      "VALUES (?,?,0,?,?,?,?,1,?,?,?,?,?,?)"
     ).bind(id, orgId, b.name, b.description || "", b.icon || "🧩", b.category || "custom",
-      JSON.stringify(b.template), JSON.stringify(b.paramSchema || []), featureKey, now, now).run();
+      JSON.stringify(b.template), JSON.stringify(b.paramSchema || []), featureKey, folderId, now, now).run();
     // Self-entitled: the org that authors a custom object can use it immediately,
     // no separate master grant step needed (grants are for built-ins / cross-org).
     await env.DB.prepare(
@@ -2956,6 +3054,17 @@ async function api(request, env, url) {
     if (b.category != null) { fields.push("category=?"); vals.push(b.category); }
     if (b.template != null) { fields.push("template=?"); vals.push(JSON.stringify(b.template)); fields.push("version=version+1"); }
     if (b.paramSchema != null) { fields.push("param_schema=?"); vals.push(JSON.stringify(b.paramSchema)); }
+    if (b.folderId !== undefined) {
+      const newFolderId = b.folderId || null;
+      if (newFolderId) {
+        const orgForFolder = row.org_id == null ? null : row.org_id;
+        const folder = orgForFolder
+          ? await env.DB.prepare("SELECT id FROM code_object_folder WHERE id=? AND org_id=?").bind(newFolderId, orgForFolder).first()
+          : null; // built-ins (org_id NULL) have no org to scope a folder check against — moving a built-in into a folder isn't supported
+        if (!folder) return json({ error: "folder not found" }, 404, AC);
+      }
+      fields.push("folder_id=?"); vals.push(newFolderId);
+    }
     if (!fields.length) return json({ error: "nothing to update" }, 400, AC);
     fields.push("updated_at=?"); vals.push(new Date().toISOString());
     vals.push(id);

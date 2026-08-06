@@ -1323,6 +1323,9 @@ const HUD = {
     const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
     const active=Geofencer.update(p,this.prev,fix.t);
     this.prev=p; this.pos=p;
+    // Global functions (Code Objects dropped on the map, not a stop) run on
+    // every fix regardless of which zone (if any) is currently active.
+    if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.tickGlobal) PipelineRuntime.tickGlobal(fix, lastSmoothed);
 
     // pick nearest active target ring for the needle (or nearest zone center)
     let pick=null,best=Infinity;
@@ -1590,6 +1593,62 @@ setInterval(()=>Analytics.sync(), 30000);
 try{ window.addEventListener('online', ()=>Analytics.sync());
      document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) Analytics.sync(); }); }catch(e){}
 
+// Shared sayFn/guideStartFn/webhookFn closures for PipelineRuntime.load()
+// (per-zone, target-layer enter/exit) and .loadGlobal() (project-wide,
+// no owning zone) — factored out so both call sites build identical
+// callbacks without copy-paste drift. zoneCtx is {kind,zone} for a per-zone
+// load, or null/omitted for the global one (webhookFn's payload/log line
+// degrade to a zone-less "global" label in that case).
+function pipelineCallbacks(zoneCtx){
+  return {
+    sayFn:(text)=>Audio.say(text,false,0),
+    guideStartFn:(targetZone)=>{
+      GuidanceBot.start({
+        targetZone,
+        allZones:BUNDLE.zones||[],
+        sayFn:(text)=>Audio.say(text,false,0),
+        onComplete:()=>{
+          const hud=document.getElementById('guidanceHud');
+          if(hud) hud.style.display='none';
+          HUD.log('ev-sys','Guidance complete — arrived at '+targetZone.name);
+        },
+        onInstruction:(text,distM,phase)=>{
+          const hud=document.getElementById('guidanceHud');
+          if(hud){
+            hud.style.display='block';
+            const instr=document.getElementById('guidanceInstr');
+            const dist=document.getElementById('guidanceDist');
+            const ph=document.getElementById('guidancePhase');
+            if(instr) instr.textContent=text;
+            if(dist)  dist.textContent=distM!=null?Math.round(distM)+' m':'—';
+            if(ph)    ph.textContent=phase;
+          }
+        }
+      });
+      const hud=document.getElementById('guidanceHud');
+      if(hud) hud.style.display='block';
+      HUD.log('ev-sys','Guidance started → '+targetZone.name);
+    },
+    webhookFn:(url,includeDevice)=>{
+      if(!url) return;
+      if(includeDevice && !(window.hasConsent && window.hasConsent('live-tracking'))){
+        HUD.log('ev-flick','webhook skipped — needs consent: live-tracking'); return;
+      }
+      const body={ event: zoneCtx?zoneCtx.kind:'global', zone: zoneCtx?zoneCtx.zone.id:null, name: zoneCtx?zoneCtx.zone.name:null,
+                   project:(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null, ts:Date.now() };
+      if(includeDevice){ try{ body.deviceId=localStorage.getItem('gp.device')||null; }catch(err){} }
+      let ctrl,to;
+      try{ ctrl=new AbortController(); to=setTimeout(()=>ctrl.abort(),5000); }catch(err){}
+      fetch(url,{ method:'POST', headers:{'content-type':'application/json'},
+          body:JSON.stringify(body), mode:'cors', keepalive:true, signal:ctrl?ctrl.signal:undefined })
+        .then(r=>HUD.log('ev-sys','webhook '+(zoneCtx?zoneCtx.kind+' → '+zoneCtx.zone.name:'global')+' ('+r.status+')'))
+        .catch(err=>HUD.log('ev-warn','webhook failed: '+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||err)))
+        .finally(()=>{ if(to) clearTimeout(to); });
+    },
+    allZones: BUNDLE.zones||[]
+  };
+}
+
 /* Geofencer -> HUD log wiring */
 Geofencer.onEvent=async(e)=>{
   if(e.kind==='enter'){ HUD.log('ev-enter','ENTER  '+e.zone.name+(e.info.side?' ('+e.info.side+')':''));
@@ -1625,53 +1684,7 @@ Geofencer.onEvent=async(e)=>{
     // await before the first tick() or zone_enter could fire before the
     // compiled graph exists yet. BUNDLE-wide prefetch (below, on bundle load)
     // keeps this await effectively instant in the common case.
-    await PipelineRuntime.load(e.zone, {
-      sayFn:(text)=>Audio.say(text,false,0),
-      guideStartFn:(targetZone)=>{
-        GuidanceBot.start({
-          targetZone,
-          allZones:BUNDLE.zones||[],
-          sayFn:(text)=>Audio.say(text,false,0),
-          onComplete:()=>{
-            const hud=document.getElementById('guidanceHud');
-            if(hud) hud.style.display='none';
-            HUD.log('ev-sys','Guidance complete — arrived at '+targetZone.name);
-          },
-          onInstruction:(text,distM,phase)=>{
-            const hud=document.getElementById('guidanceHud');
-            if(hud){
-              hud.style.display='block';
-              const instr=document.getElementById('guidanceInstr');
-              const dist=document.getElementById('guidanceDist');
-              const ph=document.getElementById('guidancePhase');
-              if(instr) instr.textContent=text;
-              if(dist)  dist.textContent=distM!=null?Math.round(distM)+' m':'—';
-              if(ph)    ph.textContent=phase;
-            }
-          }
-        });
-        const hud=document.getElementById('guidanceHud');
-        if(hud) hud.style.display='block';
-        HUD.log('ev-sys','Guidance started → '+targetZone.name);
-      },
-      webhookFn:(url,includeDevice)=>{
-        if(!url) return;
-        if(includeDevice && !(window.hasConsent && window.hasConsent('live-tracking'))){
-          HUD.log('ev-flick','webhook skipped — needs consent: live-tracking'); return;
-        }
-        const body={ event:e.kind, zone:e.zone.id, name:e.zone.name,
-                     project:(typeof BUNDLE!=='undefined'&&BUNDLE.project)||null, ts:Date.now() };
-        if(includeDevice){ try{ body.deviceId=localStorage.getItem('gp.device')||null; }catch(err){} }
-        let ctrl,to;
-        try{ ctrl=new AbortController(); to=setTimeout(()=>ctrl.abort(),5000); }catch(err){}
-        fetch(url,{ method:'POST', headers:{'content-type':'application/json'},
-            body:JSON.stringify(body), mode:'cors', keepalive:true, signal:ctrl?ctrl.signal:undefined })
-          .then(r=>HUD.log('ev-sys','webhook '+e.kind+' → '+e.zone.name+' ('+r.status+')'))
-          .catch(err=>HUD.log('ev-warn','webhook failed: '+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||err)))
-          .finally(()=>{ if(to) clearTimeout(to); });
-      },
-      allZones: BUNDLE.zones||[]
-    });
+    await PipelineRuntime.load(e.zone, pipelineCallbacks({kind:e.kind, zone:e.zone}));
     if(e.kind==='enter') PipelineRuntime.tick(e.zone.id, null, lastSmoothed, { entered:true });
     else if(e.kind==='exit'){ PipelineRuntime.tick(e.zone.id, null, lastSmoothed, { exited:true }); PipelineRuntime.unload(e.zone.id); }
   }
@@ -2027,6 +2040,7 @@ EngineKokoro.tryLoad();
     BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
     loadWalkingPaths(b);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
+    if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
     if(!HUD.pos) MapView.recenter(b.ref);
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
       // minGain/curve dropped: the fade curve is now the fixed, shared
@@ -2044,6 +2058,7 @@ EngineKokoro.tryLoad();
       BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
       loadWalkingPaths(b);
       if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
+    if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
       if(!HUD.pos) MapView.recenter(b.ref);
       if(document.getElementById('simZones')) buildSimZones();
       HUD.log('ev-sys','offline — loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' from saved copy');

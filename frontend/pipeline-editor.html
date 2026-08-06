@@ -7,6 +7,8 @@
 <script src="role-gate.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <script src="pipeline-runtime.js"></script>
+<script src="client-picker.js"></script>
+<script src="code-objects.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
@@ -26,6 +28,11 @@
   label.field{display:block;font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;
          letter-spacing:.5px;color:var(--fog);margin:10px 0 4px}
   .layout{display:flex;height:calc(100% - 52px)}
+  .library{width:220px;border-right:1px solid var(--rim);overflow-y:auto;padding:10px;flex:0 0 auto;
+         display:flex;flex-direction:column;gap:8px}
+  .library h3{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:2px 0 0}
+  .library-body{flex:1 1 auto;min-height:0}
+  #libraryClientNav{display:flex}
   .palette{width:180px;border-right:1px solid var(--rim);overflow-y:auto;padding:10px;flex:0 0 auto}
   .palette h3{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:12px 0 6px}
   .blk-card{background:var(--slate);border:1px solid var(--rim);border-radius:8px;padding:8px 10px;
@@ -69,6 +76,12 @@
 </div>
 <div id="errBanner"></div>
 <div class="layout">
+  <div class="library" id="libraryCol" style="display:none">
+    <div id="libraryClientNav"></div>
+    <button id="btnNewCodeObject" class="on">+ New Code Object</button>
+    <h3>Code Library</h3>
+    <div class="library-body" id="libraryBody"></div>
+  </div>
   <div class="palette" id="palette"></div>
   <div class="canvas-wrap">
     <svg id="svg"></svg>
@@ -80,12 +93,15 @@
 const qs = new URLSearchParams(location.search);
 const projectId = qs.get("project");
 const zoneId = qs.get("zone");
-const codeObjectId = qs.get("codeObject");
-const codeObjectOrg = qs.get("org");
-document.getElementById("backLink").href = codeObjectId
-  ? "/code-library?org=" + encodeURIComponent(codeObjectOrg || "")
-  : "/editor?app=" + encodeURIComponent(qs.get("app") || "") + "&project=" + encodeURIComponent(projectId || "");
-if (codeObjectId) document.getElementById("backLink").textContent = "← Back to Code Library";
+// codeObjectId is reassignable — picking a different object from the inline
+// library sidebar (see showLibrary()/onCardClick below) switches modes in
+// place instead of navigating to a separate page, per the merged-screen
+// redesign (the standalone code-library.html this used to link to is gone).
+let codeObjectId = qs.get("codeObject");
+let libraryOrgId = qs.get("org") || (window.ClientPicker && ClientPicker.resolve()) || "";
+// The library is now inline on this same screen (no separate page to have
+// come from), so the back link always just goes to the Fence Editor.
+document.getElementById("backLink").href = "/editor";
 
 let bundle = null, zone = null, pipeline = { v: 1, nodes: [], edges: [] };
 let selectedId = null;
@@ -107,22 +123,79 @@ function showErr(msg){
   el.textContent = msg; el.style.display = "block";
 }
 
+// The library sidebar only makes sense when there's no single owning zone
+// (raw zone.pipeline editing has no "library" concept) — shown for
+// code-object mode and for the blank "just landed here" state, hidden in
+// zone mode.
+let _libraryMounted = false;
+function showLibrary(){
+  document.getElementById("libraryCol").style.display = "flex";
+  if (window.ClientPicker && !_libraryMounted) {
+    ClientPicker.init({ navEl: document.getElementById("libraryClientNav"), onChange: (org) => { libraryOrgId = org; if (window.CodeObjects) CodeObjects.refresh(); } });
+    if (libraryOrgId) { try { localStorage.setItem("gp.activeClient", libraryOrgId); } catch (e) {} }
+  }
+  if (!_libraryMounted && window.CodeObjects) {
+    _libraryMounted = true;
+    CodeObjects.mount(document.getElementById("libraryBody"), {
+      embedded: true,
+      getOrgId: () => libraryOrgId,
+      getToken,
+      onCardClick: (id) => {
+        codeObjectId = id;
+        history.pushState(null, "", "/pipeline?codeObject=" + encodeURIComponent(id) + "&org=" + encodeURIComponent(libraryOrgId || ""));
+        loadCodeObject();
+      }
+    });
+  } else if (window.CodeObjects) {
+    // force=true: re-fetches past the org-keyed cache every time this runs
+    // (including right after this same page creates a new object via its
+    // own toolbar, or edits+saves one) so the sidebar never shows stale data.
+    CodeObjects.refresh(true);
+  }
+}
+document.getElementById("btnNewCodeObject").onclick = async () => {
+  if (!libraryOrgId) { alert("Select a customer first."); return; }
+  const name = (prompt('Name for the new code object (e.g. "Avalanche Warning"):') || "").trim();
+  if (!name) return;
+  try {
+    const r = await fetch("/api/code-objects", {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + getToken() },
+      body: JSON.stringify({ orgId: libraryOrgId, name, template: { v: 1, nodes: [], edges: [] }, paramSchema: [] })
+    });
+    if (!r.ok) { alert("Create failed: " + ((await r.json().catch(() => ({}))).error || r.status)); return; }
+    const created = await r.json();
+    codeObjectId = created.id;
+    history.pushState(null, "", "/pipeline?codeObject=" + encodeURIComponent(created.id) + "&org=" + encodeURIComponent(libraryOrgId));
+    await loadCodeObject(); // showLibrary() inside this also refreshes the sidebar so the new card appears
+  } catch (e) { alert("Create failed: " + e.message); }
+};
+
 async function load(){
   if (codeObjectId) return loadCodeObject();
-  if (!projectId || !zoneId){ showErr("Missing ?project= or ?zone= in URL"); return; }
-  const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle");
-  if (!r.ok){ showErr("Could not load bundle for project " + projectId); return; }
-  bundle = await r.json();
-  zone = (bundle.zones || []).find(z => z.id === zoneId);
-  if (!zone){ showErr("Zone " + zoneId + " not found in this project's bundle"); return; }
-  pipeline = zone.pipeline && zone.pipeline.v === 1 ? zone.pipeline : { v: 1, nodes: [], edges: [] };
-  nextId = 1 + pipeline.nodes.reduce((m, n) => Math.max(m, parseInt((n.id || "n0").slice(1)) || 0), 0);
-  document.getElementById("ctxLabel").textContent = (bundle.name || projectId) + " — " + zone.name;
+  if (projectId || zoneId) {
+    if (!projectId || !zoneId){ showErr("Missing ?project= or ?zone= in URL"); return; }
+    const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle");
+    if (!r.ok){ showErr("Could not load bundle for project " + projectId); return; }
+    bundle = await r.json();
+    zone = (bundle.zones || []).find(z => z.id === zoneId);
+    if (!zone){ showErr("Zone " + zoneId + " not found in this project's bundle"); return; }
+    pipeline = zone.pipeline && zone.pipeline.v === 1 ? zone.pipeline : { v: 1, nodes: [], edges: [] };
+    nextId = 1 + pipeline.nodes.reduce((m, n) => Math.max(m, parseInt((n.id || "n0").slice(1)) || 0), 0);
+    document.getElementById("ctxLabel").textContent = (bundle.name || projectId) + " — " + zone.name;
+    renderPalette();
+    render();
+    return;
+  }
+  // Landed with no params at all — just browse the library until a card is picked.
+  document.getElementById("ctxLabel").textContent = "pick an object from the library to start editing";
+  showLibrary();
   renderPalette();
   render();
 }
 
 async function loadCodeObject(){
+  showLibrary();
+  selectedId = null; // switching objects must not leave stale props showing for a node id that may not exist in the newly-loaded one
   const r = await fetch("/api/code-objects/" + encodeURIComponent(codeObjectId));
   if (!r.ok){ showErr("Could not load code object " + codeObjectId); return; }
   const def = await r.json();

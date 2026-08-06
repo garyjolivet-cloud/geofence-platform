@@ -1,10 +1,16 @@
 /* guidance-bot.js — precision positioning guidance module
  * Guides a visitor (phone in pocket) to a GPS spot and facing direction.
  * All instructions are relative: turn left/right, bear, slow down, stop.
- * Routes around zones flagged isHazard via Turf.js tangent waypoints.
- * Exposes window.GuidanceBot.
+ * Routes around hazard zones (the Hazard Zone Code Object, or the legacy
+ * isHazard boolean on an un-republished old bundle) via Turf.js tangent
+ * waypoints. Exposes window.GuidanceBot.
  */
 (function(){
+// Must match migrations/0026_hazard_code_object.sql's seeded id — duplicated
+// here rather than imported since this file loads standalone in the browser,
+// same as fence-editor.html's and pipeline-runtime.js's own copies of this
+// constant (this codebase's existing verbatim-mirror convention).
+const HAZARD_CODE_OBJECT_ID="hazard-zone";
 'use strict';
 
 // --- constants ---
@@ -143,7 +149,7 @@ function tangentVertices(P, hCoords){
 
 async function computeBypassWaypoints(userLatLon, targetLatLon, allZones){
   if(!userLatLon) return [];
-  const hazards=(allZones||[]).filter(z=>z.isHazard);
+  const hazards=(allZones||[]).filter(z=>z.isHazard || (z.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID));
   if(!hazards.length) return [];
   const turf=await loadTurf();
   if(!turf) return [];

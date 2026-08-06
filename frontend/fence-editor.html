@@ -545,22 +545,12 @@
       </div>
     </div>
 
-    <!-- Advanced collapsible — hazard flag + everything else that isn't
-         Voices & Audio or the pipeline lives here -->
+    <!-- Advanced collapsible — everything that isn't Voices & Audio lives here.
+         Hazard marking and per-stop behavior both now go through Code Objects
+         (drag from the floating palette) instead of a checkbox/raw pipeline
+         editor here — see #pCodeObjectsChips below. -->
     <div class="adv-toggle" id="advToggle"><span class="arr">▶</span> Advanced</div>
     <div class="adv-body" id="advBody">
-      <label class="chk" id="pHazardRow" style="margin:0 0 6px">
-        <input type="checkbox" id="pIsHazard"> ⚠️ Hazard zone — guidance routes visitors around this
-      </label>
-      <hr>
-      <!-- Pipeline: drag-and-drop function blocks (weather lookups, compares,
-           speak/guide/webhook actions) replace the old per-zone bot system. -->
-      <label class="k" style="margin-top:4px">🧩 Pipeline</label>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span class="hint" id="pPipelineSummary" style="flex:1">no pipeline set</span>
-        <button id="pPipelineEdit" class="ghost" style="flex:0 0 auto">Edit Pipeline →</button>
-      </div>
-
       <!-- Code Objects: reusable pre-built behaviors attached by reference,
            not hand-wired per stop. Attach/detach happens via the floating
            🧩 palette (drag onto this stop's row/marker, or select this stop
@@ -642,6 +632,9 @@
   <label class="chk" style="margin:0 0 4px" title="A template is a reusable master copy — front desk picks it to stamp out dated, guide-assigned tours from it. It is never run directly.">
     <input type="checkbox" id="isTemplateChk"> this is a template (not a specific dated tour)
   </label>
+  <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
+  <label class="k" style="margin:0">🌐 Global Code Objects — active on every GPS tick, not tied to a stop</label>
+  <div id="pGlobalCodeObjectsChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px"></div>
   <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
   <!-- dot buttons — click to reveal slider -->
   <div class="proj-dot-row">
@@ -1115,6 +1108,14 @@ function zoneGenR(z){ const s=z.shape;
   return z.approachM;
 }
 
+// Hazard marking is a Code Object (migrations/0026), not a per-zone boolean
+// — dragged onto a stop from the floating palette like any other reusable
+// behavior. This id must match that migration's seeded row exactly; it's
+// duplicated (not imported) in guidance-bot.js and pipeline-runtime.js per
+// this codebase's existing verbatim-mirror convention for shared constants
+// used across independently-loaded files.
+const HAZARD_CODE_OBJECT_ID="hazard-zone";
+function zoneIsHazard(z){ return (z.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID); }
 /* ---- create a stop with defaults ---- */
 function makeZone(name,shape){
   // Path stops get every field a normal stop has (they fire the full trigger
@@ -1122,7 +1123,7 @@ function makeZone(name,shape){
   const base={ id:uniqueZoneId(slug(name)), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1, loopAudio:true,
-           bearingDeg:90, isHazard:false,
+           bearingDeg:90,
            // Per-stop full-volume override — every stop gets its own ring
            // now, not just path stops. null means "use the project
            // default" (unchanged behavior until set).
@@ -1276,7 +1277,7 @@ function renderSourcesInner(){
         geometry:{type:"Polygon",coordinates:[ringFn(z.approachM)]}});
     }
     // target shape — zIdx lets map clicks identify the zone
-    const hz=!!z.isHazard;
+    const hz=zoneIsHazard(z);
     if(s.type==="circle") feats.push({type:"Feature",properties:{kind:"fill",zIdx:i,sel:selected,name:z.name,isHazard:hz},
         geometry:{type:"Polygon",coordinates:[circleRing(s.center,s.radiusM,64)]}});
     else if(s.type==="polygon") feats.push({type:"Feature",properties:{kind:"fill",zIdx:i,sel:selected,name:z.name,isHazard:hz},
@@ -1828,15 +1829,13 @@ function refreshProps(){
   fires.disabled = isTrip;
   document.getElementById("dwellRow").style.display=(!isTrip && z.fires==="dwell")?"flex":"none";
   document.getElementById("pDwell").value=z.dwellS;
-  updatePipelineSummary(z);
   updateCodeObjectsSummary(z);
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
-  document.getElementById("pIsHazard").checked = !!z.isHazard;
   updateVaSummary(z);
-  // Auto-expand Advanced when the zone already has pipeline/TTS content or
-  // the hazard flag set — a config that already exists shouldn't disappear
-  // into a collapsed section unnoticed.
-  const hasAdvContent=(z.pipeline&&z.pipeline.nodes&&z.pipeline.nodes.length>0)||(z.codeObjects&&z.codeObjects.length>0)||!!(z.say||"").trim()||!!z.isHazard;
+  // Auto-expand Advanced when the zone already has Code Objects or TTS
+  // content — a config that already exists shouldn't disappear into a
+  // collapsed section unnoticed.
+  const hasAdvContent=(z.codeObjects&&z.codeObjects.length>0)||!!(z.say||"").trim();
   const advTgl=document.getElementById("advToggle");
   const advBdy=document.getElementById("advBody");
   if(advTgl&&advBdy){
@@ -1869,13 +1868,6 @@ function updateVaSummary(zone){
     if(!hasClip||_paPlaying?.url!==clipUrl) pAudioStopPlay();
   }
 }
-function updatePipelineSummary(zone){
-  const el=document.getElementById("pPipelineSummary"); if(!el) return;
-  const nodes=(zone.pipeline&&zone.pipeline.nodes)||[];
-  if(!nodes.length){ el.textContent="no pipeline set"; return; }
-  const hasGuide=nodes.some(n=>n.type==="action.guide_to_zone");
-  el.textContent=nodes.length+" block"+(nodes.length===1?"":"s")+(hasGuide?" · guides visitor":"");
-}
 // obj.name/obj.icon (code_object rows, set via POST /api/code-objects with no
 // server-side sanitization) and zone.name are attacker-controllable — must
 // never go into innerHTML unescaped.
@@ -1899,13 +1891,31 @@ function updateCodeObjectsSummary(zone){
     };
   });
 }
-document.getElementById("pPipelineEdit").onclick=()=>{
-  if(sel<0) return;
-  const projectId=_currentProjectId||slug(projName())||"project";
-  const zoneId=zones[sel].id;
-  window.open("/pipeline?project="+encodeURIComponent(projectId)+"&zone="+encodeURIComponent(zoneId), "_blank");
-};
-
+// Same chip pattern as updateCodeObjectsSummary() above, but for
+// globalCodeObjects (Code Objects dropped on the map, not a stop) — lives
+// in the Project Settings popover since it's project-wide, not per-stop.
+function renderGlobalCodeObjectsChips(){
+  const el=document.getElementById("pGlobalCodeObjectsChips"); if(!el) return;
+  const list=globalCodeObjects||[];
+  if(!list.length){ el.innerHTML='<span class="hint">none attached — drag a 🧩 object onto empty map space (not a stop)</span>'; return; }
+  const cached=(typeof CodeObjects!=="undefined")?CodeObjects.getCached():[];
+  el.innerHTML=list.map(co=>{
+    const meta=cached.find(o=>o.id===co.objectId);
+    const label=meta?escHtml(meta.icon+" "+meta.name):escHtml(co.objectId);
+    return '<span class="chk" style="background:rgba(255,106,61,.1);border:1px solid var(--rim);border-radius:8px;padding:3px 6px;font-size:12px;display:inline-flex;align-items:center;gap:5px">'
+      +label+'<button data-oid="'+escHtml(co.objectId)+'" style="background:none;border:none;color:var(--fog);cursor:pointer;font-size:12px;padding:0">✕</button></span>';
+  }).join("");
+  el.querySelectorAll("button[data-oid]").forEach(btn=>{
+    btn.onclick=()=>{
+      CodeObjects.detach({codeObjects:globalCodeObjects}, btn.dataset.oid);
+      renderGlobalCodeObjectsChips();
+      autoSave();
+      // Live Test Mode session (if any) should reflect the detach immediately,
+      // not just on the next "▶ Test" click.
+      if(simMode && typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(globalCodeObjects, simPipelineCallbacks());
+    };
+  });
+}
 /* ---- map canvas drop — drag an audio clip from the Audio Files panel
    directly onto a map zone ---- */
 (function(){
@@ -1930,10 +1940,20 @@ document.getElementById("pPipelineEdit").onclick=()=>{
         const rect=canvas.getBoundingClientRect();
         const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
         const best=_nearestZone(pt);
-        if(best==null)return;
-        if(CodeObjects.attach(zones[best],codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
-          if(sel===best) updateCodeObjectsSummary(zones[best]);
-          render();
+        if(best!=null){
+          if(CodeObjects.attach(zones[best],codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
+            if(sel===best) updateCodeObjectsSummary(zones[best]);
+            render();
+          }
+        } else if(CodeObjects.attach({codeObjects:globalCodeObjects},codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
+          // Dropped on empty map, not near any stop — attach as a project-
+          // wide "global function" (runs every GPS tick, not tied to a
+          // zone) instead of no-op'ing. {codeObjects:globalCodeObjects}
+          // wraps the real array by reference, so attach()'s push mutates
+          // globalCodeObjects itself, same trick used for real zones.
+          renderGlobalCodeObjectsChips();
+          autoSave();
+          if(simMode && typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(globalCodeObjects, simPipelineCallbacks());
         }
         return;
       }
@@ -2036,7 +2056,6 @@ document.getElementById("pVolume").addEventListener("input",()=>{
   autoSave();
 });
 bindProp("pBearing",z=>{ const v=document.getElementById("pBearing").value; z.bearingDeg=(v!==""&&v!==null)?(+v+360)%360:null; });
-document.getElementById("pIsHazard").addEventListener("change",()=>{ if(sel<0)return; zones[sel].isHazard=document.getElementById("pIsHazard").checked; render(); });
 document.getElementById("pLoopAudio").addEventListener("change",()=>{ if(sel<0)return; zones[sel].loopAudio=document.getElementById("pLoopAudio").checked; autoSave(); });
 
 /* ---- per-stop audio upload to R2 (spatial audio source) ---- */
@@ -2361,6 +2380,12 @@ const WP_COLOR_PALETTE=["#ffc24d","#38e0a6","#5eb1ff","#ff6a9d","#c792ff","#ffab
 let selectedWalkingPathIds=[];
 let walkingPathsActive=[]; // [{id,name,points,elev,cumM,cumGainM,cumLossM,totalGainM,totalLossM,color},...]
 let _pathWalkStartT=null, _pathWalkStartDistM=null, _pathWalkStartPathId=null; // locked in on the first on-path tick each walk; reset when the snapped-to path changes; cleared by SimFencer.reset()
+
+// Project-wide "global functions" — Code Objects dropped on the map rather
+// than a specific stop (setupMapDrop's fallback below), executed every GPS
+// tick regardless of which zone (if any) the visitor is in. Same
+// {objectId,version,params} reference shape as zone.codeObjects.
+let globalCodeObjects=[];
 async function loadWalkingPaths(){
   const appId=afAppId();
   if(!appId){ walkingPaths=[]; walkingPathFolders=[]; return; }
@@ -2651,6 +2676,7 @@ function toggleProjectSettingsPopover(anchorBtn){
   const pop=document.getElementById("projSettingsPopover");
   if(pop.style.display!=="none"){ closeProjectSettingsPopover(); return; }
   closeStopFolderMenus();
+  renderGlobalCodeObjectsChips();
   pop.style.display="flex"; pop.style.visibility="hidden";
   const ar=anchorBtn.getBoundingClientRect(), mr=pop.getBoundingClientRect();
   let top=ar.bottom+4;
@@ -2923,7 +2949,7 @@ function buildZoneRow(i){
   const z=zones[i];
   const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
   const cue=z.shape.type==="path"?"ambient":(z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive"));
-  const hzBadge=z.isHazard?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
+  const hzBadge=zoneIsHazard(z)?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
   const coBadge=(z.codeObjects&&z.codeObjects.length)?'<span title="'+z.codeObjects.length+' code object'+(z.codeObjects.length===1?'':'s')+' attached" style="font-size:10px;margin-left:3px;vertical-align:middle">🧩'+(z.codeObjects.length>1?'×'+z.codeObjects.length:'')+'</span>':'';
   const bulkChk=coBulkMode?'<input type="checkbox" class="co-bulk-chk" style="margin-right:6px;accent-color:var(--coral)" '+(coBulkSel.has(z.id)?"checked":"")+'>':'';
   d.innerHTML='<div class="t">'+bulkChk+'<b class="cond">'+esc(z.name)+hzBadge+coBadge+'</b>'
@@ -3191,7 +3217,6 @@ function zoneToEngine(z){
   if(z.volume!=null && Math.abs(z.volume-1)>0.001) zo.volume=z.volume;
   if(z.loopAudio===false) zo.loopAudio=false;
   if(z.bearingDeg!=null) zo.bearingDeg=z.bearingDeg;
-  if(z.isHazard) zo.isHazard=true;
   // Per-stop hearing-range override — every stop, not just path stops.
   if(z.spatialClearM!=null) zo.spatialClearM=z.spatialClearM;
   // Editor-only organization (this project's own stop_folder tree, separate
@@ -3233,6 +3258,7 @@ function exportBundle(){
               liveTtlMs:+document.getElementById("liveTtlMs").value,
               audioRetriggerDelayS:+document.getElementById("audioRetriggerDelayS").value,
               walkingPathIds:selectedWalkingPathIds.slice(),
+              globalCodeObjects:globalCodeObjects.slice(),
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -3267,9 +3293,16 @@ function engineToZone(zo,legacyPathId){
   });
   if(zo.audioUrl) z.audioUrl=zo.audioUrl;
   if(zo.bearingDeg!=null) z.bearingDeg=zo.bearingDeg;
-  if(zo.isHazard) z.isHazard=true;
   if(zo.pipeline&&Array.isArray(zo.pipeline.nodes)) z.pipeline=zo.pipeline;
   if(zo.codeObjects&&Array.isArray(zo.codeObjects)) z.codeObjects=zo.codeObjects;
+  // One-time self-heal for bundles published before hazard became a Code
+  // Object: a legacy zo.isHazard:true with no matching Code Object gets the
+  // Hazard Zone object attached automatically the moment the project is
+  // reopened here, so it renders/behaves correctly without any manual data
+  // fix. Republishing afterward stops writing the legacy field at all.
+  if(zo.isHazard && !(z.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID)){
+    z.codeObjects=(z.codeObjects||[]).concat([{objectId:HAZARD_CODE_OBJECT_ID,version:1,params:{}}]);
+  }
   // Per-stop hearing-range override — every stop, not just path stops.
   z.spatialClearM=zo.spatialClearM??null;
   // Stop tree folder — resolved against the live folder list at render time
@@ -3316,6 +3349,8 @@ document.getElementById("importBtn").onclick=()=>{
     if(b.liveTtlMs) document.getElementById("liveTtlMs").value=String(b.liveTtlMs);
     if(b.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=String(b.audioRetriggerDelayS);
     loadActiveWalkingPathData(Array.isArray(b.walkingPathIds)?b.walkingPathIds:(b.walkingPathId?[b.walkingPathId]:[]));
+    globalCodeObjects=Array.isArray(b.globalCodeObjects)?b.globalCodeObjects.slice():[];
+    renderGlobalCodeObjectsChips();
     render(); refreshProps();
     const c=zones.length?zoneCenterLonLat(zones[0]):REF; map.flyTo({center:c,zoom:16});
     document.getElementById("status").textContent="imported "+zones.length+" stops — click one to edit";
@@ -4257,7 +4292,7 @@ function editorToSimBundle(){
       layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       pipeline:(z.pipeline&&Array.isArray(z.pipeline.nodes)&&z.pipeline.nodes.length)?z.pipeline:null,
       codeObjects:(z.codeObjects&&z.codeObjects.length)?z.codeObjects:[],
-      bearingDeg:z.bearingDeg!=null?z.bearingDeg:null,isHazard:!!z.isHazard};
+      bearingDeg:z.bearingDeg!=null?z.bearingDeg:null};
     if(s.type==="path"){
       out.path=s.coords.map(c=>[c[1],c[0]]);
       out.movementMode=z.movementMode||"walk";
@@ -4270,7 +4305,8 @@ function editorToSimBundle(){
   const cs=simZones.filter(z=>z.center);
   const ref=cs.length?[cs.reduce((s,z)=>s+z.center[0],0)/cs.length,cs.reduce((s,z)=>s+z.center[1],0)/cs.length]:[0,0];
   return{name:slug(projName())||"project",ref,zones:simZones,
-    spatialRangeM:farM,spatialClearM:clearM,spatialTuning:AudioLab.getTuning()};
+    spatialRangeM:farM,spatialClearM:clearM,spatialTuning:AudioLab.getTuning(),
+    globalCodeObjects:globalCodeObjects.slice()};
 }
 
 // Trigger (farM) + full-volume (clearM) radii for a sim-bundle zone (which
@@ -4312,6 +4348,9 @@ function feedSim(lat,lon,acc,t){
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;
+  // Global functions (Code Objects dropped on the map, not a stop) run on
+  // every simulated fix regardless of which zone (if any) is active.
+  if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.tickGlobal) PipelineRuntime.tickGlobal({lat,lon,acc,t}, simLastSmoothed);
   // find nearest zone for spatial audio — raw position, same reason as
   // SimFencer above: the smoothed position can lag well behind raw at high
   // sim-test speeds (a fast simulated walk/teleport-style jump followed by
@@ -4460,6 +4499,17 @@ function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)ret
   d.textContent=new Date().toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit",second:"2-digit"})+"  "+msg;
   el.prepend(d);while(el.children.length>120)el.removeChild(el.lastChild);}
 
+// Shared sayFn/guideStartFn/webhookFn closures for PipelineRuntime.load()
+// (per-zone) and .loadGlobal() (project-wide global functions) in Test
+// Mode — factored out so both call sites build identical callbacks.
+function simPipelineCallbacks(){
+  return {
+    sayFn:(text)=>{ simLogEv("sev-say","[pipeline] SAY \""+text+"\""); if(simSoundOn) simTTS(text); },
+    guideStartFn:(targetZone)=>{ simLogEv("sev-sys","[pipeline] guide_to_zone → "+targetZone.name); simStartGuidance(targetZone); },
+    webhookFn:(url)=>{ simLogEv("sev-sys","[pipeline] webhook → "+url); },
+    allZones: simBundle.zones
+  };
+}
 SimFencer.onEvent=async e=>{
   const who=e.subject&&e.subject!=="visitor"?"["+e.subject+"] ":"";
   if(e.kind==="enter"){
@@ -4472,12 +4522,7 @@ SimFencer.onEvent=async e=>{
         // load() is async (it may fetch attached code-object definitions) —
         // must await before the first tick() or zone_enter could fire before
         // the compiled graph exists yet.
-        await PipelineRuntime.load(e.zone, {
-          sayFn:(text)=>{ simLogEv("sev-say","[pipeline] SAY \""+text+"\""); if(simSoundOn) simTTS(text); },
-          guideStartFn:(targetZone)=>{ simLogEv("sev-sys","[pipeline] guide_to_zone → "+targetZone.name); simStartGuidance(targetZone); },
-          webhookFn:(url)=>{ simLogEv("sev-sys","[pipeline] webhook → "+url); },
-          allZones: simBundle.zones
-        });
+        await PipelineRuntime.load(e.zone, simPipelineCallbacks());
         PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { entered:true });
       }
     }
@@ -4517,6 +4562,7 @@ function enterTestMode(){
   selectZone(-1);
   simBundle=editorToSimBundle();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
+  if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(simBundle.globalCodeObjects||[], simPipelineCallbacks());
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   // unlock AudioContext now while we're inside the button click gesture
   SimVoice.ensure();
