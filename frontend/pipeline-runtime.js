@@ -122,7 +122,13 @@ const BLOCKS = {
   "action.speak": {
     label: "Speak", category: "action",
     inputs: [{ id: "in", type: "gate" }], outputs: [],
-    params: [{ id: "text", type: "text", default: "", label: "Text ({{node.port}} to interpolate)" }]
+    // interpolatable: true flags this specific param as one interpolate()
+    // actually processes at tick time (see evalGraph's "action.speak" case) —
+    // pipeline-editor.html uses this flag to decide which text fields get the
+    // "insert value" picker + broken-reference validation, since e.g.
+    // action.webhook's url param below looks like free text too but is
+    // never run through interpolate().
+    params: [{ id: "text", type: "text", default: "", label: "Text", interpolatable: true }]
   },
   "action.guide_to_zone": {
     label: "Guide To Zone", category: "action",

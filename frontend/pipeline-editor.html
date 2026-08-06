@@ -23,6 +23,7 @@
          font-size:13px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:9px;
          padding:8px 14px;cursor:pointer}
   button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  button.ghost{background:none}
   input,select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px 10px;width:100%}
   label.field{display:block;font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;
@@ -64,6 +65,19 @@
   #errBanner{display:none;background:var(--hazard);color:#fff;font-family:"Barlow Condensed";font-size:12px;
          padding:6px 16px}
   #saveMsg{font-family:"Barlow Condensed";font-size:12px;color:var(--go)}
+  .insert-row{display:flex;gap:6px;align-items:center;margin-top:4px}
+  .insert-row button{flex:0 0 auto;font-size:11px;padding:5px 8px}
+  .field-warn{font-family:"Barlow Condensed";font-size:11px;color:var(--hazard);margin-top:4px;line-height:1.3}
+  .node-id-tag{fill:var(--fog);font-family:"Barlow Condensed";font-size:9px;opacity:.7}
+  .insert-menu{position:fixed;z-index:600;background:var(--slate-2);border:1px solid var(--rim);
+         border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.45);min-width:220px;max-height:60vh;overflow-y:auto}
+  .insert-menu button{display:block;width:100%;text-align:left;background:none;border:none;
+         color:var(--snow);padding:8px 10px;font-family:"Barlow Condensed";font-size:12px;cursor:pointer;
+         border-radius:0}
+  .insert-menu button:hover{background:rgba(255,255,255,.06)}
+  .insert-menu .port-name{color:var(--ice)}
+  .insert-menu .node-hint{color:var(--fog);font-size:10px}
+  .insert-menu .empty{padding:10px;color:var(--fog);font-size:12px;cursor:default}
 </style>
 </head>
 <body>
@@ -308,6 +322,15 @@ function renderNode(node){
   title.textContent = def.label;
   g.appendChild(title);
 
+  // Faint node-id tag — not needed to use the graph day-to-day (the "Insert
+  // value" picker never requires typing/reading one), but visible here for
+  // anyone debugging a saved template directly (e.g. via the API) instead
+  // of needing dev tools to find out "what is n10".
+  const idTag = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  idTag.setAttribute("class", "node-id-tag"); idTag.setAttribute("x", 10); idTag.setAttribute("y", hgt - 6);
+  idTag.textContent = node.id;
+  g.appendChild(idTag);
+
   const delX = document.createElementNS("http://www.w3.org/2000/svg", "text");
   delX.setAttribute("class", "del-x"); delX.setAttribute("x", NODE_W - 14); delX.setAttribute("y", 17);
   delX.textContent = "✕";
@@ -418,6 +441,83 @@ function defaultParams(type){
 }
 
 /* ===================== Property panel ===================== */
+/* ===================== Interpolation helpers ===================== */
+// Finds every {{nodeId.portId}} reference in text that doesn't resolve to a
+// real node+output in the current graph — catches exactly the class of bug
+// that made a saved Speak text silently go blank at runtime (a stale/typo'd
+// node id from hand-editing) instead of only surfacing after a live test.
+function findBrokenRefs(text, nodes){
+  if (!text) return [];
+  const byId = {}; nodes.forEach(n => byId[n.id] = n);
+  const broken = [];
+  const re = /\{\{(\w+)\.(\w+)\}\}/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const nodeId = m[1], portId = m[2];
+    const node = byId[nodeId];
+    const def = node && PipelineRuntime.BLOCKS[node.type];
+    const hasPort = def && def.outputs.some(p => p.id === portId);
+    if (!hasPort) broken.push(nodeId + "." + portId);
+  }
+  return broken;
+}
+function insertAtCursor(input, snippet){
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, start) + snippet + input.value.slice(end);
+  const pos = start + snippet.length;
+  input.focus();
+  input.setSelectionRange(pos, pos);
+  // Fires the same "input" listener renderProps() already wires up, so
+  // node.params stays in sync without a separate write path here.
+  input.dispatchEvent(new Event("input"));
+}
+// Every currently-available {{id.port}} value in the graph, as a pick-list —
+// this is the actual "make it obvious" fix: nobody types or memorizes a node
+// id, they just click what they mean. Positioned like the small self-
+// contained menus in code-objects.js (document.body + position:fixed,
+// clamped to the viewport, since this page has no shared menu helper).
+function openInsertMenu(anchorBtn, input){
+  document.querySelectorAll(".insert-menu").forEach(m => m.remove());
+  const menu = document.createElement("div");
+  menu.className = "insert-menu";
+  menu.style.top = "0"; menu.style.left = "0"; menu.style.visibility = "hidden";
+  const options = [];
+  pipeline.nodes.forEach(n => {
+    const def = PipelineRuntime.BLOCKS[n.type];
+    if (!def) return;
+    def.outputs.forEach(p => options.push({ node: n, def, port: p }));
+  });
+  if (!options.length) {
+    const e = document.createElement("div"); e.className = "empty";
+    e.textContent = "no other blocks with outputs on the canvas yet";
+    menu.appendChild(e);
+  } else {
+    options.forEach(o => {
+      const b = document.createElement("button"); b.type = "button";
+      b.innerHTML = o.def.label + " <span class=\"port-name\">→ " + o.port.id + "</span>"
+        + " <span class=\"node-hint\">(" + o.node.id + ")</span>";
+      b.onclick = (e) => {
+        e.stopPropagation();
+        insertAtCursor(input, "{{" + o.node.id + "." + o.port.id + "}}");
+        menu.remove();
+      };
+      menu.appendChild(b);
+    });
+  }
+  document.body.appendChild(menu);
+  const ar = anchorBtn.getBoundingClientRect(), mr = menu.getBoundingClientRect();
+  let top = ar.bottom + 4;
+  if (top + mr.height > window.innerHeight) top = Math.max(4, ar.top - mr.height - 4);
+  let left = Math.min(ar.left, window.innerWidth - mr.width - 4);
+  menu.style.top = top + "px"; menu.style.left = Math.max(4, left) + "px"; menu.style.visibility = "visible";
+}
+document.addEventListener("mousedown", (e) => {
+  if (!e.target.closest(".insert-menu") && !e.target.closest(".insert-row")) {
+    document.querySelectorAll(".insert-menu").forEach(m => m.remove());
+  }
+});
+
 function renderProps(){
   const el = document.getElementById("props");
   const node = pipeline.nodes.find(n => n.id === selectedId);
@@ -445,10 +545,32 @@ function renderProps(){
     } else {
       input = document.createElement("input"); input.type = "text"; input.value = node.params[p.id] ?? p.default ?? "";
     }
+    let warnEl = null;
+    if (p.interpolatable) {
+      warnEl = document.createElement("div");
+      warnEl.className = "field-warn"; warnEl.style.display = "none";
+      const refreshWarn = () => {
+        const broken = findBrokenRefs(input.value, pipeline.nodes);
+        if (broken.length) { warnEl.textContent = "⚠ " + broken.join(", ") + " — no block on the canvas has that id/value. Use \"➕ Insert value\" instead of typing this by hand."; warnEl.style.display = "block"; }
+        else warnEl.style.display = "none";
+      };
+      input.addEventListener("input", refreshWarn);
+      refreshWarn();
+    }
     input.addEventListener("input", () => {
       node.params[p.id] = p.type === "boolean" ? input.checked : p.type === "number" ? Number(input.value) : input.value;
     });
     el.appendChild(input);
+    if (p.interpolatable) {
+      const row = document.createElement("div"); row.className = "insert-row";
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = "ghost";
+      btn.textContent = "➕ Insert value";
+      btn.title = "Pick a value from another block on the canvas instead of typing {{...}} by hand";
+      btn.onclick = (e) => { e.stopPropagation(); openInsertMenu(btn, input); };
+      row.appendChild(btn);
+      el.appendChild(row);
+      el.appendChild(warnEl);
+    }
 
     if (codeObjectId) {
       const key = node.id + ":" + p.id;
@@ -472,6 +594,23 @@ function renderProps(){
 document.getElementById("saveBtn").addEventListener("click", async () => {
   const { cyclic } = PipelineRuntime.topoSort(pipeline.nodes, pipeline.edges);
   if (cyclic) { showErr("Pipeline has a cycle — remove a connection before saving"); return; }
+  // Block saving a graph with a dangling {{id.port}} reference — this is the
+  // exact bug class that made a previously-working Speak text silently go
+  // blank after edits (a stale node id left over from an earlier version).
+  // Catch it here instead of only after a live test.
+  const brokenByNode = [];
+  pipeline.nodes.forEach(n => {
+    const def = PipelineRuntime.BLOCKS[n.type];
+    (def.params || []).forEach(p => {
+      if (!p.interpolatable) return;
+      const broken = findBrokenRefs(n.params && n.params[p.id], pipeline.nodes);
+      if (broken.length) brokenByNode.push(def.label + " (" + n.id + "): " + broken.join(", "));
+    });
+  });
+  if (brokenByNode.length) {
+    showErr("Fix before saving — these references don't match any block on the canvas: " + brokenByNode.join(" · "));
+    return;
+  }
   showErr(null);
   const token = getToken();
   const msg = document.getElementById("saveMsg");
