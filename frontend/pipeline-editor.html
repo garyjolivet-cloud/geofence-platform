@@ -30,12 +30,19 @@
   label.field{display:block;font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;
          letter-spacing:.5px;color:var(--fog);margin:10px 0 4px}
   .layout{display:flex;height:calc(100% - 52px)}
-  .library{width:220px;border-right:1px solid var(--rim);overflow-y:auto;padding:10px;flex:0 0 auto;
+  .library{width:220px;min-width:160px;max-width:60vw;resize:horizontal;overflow:auto;
+         border-right:1px solid var(--rim);padding:10px;flex:0 0 auto;
          display:flex;flex-direction:column;gap:8px}
   .library h3{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:2px 0 0}
   .library-body{flex:1 1 auto;min-height:0}
   #libraryClientNav{display:flex}
-  .palette{width:180px;border-right:1px solid var(--rim);overflow-y:auto;padding:10px;flex:0 0 auto}
+  /* All three side columns use the same drag-to-resize pattern as the Audio
+     Studio/Chatterbox rails (resize:horizontal + flex:0 0 auto — a fixed
+     flex-basis is required or the flex layout overrides any manual resize) —
+     drag the handle at each column's bottom-right corner to trade space
+     between it and its neighbor. */
+  .palette{width:180px;min-width:120px;max-width:50vw;resize:horizontal;overflow:auto;
+         border-right:1px solid var(--rim);padding:10px;flex:0 0 auto}
   .palette h3{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:12px 0 6px}
   .blk-card{background:var(--slate);border:1px solid var(--rim);border-radius:8px;padding:8px 10px;
          margin-bottom:6px;cursor:grab;font-family:"Barlow Condensed";font-size:13px}
@@ -60,7 +67,8 @@
   .pedge.gate{stroke:var(--amber)}
   .pedge-temp{fill:none;stroke:var(--coral);stroke-width:2;stroke-dasharray:4 3}
   .del-x{fill:var(--hazard);cursor:pointer;font-family:"Barlow Condensed";font-size:12px}
-  .props{width:240px;border-left:1px solid var(--rim);padding:12px;flex:0 0 auto;overflow-y:auto}
+  .props{width:240px;min-width:180px;max-width:60vw;resize:horizontal;overflow:auto;
+         border-left:1px solid var(--rim);padding:12px;flex:0 0 auto}
   .props h3{font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin:0 0 8px}
   .props .empty{font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
   #errBanner{display:none;background:var(--hazard);color:#fff;font-family:"Barlow Condensed";font-size:12px;
