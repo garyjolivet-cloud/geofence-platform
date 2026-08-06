@@ -69,6 +69,20 @@
   .insert-row{display:flex;gap:6px;align-items:center;margin-top:4px}
   .insert-row button{flex:0 0 auto;font-size:11px;padding:5px 8px}
   .field-warn{font-family:"Barlow Condensed";font-size:11px;color:var(--hazard);margin-top:4px;line-height:1.3}
+  /* Chip field — the non-programmer-facing replacement for typing/seeing raw
+     {{n10.pctComplete}} text. Looks/behaves like the plain textarea next to
+     it (same font/colors/padding) but inserted values render as rounded
+     pill tokens with a plain-English label instead of the bracket syntax;
+     the underlying {{id.port}} text is only ever reconstructed on save
+     (see serializeChipField) — findBrokenRefs/interpolate() never change. */
+  .chip-field{min-height:60px;max-height:240px;overflow-y:auto;font-family:"Barlow Condensed";
+         font-size:13px;background:var(--slate-2);color:var(--snow);border:1px solid var(--rim);
+         border-radius:8px;padding:7px 10px;line-height:1.8;white-space:pre-wrap;word-break:break-word}
+  .chip-field:focus{outline:2px solid var(--coral);outline-offset:-1px}
+  .chip{display:inline-flex;align-items:center;background:rgba(255,106,61,.18);border:1px solid var(--coral);
+         color:var(--coral);border-radius:999px;padding:1px 9px;margin:0 1px;font-size:12px;font-weight:600;
+         white-space:nowrap;cursor:default}
+  .chip.broken{background:rgba(255,47,78,.18);border-color:var(--hazard);color:var(--hazard)}
   .node-id-tag{fill:var(--fog);font-family:"Barlow Condensed";font-size:9px;opacity:.7}
   .insert-menu{position:fixed;z-index:600;background:var(--slate-2);border:1px solid var(--rim);
          border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.45);min-width:220px;max-height:60vh;overflow-y:auto}
@@ -470,23 +484,127 @@ function findBrokenRefs(text, nodes){
   }
   return broken;
 }
-function insertAtCursor(input, snippet){
-  const start = input.selectionStart ?? input.value.length;
-  const end = input.selectionEnd ?? input.value.length;
-  input.value = input.value.slice(0, start) + snippet + input.value.slice(end);
-  const pos = start + snippet.length;
-  input.focus();
-  input.setSelectionRange(pos, pos);
-  // Fires the same "input" listener renderProps() already wires up, so
-  // node.params stays in sync without a separate write path here.
-  input.dispatchEvent(new Event("input"));
+/* ---- Chip field: renders {{id.port}} references as plain-English pill
+   tokens instead of bracket syntax, for non-programmer editing. The stored
+   value (node.params[p.id]) and everything downstream — findBrokenRefs(),
+   the runtime's interpolate() — never see anything but the original
+   {{id.port}} text; chips are purely a display/input convenience layered
+   on top via a contenteditable div. ---- */
+function chipRefText(nodeId, portId){ return "{{" + nodeId + "." + portId + "}}"; }
+// What a chip should say — the block's label + the port's human label (now
+// set on every output in pipeline-runtime.js's BLOCKS registry), e.g.
+// "Walking Path Progress → % Complete". Falls back to the raw ids for a
+// stale/broken reference so it's still identifiable (and still editable —
+// selecting it and hitting Insert value replaces it with a working one).
+function describeRef(nodeId, portId, nodes){
+  const node = nodes.find(n => n.id === nodeId);
+  const def = node && PipelineRuntime.BLOCKS[node.type];
+  const port = def && def.outputs.find(p => p.id === portId);
+  if (!def || !port) return { text: "⚠ " + nodeId + "." + portId, broken: true };
+  return { text: def.label + " → " + (port.label || port.id), broken: false };
+}
+function buildChip(nodeId, portId){
+  const { text, broken } = describeRef(nodeId, portId, pipeline.nodes);
+  const chip = document.createElement("span");
+  chip.className = "chip" + (broken ? " broken" : "");
+  chip.contentEditable = "false";
+  chip.dataset.nodeId = nodeId; chip.dataset.portId = portId;
+  chip.textContent = text;
+  return chip;
+}
+// Parses stored {{id.port}} text into a mix of plain text nodes + chip
+// spans and fills `field` with it. Called on first render of a node's
+// props, and any time the selected node changes.
+function renderChipField(field, text){
+  field.innerHTML = "";
+  const re = /\{\{(\w+)\.(\w+)\}\}/g;
+  let last = 0, m;
+  while ((m = re.exec(text || ""))) {
+    if (m.index > last) field.appendChild(document.createTextNode(text.slice(last, m.index)));
+    field.appendChild(buildChip(m[1], m[2]));
+    last = m.index + m[0].length;
+  }
+  if (last < (text || "").length) field.appendChild(document.createTextNode(text.slice(last)));
+}
+// Reverse of the above — walks the live DOM back into {{id.port}} text, the
+// only form findBrokenRefs()/the runtime's interpolate() understand.
+function serializeChipField(field){
+  let out = "";
+  field.childNodes.forEach(node => {
+    if (node.nodeType === 3) out += node.nodeValue;
+    else if (node.classList && node.classList.contains("chip")) out += chipRefText(node.dataset.nodeId, node.dataset.portId);
+  });
+  return out;
+}
+function chipAdjacentToCursor(range, dir){
+  const { startContainer, startOffset } = range;
+  if (startContainer.nodeType === 3) {
+    if (dir === "before" && startOffset === 0) return startContainer.previousSibling;
+    if (dir === "after" && startOffset === startContainer.length) return startContainer.nextSibling;
+    return null;
+  }
+  const idx = dir === "before" ? startOffset - 1 : startOffset;
+  return startContainer.childNodes[idx] || null;
+}
+function isChipEl(el){ return el && el.nodeType === 1 && el.classList && el.classList.contains("chip"); }
+// Native contenteditable backspace next to a contenteditable=false span
+// usually takes two presses (select, then delete) — not the single atomic
+// delete a non-programmer expects from a "token". Intercept and remove the
+// whole chip in one press instead.
+function wireChipAtomicDelete(field){
+  field.addEventListener("keydown", (e) => {
+    if (e.key !== "Backspace" && e.key !== "Delete") return;
+    const sel = document.getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    const chip = chipAdjacentToCursor(range, e.key === "Backspace" ? "before" : "after");
+    if (!isChipEl(chip)) return;
+    e.preventDefault();
+    chip.remove();
+    field.dispatchEvent(new Event("input"));
+  });
+}
+// Tracks the last real caret position inside a chip field while it's
+// focused — needed because clicking the "Insert value" button (outside the
+// field) blurs it, and by the time its click handler runs there's no
+// selection left inside the field to insert at.
+let _chipCaret = null;
+document.addEventListener("selectionchange", () => {
+  const sel = document.getSelection();
+  if (!sel.rangeCount) return;
+  const active = document.activeElement;
+  if (active && active.classList && active.classList.contains("chip-field")) {
+    _chipCaret = { field: active, range: sel.getRangeAt(0).cloneRange() };
+  }
+});
+function insertChipAtField(field, nodeId, portId){
+  const chip = buildChip(nodeId, portId);
+  let range = (_chipCaret && _chipCaret.field === field) ? _chipCaret.range : null;
+  if (!range || !field.contains(range.startContainer)) {
+    range = document.createRange();
+    range.selectNodeContents(field);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  range.insertNode(chip);
+  const spacer = document.createTextNode(" ");
+  chip.after(spacer);
+  range = document.createRange();
+  range.setStartAfter(spacer); range.setEndAfter(spacer);
+  const sel = document.getSelection();
+  sel.removeAllRanges(); sel.addRange(range);
+  field.focus();
+  _chipCaret = { field, range: range.cloneRange() };
+  field.dispatchEvent(new Event("input"));
 }
 // Every currently-available {{id.port}} value in the graph, as a pick-list —
 // this is the actual "make it obvious" fix: nobody types or memorizes a node
-// id, they just click what they mean. Positioned like the small self-
-// contained menus in code-objects.js (document.body + position:fixed,
-// clamped to the viewport, since this page has no shared menu helper).
-function openInsertMenu(anchorBtn, input){
+// id, they just click what they mean. Gate-type outputs (trigger pulses,
+// logic results) are left out — they're only ever true/false, not a
+// meaningful thing to speak. Positioned like the small self-contained menus
+// in code-objects.js (document.body + position:fixed, clamped to the
+// viewport, since this page has no shared menu helper).
+function openInsertMenu(anchorBtn, field){
   document.querySelectorAll(".insert-menu").forEach(m => m.remove());
   const menu = document.createElement("div");
   menu.className = "insert-menu";
@@ -495,20 +613,20 @@ function openInsertMenu(anchorBtn, input){
   pipeline.nodes.forEach(n => {
     const def = PipelineRuntime.BLOCKS[n.type];
     if (!def) return;
-    def.outputs.forEach(p => options.push({ node: n, def, port: p }));
+    def.outputs.filter(p => p.type !== "gate").forEach(p => options.push({ node: n, def, port: p }));
   });
   if (!options.length) {
     const e = document.createElement("div"); e.className = "empty";
-    e.textContent = "no other blocks with outputs on the canvas yet";
+    e.textContent = "no other blocks with values on the canvas yet";
     menu.appendChild(e);
   } else {
     options.forEach(o => {
       const b = document.createElement("button"); b.type = "button";
-      b.innerHTML = o.def.label + " <span class=\"port-name\">→ " + o.port.id + "</span>"
+      b.innerHTML = o.def.label + " <span class=\"port-name\">→ " + (o.port.label || o.port.id) + "</span>"
         + " <span class=\"node-hint\">(" + o.node.id + ")</span>";
       b.onclick = (e) => {
         e.stopPropagation();
-        insertAtCursor(input, "{{" + o.node.id + "." + o.port.id + "}}");
+        insertChipAtField(field, o.node.id, o.port.id);
         menu.remove();
       };
       menu.appendChild(b);
@@ -538,6 +656,7 @@ function renderProps(){
     const label = document.createElement("label"); label.className = "field"; label.textContent = p.label || p.id;
     el.appendChild(label);
     let input;
+    let isChipField = false;
     if (p.type === "select") {
       input = document.createElement("select");
       p.options.forEach(o => { const opt = document.createElement("option"); opt.value = o; opt.textContent = o; input.appendChild(opt); });
@@ -551,12 +670,22 @@ function renderProps(){
       input.checked = !!(node.params[p.id] ?? p.default);
     } else if (p.type === "number") {
       input = document.createElement("input"); input.type = "number"; input.value = node.params[p.id] ?? p.default;
+    } else if (p.interpolatable) {
+      // Chip field instead of a plain textarea — {{id.port}} references
+      // render as plain-English pill tokens (see renderChipField/buildChip
+      // above), so a non-programmer editing a Speak line never has to read
+      // or type bracket-and-dot syntax. The underlying text (with brackets)
+      // only exists again once serializeChipField() reconstructs it, on
+      // every "input" event and again right before Save.
+      isChipField = true;
+      input = document.createElement("div");
+      input.className = "chip-field"; input.contentEditable = "true";
+      renderChipField(input, node.params[p.id] ?? p.default ?? "");
+      wireChipAtomicDelete(input);
     } else {
-      // textarea, not a single-line input — a Speak line (or any other text
-      // param) is easy to lose the end of in a 240px-wide panel otherwise.
-      // Auto-grows with content (see the "input" listener below) and still
-      // has a manual resize handle (CSS textarea{resize:vertical}) as a
-      // fallback/floor.
+      // textarea, not a single-line input — e.g. action.webhook's url,
+      // which looks like free text too but is never run through
+      // interpolate() so it doesn't get the chip-field treatment above.
       input = document.createElement("textarea"); input.rows = 2; input.value = node.params[p.id] ?? p.default ?? "";
     }
     if (input.tagName === "TEXTAREA") {
@@ -569,22 +698,26 @@ function renderProps(){
       warnEl = document.createElement("div");
       warnEl.className = "field-warn"; warnEl.style.display = "none";
       const refreshWarn = () => {
-        const broken = findBrokenRefs(input.value, pipeline.nodes);
-        if (broken.length) { warnEl.textContent = "⚠ " + broken.join(", ") + " — no block on the canvas has that id/value. Use \"➕ Insert value\" instead of typing this by hand."; warnEl.style.display = "block"; }
+        const broken = findBrokenRefs(serializeChipField(input), pipeline.nodes);
+        if (broken.length) { warnEl.textContent = "⚠ one of the tokens above (" + broken.join(", ") + ") doesn't match any block on the canvas anymore — remove it and use \"➕ Insert value\" to add a working one."; warnEl.style.display = "block"; }
         else warnEl.style.display = "none";
       };
       input.addEventListener("input", refreshWarn);
       refreshWarn();
     }
-    input.addEventListener("input", () => {
-      node.params[p.id] = p.type === "boolean" ? input.checked : p.type === "number" ? Number(input.value) : input.value;
-    });
+    if (isChipField) {
+      input.addEventListener("input", () => { node.params[p.id] = serializeChipField(input); });
+    } else {
+      input.addEventListener("input", () => {
+        node.params[p.id] = p.type === "boolean" ? input.checked : p.type === "number" ? Number(input.value) : input.value;
+      });
+    }
     el.appendChild(input);
     if (p.interpolatable) {
       const row = document.createElement("div"); row.className = "insert-row";
       const btn = document.createElement("button"); btn.type = "button"; btn.className = "ghost";
       btn.textContent = "➕ Insert value";
-      btn.title = "Pick a value from another block on the canvas instead of typing {{...}} by hand";
+      btn.title = "Insert a live value from another block on the canvas";
       btn.onclick = (e) => { e.stopPropagation(); openInsertMenu(btn, input); };
       row.appendChild(btn);
       el.appendChild(row);

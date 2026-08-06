@@ -17,20 +17,25 @@ const HAZARD_CODE_OBJECT_ID="hazard-zone";
 // Each block declares its ports (gate = pulse-only boolean, anything else = a named
 // data value) and, for data/logic/action blocks, an eval(ctx) used by the runtime.
 // `params` describes editable fields for the property panel (id, type, default, label).
+// Output ports also carry a human `label` (e.g. "% Complete" for pctComplete) —
+// purely cosmetic for pipeline-editor.html's "insert value" picker and the
+// chip tokens it builds in interpolatable text fields; the runtime itself
+// only ever reads `id`/`type`, so this is safe to extend without touching
+// eval logic below.
 const BLOCKS = {
   "trigger.zone_enter": {
     label: "On Zone Enter", category: "trigger",
-    inputs: [], outputs: [{ id: "out", type: "gate" }],
+    inputs: [], outputs: [{ id: "out", type: "gate", label: "Triggered" }],
     params: []
   },
   "trigger.zone_exit": {
     label: "On Zone Exit", category: "trigger",
-    inputs: [], outputs: [{ id: "out", type: "gate" }],
+    inputs: [], outputs: [{ id: "out", type: "gate", label: "Triggered" }],
     params: []
   },
   "trigger.dwell": {
     label: "On Dwell", category: "trigger",
-    inputs: [], outputs: [{ id: "out", type: "gate" }],
+    inputs: [], outputs: [{ id: "out", type: "gate", label: "Triggered" }],
     params: [{ id: "seconds", type: "number", default: 10, label: "Seconds" }]
   },
   // For project-wide "global" pipelines only (attached via drag-onto-the-map
@@ -41,40 +46,40 @@ const BLOCKS = {
   // every tick (several times a second) — gate it through logic.* first.
   "trigger.always": {
     label: "On Every Tick", category: "trigger",
-    inputs: [], outputs: [{ id: "out", type: "gate" }],
+    inputs: [], outputs: [{ id: "out", type: "gate", label: "Triggered" }],
     params: []
   },
   "data.weather": {
     label: "Weather", category: "data",
     inputs: [],
     outputs: [
-      { id: "tempC", type: "number" }, { id: "windKph", type: "number" },
-      { id: "windDirDeg", type: "number" }, { id: "precip1hMm", type: "number" },
-      { id: "precip24hMm", type: "number" }
+      { id: "tempC", type: "number", label: "Temperature (°C)" }, { id: "windKph", type: "number", label: "Wind Speed (km/h)" },
+      { id: "windDirDeg", type: "number", label: "Wind Direction (°)" }, { id: "precip1hMm", type: "number", label: "Rain, Last Hour (mm)" },
+      { id: "precip24hMm", type: "number", label: "Rain, Last 24h (mm)" }
     ],
     params: []
   },
   "data.snow_history": {
     label: "Snow History", category: "data",
     inputs: [],
-    outputs: [{ id: "hn24Cm", type: "number" }, { id: "precip24hMm", type: "number" }, { id: "tempC", type: "number" }],
+    outputs: [{ id: "hn24Cm", type: "number", label: "New Snow, 24h (cm)" }, { id: "precip24hMm", type: "number", label: "Rain, Last 24h (mm)" }, { id: "tempC", type: "number", label: "Temperature (°C)" }],
     params: []
   },
   "data.position": {
     label: "Position", category: "data",
     inputs: [],
-    outputs: [{ id: "speedKmh", type: "number" }, { id: "headingDeg", type: "number" }, { id: "distFromZoneCenterM", type: "number" }],
+    outputs: [{ id: "speedKmh", type: "number", label: "Speed (km/h)" }, { id: "headingDeg", type: "number", label: "Heading (°)" }, { id: "distFromZoneCenterM", type: "number", label: "Distance from Zone Center (m)" }],
     params: []
   },
   "data.dwell_time": {
     label: "Dwell Time", category: "data",
-    inputs: [], outputs: [{ id: "seconds", type: "number" }],
+    inputs: [], outputs: [{ id: "seconds", type: "number", label: "Seconds in Zone" }],
     params: []
   },
   "data.zone_props": {
     label: "Zone Properties", category: "data",
     inputs: [],
-    outputs: [{ id: "bearingDeg", type: "number" }, { id: "isHazard", type: "gate" }, { id: "id", type: "text" }],
+    outputs: [{ id: "bearingDeg", type: "number", label: "Bearing (°)" }, { id: "isHazard", type: "gate", label: "Is Hazard" }, { id: "id", type: "text", label: "Zone ID" }],
     params: []
   },
   // Only populated when the project has a Walking Path selected — see
@@ -86,18 +91,18 @@ const BLOCKS = {
     label: "Walking Path Progress", category: "data",
     inputs: [],
     outputs: [
-      { id: "distanceCoveredM", type: "number" }, { id: "distanceRemainingM", type: "number" },
-      { id: "totalDistanceM", type: "number" }, { id: "pctComplete", type: "number" },
-      { id: "elevGainSoFarM", type: "number" }, { id: "elevLossSoFarM", type: "number" },
-      { id: "totalElevGainM", type: "number" }, { id: "totalElevLossM", type: "number" },
-      { id: "etaSeconds", type: "number" }
+      { id: "distanceCoveredM", type: "number", label: "Distance Walked (m)" }, { id: "distanceRemainingM", type: "number", label: "Distance Remaining (m)" },
+      { id: "totalDistanceM", type: "number", label: "Total Distance (m)" }, { id: "pctComplete", type: "number", label: "% Complete" },
+      { id: "elevGainSoFarM", type: "number", label: "Elevation Gained So Far (m)" }, { id: "elevLossSoFarM", type: "number", label: "Elevation Lost So Far (m)" },
+      { id: "totalElevGainM", type: "number", label: "Total Elevation Gain (m)" }, { id: "totalElevLossM", type: "number", label: "Total Elevation Loss (m)" },
+      { id: "etaSeconds", type: "number", label: "Time Remaining (sec)" }
     ],
     params: []
   },
   "logic.compare": {
     label: "Compare", category: "logic",
     inputs: [{ id: "in", type: "number" }, { id: "gate", type: "gate" }],
-    outputs: [{ id: "out", type: "gate" }],
+    outputs: [{ id: "out", type: "gate", label: "Triggered" }],
     params: [
       { id: "op", type: "select", options: ["gt", "lt", "eq"], default: "gt", label: "Operator" },
       { id: "value", type: "number", default: 0, label: "Value" }
@@ -106,17 +111,17 @@ const BLOCKS = {
   "logic.and": {
     label: "And", category: "logic",
     inputs: [{ id: "a", type: "gate" }, { id: "b", type: "gate" }],
-    outputs: [{ id: "out", type: "gate" }], params: []
+    outputs: [{ id: "out", type: "gate", label: "Triggered" }], params: []
   },
   "logic.or": {
     label: "Or", category: "logic",
     inputs: [{ id: "a", type: "gate" }, { id: "b", type: "gate" }],
-    outputs: [{ id: "out", type: "gate" }], params: []
+    outputs: [{ id: "out", type: "gate", label: "Triggered" }], params: []
   },
   "logic.aspect_load": {
     label: "Aspect Load", category: "logic",
     inputs: [{ id: "windDirDeg", type: "number" }, { id: "bearingDeg", type: "number" }],
-    outputs: [{ id: "out", type: "gate" }],
+    outputs: [{ id: "out", type: "gate", label: "Triggered" }],
     params: [{ id: "toleranceDeg", type: "number", default: 90, label: "Tolerance (deg)" }]
   },
   "action.speak": {

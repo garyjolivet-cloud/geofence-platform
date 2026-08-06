@@ -3432,6 +3432,13 @@ async function loadFromPlatform(id){
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
+    // Setting .value on <select> above doesn't fire a "change" event, so the
+    // Code Objects palette's own change-listener (which is what normally
+    // re-fetches it for the right org) never runs on a project load — it's
+    // stuck showing whatever it had at mount time (usually "select a
+    // customer", since mount() runs before this async load finishes). Force
+    // it explicitly, same as the audio tree's doAudioRefresh() call already does.
+    if(window.CodeObjects) CodeObjects.refresh(true);
     doAudioRefresh();
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
