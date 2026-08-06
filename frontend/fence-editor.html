@@ -437,15 +437,20 @@
     </div>
     <div style="margin:2px 0">
       <div class="spd-presets">
-        <button class="spd-btn" data-spd="0.35" data-label="🚶 Walk">🚶</button>
-        <button class="spd-btn on" data-spd="1.4" data-label="🚴 Bike">🚴</button>
-        <button class="spd-btn" data-spd="2.8" data-label="⛷️ Ski">⛷️</button>
-        <button class="spd-btn" data-spd="5.6" data-label="🚗 Car">🚗</button>
-        <button class="spd-btn" data-spd="8.3" data-label="🚂 Train">🚂</button>
-        <button class="spd-btn" data-spd="34.7" data-label="✈️ Plane">✈️</button>
+        <button class="spd-btn" data-spd="5" data-label="🚶 Walk">🚶</button>
+        <button class="spd-btn on" data-spd="20" data-label="🚴 Bike">🚴</button>
+        <button class="spd-btn" data-spd="40" data-label="⛷️ Ski">⛷️</button>
+        <button class="spd-btn" data-spd="80" data-label="🚗 Car">🚗</button>
+        <button class="spd-btn" data-spd="120" data-label="🚂 Train">🚂</button>
+        <button class="spd-btn" data-spd="500" data-label="✈️ Plane">✈️</button>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
-        <input type="range" id="simSpd" min="0.1" max="40" step="0.1" value="1.4" style="flex:1;accent-color:var(--coral)">
+        <!-- Value is real km/h — the visitor avatar actually moves at this
+             literal speed (converted to m/s in simPlay()), and that's the
+             same number reported to a pipeline's data.position.speedKmh, so
+             what this control says is what any speed-gated pipeline logic
+             sees. -->
+        <input type="range" id="simSpd" min="1" max="500" step="1" value="20" style="flex:1;accent-color:var(--coral)">
         <span id="simSpdV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 56px;text-align:right">🚴 Bike</span>
       </div>
     </div>
@@ -4691,8 +4696,10 @@ function simPlay(){
   document.getElementById("simPlay").classList.add("on");
   let vT=Date.now();
   simTimer=setInterval(()=>{
-    const speed=+document.getElementById("simSpd").value,total=simPathTotal();
-    simDist=Math.max(0,Math.min(simDist+speed*simDir,total));vT+=1000;
+    // simSpd's value is real km/h (see the input's comment in the HTML) —
+    // convert to m/s since simDist advances in meters per simulated second.
+    const speedMps=(+document.getElementById("simSpd").value)/3.6,total=simPathTotal();
+    simDist=Math.max(0,Math.min(simDist+speedMps*simDir,total));vT+=1000;
     const ended=simDir>0?simDist>=total:simDist<=0;
     const pt=simPathPointAt(simDist);
     const jLat=pt[0]+(Math.random()-.5)*3/111320,jLon=pt[1]+(Math.random()-.5)*3/111320;
@@ -4743,14 +4750,14 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();refreshSimChips();simLogEv("sev-sys","reset");};
-// speed presets
+// speed presets — slider value is real km/h (see input's comment above)
 (function(){
   const slider=document.getElementById("simSpd");
   const label=document.getElementById("simSpdV");
-  const SpdPresets={0.35:"🚶 Walk",1.4:"🚴 Bike",2.8:"⛷️ Ski",5.6:"🚗 Car",8.3:"🚂 Train",34.7:"✈️ Plane"};
+  const SpdPresets={5:"🚶 Walk",20:"🚴 Bike",40:"⛷️ Ski",80:"🚗 Car",120:"🚂 Train",500:"✈️ Plane"};
   function setSpeed(val,lbl){
     slider.value=val;
-    label.textContent=lbl||(""+val+" m/t");
+    label.textContent=lbl||(Math.round(val)+" km/h");
     document.querySelectorAll(".spd-btn").forEach(b=>{
       b.classList.toggle("on",parseFloat(b.dataset.spd)===parseFloat(val));
     });
@@ -4761,10 +4768,10 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   slider.oninput=()=>{
     const v=parseFloat(slider.value);
     const preset=SpdPresets[v];
-    label.textContent=preset||Math.round(v*14.4)+" km/h";
+    label.textContent=preset||Math.round(v)+" km/h";
     document.querySelectorAll(".spd-btn").forEach(b=>b.classList.remove("on"));
   };
-  setSpeed(1.4,"🚴 Bike");
+  setSpeed(20,"🚴 Bike");
 })();
 map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspended"&&SimVoice.ctx.resume();
   const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());});
