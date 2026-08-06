@@ -537,6 +537,28 @@
         <div class="va-summary empty" id="vaSummary" style="flex:1">nothing set — add a clip or a pipeline</div>
         <button id="pAudioClear" class="ghost" style="flex:0 0 auto;color:var(--hazard);border-color:var(--hazard);display:none" title="Remove this clip">✕</button>
       </div>
+
+      <!-- Moved here from the collapsed Advanced section — a stop's spoken
+           line and the voice it's read in are core "Voices & Audio" content,
+           not advanced/rarely-touched settings, and were easy to miss
+           tucked under a collapsed toggle further down. -->
+      <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
+      <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
+      <label class="k">voice</label>
+      <select id="pVoice">
+        <option value="">— default (Bella) —</option>
+        <option value="af_bella">Bella (US female)</option>
+        <option value="af_nicole">Nicole (US female)</option>
+        <option value="af_sarah">Sarah (US female)</option>
+        <option value="af_sky">Sky (US female)</option>
+        <option value="am_adam">Adam (US male)</option>
+        <option value="am_michael">Michael (US male)</option>
+        <option value="bf_emma">Emma (UK female)</option>
+        <option value="bf_isabella">Isabella (UK female)</option>
+        <option value="bm_george">George (UK male)</option>
+        <option value="bm_lewis">Lewis (UK male)</option>
+      </select>
+      <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
     </div>
 
     <div id="pFiresRow">
@@ -563,24 +585,6 @@
            and click +/− on a card) — this panel just shows what's attached. -->
       <label class="k" style="margin-top:6px">🧩 Code Objects</label>
       <div id="pCodeObjectsChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-
-      <label class="k" style="margin-top:6px">spoken line (TTS, no bot)</label>
-      <textarea id="pSay" class="say" placeholder="Turn and look. This is…"></textarea>
-      <label class="k">voice</label>
-      <select id="pVoice">
-        <option value="">— default (Bella) —</option>
-        <option value="af_bella">Bella (US female)</option>
-        <option value="af_nicole">Nicole (US female)</option>
-        <option value="af_sarah">Sarah (US female)</option>
-        <option value="af_sky">Sky (US female)</option>
-        <option value="am_adam">Adam (US male)</option>
-        <option value="am_michael">Michael (US male)</option>
-        <option value="bf_emma">Emma (UK female)</option>
-        <option value="bf_isabella">Isabella (UK female)</option>
-        <option value="bm_george">George (UK male)</option>
-        <option value="bm_lewis">Lewis (UK male)</option>
-      </select>
-      <div class="row"><button id="pSpeak" class="ghost" style="flex:1">▶ Speak it</button></div>
       <hr>
       <label class="k">bearing of interest — visitor faces this direction on arrival</label>
       <div style="display:flex;gap:6px;align-items:center">
@@ -1838,10 +1842,11 @@ function refreshProps(){
   updateCodeObjectsSummary(z);
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   updateVaSummary(z);
-  // Auto-expand Advanced when the zone already has Code Objects or TTS
-  // content — a config that already exists shouldn't disappear into a
-  // collapsed section unnoticed.
-  const hasAdvContent=(z.codeObjects&&z.codeObjects.length>0)||!!(z.say||"").trim();
+  // Auto-expand Advanced when the zone already has Code Objects attached —
+  // a config that already exists shouldn't disappear into a collapsed
+  // section unnoticed. (Spoken line/voice now live in the always-visible
+  // Voices & Audio section above, not in here, so they no longer factor in.)
+  const hasAdvContent=z.codeObjects&&z.codeObjects.length>0;
   const advTgl=document.getElementById("advToggle");
   const advBdy=document.getElementById("advBody");
   if(advTgl&&advBdy){

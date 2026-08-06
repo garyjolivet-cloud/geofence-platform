@@ -330,9 +330,15 @@ function evalGraph(g, fix, smoothedPos, evt) {
         break;
       }
       case "data.position": {
-        cache[id].speedKmh = smoothedPos && smoothedPos.speed != null ? smoothedPos.speed * 3.6 : null;
-        cache[id].headingDeg = smoothedPos ? smoothedPos.headingTravel : null;
-        cache[id].distFromZoneCenterM = evt.distFromZoneCenterM ?? null;
+        // Rounded before caching — unlike every other numeric pipeline output
+        // (data.walking_path_progress rounds everything before exposing it),
+        // this was left as a raw float. smoothedPos.speed*3.6 routinely comes
+        // out as something like 7.046582164416, which interpolate()'s
+        // String(v) then drops verbatim into Speak text — spoken aloud, a
+        // 12-digit decimal tail reads as an endless run of digits.
+        cache[id].speedKmh = smoothedPos && smoothedPos.speed != null ? Math.round(smoothedPos.speed * 3.6 * 10) / 10 : null;
+        cache[id].headingDeg = smoothedPos && smoothedPos.headingTravel != null ? Math.round(smoothedPos.headingTravel) : null;
+        cache[id].distFromZoneCenterM = evt.distFromZoneCenterM != null ? Math.round(evt.distFromZoneCenterM) : null;
         break;
       }
       case "data.dwell_time": cache[id].seconds = evt.dwellSeconds ?? null; break;
