@@ -106,6 +106,36 @@ const BLOCKS = {
     ],
     params: []
   },
+  // Tour-wide progress across every stop, not just within one Walking Path
+  // (compare to data.walking_path_progress above). Backed by TourState (see
+  // tour-state.js) via the host's callbacks.tourProgressFn — a stop's own
+  // pipeline never talks to TourState directly, same isolation every other
+  // side effect in this file already goes through.
+  "data.tour_progress": {
+    label: "Tour Progress", category: "data",
+    inputs: [],
+    outputs: [
+      { id: "visitedCount", type: "number", label: "Stops Visited" },
+      { id: "totalStops", type: "number", label: "Total Stops" },
+      { id: "pctComplete", type: "number", label: "% Complete" }
+    ],
+    params: []
+  },
+  // Reads a value previously written by another stop's action.set_flag
+  // anywhere in the project (matched by name, not wiring) — the primitive
+  // "branching narrative" is built from: gate a Speak node on this being
+  // true/false via logic.flag_equals, or drop the raw value straight into a
+  // Speak line's text as a chip.
+  "data.get_flag": {
+    label: "Get Flag", category: "data",
+    inputs: [], outputs: [{ id: "value", type: "text", label: "Flag Value" }],
+    params: [{ id: "name", type: "text", default: "", label: "Flag name" }]
+  },
+  "data.get_counter": {
+    label: "Get Counter", category: "data",
+    inputs: [], outputs: [{ id: "value", type: "number", label: "Counter Value" }],
+    params: [{ id: "name", type: "text", default: "", label: "Counter name" }]
+  },
   "logic.compare": {
     label: "Compare", category: "logic",
     inputs: [{ id: "in", type: "number" }, { id: "gate", type: "gate" }],
@@ -145,6 +175,30 @@ const BLOCKS = {
     outputs: [{ id: "out", type: "gate", label: "Triggered" }],
     params: [{ id: "toleranceDeg", type: "number", default: 90, label: "Tolerance (deg)" }]
   },
+  // "Has this specific other stop already been visited this walk" — the
+  // primitive both "progressive unlocking" (chain several of these through
+  // logic.and, feed the result into a trigger's gate) and "branching
+  // narrative" (gate two different Speak nodes on the same check) are built
+  // from. targetZoneId uses the exact same zoneSelect param shape
+  // action.guide_to_zone's target already does below — same pre-existing
+  // limitation applies (only a populated picker in raw zone/global-function
+  // editing mode, not while authoring a reusable Code Object).
+  "logic.stop_visited": {
+    label: "Stop Visited?", category: "logic",
+    inputs: [], outputs: [{ id: "out", type: "gate", label: "Visited" }],
+    params: [{ id: "targetZoneId", type: "zoneSelect", default: "", label: "Stop" }]
+  },
+  // Gate version of data.get_flag — lets a flag drive a trigger the same
+  // way logic.compare lets a number drive one, without needing a separate
+  // Compare node wired up for the common "is this flag set to X" case.
+  "logic.flag_equals": {
+    label: "Flag Equals", category: "logic",
+    inputs: [], outputs: [{ id: "out", type: "gate", label: "Triggered" }],
+    params: [
+      { id: "name", type: "text", default: "", label: "Flag name" },
+      { id: "value", type: "text", default: "", label: "Equals" }
+    ]
+  },
   "action.speak": {
     label: "Speak", category: "action",
     inputs: [{ id: "in", type: "gate" }], outputs: [],
@@ -160,6 +214,31 @@ const BLOCKS = {
     label: "Guide To Zone", category: "action",
     inputs: [{ id: "in", type: "gate" }], outputs: [],
     params: [{ id: "targetZoneId", type: "zoneSelect", default: "", label: "Target zone" }]
+  },
+  // Writes a named flag any stop's data.get_flag/logic.flag_equals can read
+  // back later — project-wide, not scoped to this zone. value is
+  // interpolatable so it can capture another node's live output (e.g.
+  // record which trail branch a visitor took) rather than only ever a
+  // fixed string.
+  "action.set_flag": {
+    label: "Set Flag", category: "action",
+    inputs: [{ id: "in", type: "gate" }], outputs: [],
+    params: [
+      { id: "name", type: "text", default: "", label: "Flag name" },
+      { id: "value", type: "text", default: "", label: "Value", interpolatable: true }
+    ]
+  },
+  // Write side of a named tour-wide counter (data.get_counter reads it
+  // back). Wiring this (or Set Flag above) straight off trigger.always
+  // has the same over-firing risk documented on logic.cooldown above —
+  // gate through it or a real trigger, not On Every Tick directly.
+  "action.increment_counter": {
+    label: "Increment Counter", category: "action",
+    inputs: [{ id: "in", type: "gate" }], outputs: [],
+    params: [
+      { id: "name", type: "text", default: "", label: "Counter name" },
+      { id: "by", type: "number", default: 1, label: "Increment by" }
+    ]
   },
   "action.webhook": {
     label: "Webhook", category: "action",
@@ -382,6 +461,24 @@ function evalGraph(g, fix, smoothedPos, evt) {
         cache[id].etaSeconds = p.etaSeconds ?? null;
         break;
       }
+      case "data.tour_progress": {
+        const p = (callbacks.tourProgressFn && callbacks.tourProgressFn()) || {};
+        cache[id].visitedCount = p.visitedCount ?? null;
+        cache[id].totalStops = p.totalStops ?? null;
+        cache[id].pctComplete = p.pctComplete ?? null;
+        break;
+      }
+      case "data.get_flag": {
+        const name = node.params && node.params.name;
+        const v = callbacks.getFlagFn ? callbacks.getFlagFn(name) : null;
+        cache[id].value = v == null ? "" : String(v);
+        break;
+      }
+      case "data.get_counter": {
+        const name = node.params && node.params.name;
+        cache[id].value = callbacks.getCounterFn ? (callbacks.getCounterFn(name) || 0) : 0;
+        break;
+      }
       case "data.zone_props": {
         cache[id].bearingDeg = (g.zone && g.zone.bearingDeg != null) ? g.zone.bearingDeg : null;
         cache[id].isHazard = !!(g.zone && (g.zone.isHazard || (g.zone.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID)));
@@ -427,6 +524,18 @@ function evalGraph(g, fix, smoothedPos, evt) {
         cache[id].out = pass;
         break;
       }
+      case "logic.stop_visited": {
+        const targetZoneId = node.params && node.params.targetZoneId;
+        cache[id].out = !!(callbacks.isVisitedFn && targetZoneId && callbacks.isVisitedFn(targetZoneId));
+        break;
+      }
+      case "logic.flag_equals": {
+        const name = node.params && node.params.name;
+        const want = (node.params && node.params.value) ?? "";
+        const have = callbacks.getFlagFn ? callbacks.getFlagFn(name) : null;
+        cache[id].out = have != null && String(have) === want;
+        break;
+      }
       case "logic.compare": {
         const inVal = getIn("in"); const gate = getIn("gate");
         const op = (node.params && node.params.op) || "gt";
@@ -451,6 +560,22 @@ function evalGraph(g, fix, smoothedPos, evt) {
           const targetId = node.params && node.params.targetZoneId;
           const targetZone = (callbacks.allZones || []).find(z => z.id === targetId);
           if (targetZone) callbacks.guideStartFn(targetZone);
+        }
+        break;
+      }
+      case "action.set_flag": {
+        if (getIn("in") && callbacks.setFlagFn) {
+          const name = node.params && node.params.name;
+          const value = interpolate((node.params && node.params.value) || "", cache);
+          if (name) callbacks.setFlagFn(name, value);
+        }
+        break;
+      }
+      case "action.increment_counter": {
+        if (getIn("in") && callbacks.incrementCounterFn) {
+          const name = node.params && node.params.name;
+          const by = (node.params && node.params.by) || 1;
+          if (name) callbacks.incrementCounterFn(name, by);
         }
         break;
       }

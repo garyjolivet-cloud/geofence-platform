@@ -120,6 +120,7 @@
 </style>
 <script src="/guidance-bot.js"></script>
 <script src="/pipeline-runtime.js"></script>
+<script src="/tour-state.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -1655,7 +1656,19 @@ function pipelineCallbacks(zoneCtx){
         .catch(err=>HUD.log('ev-warn','webhook failed: '+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||err)))
         .finally(()=>{ if(to) clearTimeout(to); });
     },
-    allZones: BUNDLE.zones||[]
+    allZones: BUNDLE.zones||[],
+    // Stop-network primitives (logic.stop_visited, action.set_flag, etc. in
+    // pipeline-runtime.js) — thin pass-throughs to TourState (tour-state.js),
+    // same isolation the callbacks above already keep: the runtime never
+    // touches TourState directly. No-op/harmless-default if tour-state.js
+    // somehow isn't loaded, matching this file's existing degrade-gracefully
+    // convention for PipelineRuntime itself.
+    isVisitedFn:(id)=>typeof TourState!=='undefined'&&TourState.isVisited(id),
+    setFlagFn:(name,val)=>{ if(typeof TourState!=='undefined') TourState.setFlag(name,val); },
+    getFlagFn:(name)=>typeof TourState!=='undefined'?TourState.getFlag(name):null,
+    incrementCounterFn:(name,by)=>typeof TourState!=='undefined'?TourState.incrementCounter(name,by):0,
+    getCounterFn:(name)=>typeof TourState!=='undefined'?TourState.getCounter(name):0,
+    tourProgressFn:()=>typeof TourState!=='undefined'?TourState.progress():{visitedCount:0,totalStops:0,pctComplete:null}
   };
 }
 
@@ -1695,6 +1708,11 @@ Geofencer.onEvent=async(e)=>{
     // compiled graph exists yet. BUNDLE-wide prefetch (below, on bundle load)
     // keeps this await effectively instant in the common case.
     await PipelineRuntime.load(e.zone, pipelineCallbacks({kind:e.kind, zone:e.zone}));
+    // Mark visited before this stop's own tick, so a Speak line on this
+    // same stop referencing logic.stop_visited on itself (e.g. "that's N of
+    // M now") already sees itself as visited on first entry, not only on a
+    // hypothetical re-entry.
+    if(e.kind==='enter' && typeof TourState!=='undefined') TourState.markVisited(e.zone.id);
     if(e.kind==='enter') PipelineRuntime.tick(e.zone.id, null, lastSmoothed, { entered:true });
     else if(e.kind==='exit'){ PipelineRuntime.tick(e.zone.id, null, lastSmoothed, { exited:true }); PipelineRuntime.unload(e.zone.id); }
   }
@@ -2051,6 +2069,7 @@ EngineKokoro.tryLoad();
     loadWalkingPaths(b);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
+    if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
     if(!HUD.pos) MapView.recenter(b.ref);
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
       // minGain/curve dropped: the fade curve is now the fixed, shared
@@ -2069,6 +2088,7 @@ EngineKokoro.tryLoad();
       loadWalkingPaths(b);
       if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
+      if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
       if(!HUD.pos) MapView.recenter(b.ref);
       if(document.getElementById('simZones')) buildSimZones();
       HUD.log('ev-sys','offline — loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' from saved copy');

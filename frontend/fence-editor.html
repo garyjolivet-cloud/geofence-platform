@@ -290,6 +290,7 @@
 </style>
 <script src="/guidance-bot.js"></script>
 <script src="/pipeline-runtime.js"></script>
+<script src="/tour-state.js"></script>
 <script src="/code-objects.js"></script>
 <script src="/audio-tree.js"></script>
 </head>
@@ -4558,7 +4559,16 @@ function simPipelineCallbacks(zoneCtx){
     sayFn:(text)=>{ simLogEv("sev-say","[pipeline] SAY \""+text+"\""); if(simSoundOn) simTTS(text,voice); },
     guideStartFn:(targetZone)=>{ simLogEv("sev-sys","[pipeline] guide_to_zone → "+targetZone.name); simStartGuidance(targetZone); },
     webhookFn:(url)=>{ simLogEv("sev-sys","[pipeline] webhook → "+url); },
-    allZones: simBundle.zones
+    allZones: simBundle.zones,
+    // Stop-network primitives — same thin TourState pass-throughs as
+    // geofence-engine.html's pipelineCallbacks(), so Test Mode exercises
+    // the exact same behavior a live walk would.
+    isVisitedFn:(id)=>typeof TourState!=='undefined'&&TourState.isVisited(id),
+    setFlagFn:(name,val)=>{ if(typeof TourState!=='undefined') TourState.setFlag(name,val); },
+    getFlagFn:(name)=>typeof TourState!=='undefined'?TourState.getFlag(name):null,
+    incrementCounterFn:(name,by)=>typeof TourState!=='undefined'?TourState.incrementCounter(name,by):0,
+    getCounterFn:(name)=>typeof TourState!=='undefined'?TourState.getCounter(name):0,
+    tourProgressFn:()=>typeof TourState!=='undefined'?TourState.progress():{visitedCount:0,totalStops:0,pctComplete:null}
   };
 }
 SimFencer.onEvent=async e=>{
@@ -4574,6 +4584,7 @@ SimFencer.onEvent=async e=>{
         // must await before the first tick() or zone_enter could fire before
         // the compiled graph exists yet.
         await PipelineRuntime.load(e.zone, simPipelineCallbacks({zone:e.zone}));
+        if(typeof TourState!=='undefined') TourState.markVisited(e.zone.id);
         PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { entered:true });
       }
     }
@@ -4614,6 +4625,11 @@ function enterTestMode(){
   simBundle=editorToSimBundle();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(simBundle.globalCodeObjects||[], simPipelineCallbacks());
+  // forceReset:true — Test Mode always starts every entry from a clean
+  // SimFencer.reset() below rather than resuming a prior test run, so
+  // TourState should match that "always fresh on (re)entry" behavior
+  // instead of silently resuming a stale simulated walk.
+  if(typeof TourState!=='undefined') TourState.init(afProjectId(), simBundle.zones.length, {ns:"sim", forceReset:true});
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   // unlock AudioContext now while we're inside the button click gesture
   SimVoice.ensure();
@@ -4769,7 +4785,13 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   document.getElementById('simGuidanceHud').style.display='none';
   const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
   SimSmoother.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
-  simBundle=editorToSimBundle();refreshSimChips();simLogEv("sev-sys","reset");};
+  simBundle=editorToSimBundle();
+  // Visited-stops/flags/counters are per-session tracking state just like
+  // SimFencer's own — Reset must clear it too, or a stop that "unlocked"
+  // earlier in this test session stays unlocked on the next simulated walk,
+  // which would look exactly like Reset silently not working.
+  if(typeof TourState!=='undefined') TourState.init(afProjectId(), simBundle.zones.length, {ns:"sim", forceReset:true});
+  refreshSimChips();simLogEv("sev-sys","reset");};
 // speed presets — slider value is real km/h (see input's comment above)
 (function(){
   const slider=document.getElementById("simSpd");
