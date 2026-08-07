@@ -3924,7 +3924,17 @@ function makeSimSmoother(){return{s:null,prev:null,rawPrev:null,spd:0,lastHeadin
     let dt=null;
     if(this.rawPrev){
       dt=(fix.t-this.rawPrev.t)/1000; let inst=this.spd;
-      if(dt>=0.4){ inst=SimGeo.hav([this.rawPrev.lat,this.rawPrev.lon],[fix.lat,fix.lon])/dt; if(inst>25)inst=this.spd; }
+      // The >25 m/s (90 km/h) reject-a-spike clamp below made sense when this
+      // was purely a real-GPS-jitter filter, but Test Mode's own speed slider
+      // now goes up to 500 km/h (the "Plane" preset) — anything faster than
+      // 90 was getting silently discarded every tick, permanently capping the
+      // reported speed just under 90 no matter how fast the slider was set.
+      // Unlike real GPS, a simulated position has no spurious-spike risk from
+      // hardware — every computed value here genuinely is the simulated
+      // avatar's true instantaneous speed — so a much higher ceiling (well
+      // above the fastest preset) is safe; it only exists at all to guard
+      // against a stray instant map-click teleporting the avatar.
+      if(dt>=0.4){ inst=SimGeo.hav([this.rawPrev.lat,this.rawPrev.lon],[fix.lat,fix.lon])/dt; if(inst>160)inst=this.spd; }
       const spdA=dt>0?1-Math.exp(-dt/SIM_TUNING.SPEED_TAU_S):0.35;
       this.spd=this.spd+spdA*(inst-this.spd);
     }
