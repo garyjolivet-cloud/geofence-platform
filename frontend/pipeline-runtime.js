@@ -125,6 +125,20 @@ const BLOCKS = {
     inputs: [{ id: "a", type: "gate" }, { id: "b", type: "gate" }],
     outputs: [{ id: "out", type: "gate", label: "Triggered" }], params: []
   },
+  // Lets a gate through at most once every N seconds, regardless of how
+  // often (or how continuously) its input re-fires — the fix for a
+  // "trigger.always -> Compare -> Speak" pipeline re-speaking every tick
+  // while a condition (e.g. speed over a limit) stays true, which sounds
+  // like overlapping/garbled audio ("talk over talk") since nothing else
+  // in this system rate-limits Speak. Needs per-instance memory across
+  // ticks (see evalGraph's "logic.cooldown" case) — unlike every other
+  // block here, which is stateless and recomputed fresh every tick.
+  "logic.cooldown": {
+    label: "Cooldown", category: "logic",
+    inputs: [{ id: "gate", type: "gate" }],
+    outputs: [{ id: "out", type: "gate", label: "Triggered" }],
+    params: [{ id: "seconds", type: "number", default: 15, label: "Minimum seconds between repeats" }]
+  },
   "logic.aspect_load": {
     label: "Aspect Load", category: "logic",
     inputs: [{ id: "windDirDeg", type: "number" }, { id: "bearingDeg", type: "number" }],
@@ -372,6 +386,31 @@ function evalGraph(g, fix, smoothedPos, evt) {
         cache[id].bearingDeg = (g.zone && g.zone.bearingDeg != null) ? g.zone.bearingDeg : null;
         cache[id].isHazard = !!(g.zone && (g.zone.isHazard || (g.zone.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID)));
         cache[id].id = g.zone ? g.zone.id : null;
+        break;
+      }
+      case "logic.cooldown": {
+        // g persists across ticks (it's the same compiled-graph object every
+        // time evalGraph runs for this zone/global graph, until the next
+        // load()/loadGlobal()), so state stashed on it here survives between
+        // calls — unlike `cache`, which is rebuilt fresh every tick above.
+        const gState = (g._nodeState = g._nodeState || {});
+        const st = (gState[id] = gState[id] || { lastFiredAt: -Infinity });
+        const seconds = (node.params && node.params.seconds) || 15;
+        // Prefer the tick's own clock (fix.t) over wall time — Test Mode's
+        // simulated walk runs at 4x real speed, so a cooldown measured
+        // against Date.now() would feel 4x longer than it's supposed to
+        // relative to the simulated walk. fix is null for per-zone ticks
+        // (enter/exit/dwell), where this block isn't really needed anyway
+        // since those only fire once per event already — Date.now() there
+        // is just a safe fallback, not the common case.
+        const nowMs = (fix && fix.t != null) ? fix.t : Date.now();
+        const gate = getIn("gate");
+        let pass = false;
+        if (gate && (nowMs - st.lastFiredAt) >= seconds * 1000) {
+          pass = true;
+          st.lastFiredAt = nowMs;
+        }
+        cache[id].out = pass;
         break;
       }
       case "logic.aspect_load": {
