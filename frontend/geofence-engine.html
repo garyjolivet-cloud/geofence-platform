@@ -121,6 +121,7 @@
 <script src="/guidance-bot.js"></script>
 <script src="/pipeline-runtime.js"></script>
 <script src="/tour-state.js"></script>
+<script src="/kalman-filter.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -267,16 +268,14 @@ const TUNING = {
   ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
   MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
   SHORT_VISIT_S: 12,
-  // Position smoothing is speed-adaptive (2026-07-23 fix): a fixed per-fix
-  // LOWPASS=0.35 lags a moving target by ~speed*tau (tau≈2.3s at ~1Hz) — ~3m
-  // at walking pace (fine vs EXIT_BUFFER_M=20) but ~16-35m at bike/ski speed,
-  // which stuck zones "in" well past their real edge and made new entries
-  // fail to confirm. tau now shrinks with estimated speed instead.
-  SMOOTH_TAU_MAX_S: 2.3,     // tau at/below SMOOTH_SPEED_LO_MPS — ≈ old LOWPASS=0.35 at ~1Hz (walking, unchanged)
-  SMOOTH_TAU_MIN_S: 0.6,     // tau at/above SMOOTH_SPEED_HI_MPS — 15 m/s * 0.6s ≈ 9m lag, well under EXIT_BUFFER_M
-  SMOOTH_SPEED_LO_MPS: 2.0,  // brisk-walk ceiling
-  SMOOTH_SPEED_HI_MPS: 8.0,  // ~29 km/h, solid bike/ski — full low-lag tau at/above this
-  SPEED_TAU_S: 2.3,          // dt-normalized tau for the internal speed estimate
+  // Position smoothing moved to an Extended Kalman Filter (2026-08-07,
+  // frontend/kalman-filter.js/GPSFilter) — replaced the old speed-adaptive
+  // EMA that lived here (SMOOTH_TAU_MAX_S/MIN_S/SMOOTH_SPEED_LO_MPS/HI_MPS/
+  // SPEED_TAU_S). That approach ignored fix.acc entirely when weighting
+  // fixes and needed a hardcoded, hand-tuned speed clamp for spike
+  // rejection; the EKF weights by fix.acc directly and replaces the clamp
+  // with a self-scaling statistical outlier gate. See kalman-filter.js's
+  // own header comment and tests/kalman-filter.test.js for the design.
   HEAD_WINDOW: 8         // compass readings used for heading-confidence variance
 };
 
@@ -503,44 +502,9 @@ function centerNow(zone, nowMs){
 }
 
 /* ======================== POSITION SMOOTHER ====================== */
-const Smoother = {
-  s:null, prev:null, rawPrev:null, spd:0, t0:null,
-  push(fix){
-    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; this.rawPrev=null; this.spd=0; }
-
-    // Speed estimate drives the adaptive tau below — computed from the last
-    // RAW fix, not the last smoothed point, so the estimate isn't itself
-    // lagged by the filter it's supposed to unlag.
-    let dt=null;
-    if(this.rawPrev){
-      dt=(fix.t-this.rawPrev.t)/1000;
-      let inst=this.spd;
-      if(dt>=0.4){                                    // ignore sub-0.4s gaps (GPS double-fix)
-        inst=Geo.hav([this.rawPrev.lat,this.rawPrev.lon],[fix.lat,fix.lon])/dt;
-        if(inst>25) inst=this.spd;                     // reject a lone >90 km/h spike
-      }
-      const spdA = dt>0 ? 1-Math.exp(-dt/TUNING.SPEED_TAU_S) : 0.35;
-      this.spd = this.spd + spdA*(inst-this.spd);      // dt-normalized low-pass the speed
-    }
-    this.rawPrev={lat:fix.lat,lon:fix.lon,t:fix.t};
-
-    // Position EMA: time-normalized + speed-adaptive time constant.
-    const lo=TUNING.SMOOTH_SPEED_LO_MPS, hi=TUNING.SMOOTH_SPEED_HI_MPS;
-    const f = hi>lo ? Math.max(0,Math.min(1,(this.spd-lo)/(hi-lo))) : 0;
-    const tau = TUNING.SMOOTH_TAU_MAX_S + f*(TUNING.SMOOTH_TAU_MIN_S-TUNING.SMOOTH_TAU_MAX_S);
-    const a = (dt!=null && dt>0) ? 1-Math.exp(-dt/tau) : 0.35;   // first fix: delta is 0 anyway
-    this.s={ lat:this.s.lat+a*(fix.lat-this.s.lat), lon:this.s.lon+a*(fix.lon-this.s.lon) };
-
-    let headingTravel=null;
-    if(this.prev){
-      const d=Geo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
-      if(d>1) headingTravel=Geo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
-    }
-    this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
-    return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed:this.spd, headingTravel };
-  },
-  reset(){ this.s=null; this.prev=null; this.rawPrev=null; this.spd=0; }
-};
+// Position/velocity smoothing now lives in frontend/kalman-filter.js
+// (window.GPSFilter) — see TUNING's comment above for why this moved off
+// the old speed-adaptive EMA that used to live here.
 
 /* ========================== GEOFENCER ========================== */
 const Geofencer = {
@@ -833,7 +797,7 @@ const EngineTTSVoice={
    anyway, per guidance-bot.js's own reasoning for not using it there).
    Powers spatial-audio panning instead, sourced the same way GuidanceBot
    already sources its turn instructions: bearing between consecutive
-   *smoothed* GPS fixes (Smoother.push()'s headingTravel), circular-EMA
+   *smoothed* GPS fixes (GPSFilter.push()'s headingTravel), circular-EMA
    smoothed so it doesn't jitter, and only trusted above a minimum walking
    speed (a stationary or very-slow fix's bearing is noise, not direction). */
 const TravelHeading = {
@@ -1321,7 +1285,7 @@ const HUD = {
 
   onFix(fix){               // fix = {lat,lon,acc,t[,heading]}
     window.__lastAcc=fix.acc;
-    const sm=Smoother.push(fix);
+    const sm=GPSFilter.push(fix);
     lastSmoothed=sm;
     TravelHeading.update(sm.speed, sm.headingTravel);
     this.fixes++;
@@ -1994,7 +1958,7 @@ function toggleSim(){
   HUD.el('pill').textContent=simMode?'SIM':'OFF';
   HUD.el('pill').className='pill '+(simMode?'sim':'');
   if(simMode){ if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;}
-    Smoother.reset(); Geofencer.reset(); HUD.prev=null;
+    GPSFilter.reset(); Geofencer.reset(); HUD.prev=null;
     Audio.unlock(); Audio.unlocked=true;
     Clarity.init(); if(Clarity.ctx && Clarity.ctx.state==='suspended') Clarity.ctx.resume();
     SpatialVoice.ensure();
@@ -2022,7 +1986,7 @@ function buildSimZones(){ const wrap=document.getElementById('simZones'); wrap.i
       // fixed start point — for a long looping route the start point is
       // often well outside hearing/trigger range of wherever it actually is.
       const c = z.path ? centerNow(z, Date.now()) : c0;
-      simPos=[c[0]-0.0004,c[1]]; Smoother.reset(); HUD.prev=null; tickSim();
+      simPos=[c[0]-0.0004,c[1]]; GPSFilter.reset(); HUD.prev=null; tickSim();
       HUD.log('ev-sys','teleported near '+z.name);
     };
     wrap.appendChild(b); }); }
@@ -2065,7 +2029,7 @@ EngineKokoro.tryLoad();
     if(!b || !Array.isArray(b.zones) || !b.zones.length){
       try{ localStorage.removeItem(LKEY); }catch(_){}
       HUD.log('ev-warn','no stops published for this project yet'); return; }
-    BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
+    BUNDLE=b; Geofencer.reset(); GPSFilter.reset(); HUD.prev=null;
     loadWalkingPaths(b);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
@@ -2084,7 +2048,7 @@ EngineKokoro.tryLoad();
   }catch(e){
     let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
     if(cached){ try{ const b=JSON.parse(cached);
-      BUNDLE=b; Geofencer.reset(); Smoother.reset(); HUD.prev=null;
+      BUNDLE=b; Geofencer.reset(); GPSFilter.reset(); HUD.prev=null;
       loadWalkingPaths(b);
       if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());

@@ -6,6 +6,7 @@
 <title>Geofence Simulator</title>
 <script src="role-gate.js"></script>
 <script>RoleGate.require(['admin']);</script>
+<script src="/kalman-filter.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -140,9 +141,13 @@ input[type=range]{width:100%;accent-color:var(--coral)}
    GEOFENCE SIMULATOR — desk test bench
    The block marked ENGINE CORE below is a VERBATIM MIRROR of the same
    modules in geofence-engine.html. Do NOT hand-edit it here; if the
-   engine's logic changes, re-copy TUNING/Geo/Smoother/Geofencer so the
-   simulator always tests exactly what ships. (Later: extract to a shared
-   engine-core.js that both files load.)
+   engine's logic changes, re-copy TUNING/Geo/Geofencer so the simulator
+   always tests exactly what ships. (Later: extract to a shared
+   engine-core.js that both files load.) Position/velocity smoothing itself
+   is no longer part of this mirror at all — both files now load the one
+   real shared frontend/kalman-filter.js (window.GPSFilter) directly,
+   finally closing the "pending future work" this comment used to describe
+   for that piece.
    ===================================================================== */
 
 /* ----- sim-side globals the core reads ----- */
@@ -277,13 +282,10 @@ const TUNING = {
   ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
   MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
   SHORT_VISIT_S: 12,
-  // Position smoothing is speed-adaptive (2026-07-23 fix) — see geofence-engine.html
-  // for the full derivation. Mirror kept identical per this file's own contract.
-  SMOOTH_TAU_MAX_S: 2.3,     // tau at/below SMOOTH_SPEED_LO_MPS — ≈ old LOWPASS=0.35 at ~1Hz (walking, unchanged)
-  SMOOTH_TAU_MIN_S: 0.6,     // tau at/above SMOOTH_SPEED_HI_MPS — 15 m/s * 0.6s ≈ 9m lag, well under EXIT_BUFFER_M
-  SMOOTH_SPEED_LO_MPS: 2.0,  // brisk-walk ceiling
-  SMOOTH_SPEED_HI_MPS: 8.0,  // ~29 km/h, solid bike/ski — full low-lag tau at/above this
-  SPEED_TAU_S: 2.3,          // dt-normalized tau for the internal speed estimate
+  // Position/velocity smoothing moved to an Extended Kalman Filter
+  // (2026-08-07, frontend/kalman-filter.js/GPSFilter) — see that file's own
+  // header comment for the design. Mirrored across this file and
+  // geofence-engine.html the same way the old EMA constants were.
   HEAD_WINDOW: 8         // compass readings used for heading-confidence variance
 };
 
@@ -433,44 +435,8 @@ function ambientCenterNow(zone, nowMs){
   return pathPointAtDist(zone.path, cum, d);
 }
 
-const Smoother = {
-  s:null, prev:null, rawPrev:null, spd:0, t0:null,
-  push(fix){
-    if(!this.s){ this.s={lat:fix.lat,lon:fix.lon}; this.prev=null; this.rawPrev=null; this.spd=0; }
-
-    // Speed estimate drives the adaptive tau below — computed from the last
-    // RAW fix, not the last smoothed point, so the estimate isn't itself
-    // lagged by the filter it's supposed to unlag.
-    let dt=null;
-    if(this.rawPrev){
-      dt=(fix.t-this.rawPrev.t)/1000;
-      let inst=this.spd;
-      if(dt>=0.4){                                    // ignore sub-0.4s gaps (GPS double-fix)
-        inst=Geo.hav([this.rawPrev.lat,this.rawPrev.lon],[fix.lat,fix.lon])/dt;
-        if(inst>25) inst=this.spd;                     // reject a lone >90 km/h spike
-      }
-      const spdA = dt>0 ? 1-Math.exp(-dt/TUNING.SPEED_TAU_S) : 0.35;
-      this.spd = this.spd + spdA*(inst-this.spd);      // dt-normalized low-pass the speed
-    }
-    this.rawPrev={lat:fix.lat,lon:fix.lon,t:fix.t};
-
-    // Position EMA: time-normalized + speed-adaptive time constant.
-    const lo=TUNING.SMOOTH_SPEED_LO_MPS, hi=TUNING.SMOOTH_SPEED_HI_MPS;
-    const f = hi>lo ? Math.max(0,Math.min(1,(this.spd-lo)/(hi-lo))) : 0;
-    const tau = TUNING.SMOOTH_TAU_MAX_S + f*(TUNING.SMOOTH_TAU_MIN_S-TUNING.SMOOTH_TAU_MAX_S);
-    const a = (dt!=null && dt>0) ? 1-Math.exp(-dt/tau) : 0.35;   // first fix: delta is 0 anyway
-    this.s={ lat:this.s.lat+a*(fix.lat-this.s.lat), lon:this.s.lon+a*(fix.lon-this.s.lon) };
-
-    let headingTravel=null;
-    if(this.prev){
-      const d=Geo.hav([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
-      if(d>1) headingTravel=Geo.bearing([this.prev.lat,this.prev.lon],[this.s.lat,this.s.lon]);
-    }
-    this.prev={lat:this.s.lat,lon:this.s.lon,t:fix.t};
-    return { lat:this.s.lat, lon:this.s.lon, acc:fix.acc, t:fix.t, speed:this.spd, headingTravel };
-  },
-  reset(){ this.s=null; this.prev=null; this.rawPrev=null; this.spd=0; }
-};
+// Position/velocity smoothing now lives in frontend/kalman-filter.js
+// (window.GPSFilter) — see TUNING's comment above.
 
 const Geofencer = {
   state:{},                 // per-layer state machine
@@ -788,7 +754,7 @@ function zoneNearestDistM(z,p,nowMs){
 let prevP=null, fixCount=0;
 function feed(lat,lon,acc,t){
   window.__lastAcc=acc;
-  const sm=Smoother.push({lat,lon,acc,t});
+  const sm=GPSFilter.push({lat,lon,acc,t});
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
   const active=Geofencer.update(p,prevP,t);
   prevP=p; fixCount++;
@@ -835,7 +801,7 @@ function loadBundle(b,srcLabel){
   BUNDLE = b;
   if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
   loadWalkingPaths(b);
-  Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+  GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0;
   AmbientClip.stop();
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);
   refreshZones(); fitToData();
@@ -926,7 +892,7 @@ function play(){
     else { log("ev-warn","load a bundle with stops, or draw a path first"); return; } }
   if(playing){ pause(); return; }
   Audio.unlock();
-  if(sDist>=pathTotal()){ sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones(); }
+  if(sDist>=pathTotal()){ sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones(); }
   playing=true; document.getElementById("btnPlay").textContent="⏸ Pause"; document.getElementById("btnPlay").classList.add("on");
   vT=Date.now();
   timer=setInterval(()=>{
@@ -939,7 +905,7 @@ function play(){
     avatar.setLngLat([jLon,jLat]);
     feed(jLat,jLon,Math.max(3,jitV||5),vT);
     if(ended){ if(document.getElementById("btnLoop").classList.contains("on")){
-        sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; log("ev-sys","loop — restarting path"); }
+        sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; log("ev-sys","loop — restarting path"); }
       else { pause(); log("ev-sys","path complete"); } }
   },250);
 }
@@ -1014,13 +980,13 @@ document.getElementById("btnClearPath").onclick=()=>{ PATH=[]; sDist=0; drawPath
 document.getElementById("btnPlay").onclick=play;
 document.getElementById("btnStops").onclick=()=>{ if(playing) pause();
   if(!buildStopsPath()){ log("ev-warn","no stops with a center to route through"); return; }
-  sDist=0; Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones();
+  sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones();
   fitToData(); play(); };
 document.getElementById("btnLoop").onclick=(e)=>{ e.target.classList.toggle("on");
   e.target.textContent=e.target.classList.contains("on")?"Loop ▣":"Loop ▢"; };
 document.getElementById("btnMute").onclick=(e)=>{ Audio.on=!Audio.on;
   e.target.classList.toggle("on",Audio.on); e.target.textContent=Audio.on?"Sound ◼":"Muted ◻"; };
-document.getElementById("btnReset").onclick=()=>{ Smoother.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+document.getElementById("btnReset").onclick=()=>{ GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0;
   document.getElementById("sFix").textContent="0"; refreshZones(); log("ev-sys","engine reset — state cleared"); };
 
 log("ev-sys","simulator ready — sample walk loaded. Drag the dot, or Draw path → Play.");
