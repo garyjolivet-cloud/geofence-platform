@@ -1113,10 +1113,19 @@ function checkProximityAudio(lat, lon){
     if(s.expiresAt>now && s.audioUrl) candidates.push({id:"live:"+s.id, lat:s.lat, lon:s.lon, radiusM:s.radiusM||25, url:s.audioUrl});
   });
   publishedZones.forEach(z=>{
-    if(!z.center || !z.audioUrl) return;
+    if(!z.center) return;
+    // Recorded clip takes priority when both exist, same convention as the
+    // real walk engine ("recorded voice replaces TTS when present") — but
+    // a say-only stop (no audioUrl at all) is a normal, common authoring
+    // pattern via the Fence Editor and needs a candidate too, or it never
+    // gets picked up here at all. This was the actual bug: every stop in
+    // this proximity check used to require z.audioUrl outright, silently
+    // skipping any zone authored with only a spoken "say" line.
+    const say = !z.audioUrl && (z.triggers||[]).find(t=>t.fires_on==="enter" && t.say)?.say;
+    if(!z.audioUrl && !say) return;
     const tgt=(z.layers||[]).find(l=>l.kind==="target");
     const r = tgt && tgt.radiusM!=null ? tgt.radiusM : 12;
-    candidates.push({id:"pub:"+z.id, lat:z.center[0], lon:z.center[1], radiusM:r, url:z.audioUrl});
+    candidates.push({id:"pub:"+z.id, lat:z.center[0], lon:z.center[1], radiusM:r, url:z.audioUrl||null, say:say||null});
   });
 
   let nearest=null, nearestD=Infinity;
@@ -1128,7 +1137,15 @@ function checkProximityAudio(lat, lon){
   if(nearest && nearest.id!==_nearStopId){
     _nearStopId = nearest.id;
     if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
-    playStopAudio(nearest.url);
+    if(nearest.url) playStopAudio(nearest.url);
+    else if(nearest.say){
+      // Plain browser TTS, matching this file's own existing "Signal lost/
+      // restored" announcements — not the full Kokoro/Workers-AI chain the
+      // real engine uses. This tool is for an author to quickly verify
+      // newly published content while walking, not the polished visitor
+      // experience, so the simpler built-in voice is the right fit here.
+      try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(nearest.say)); }catch(e){}
+    }
   } else if(!nearest && _nearStopId!==null){
     _nearStopId = null;
     if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
