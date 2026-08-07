@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Field</title>
 <script src="role-gate.js"></script>
+<script src="/kalman-filter.js"></script>
 <script src="code-objects.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
@@ -1123,8 +1124,13 @@ function checkProximityAudio(lat, lon){
     // skipping any zone authored with only a spoken "say" line.
     const say = !z.audioUrl && (z.triggers||[]).find(t=>t.fires_on==="enter" && t.say)?.say;
     if(!z.audioUrl && !say) return;
+    // audibleFromM is the "how far away can this actually be heard" figure
+    // (what SpatialVoice fades against in the real engine) — a more honest
+    // distance for "should this be audible right now" than the tighter
+    // target-layer entry radius, which exists for formal enter/exit state
+    // tracking, not for gating whether you're merely in earshot.
     const tgt=(z.layers||[]).find(l=>l.kind==="target");
-    const r = tgt && tgt.radiusM!=null ? tgt.radiusM : 12;
+    const r = Math.max(z.audibleFromM||0, (tgt && tgt.radiusM!=null) ? tgt.radiusM : 12);
     candidates.push({id:"pub:"+z.id, lat:z.center[0], lon:z.center[1], radiusM:r, url:z.audioUrl||null, say:say||null});
   });
 
@@ -1245,7 +1251,14 @@ async function initPermissions(){
       // a weak trail signal) — piggyback on every GPS fix, same as refreshMap,
       // so it keeps retrying until it actually succeeds instead of just once.
       refreshPublishedZones();
-      checkProximityAudio(lat, lon);
+      // Proximity auto-play used the raw fix directly — no smoothing at all,
+      // unlike the real walk engine. A single noisy fix (normal phone GPS
+      // jitter) can easily land more than a tight ~10m trigger radius away
+      // from where you're actually standing, silently missing a stop even
+      // though you're right there. Route through the same GPSFilter
+      // (Extended Kalman Filter) the engine now uses instead of the raw fix.
+      const smoothed = (typeof GPSFilter!=='undefined') ? GPSFilter.push({lat,lon,acc,t:pos.timestamp}) : {lat,lon};
+      checkProximityAudio(smoothed.lat, smoothed.lon);
       if(first){ map.flyTo({center:[lon,lat],zoom:17}); setStatus("Ready"); }
     },
     err => setStatus("GPS: "+err.message),
