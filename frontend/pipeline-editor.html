@@ -44,15 +44,17 @@
          display:flex;flex-direction:column;gap:8px}
   .library h3{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:2px 0 0}
   .library-body{flex:1 1 auto;min-height:0}
-  #libraryClientNav{display:flex}
   /* All three side columns use the same drag-to-resize pattern as the Audio
      Studio/Chatterbox rails (resize:horizontal + flex:0 0 auto — a fixed
      flex-basis is required or the flex layout overrides any manual resize) —
      drag the handle at each column's bottom-right corner to trade space
      between it and its neighbor. */
   .palette{width:180px;min-width:120px;max-width:50vw;resize:horizontal;overflow:auto;
-         border-right:1px solid var(--rim);padding:10px;flex:0 0 auto}
+         border-right:1px solid var(--rim);padding:10px;flex:0 0 auto;
+         display:flex;flex-direction:column;gap:6px}
   .palette h3{font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:12px 0 6px}
+  #paletteSaveRow{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  #palette{flex:1 1 auto;min-height:0}
   .blk-card{background:var(--slate);border:1px solid var(--rim);border-radius:8px;padding:8px 10px;
          margin-bottom:6px;cursor:grab;font-family:"Barlow Condensed";font-size:13px}
   .blk-card:hover{border-color:var(--coral)}
@@ -125,20 +127,22 @@
 <div class="hdr">
   <h1>Pipeline Editor</h1>
   <div class="sub" id="ctxLabel">loading…</div>
-  <span id="saveMsg"></span>
-  <button id="saveBtn" class="on">Save</button>
-  <a id="backLink" href="/editor">← Back to Fence Editor</a>
 </div>
 <div id="topNav"></div>
 <div id="errBanner"></div>
 <div class="layout">
   <div class="library" id="libraryCol" style="display:none">
-    <div id="libraryClientNav"></div>
     <button id="btnNewCodeObject" class="on">+ New Code Object</button>
     <h3>Code Library</h3>
     <div class="library-body" id="libraryBody"></div>
   </div>
-  <div class="palette" id="palette"></div>
+  <div class="palette">
+    <div id="paletteSaveRow">
+      <button id="saveBtn" class="on">Save</button>
+      <span id="saveMsg"></span>
+    </div>
+    <div id="palette"></div>
+  </div>
   <div class="canvas-wrap">
     <svg id="svg"></svg>
   </div>
@@ -154,13 +158,13 @@ const zoneId = qs.get("zone");
 // place instead of navigating to a separate page, per the merged-screen
 // redesign (the standalone code-library.html this used to link to is gone).
 let codeObjectId = qs.get("codeObject");
-let libraryOrgId = qs.get("org") || (window.ClientPicker && ClientPicker.resolve()) || "";
-// The library is now inline on this same screen (no separate page to have
-// come from), so the back link always just goes to the Fence Editor — but
-// if we arrived (or navigated within the library) with a project in view,
-// carry it back so the editor reopens the same project instead of blank.
-document.getElementById("backLink").href = "/editor" + (projectId ? "?project=" + encodeURIComponent(projectId) : "");
-if(window.TopNav){ TopNav.init({ navEl: document.getElementById("topNav"), active: "code-library" }); }
+let libraryOrgId = qs.get("org") || (window.TopNav && TopNav.resolveCompany()) || "";
+if(window.TopNav){
+  TopNav.init({
+    navEl: document.getElementById("topNav"), active: "code-library",
+    onCompanyChange: (org) => { libraryOrgId = org; if (window.CodeObjects) CodeObjects.refresh(); }
+  });
+}
 
 let bundle = null, zone = null, pipeline = { v: 1, nodes: [], edges: [] };
 let folders = []; // [{id,parentId,name}] for zoneSelect's grouped picker — populated in load()
@@ -190,10 +194,6 @@ function showErr(msg){
 let _libraryMounted = false;
 function showLibrary(){
   document.getElementById("libraryCol").style.display = "flex";
-  if (window.ClientPicker && !_libraryMounted) {
-    ClientPicker.init({ navEl: document.getElementById("libraryClientNav"), onChange: (org) => { libraryOrgId = org; if (window.CodeObjects) CodeObjects.refresh(); } });
-    if (libraryOrgId) { try { localStorage.setItem("gp.activeClient", libraryOrgId); } catch (e) {} }
-  }
   if (!_libraryMounted && window.CodeObjects) {
     _libraryMounted = true;
     CodeObjects.mount(document.getElementById("libraryBody"), {
