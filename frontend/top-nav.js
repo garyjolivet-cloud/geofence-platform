@@ -16,20 +16,27 @@
 // is a library-scoped filter that's allowed to diverge from the page-level
 // company, not "the page's" company selector).
 //
-// Project pulldown is built on searchable-select.js's searchableSelect()
-// widget, extended with a "+ New Project" action and a management view
-// (rename/delete workspace, delete project, combine, merge) ported from
-// index.html's mutating actions — same endpoints, same gp.admin
-// token-prompt auth pattern, just re-skinned into this dropdown instead of
-// three separate full-screen modals.
+// Project pulldown matches searchable-select.js's interaction pattern
+// (type-to-filter, custom position:fixed menu, mousedown-not-click rows) but
+// is implemented directly here rather than calling searchableSelect() —
+// that widget's menu is self-contained with no hook for the extra pinned
+// "+ New Project"/"Manage workspaces" rows this dropdown also needs, so
+// reusing it as-is would mean two disjoint interactive zones instead of one
+// cohesive menu. The management view itself (rename/delete workspace,
+// delete project, combine, merge) is ported from index.html's mutating
+// actions — same endpoints, same gp.admin token-prompt auth pattern, just
+// re-skinned into this dropdown instead of three separate full-screen modals.
 //
 // Switching Company or Project navigates to a fresh URL by default — every
 // tool already re-derives its state from ?project=/?org= at top-of-script
 // (no shared router exists), so a real navigation is the simplest way to
 // reset state correctly without rewriting each tool's own loading logic.
 // Pass onCompanyChange/onProjectChange to hot-swap instead, for pages that
-// already have the machinery (Dashboard's refreshForClient, Fence Editor's
-// CodeObjects.refresh()+doAudioRefresh()).
+// already have the machinery (Dashboard's refreshForClient, Chatterbox's
+// mountTree(), Fence Editor's CodeObjects.refresh()+doAudioRefresh()).
+// onProjectChange receives (projectId, projectObj) — the full object from
+// the last /api/projects fetch, so a host page doesn't need a redundant
+// lookup just to get the project's display name.
 (function(){
   "use strict";
 
@@ -174,7 +181,7 @@
       projInput.value = projectLabel(p);
       closeMenu();
       refreshToolHrefs();
-      if(opts.onProjectChange){ opts.onProjectChange(project); return; }
+      if(opts.onProjectChange){ opts.onProjectChange(project, p); return; }
       location.href = toolHref(location.pathname, project, company);
     }
 

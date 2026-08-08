@@ -6,6 +6,7 @@
 <title>Chase Life — Chatterbox Studio</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
 <script src="audio-tree.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -92,13 +93,9 @@
 <div class="hdr">
   <h1>🎙️ Chatterbox Studio</h1>
   <span class="crumb" id="hdrCrumb">voice cloning — Macbeth-to-park-tour narration</span>
-  <nav id="clientNav" style="display:flex;align-items:center;gap:8px"></nav>
-  <select id="projectSel" title="Which project's audio tree renders save into" style="max-width:180px"><option value="">— pick a project —</option></select>
   <a href="/library">Library →</a>
-  <a href="/studio">Audio Studio →</a>
-  <a href="/editor">Editor →</a>
-  <a href="/">Home</a>
 </div>
+<div id="topNav"></div>
 
 <div id="main">
   <div class="rail">
@@ -476,7 +473,10 @@ document.getElementById("btnResembleSubmit").onclick=()=>{
    ============================================================ */
 let scriptSlug="";
 let lineSeq=0;
-let projectId=new URLSearchParams(location.search).get("project")||localStorage.getItem("chatterbox.lastProject")||null;
+// TopNav (the persistent cross-tool nav bar) owns project selection now —
+// resolveProject() reads ?project= (wins) or localStorage["gp.activeProject"],
+// replacing this page's own now-removed #projectSel/"chatterbox.lastProject" pair.
+let projectId=(window.TopNav && TopNav.resolveProject())||null;
 let projectName=null;
 let audioTree=null; // mounted in project mode — same audio_folder tree Audio Studio shows for this project; see mountTree()
 let openScriptId=null, openScriptName=null; // the saved chatterbox_script row currently open, if any — see saveScript()/openScript()
@@ -625,10 +625,9 @@ function restoreScript(data){
   // tree has loaded.
   if(savedTarget && savedTarget.scopeId && savedTarget.scopeId!==projectId){
     projectId=savedTarget.scopeId;
-    try{ localStorage.setItem("chatterbox.lastProject",projectId); }catch(e){}
-    document.getElementById("projectSel").value=projectId;
+    if(window.TopNav) TopNav.setProject(projectId);
   }
-  loadProjectOptions().then(()=>{
+  syncProjectName().then(()=>{
     if(savedTarget && audioTree) audioTree.revealFolder(savedTarget.scope,savedTarget.folderId);
   });
   updateScriptButtons();
@@ -792,38 +791,24 @@ function mountTree(){
     onError: msg=>console.error("[audio tree]",msg)
   });
 }
-async function loadProjectOptions(){
-  const sel=document.getElementById("projectSel");
+// Verifies the resolved projectId genuinely belongs to the current org
+// before mounting its tree — a leftover localStorage["gp.activeProject"]
+// from a previously-selected company shouldn't silently mount a stale/wrong
+// tree once a different company is active. Replaces the old #projectSel-
+// driven loadProjectOptions(); TopNav's Project pulldown is the picker now.
+async function syncProjectName(){
   const org=currentOrg();
-  if(!org){
-    sel.innerHTML='<option value="">— pick a client first —</option>';
-    sel.disabled=true;
-    mountTree();
-    return;
-  }
-  sel.disabled=false;
+  if(!org){ projectId=null; projectName=null; mountTree(); return; }
+  if(!projectId){ mountTree(); return; }
   try{
     const r=await fetch("/api/projects?org="+encodeURIComponent(org),{headers:authHeaders()});
     const j=r.ok?await r.json():{projects:[]};
     const projects=j.projects||[];
-    sel.innerHTML='<option value="">— pick a project —</option>'+
-      projects.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===projectId?" selected":"")+'>'+esc(p.name||p.id)+'</option>').join("");
     const match=projects.find(p=>p.id===projectId);
     projectName=match?(match.name||match.id):null;
-    if(projectId && !match) projectId=null; // saved/URL project doesn't belong to this org — don't silently mount a stale tree
-  }catch(e){ sel.innerHTML='<option value="">— error loading projects —</option>'; }
+    if(!match) projectId=null; // resolved project doesn't belong to this org — don't silently mount a stale tree
+  }catch(e){}
   mountTree();
-}
-document.getElementById("projectSel").onchange=(e)=>{
-  projectId=e.target.value||null;
-  const opt=e.target.selectedOptions[0];
-  projectName=(opt&&opt.value)?opt.textContent:null;
-  try{ if(projectId) localStorage.setItem("chatterbox.lastProject",projectId); else localStorage.removeItem("chatterbox.lastProject"); }catch(err){}
-  const u=new URL(location.href);
-  if(projectId) u.searchParams.set("project",projectId); else u.searchParams.delete("project");
-  history.replaceState(null,"",u);
-  mountTree();
-  persistScript();
 };
 
 function updateGenAllHint(){
@@ -1299,8 +1284,18 @@ document.getElementById("btnSaveScriptAs").onclick=()=>saveScript(true);
    Init
    ============================================================ */
 loadVoices();
-loadProjectOptions();
-if(window.ClientPicker){ ClientPicker.init({navEl:document.getElementById("clientNav"),onChange:()=>{loadVoices();loadProjectOptions();}}); }
+syncProjectName();
+if(window.TopNav){
+  TopNav.init({
+    navEl:document.getElementById("topNav"),
+    active:"chatterbox",
+    onCompanyChange:()=>{ loadVoices(); syncProjectName(); },
+    onProjectChange:(id,proj)=>{
+      projectId=id; projectName=proj?(proj.name||proj.id):null;
+      mountTree(); persistScript();
+    }
+  });
+}
 
 (function(){
   try{
