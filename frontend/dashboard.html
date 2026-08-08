@@ -6,6 +6,7 @@
 <title>Geofence Platform — Dashboard</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
 <script src="searchable-select.js"></script>
 <script src="wheel-picker.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
@@ -85,6 +86,12 @@
 </style>
 </head>
 <body>
+<!-- Cross-tool nav is a separate element from #topNav below (this page's
+     own Analytics/Team/Walk Links/Calendar tab bar) — admin-only, matching
+     the same role gate the old ClientPicker.init call here already had;
+     operator/front_desk never see it since every other tool it links to is
+     admin-gated too. -->
+<div id="crossToolNav"></div>
 <div id="previewBanner" style="display:none;position:sticky;top:0;z-index:50;background:var(--amber);color:#1a0d07;
      padding:10px 20px;text-align:center;font-family:'Barlow Condensed';font-weight:700;font-size:14px;letter-spacing:.4px;text-transform:uppercase">
   🏢 Viewing as <b id="previewName"></b> — <a href="/clients" style="color:#1a0d07;text-decoration:underline">back to clients</a>
@@ -104,7 +111,6 @@
       <select id="projSel" style="display:none"><option value="">— project —</option></select>
       <input class="tokenin" id="tok" type="password" placeholder="admin token" style="width:140px">
       <button class="go" id="load" style="display:none">Load</button>
-      <a href="/">Home</a>
       <button class="nav" onclick="signOut()" style="color:var(--fog)">Sign out</button>
     </nav>
   </header>
@@ -942,8 +948,8 @@ RoleGate.require(["admin","operator","front_desk"]).then(me=>{
   applyRoleVisibility(me.role);
   applyInviteRoleOptions(me.role);
   showTab(defaultTabForRole(me.role));
-  if(me.role==="admin"){
-    ClientPicker.init({navEl:document.getElementById("topNav"), allowAll:false, defaultId:me.orgId, onChange:refreshForClient});
+  if(me.role==="admin" && window.TopNav){
+    TopNav.init({navEl:document.getElementById("crossToolNav"), active:"dashboard", allowAllCompany:false, defaultCompany:me.orgId, onCompanyChange:refreshForClient});
   }
   refreshForClient();
 });

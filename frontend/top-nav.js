@@ -37,6 +37,13 @@
 // onProjectChange receives (projectId, projectObj) — the full object from
 // the last /api/projects fetch, so a host page doesn't need a redundant
 // lookup just to get the project's display name.
+//
+// init(opts): navEl (required), active (tool-link key to highlight, or
+// null), allowAllCompany, defaultCompany (a fallback org id used — both
+// functionally and for display — when nothing's been picked/stored yet,
+// e.g. an admin's own home org; matches the pattern dashboard.html's own
+// orgParam() already used before this module existed), onCompanyChange,
+// onProjectChange.
 (function(){
   "use strict";
 
@@ -92,7 +99,11 @@
     navEl.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;"
       + "background:var(--slate2,#1b2738);border-bottom:1px solid var(--rim,#26344a)";
 
-    let company = (window.ClientPicker ? window.ClientPicker.resolve() : "") || "";
+    // client-picker.js's own defaultId is display-only (render(), not set())
+    // — resolve()/get() stay empty until a real pick happens. Fall back to
+    // opts.defaultCompany here too so the Project pulldown/tool-link hrefs
+    // work correctly on a first visit, not just look right.
+    let company = (window.ClientPicker ? window.ClientPicker.resolve() : "") || opts.defaultCompany || "";
     let project = resolveProject();
     let projects = []; // this company's projects, refetched whenever company changes
 
@@ -398,6 +409,7 @@
       await window.ClientPicker.init({
         navEl: companySlot,
         allowAll: !!opts.allowAllCompany,
+        defaultId: opts.defaultCompany,
         onChange: async (newCompany) => {
           company = newCompany || "";
           if(opts.onCompanyChange){ opts.onCompanyChange(company); await loadProjects(); refreshToolHrefs(); return; }
