@@ -8,6 +8,7 @@
 <script>RoleGate.require(['admin']);</script>
 <script src="pipeline-runtime.js"></script>
 <script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
 <script src="code-objects.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -128,6 +129,7 @@
   <button id="saveBtn" class="on">Save</button>
   <a id="backLink" href="/editor">← Back to Fence Editor</a>
 </div>
+<div id="topNav"></div>
 <div id="errBanner"></div>
 <div class="layout">
   <div class="library" id="libraryCol" style="display:none">
@@ -158,6 +160,7 @@ let libraryOrgId = qs.get("org") || (window.ClientPicker && ClientPicker.resolve
 // if we arrived (or navigated within the library) with a project in view,
 // carry it back so the editor reopens the same project instead of blank.
 document.getElementById("backLink").href = "/editor" + (projectId ? "?project=" + encodeURIComponent(projectId) : "");
+if(window.TopNav){ TopNav.init({ navEl: document.getElementById("topNav"), active: "code-library" }); }
 
 let bundle = null, zone = null, pipeline = { v: 1, nodes: [], edges: [] };
 let folders = []; // [{id,parentId,name}] for zoneSelect's grouped picker — populated in load()
