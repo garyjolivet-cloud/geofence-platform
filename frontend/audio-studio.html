@@ -164,7 +164,6 @@
 <div class="hdr">
   <h1>🎛 Audio Studio</h1>
   <span class="crumb" id="hdrCrumb"></span>
-  <a class="linklike" id="btnBackToEditor" href="/editor" style="display:none">&larr; Back to Editor</a>
 </div>
 <div id="topNav"></div>
 
@@ -538,16 +537,12 @@ function initFromUrl(){
 function showNoProject(){
   document.getElementById("noProjectHint").style.display="block";
   document.getElementById("studioScreen").classList.remove("show");
-  document.getElementById("btnBackToEditor").style.display="none";
   document.getElementById("hdrCrumb").textContent="";
 }
 function showStudio(){
   document.getElementById("noProjectHint").style.display="none";
   document.getElementById("studioScreen").classList.add("show");
   document.getElementById("hdrCrumb").textContent=studio.projectName||studio.projectId;
-  const backBtn=document.getElementById("btnBackToEditor");
-  if(studio.projectId){ backBtn.href="/editor?project="+encodeURIComponent(studio.projectId); backBtn.style.display="inline-block"; }
-  else backBtn.style.display="none";
 }
 async function enterProject(){
   document.getElementById("hdrCrumb").textContent=studio.projectId;
@@ -562,20 +557,6 @@ async function enterProject(){
   openSessionId=null; openSessionName=null; updateSaveButtons();
   audioTree.refresh({projectId:studio.projectId,projectLabel:studio.projectName||studio.projectId});
 }
-// Prefer a real back-navigation over the href when we can tell we arrived
-// here from the Fence Editor in this same tab: history.back() restores its
-// exact in-memory state (e.g. an unpublished Customer selection or unsaved
-// zone edits) via bfcache, where a fresh /editor?project= load only ever
-// has the last-PUBLISHED bundle to show. Falls through to the plain href
-// (already set correctly above) for modified clicks, new tabs, or a direct
-// deep link into Studio with no editor history to go back to.
-document.getElementById("btnBackToEditor").addEventListener("click",e=>{
-  if(e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey) return;
-  let cameFromEditor=false;
-  try{ cameFromEditor=["/editor","/fence-editor"].includes(new URL(document.referrer).pathname); }catch(err){}
-  if(cameFromEditor){ e.preventDefault(); history.back(); }
-});
-
 /* ============================================================
    Source tree — "This Project" folders + pinned org Library, both
    real nested trees (audio-tree.js), backed by GET /api/audio/tree.
