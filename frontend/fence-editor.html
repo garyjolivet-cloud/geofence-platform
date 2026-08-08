@@ -31,15 +31,25 @@
          max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
          background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
          backdrop-filter:blur(6px);display:flex;flex-direction:column}
-  /* min-width/min-height:0 added 2026-08-08 — .panel's own base rule sets
-     min-width:260px;min-height:200px, which (found live, tripped over
-     while testing the just-relocated collapse button) silently defeated
-     this rule's width:36px!important — !important on width doesn't help
-     against a *different*, non-!important property (min-width) still
-     enforcing a 260px floor. A real, apparently long-standing bug, not
-     something today's changes introduced (confirmed via git log — this
-     rule never had a min-width override, even in its original form). */
-  .panel.mini{width:36px!important;height:auto!important;min-width:0;min-height:0;padding:8px 6px;overflow:hidden;resize:none}
+  /* min-width/min-height:0 (2026-08-08) — .panel's own base rule sets
+     min-width:260px;min-height:200px, which would otherwise silently
+     defeat width:auto below the same way it once defeated a fixed
+     width:36px here (found live, confirmed via git log this predates
+     today's changes — #audioPalette.mini already had the same override,
+     .panel.mini just never got it). width/height:auto (not a fixed 36px)
+     because mini now shows a real row (project name + button) instead of
+     a narrow icon-only strip — same sizing approach as #audioPalette.mini,
+     which sizes to whatever its own visible head row needs. */
+  .panel.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;padding:8px 6px;overflow:hidden;resize:none}
+  /* Mini hides every direct child of .panel-body except #mainPanelHead
+     (and the always-hidden #appSel). The editing UI isn't one single
+     wrapper — it's #editorControls, a bare Test-button .row, #simPanel,
+     and #editSection, all as separate siblings — so a single
+     "#editorControls{display:none}" rule (first attempt, confirmed live:
+     left Test/Add-a-stop/Stops visible when collapsed) doesn't cover it.
+     This :not() form hides whatever's there rather than needing to be
+     kept in sync with every new sibling added to .panel-body later. */
+  .panel.mini > .panel-body > *:not(#mainPanelHead):not(#appSel){display:none}
   .panel-body{flex:1 1 auto;overflow-y:auto;min-height:0}
   /* Audio palette — floats independently of .panel so it never blocks map stops */
   #audioPalette{position:absolute;top:10px;right:10px;width:280px;height:380px;min-width:220px;min-height:160px;
@@ -54,15 +64,9 @@
   #audioPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #audioPaletteHead button,#audioPaletteHead a{flex:0 0 auto;padding:3px 8px;font-size:13px}
   #audioPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
-  .panel.mini .panel-body{display:none}
   #panelMinBtn{background:none;border:none;color:var(--fog);cursor:pointer;padding:2px 4px;
                font-size:14px;line-height:1;flex-shrink:0;margin-left:auto}
   #panelMinBtn:hover{color:var(--snow)}
-  #panelExpandBtn{display:none;writing-mode:vertical-rl;font-family:"Barlow Condensed";font-size:11px;
-                  color:var(--fog);cursor:pointer;background:none;border:none;padding:4px 0;
-                  text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
-  .panel.mini #panelExpandBtn{display:block}
-  .panel.mini #panelMinBtn{display:none}
   .panel h1{font-family:"Black Han Sans";font-size:17px;margin:0 0 4px}
   .panel h1 .v{font-family:"Barlow Condensed";font-size:12px;color:var(--coral);font-weight:600}
   .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
@@ -404,30 +408,31 @@
 </div>
 
 <div class="panel" id="mainPanel">
-  <!-- collapse/expand buttons -->
-  <button id="panelExpandBtn" onclick="document.getElementById('mainPanel').classList.remove('mini')" title="Expand panel">▶</button>
   <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
   <select id="appSel" style="display:none"><option value="">— app —</option></select>
 
+  <!-- Project-name row: the panel's drag handle, its rename field, and its
+       collapse/expand toggle, all in one — and, since 2026-08-08, the ONE
+       thing that stays visible when the panel is collapsed (.panel.mini
+       hides #editorControls below, not this row), same "head always
+       visible, body hides" pattern #audioPalette already uses. Lives
+       outside #editorControls (unlike everything below it) specifically so
+       it isn't swept up by that div's own test-mode display:none — the
+       project name and collapse toggle now stay usable in Test Mode too,
+       not just the normal editing view. Dragging is suppressed over the
+       contenteditable name itself and over the button, so renaming and
+       collapsing both still work normally from here. -->
+  <div id="mainPanelHead" style="display:flex;align-items:flex-end;gap:8px;cursor:move;user-select:none" title="Drag to move this panel">
+    <span id="projCrumb" contenteditable="true" spellcheck="false"
+          style="flex:1;min-width:0;font-family:'Black Han Sans';font-size:22px;line-height:1.15;color:var(--snow);
+                 outline:none;cursor:text;border-bottom:1px dashed var(--rim);margin:0 0 8px;padding:0 0 3px"
+          title="click to rename">new tour</span>
+    <button id="panelMinBtn" style="flex:0 0 auto;margin-bottom:8px" title="Collapse panel">&#8722;</button>
+  </div>
+
   <!-- editor-only controls — hidden in test mode -->
   <div id="editorControls">
-    <!-- The old breadcrumb titlebar (⋮⋮ drag handle, "Home" link, client
-         name) was removed 2026-08-08 — Home moved to TopNav's own bar
-         (left of its gear), and the client name was redundant with
-         TopNav's own Company picker sitting right next to it. This row is
-         now the panel's drag handle instead (title="Drag..." + cursor:move
-         below); dragging is only suppressed over the contenteditable name
-         itself or the collapse button, so renaming and collapsing both
-         still work normally from here. -->
-    <div id="mainPanelHead" style="display:flex;align-items:flex-end;gap:8px;cursor:move;user-select:none" title="Drag to move this panel">
-      <!-- project name — large, bold, high-contrast; the one place to view/rename it -->
-      <span id="projCrumb" contenteditable="true" spellcheck="false"
-            style="flex:1;min-width:0;font-family:'Black Han Sans';font-size:22px;line-height:1.15;color:var(--snow);
-                   outline:none;cursor:text;border-bottom:1px dashed var(--rim);margin:0 0 8px;padding:0 0 3px"
-            title="click to rename">new tour</span>
-      <button id="panelMinBtn" style="flex:0 0 auto;margin-bottom:8px" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">&#8722;</button>
-    </div>
     <!-- shared status line — publish/upload/delete feedback lands here throughout the editor -->
     <div class="hint" id="platStatus" style="margin:0 0 4px">sign in required for Load, Publish</div>
     <!-- publish -->
@@ -2311,6 +2316,18 @@ document.getElementById("audioPaletteMin").onclick=e=>{
     document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
   });
 })();
+// Single toggle button (2026-08-08) — same −/+ glyph-swap pattern as
+// audioPaletteMin below, replacing the old two-separate-buttons
+// (panelExpandBtn shown only when mini, panelMinBtn shown only when not)
+// approach now that collapsing only hides #editorControls, not the whole
+// panel-body, so one button in one fixed spot can stay visible throughout.
+document.getElementById("panelMinBtn").onclick=e=>{
+  e.stopPropagation();
+  const p=document.getElementById("mainPanel");
+  const wasMini=p.classList.contains("mini");
+  p.classList.toggle("mini");
+  document.getElementById("panelMinBtn").innerHTML=wasMini?"&#8722;":"&#43;";
+};
 // Drag-source-only clip browser — all editing (rename/move/copy/delete/
 // upload) lives in Audio Studio, so this mounts audio-tree.js read-only.
 // Still one unified tree (project folders + a pinned Library subtree), same
