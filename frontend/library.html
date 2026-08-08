@@ -6,6 +6,7 @@
 <title>Chase Life — Audio Library</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
 <script src="audio-tree.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -90,8 +91,7 @@
 <body>
 <div class="hdr">
   <h1>📁 Audio Library</h1>
-  <span id="clientPickerNav" style="display:flex;align-items:center"></span>
-  <a href="/">&larr; Home</a>
+  <nav id="topNav"></nav>
 </div>
 
 <div class="main">
@@ -550,7 +550,11 @@ document.getElementById("cmbRender").onclick=async()=>{
   finally{ btn.textContent="Render + Upload ▶"; btn.disabled=false; }
 };
 
-ClientPicker.init({ navEl: document.getElementById("clientPickerNav"), onChange: refresh });
+// This page is purely org-scoped (no project concept — the Library tree is
+// company-wide, browsed regardless of any one project) — picking a project
+// from TopNav's pulldown means "go work on it," same as index.html's homepage.
+TopNav.init({navEl:document.getElementById("topNav"), active:null, allowAllCompany:false, onCompanyChange:refresh,
+  onProjectChange:(id)=>{ location.href="/editor?project="+encodeURIComponent(id); }});
 refresh();
 </script>
 </body>
