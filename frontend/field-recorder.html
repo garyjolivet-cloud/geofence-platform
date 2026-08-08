@@ -226,6 +226,10 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
       <button class="fbt" id="btnPathSave" style="display:none" onclick="savePathRecording()">💾 Save Path</button>
     </div>
     <div id="status">Starting up…</div>
+    <div id="proxDebug" style="font-size:11px;color:var(--fog);text-align:center;opacity:.8;display:flex;align-items:center;justify-content:center;gap:8px">
+      <span id="proxDebugText"></span>
+      <button onclick="testNearestNow()" style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--fog);background:none;color:var(--fog);cursor:pointer">🔊 Test nearest now</button>
+    </div>
   </div>
 </div>
 
@@ -954,15 +958,28 @@ function _ensureContentEl(){
   return el;
 }
 function unlockAudioPlayback(){
-  if(_audioUnlocked) return;
   try{
     const el=_ensureContentEl();
-    el.src=URL.createObjectURL(_silentWavBlob());
-    el.play().then(()=>{
-      _audioUnlocked=true;
-      const bar=document.getElementById('audioEnableBar'); if(bar) bar.style.display='none';
-    }).catch(()=>{});
+    if(!_audioUnlocked){
+      el.src=URL.createObjectURL(_silentWavBlob());
+      el.play().then(()=>{
+        _audioUnlocked=true;
+        const bar=document.getElementById('audioEnableBar'); if(bar) bar.style.display='none';
+      }).catch(()=>{});
+    } else {
+      // Confirmed live: even with the element already unlocked once, some
+      // browsers still refuse a later play() call after checkProximityAudio
+      // swaps .src to a real clip from the non-gesture GPS callback — the
+      // "user activation" tied to that element/session can lapse over the
+      // course of a long walk. Re-touch play() on every real tap so there's
+      // always a recent genuine gesture backing it, not just the first one.
+      el.play().catch(()=>{});
+    }
   }catch(e){}
+  // Say-only stops play via speechSynthesis from checkProximityAudio, called
+  // out of the non-gesture watchPosition callback — same restriction class,
+  // same re-arm-on-every-tap treatment.
+  try{ speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); }catch(e){}
 }
 
 let _playingUrl = null;
@@ -1102,8 +1119,7 @@ async function savePathRecording(){
 // session. Auto-play whichever stop (local, live, or already-published)
 // you're standing inside the trigger radius of; only re-fires on actually
 // entering/leaving/switching stops, not on every GPS tick.
-let _nearStopId = null;
-function checkProximityAudio(lat, lon){
+function buildProximityCandidates(){
   const now = Date.now();
   const candidates = [];
   stops.forEach(s=>{
@@ -1133,6 +1149,94 @@ function checkProximityAudio(lat, lon){
     const r = Math.max(z.audibleFromM||0, (tgt && tgt.radiusM!=null) ? tgt.radiusM : 12);
     candidates.push({id:"pub:"+z.id, lat:z.center[0], lon:z.center[1], radiusM:r, url:z.audioUrl||null, say:say||null});
   });
+  return candidates;
+}
+
+// iOS Safari (and Chrome-on-iOS, same WebKit engine) requires
+// speechSynthesis.speak() to happen synchronously inside a real user gesture
+// — confirmed live: a direct button tap plays fine, but the same call from
+// checkProximityAudio's GPS callback does not, with no reliable JS-side
+// unlock trick (unlike the <audio> element, whose "activated" state
+// genuinely does persist across async calls when the same element is
+// reused — see playStopAudio). Route say-only stops through this app's own
+// /api/tts (already used by the real engine's fallback TTS tier) to get
+// real audio bytes, then play those through that same proven <audio>-element
+// path instead of fighting the unfixable speechSynthesis restriction.
+const _ttsCache = new Map(); // say text -> blob: URL
+async function sayViaTts(text){
+  if(_ttsCache.has(text)) return _ttsCache.get(text);
+  const r = await fetch("/api/tts", {
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body: JSON.stringify({text})
+  });
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  _ttsCache.set(text, url);
+  return url;
+}
+
+function speakViaBrowserTts(text){
+  // Fallback only (offline, or /api/tts failed) — same restriction as
+  // above applies here, so this may still be silent on iOS when triggered
+  // from the GPS callback, but it's better than nothing when there's no
+  // network to reach /api/tts at all.
+  try{
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.onstart = ()=> setStatus("🔊 speaking: "+text.slice(0,60));
+    u.onerror = (e)=> setStatus("TTS blocked: "+(e.error||"unknown error"));
+    speechSynthesis.speak(u);
+  }catch(e){ setStatus("TTS threw: "+e.message); }
+}
+
+function playCandidate(c){
+  if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
+  if(c.url) playStopAudio(c.url);
+  else if(c.say){
+    setStatus("Loading speech…");
+    sayViaTts(c.say).then(url=>{
+      setStatus("🔊 "+c.say.slice(0,60));
+      playStopAudio(url);
+    }).catch(()=>speakViaBrowserTts(c.say));
+  }
+}
+
+// Manual test — fires the single closest candidate (ignoring range/dedup)
+// directly from this button tap, a genuine synchronous user gesture with
+// no GPS callback in between. If this is also silent, the problem isn't
+// autoplay/gesture policy at all; if it works, the audio/TTS path itself is
+// fine and the remaining gap is specifically the GPS-triggered auto-play.
+function testNearestNow(){
+  if(!lastPos){ setStatus("No GPS yet — can't test"); return; }
+  const candidates = buildProximityCandidates();
+  let closest=null, closestD=Infinity;
+  candidates.forEach(c=>{
+    const d = haversineM(lastPos.lat, lastPos.lon, c.lat, c.lon);
+    if(d<closestD){ closest=c; closestD=d; }
+  });
+  if(!closest){ setStatus("No stops loaded to test"); return; }
+  setStatus("Testing "+closest.id+" ("+Math.round(closestD)+"m away)…");
+  playCandidate(closest);
+}
+
+let _nearStopId = null;
+function checkProximityAudio(lat, lon){
+  const candidates = buildProximityCandidates();
+
+  // Closest candidate regardless of whether it's in range yet, purely for the
+  // on-screen debug readout below — separate from nearest/nearestD, which
+  // stay range-gated for actual trigger logic.
+  let closestAny=null, closestAnyD=Infinity;
+  candidates.forEach(c=>{
+    const d = haversineM(lat, lon, c.lat, c.lon);
+    if(d<closestAnyD){ closestAny=c; closestAnyD=d; }
+  });
+  const dbg=document.getElementById("proxDebugText");
+  if(dbg) dbg.textContent = closestAny
+    ? "nearest: "+closestAny.id+" "+Math.round(closestAnyD)+"m (need ≤"+closestAny.radiusM+"m)"
+    : (candidates.length===0 ? "no candidates loaded" : "");
 
   let nearest=null, nearestD=Infinity;
   candidates.forEach(c=>{
@@ -1142,16 +1246,7 @@ function checkProximityAudio(lat, lon){
 
   if(nearest && nearest.id!==_nearStopId){
     _nearStopId = nearest.id;
-    if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
-    if(nearest.url) playStopAudio(nearest.url);
-    else if(nearest.say){
-      // Plain browser TTS, matching this file's own existing "Signal lost/
-      // restored" announcements — not the full Kokoro/Workers-AI chain the
-      // real engine uses. This tool is for an author to quickly verify
-      // newly published content while walking, not the polished visitor
-      // experience, so the simpler built-in voice is the right fit here.
-      try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(nearest.say)); }catch(e){}
-    }
+    playCandidate(nearest);
   } else if(!nearest && _nearStopId!==null){
     _nearStopId = null;
     if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
@@ -1810,12 +1905,17 @@ async function clearCurrentSession(){
   for(const s of stops) await dbDelete("stops",s.id);
   for(const c of clips.filter(c=>c.projId===projId)) await dbDelete("clips",c.id);
   await dbDelete("sessions",projId);
-  stops=[]; clips=[]; liveStops=[]; lastStop=null; session=null; publishedZones=[];
+  stops=[]; clips=[]; liveStops=[]; lastStop=null; session=null;
   document.getElementById("btnPub").disabled=true;
   refreshMap();
-  refreshPublishedZones();
   renderStopList();
   setStatus("Session cleared");
+  // publishedZones (the project's real published stops) is a reference layer,
+  // not local session data — the confirm dialog above promises "published
+  // server data is unaffected," so reload it instead of leaving it blanked
+  // out until the next full page refresh.
+  await loadPublishedBundle();
+  refreshPublishedZones();
 }
 
 /* ── init ───────────────────────────────────────────── */
@@ -1862,7 +1962,7 @@ async function init(){
 
   document.getElementById("screenSessions").style.display = "none";
   document.getElementById("screenField").style.display = "flex";
-  document.getElementById("screenField").addEventListener("pointerdown", unlockAudioPlayback, {once:true});
+  document.getElementById("screenField").addEventListener("pointerdown", unlockAudioPlayback);
 
   session  = await dbGet("sessions", projId);
   stops    = (await dbGetAll("stops")).filter(s=>s.projId===projId);
