@@ -58,6 +58,11 @@
   label.chk input{width:auto}
   input,textarea,select{width:100%;font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px}
+  /* select's own background/color style its closed box, but most browsers
+     render the opened dropdown popup with their own default (usually
+     white) background regardless — options can end up near-invisible
+     white-on-white. Styling <option> directly fixes the popup itself. */
+  select option{background:var(--slate-2);color:var(--snow)}
   .half{display:flex;gap:6px} .half>div{flex:1}
   textarea#out{height:52px;resize:vertical;font-family:ui-monospace,monospace;font-size:11px;line-height:1.4}
   textarea.say{height:54px;resize:vertical;font-family:"Barlow Condensed";font-size:13px}
@@ -1898,9 +1903,16 @@ function updateCodeObjectsSummary(zone){
   }).join("");
   el.querySelectorAll("button[data-oid]").forEach(btn=>{
     btn.onclick=()=>{
+      // Missing autoSave() here (unlike the identical global-object detach
+      // handler nearby) meant a per-stop detach only ever lived in the
+      // in-memory zones array — never the local draft, never published — so
+      // any navigation away and back (confirmed live: the Code Library
+      // round-trip) silently reverted it, since there was nothing to
+      // restore from but the server's still-attached published copy.
       CodeObjects.detach(zone, btn.dataset.oid);
       updateCodeObjectsSummary(zone);
       render();
+      autoSave();
     };
   });
 }
@@ -1957,6 +1969,7 @@ function renderGlobalCodeObjectsChips(){
           if(CodeObjects.attach(zones[best],codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
             if(sel===best) updateCodeObjectsSummary(zones[best]);
             render();
+            autoSave();
           }
         } else if(CodeObjects.attach({codeObjects:globalCodeObjects},codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
           // Dropped on empty map, not near any stop — attach as a project-
@@ -1997,6 +2010,7 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
       if(CodeObjects.attach(zones[zoneIdx],codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
         if(sel===zoneIdx) updateCodeObjectsSummary(zones[zoneIdx]);
         render();
+        autoSave();
       }
       return;
     }
@@ -4310,7 +4324,12 @@ function editorToSimBundle(){
       layers:[generalLayer,targetLayer].filter(Boolean),triggers,
       pipeline:(z.pipeline&&Array.isArray(z.pipeline.nodes)&&z.pipeline.nodes.length)?z.pipeline:null,
       codeObjects:(z.codeObjects&&z.codeObjects.length)?z.codeObjects:[],
-      bearingDeg:z.bearingDeg!=null?z.bearingDeg:null};
+      bearingDeg:z.bearingDeg!=null?z.bearingDeg:null,
+      // Confirmed missing live (2026-08-07): every other per-stop field here
+      // was copied from the live zone into the sim snapshot, but ttsVoice
+      // never was — every stop in Test Mode silently spoke as the default
+      // voice regardless of what was actually selected/published.
+      ttsVoice:z.ttsVoice||null};
     if(s.type==="path"){
       out.path=s.coords.map(c=>[c[1],c[0]]);
       out.movementMode=z.movementMode||"walk";
@@ -4470,31 +4489,62 @@ function _ttsEnsureCtx(){
   if(_ttsCtx.state==='suspended') _ttsCtx.resume();
   return _ttsCtx;
 }
-function _ttsPlayPCM(audio, sampleRate){
+function _ttsPlayPCM(audio, sampleRate, done){
   const ctx=_ttsEnsureCtx();
   const buf=ctx.createBuffer(1,audio.length,sampleRate);
   buf.getChannelData(0).set(audio);
-  const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination); src.start();
+  const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination);
+  if(done) src.onended=done;
+  src.start();
 }
+// Confirmed live (2026-08-07): two different Speak nodes (e.g. a plain
+// speed readout + a separate threshold-warning object, both attached to the
+// same stop) firing on the same GPS tick each called simTTS() independently
+// — nothing here ever coordinated them, so two overlapping/garbled voices
+// played at once. logic.cooldown only rate-limits a *single* node's own
+// repeats; it can't fix two genuinely different nodes triggering together.
+// Serialize instead: at most one utterance plays at a time, and at most one
+// more stays queued (replacing any earlier not-yet-played one, not
+// stacking indefinitely) so a high-frequency source like a live speed
+// readout can't build up an ever-growing backlog that falls behind real time.
+let _ttsBusy=false, _ttsPending=null;
 function simTTS(text, voice){
+  if(_ttsBusy){ _ttsPending={text,voice}; return; }
+  _playTts(text, voice);
+}
+function _playTts(text, voice){
+  _ttsBusy=true;
+  const resolvedVoice=voice||SimKokoro.voice;
+  simLogEv('sev-sys','[tts] requested voice="'+(voice||"(none — using default "+SimKokoro.voice+")")+'" via '+(SimKokoro.tts?'Kokoro':'Workers AI'));
+  const advance=()=>{
+    _ttsBusy=false;
+    if(_ttsPending){ const next=_ttsPending; _ttsPending=null; _playTts(next.text,next.voice); }
+  };
   if(SimKokoro.tts){
-    SimKokoro.tts.generate(text,{voice:voice||SimKokoro.voice})
-      .then(r=>_ttsPlayPCM(r.audio,r.sampling_rate))
-      .catch(()=>_ttsWorkers(text,voice));
+    SimKokoro.tts.generate(text,{voice:resolvedVoice})
+      .then(r=>_ttsPlayPCM(r.audio,r.sampling_rate,advance))
+      .catch(()=>_ttsWorkers(text,voice,advance));
     return;
   }
-  _ttsWorkers(text,voice);
+  _ttsWorkers(text,voice,advance);
 }
-function _ttsWorkers(text,voice){
+function _ttsWorkers(text,voice,done){
   fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,voice})})
     .then(r=>r.ok?r.arrayBuffer():Promise.reject())
     .then(ab=>{ const ctx=_ttsEnsureCtx(); ctx.decodeAudioData(ab,buf=>{
-        const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination); src.start();
-      },()=>_ttsFallback(text)); })
-    .catch(()=>_ttsFallback(text));
+        const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination);
+        if(done) src.onended=done;
+        src.start();
+      },()=>_ttsFallback(text,done)); })
+    .catch(()=>_ttsFallback(text,done));
 }
-function _ttsFallback(text){
-  try{speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text));}catch(e){}
+function _ttsFallback(text,done){
+  try{
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);
+    if(done){ u.onend=done; u.onerror=done; }
+    speechSynthesis.speak(u);
+  }catch(e){ if(done) done(); }
 }
 
 function updateGuidanceArrow(lat,lon){
@@ -4834,9 +4884,16 @@ if(typeof CodeObjects!=="undefined"){
     },
     getZones:()=>zones,
     onZonesChanged:()=>{
+      // Confirmed missing live (2026-08-07): attach/detach via card click or
+      // the − button never persisted anywhere (not the local draft, not
+      // published) — only the drag-drop and global-object paths nearby
+      // called autoSave(). Any navigation away and back (e.g. the Code
+      // Library round-trip) silently reverted the change back to whatever
+      // was last actually published.
       drawList();
       if(sel>=0) updateCodeObjectsSummary(zones[sel]);
       render();
+      autoSave();
     }
   });
   document.getElementById("clientSel").addEventListener("change",()=>{ CodeObjects.refresh(); doAudioRefresh(); });
