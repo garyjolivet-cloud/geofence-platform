@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chase Life — Fence Editor</title>
 <script src="role-gate.js"></script>
+<script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
@@ -15,6 +17,15 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow)}
   #map{position:absolute;inset:0}
+  /* Cross-tool nav — the only normal-flow, non-floating element on this
+     page. #map still starts at inset:0 in CSS (so it's never briefly
+     unstyled/full-height before JS runs); the boot script below measures
+     this bar's real rendered height and pushes #map/#mainPanel/#audioPalette
+     down by exactly that, then calls map.resize() — same "measure the real
+     height, don't hardcode a guess" fix already used for wheel-picker's
+     popover positioning elsewhere in this app. position:relative+z-index
+     is what lets it paint above #map, which is itself position:absolute. */
+  #crossToolNav{position:relative;z-index:50}
   .cond{font-family:"Barlow Condensed",sans-serif}
   .panel{position:absolute;top:10px;left:10px;width:312px;min-width:260px;min-height:200px;
          max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
@@ -301,6 +312,7 @@
 <script src="/audio-tree.js"></script>
 </head>
 <body>
+<div id="crossToolNav"></div>
 <div id="map"></div>
 <div class="base"><select id="baseSel" title="base map">
   <option value="sat">Satellite</option><option value="topo">Topo</option><option value="street">Street</option>
@@ -4897,6 +4909,27 @@ if(typeof CodeObjects!=="undefined"){
     }
   });
   document.getElementById("clientSel").addEventListener("change",()=>{ CodeObjects.refresh(); doAudioRefresh(); });
+}
+
+// Cross-tool nav bar — full-width strip above the map, unlike every other
+// panel/palette here (all floating). Unlike Audio Studio/Chatterbox, this
+// page has no in-place "load a different project" path — project state is
+// threaded through hundreds of globals, not one reload-able function — so
+// Company/Project changes just navigate to a fresh /editor URL, same as
+// every other tool already links into this page. #projSettingsPopover
+// (this project's own customer/template assignment, opened from
+// #mainPanel's own ⚙) is a different, deliberately untouched concept —
+// TopNav's own gear is left with nothing wired to it (stays hidden).
+if(window.TopNav){
+  TopNav.init({navEl:document.getElementById("crossToolNav"), active:"edit", allowAllCompany:false}).then(()=>{
+    const navH=document.getElementById("crossToolNav").getBoundingClientRect().height;
+    document.getElementById("map").style.top=navH+"px";
+    document.getElementById("mainPanel").style.top=(navH+10)+"px";
+    document.getElementById("audioPalette").style.top=(navH+10)+"px";
+    document.querySelector(".base").style.top=(navH+10)+"px";
+    document.getElementById("mapKeyBtn").style.top=(navH+44)+"px";
+    map.resize();
+  });
 }
 </script>
 </body>
