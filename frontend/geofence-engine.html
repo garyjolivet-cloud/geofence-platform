@@ -700,30 +700,49 @@ const Audio = {
     if(typeof zoneOrDist==='number') d=zoneOrDist;
     else if(zoneOrDist&&zoneOrDist.center&&HUD.pos) d=Geo.hav([HUD.pos.lat,HUD.pos.lon],zoneOrDist.center);
     if(!voice && zoneOrDist&&zoneOrDist.ttsVoice) voice=zoneOrDist.ttsVoice;
+    // Two different pipeline Speak nodes (or a plain zone say + a pipeline
+    // Speak) can both become due on the same GPS tick — previously each
+    // independently called EngineTTSVoice.play(), which stopped whatever was
+    // already playing to start the new one, abruptly cutting a mid-sentence
+    // announcement off. Queue instead: at most one utterance plays at a
+    // time, at most one more stays queued (replacing any earlier not-yet-
+    // played one, not stacking indefinitely) so both finish cleanly and a
+    // high-frequency source can't build an ever-growing backlog.
+    if(this._speaking){ this._pending={clean,warn,d,voice}; return; }
+    this._speakNow(clean,warn,d,voice);
+  },
+  _speakNow(clean,warn,d,voice){
+    this._speaking=true;
+    const advance=()=>{
+      this._speaking=false;
+      if(this._pending){ const n=this._pending; this._pending=null; this._speakNow(n.clean,n.warn,n.d,n.voice); }
+    };
     // Kokoro if loaded, else Workers AI, else browser speechSynthesis
     if(EngineKokoro.tts){
       EngineKokoro.tts.generate(clean,{voice:voice||EngineKokoro.voice})
-        .then(r=>{ EngineTTSVoice.play(r.audio,r.sampling_rate,d); })
-        .catch(()=>this._apiTTS(clean,d,warn,voice));
+        .then(r=>{ EngineTTSVoice.play(r.audio,r.sampling_rate,d,advance); })
+        .catch(()=>this._apiTTS(clean,d,warn,voice,advance));
     } else {
-      this._apiTTS(clean,d,warn,voice);
+      this._apiTTS(clean,d,warn,voice,advance);
     }
   },
-  _apiTTS(text,d,warn,voice){
+  _apiTTS(text,d,warn,voice,done){
     fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,voice})})
       .then(r=>r.ok?r.arrayBuffer():Promise.reject(r.status))
       .then(ab=>{
         EngineTTSVoice._ensure();
         EngineTTSVoice.ctx.decodeAudioData(ab,buf=>{
-          EngineTTSVoice.play(buf.getChannelData(0),buf.sampleRate,d);
-        },()=>this._fallback(text,warn));
+          EngineTTSVoice.play(buf.getChannelData(0),buf.sampleRate,d,done);
+        },()=>this._fallback(text,warn,done));
       })
-      .catch(()=>this._fallback(text,warn));
+      .catch(()=>this._fallback(text,warn,done));
   },
-  _fallback(text,warn){
+  _fallback(text,warn,done){
     try{ const u=new SpeechSynthesisUtterance(text);
-      u.rate=1; u.pitch=warn?1.1:1; speechSynthesis.cancel(); speechSynthesis.speak(u);
-    }catch(e){} }
+      u.rate=1; u.pitch=warn?1.1:1;
+      if(done){ u.onend=done; u.onerror=done; }
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+    }catch(e){ if(done) done(); } }
 };
 
 // Kokoro TTS — shared with editor via browser cache (same origin)
@@ -772,14 +791,18 @@ const EngineTTSVoice={
     this.nodes={mono,lpf,pan,vol,dry,conv,wet};
     return true;
   },
-  play(samples,sampleRate,distM){
-    if(!this._ensure()) return;
+  play(samples,sampleRate,distM,done){
+    if(!this._ensure()){ if(done) done(); return; }
     const c=this.ctx;
     if(c.state==='suspended') c.resume();
+    // Defensive only now that Audio.say() serializes upstream — this should
+    // never fire a still-active source in normal flow, kept as a safety net
+    // for any other direct caller of this function.
     if(this._src){try{this._src.stop();}catch(e){}}
     const buf=c.createBuffer(1,samples.length,sampleRate);
     buf.getChannelData(0).set(samples);
     const s=c.createBufferSource(); s.buffer=buf;
+    if(done) s.onended=done;
     s.connect(this.nodes.mono); s.start();
     this._src=s;
     const t=SpatialVoice.tuning;
