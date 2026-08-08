@@ -525,6 +525,22 @@
     const head = float.querySelector(".co-float-head");
     const body = float.querySelector(".co-float-body");
     if (!opts.embedded) {
+      const openLibraryLink = head.querySelector(".co-open-library");
+      if (openLibraryLink) {
+        // The href baked in above is computed once, synchronously, at mount
+        // time — but the host (fence-editor.html) mounts this palette before
+        // its own async project-bundle fetch resolves, so getProjectId()
+        // can still be empty/stale at that exact instant, baking a
+        // project-less link in forever (confirmed live: landed back on a
+        // blank "new tour" instead of the project just left). Recompute
+        // right before actual navigation instead, so it always reflects
+        // whatever project is really loaded by the time you click.
+        openLibraryLink.addEventListener("pointerdown", () => {
+          const org = opts.getOrgId ? (opts.getOrgId() || "") : "";
+          const proj = opts.getProjectId ? (opts.getProjectId() || "") : "";
+          openLibraryLink.href = "/pipeline?org=" + encodeURIComponent(org) + (proj ? "&project=" + encodeURIComponent(proj) : "");
+        });
+      }
       makeHeaderDraggable(float, head);
       head.querySelector(".co-toggle").onclick = () => {
         float.classList.toggle("collapsed");
