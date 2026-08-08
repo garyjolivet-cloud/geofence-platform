@@ -771,7 +771,9 @@ function buildZoneSelectField(currentValue){
   };
 
   let menu = null, searchInput = null, treeBody = null;
-  const expanded = new Set();
+  // Root (id null) starts expanded but is otherwise a node like any other —
+  // toggleable, same as fence-editor.html's stopTreeExpanded=new Set([null]).
+  const expanded = new Set([null]);
   const onDocDown = (e) => { if (menu && !menu.contains(e.target) && e.target !== text) closeMenu(); };
   function closeMenu(){ if (menu){ menu.remove(); menu = null; searchInput = null; treeBody = null; document.removeEventListener("mousedown", onDocDown, true); } }
 
@@ -782,30 +784,32 @@ function buildZoneSelectField(currentValue){
     if (node.zones.some(z => matchesSearch(z, q))) return true;
     return node.children.some(c => folderMatchesDeep(c, q));
   }
+  // Root row + indent/connector-line children wrapper deliberately match
+  // fence-editor.html's buildStopFolderRow()/.sf-children (and audio-tree.js's
+  // .at-children) pixel-for-pixel — one consistent tree look across the app.
   function renderNode(node, depth, q){
     const nodeWrap = document.createElement("div");
     const isRoot = node.id === null;
-    const isExpanded = isRoot || expanded.has(node.id) || (!!q && folderMatchesDeep(node, q));
-    if (!isRoot) {
-      const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;padding-left:" + (8 + depth * 14) + "px;"
-        + "cursor:pointer;color:var(--snow)";
-      const chevron = document.createElement("span"); chevron.textContent = isExpanded ? "▾" : "▸"; chevron.style.width = "10px";
-      const icon = document.createElement("span"); icon.textContent = "📁";
-      const nameEl = document.createElement("span"); nameEl.textContent = node.name; nameEl.style.flex = "1";
-      const count = document.createElement("span"); count.textContent = node.zones.length; count.style.cssText = "font-size:11px;color:var(--fog)";
-      row.append(chevron, icon, nameEl, count);
-      row.addEventListener("mouseenter", () => { row.style.background = "rgba(255,106,61,.12)"; });
-      row.addEventListener("mouseleave", () => { row.style.background = ""; });
-      row.addEventListener("mousedown", (e) => {
-        e.preventDefault(); e.stopPropagation();
-        if (expanded.has(node.id)) expanded.delete(node.id); else expanded.add(node.id);
-        renderTree(searchInput.value);
-      });
-      nodeWrap.appendChild(row);
-    }
+    const isExpanded = expanded.has(node.id) || (!!q && folderMatchesDeep(node, q));
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;padding-left:" + (8 + depth * 14) + "px;"
+      + "cursor:pointer;color:var(--snow)";
+    const chevron = document.createElement("span"); chevron.textContent = isExpanded ? "▾" : "▸"; chevron.style.width = "10px";
+    const icon = document.createElement("span"); icon.textContent = isRoot ? "📂" : "📁";
+    const nameEl = document.createElement("span"); nameEl.textContent = isRoot ? (bundle.name || projectId || "All stops") : node.name; nameEl.style.flex = "1";
+    const count = document.createElement("span"); count.textContent = node.zones.length; count.style.cssText = "font-size:11px;color:var(--fog)";
+    row.append(chevron, icon, nameEl, count);
+    row.addEventListener("mouseenter", () => { row.style.background = "rgba(255,106,61,.12)"; });
+    row.addEventListener("mouseleave", () => { row.style.background = ""; });
+    row.addEventListener("mousedown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (expanded.has(node.id)) expanded.delete(node.id); else expanded.add(node.id);
+      renderTree(searchInput.value);
+    });
+    nodeWrap.appendChild(row);
     if (isExpanded) {
       const kids = document.createElement("div");
+      kids.style.cssText = "margin-left:16px;border-left:1px solid var(--rim);padding-left:4px";
       const visibleChildren = q ? node.children.filter(c => folderMatchesDeep(c, q)) : node.children;
       const visibleZones = node.zones.filter(z => matchesSearch(z, q));
       visibleChildren.forEach(c => kids.appendChild(renderNode(c, depth + 1, q)));
