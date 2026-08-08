@@ -6,6 +6,7 @@
 <title>Chase Life — Audio Studio</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
 <script src="audio-tree.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -30,16 +31,6 @@
   input,select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:6px 9px}
   .hint{font-family:"Barlow";font-size:12px;color:var(--fog)}
-
-  /* ---- project picker screen ---- */
-  #pickerScreen{flex:1;overflow:auto;padding:20px}
-  #pickerScreen .inner{max-width:840px;margin:0 auto}
-  #pickerScreen h2{font-family:"Barlow Condensed";font-size:14px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);margin:18px 0 8px}
-  .proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-  .proj-tile{background:rgba(255,255,255,.03);border:1px solid var(--rim);border-radius:12px;padding:14px;cursor:pointer;transition:.12s;display:flex;flex-direction:column;gap:6px}
-  .proj-tile:hover{border-color:var(--coral);background:rgba(255,106,61,.05)}
-  .proj-tile .pt-name{font-family:"Barlow Condensed";font-size:15px;font-weight:600}
-  .proj-tile .pt-meta{font-family:"Barlow Condensed";font-size:11px;color:var(--fog)}
 
   /* ---- main studio screen ---- */
   #studioScreen{flex:1;display:none;min-height:0}
@@ -172,27 +163,16 @@
 <body>
 <div class="hdr">
   <h1>🎛 Audio Studio</h1>
-  <span id="clientPickerNav" style="display:flex;align-items:center"></span>
   <span class="crumb" id="hdrCrumb"></span>
   <a class="linklike" id="btnBackToEditor" href="/editor" style="display:none">&larr; Back to Editor</a>
-  <button class="linklike" id="btnBackToProjects" style="display:none">&larr; Projects</button>
-  <a href="/chatterbox">Chatterbox →</a>
-  <a href="/">Home</a>
 </div>
+<div id="topNav"></div>
 
 <div id="status"></div>
 <div id="barWrap"><div id="barFill"></div></div>
 
-<!-- ================= project picker ================= -->
-<div id="pickerScreen">
-  <div class="inner">
-    <div class="hint" id="noOrgHint">Pick a company above to see its projects.</div>
-    <div id="projPickerBody" style="display:none">
-      <h2>Projects</h2>
-      <div class="proj-grid" id="projGrid"></div>
-    </div>
-  </div>
-</div>
+<!-- ================= no project selected yet ================= -->
+<div id="noProjectHint" class="hint" style="display:none;padding:20px;text-align:center">Pick a company and project from the bar above to get started.</div>
 
 <!-- ================= main studio ================= -->
 <div id="studioScreen">
@@ -549,52 +529,25 @@ function uploadBlob(blob,target,name,mimeType){
    ============================================================ */
 function initFromUrl(){
   const qs=new URLSearchParams(location.search);
-  // Falls back to the last project worked on when there's no ?project= in
-  // the URL (e.g. arriving via a plain nav link from Chatterbox rather than
-  // a deep link) — so leaving Studio and coming back resumes where you left
-  // off instead of always landing on the picker. Explicitly clearing this
-  // (see btnBackToProjects below) is what actually means "I'm done here."
-  studio.projectId=qs.get("project")||localStorage.getItem("audioStudio.lastProject")||null;
+  // Project selection is TopNav's job now (?project=/localStorage["gp.activeProject"]) —
+  // this page no longer tracks its own separate "audioStudio.lastProject".
+  studio.projectId=(window.TopNav && TopNav.resolveProject())||null;
   studio.deepZone=qs.get("zone")||null;
   studio.deepBearing=qs.has("bearing")?Number(qs.get("bearing")):null;
-  if(studio.projectId){ try{ localStorage.setItem("audioStudio.lastProject",studio.projectId); }catch(e){} }
 }
-function showPicker(){
-  document.getElementById("pickerScreen").style.display="block";
+function showNoProject(){
+  document.getElementById("noProjectHint").style.display="block";
   document.getElementById("studioScreen").classList.remove("show");
-  document.getElementById("btnBackToProjects").style.display="none";
   document.getElementById("btnBackToEditor").style.display="none";
   document.getElementById("hdrCrumb").textContent="";
 }
 function showStudio(){
-  document.getElementById("pickerScreen").style.display="none";
+  document.getElementById("noProjectHint").style.display="none";
   document.getElementById("studioScreen").classList.add("show");
-  document.getElementById("btnBackToProjects").style.display="inline-block";
   document.getElementById("hdrCrumb").textContent=studio.projectName||studio.projectId;
   const backBtn=document.getElementById("btnBackToEditor");
   if(studio.projectId){ backBtn.href="/editor?project="+encodeURIComponent(studio.projectId); backBtn.style.display="inline-block"; }
   else backBtn.style.display="none";
-}
-async function loadProjectPicker(){
-  const org=currentOrg();
-  document.getElementById("noOrgHint").style.display=org?"none":"block";
-  document.getElementById("projPickerBody").style.display=org?"block":"none";
-  if(!org) return;
-  const grid=document.getElementById("projGrid");
-  grid.innerHTML='<div class="hint">loading…</div>';
-  try{
-    const r=await fetch("/api/projects?org="+encodeURIComponent(org),{headers:{authorization:"Bearer "+getToken()}});
-    const j=r.ok?await r.json():{projects:[]};
-    const projects=j.projects||[];
-    if(!projects.length){ grid.innerHTML='<div class="hint">no projects yet for this company.</div>'; return; }
-    grid.innerHTML="";
-    projects.forEach(p=>{
-      const tile=document.createElement("div"); tile.className="proj-tile";
-      tile.innerHTML='<div class="pt-name">'+esc(p.name||p.id)+'</div><div class="pt-meta">'+(p.status||"draft")+'</div>';
-      tile.onclick=()=>{ const u=new URLSearchParams(location.search); u.set("project",p.id); location.search=u.toString(); };
-      grid.appendChild(tile);
-    });
-  }catch(e){ grid.innerHTML='<div class="hint">error: '+e.message+'</div>'; }
 }
 async function enterProject(){
   document.getElementById("hdrCrumb").textContent=studio.projectId;
@@ -609,11 +562,6 @@ async function enterProject(){
   openSessionId=null; openSessionName=null; updateSaveButtons();
   audioTree.refresh({projectId:studio.projectId,projectLabel:studio.projectName||studio.projectId});
 }
-document.getElementById("btnBackToProjects").onclick=()=>{
-  try{ localStorage.removeItem("audioStudio.lastProject"); }catch(e){}
-  const u=new URLSearchParams(location.search); u.delete("project"); u.delete("zone"); u.delete("bearing");
-  location.search=u.toString();
-};
 // Prefer a real back-navigation over the href when we can tell we arrived
 // here from the Fence Editor in this same tab: history.back() restores its
 // exact in-memory state (e.g. an unpublished Customer selection or unsaved
@@ -1474,16 +1422,25 @@ document.addEventListener("keydown",e=>{
   if(e.key==="Delete"||e.key==="Backspace"){ if(selSegId!=null){ e.preventDefault(); document.getElementById("selDelete").click(); } }
 });
 initFromUrl();
-ClientPicker.init({ navEl: document.getElementById("clientPickerNav"), onChange: ()=>{
-  if(studio.projectId) enterProject(); else { showPicker(); loadProjectPicker(); }
-}});
+if(window.TopNav){
+  TopNav.init({
+    navEl: document.getElementById("topNav"),
+    active: "audio",
+    onCompanyChange: ()=>{ studio.projectId=null; studio.projectName=null; showNoProject(); },
+    onProjectChange: (id,proj)=>{
+      studio.projectId=id; studio.projectName=proj?(proj.name||proj.id):null;
+      enterProject();
+      restoreTimelineDraft().then(restored=>{ if(!restored) newTrack(); renderTimelineUI(); });
+    }
+  });
+}
 if(studio.projectId){
   enterProject();
   restoreTimelineDraft().then(restored=>{
     if(!restored) newTrack();
     renderTimelineUI();
   });
-}else{ showPicker(); loadProjectPicker(); }
+}else{ showNoProject(); }
 </script>
 </body>
 </html>
