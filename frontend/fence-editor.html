@@ -101,10 +101,12 @@
   .sf-menu-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--snow);
                 padding:8px 12px;font-family:"Barlow Condensed";font-size:12px;cursor:pointer}
   .sf-menu-item:hover{background:rgba(255,255,255,.06)}
-  .proj-settings-popover{position:fixed;z-index:80;width:280px;height:auto;min-width:240px;min-height:120px;
-           max-width:92vw;max-height:75vh;resize:both;overflow-y:auto;
-           display:flex;flex-direction:column;gap:2px;background:var(--slate-2);border:1px solid var(--rim);
-           border-radius:10px;box-shadow:0 8px 20px rgba(0,0,0,.45);padding:12px}
+  /* Outer chrome (position/background/border/shadow/resize/sizing) used to
+     live here when this was its own floating popover — now it's plain
+     content living inside TopNav's shared #topNavSettingsPopover container
+     (top-nav.js's gearPopover), which already provides all of that. Only
+     the inner flex layout stays. */
+  .proj-settings-popover{display:flex;flex-direction:column;gap:2px}
   .gp-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:9999;
              font-family:"Barlow Condensed";font-size:14px;font-weight:600;color:var(--night);
              padding:10px 18px;border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.35);
@@ -399,8 +401,10 @@
     <a href="/" style="color:var(--fog);text-decoration:none;transition:.12s" onmouseover="this.style.color='var(--ice)'" onmouseout="this.style.color='var(--fog)'">← Home</a>
     <span style="color:var(--rim)">›</span>
     <span id="clientCrumb" style="color:var(--fog)">—</span>
-    <button id="projSettingsBtn" class="ghost" style="margin-left:auto;flex:0 0 auto;padding:3px 8px;font-size:13px" title="Project settings — customer, template, audio ranges" onclick="event.stopPropagation();toggleProjectSettingsPopover(this)">⚙</button>
-    <button id="panelMinBtn" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
+    <!-- Project settings gear moved to the persistent top nav bar (2026-08-08)
+         — see the TopNav.init({renderSettings,onSettingsOpen}) call near the
+         end of this file. -->
+    <button id="panelMinBtn" style="margin-left:auto" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
   </div>
   <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
@@ -643,16 +647,15 @@
 
 <!-- Project settings popover — customer/template/audio-range config that used
      to sit inline above the shape picker, permanently eating panel space for
-     settings only touched once in a while. Now a persistent (never destroyed —
-     these ids are real singletons the rest of the app binds to) fixed-position
-     panel toggled by the ⚙ button, positioned like openPortalMenu's popovers
-     but managed separately since openPortalMenu's menus get .remove()'d on
-     every close, which would delete these elements instead of just hiding them.
-     Deliberately a sibling of #mainPanel, not nested inside it — .panel has
-     backdrop-filter, which creates a new containing block for position:fixed
-     descendants, so a fixed popover nested inside it would position itself
-     relative to the panel instead of the viewport (same reason #audioPalette
-     below is also a top-level sibling, not nested in .panel). -->
+     settings only touched once in a while, then briefly its own fixed-
+     position panel toggled by a ⚙ button on #mainPanel. As of 2026-08-08
+     this whole div gets reparented (once, on first open — see
+     renderSettings below) into TopNav's shared #topNavSettingsPopover
+     container, whose gear button now lives in the persistent top nav bar
+     instead. These ids stay real singletons the rest of the app binds to
+     directly — just living in a different DOM parent now. Left in place
+     here in the source (not moved next to the TopNav script wiring) since
+     nothing about its own markup changed, only where it ends up mounted. -->
 <div id="projSettingsPopover" class="proj-settings-popover" style="display:none">
   <label class="k" style="margin:0">customer (Publish assigns this project to it)</label>
   <div class="row" style="margin:0 0 4px;gap:6px">
@@ -2700,41 +2703,15 @@ function openPortalMenu(anchorBtn, cls, buildFn, keepPickerOpen){
   menu.style.top=top+"px"; menu.style.left=Math.max(4,left)+"px"; menu.style.visibility="visible";
   return menu;
 }
-// Project settings popover — same position-under-anchor math as
-// openPortalMenu above, but the panel itself is a real persistent element
-// (never document.body.appendChild'd/removed) since its children are
-// functional singletons (clientSel, isTemplateChk, the dot-sliders, …) that
-// the rest of the app binds to directly; closeStopFolderMenus()'s blanket
-// ".sf-menu".remove() would otherwise delete them the moment any other
-// popup in the app opened.
-function closeProjectSettingsPopover(){
-  const pop=document.getElementById("projSettingsPopover");
-  if(pop) pop.style.display="none";
-}
-function toggleProjectSettingsPopover(anchorBtn){
-  const pop=document.getElementById("projSettingsPopover");
-  if(pop.style.display!=="none"){ closeProjectSettingsPopover(); return; }
-  closeStopFolderMenus();
-  renderGlobalCodeObjectsChips();
-  pop.style.display="flex"; pop.style.visibility="hidden";
-  const ar=anchorBtn.getBoundingClientRect(), mr=pop.getBoundingClientRect();
-  let top=ar.bottom+4;
-  if(top+mr.height>window.innerHeight) top=Math.max(4, ar.top-mr.height-4);
-  let left=Math.min(ar.left, window.innerWidth-mr.width-4);
-  pop.style.top=top+"px"; pop.style.left=Math.max(4,left)+"px"; pop.style.visibility="visible";
-}
-// click-away close uses "click", not "mousedown" like the .sf-menu popups
-// elsewhere in this file — this popover is the first one with real <select>
-// dropdowns in it, and picking a native <select> option fires its mousedown
-// on the browser's own OS-rendered option list (outside the page's DOM), so
-// a document-level "mousedown" listener sees that as an outside click and
-// closes the popover before the selection even lands. "click" fires on the
-// <select> element itself once the pick completes, so it's the right event
-// for a container that hosts native form controls.
-document.addEventListener("click",e=>{
-  const pop=document.getElementById("projSettingsPopover");
-  if(pop && pop.style.display!=="none" && !e.target.closest("#projSettingsPopover") && !e.target.closest("#projSettingsBtn")) closeProjectSettingsPopover();
-});
+// Project settings popover's own toggle/position/click-away logic used to
+// live here — removed 2026-08-08, now TopNav's shared gearPopover owns all
+// of that (open/close, positioning against its own gear button, and a
+// "click" — not "mousedown" — outside-close listener, for the exact same
+// native-<select>-inside-a-popover reason this file used to handle locally).
+// See the TopNav.init({renderSettings,onSettingsOpen}) call near the end of
+// this file for what fence-editor.html still needs to do: reparent
+// #projSettingsPopover in once, and refresh its live bits (global code
+// object chips) on every open.
 function openWpFolderMenu(anchorBtn,node){
   openPortalMenu(anchorBtn, "", menu=>{
     const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeNestedMenus(); fn(); }; menu.appendChild(b); };
@@ -3112,8 +3089,12 @@ function buildStopFolderRow(node,depth){
   }
   return wrap;
 }
-function closeStopFolderMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>m.remove()); closeProjectSettingsPopover(); }
-document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")&&!e.target.closest("#projSettingsPopover")&&!e.target.closest("#projSettingsBtn")) closeStopFolderMenus(); });
+// No longer touches the project settings popover (moved into TopNav's own
+// gearPopover 2026-08-08, which owns its own independent open/close/
+// outside-click lifecycle) — a mousedown inside it just harmlessly closes
+// any stray .sf-menu, same as clicking anywhere else non-menu on the page.
+function closeStopFolderMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>m.remove()); }
+document.addEventListener("mousedown",e=>{ if(!e.target.closest(".sf-menu")&&!e.target.closest(".sf-more")) closeStopFolderMenus(); });
 function openStopFolderMenu(anchorBtn,node){
   const isRoot=node.id===null;
   openPortalMenu(anchorBtn, "", menu=>{
@@ -4916,12 +4897,33 @@ if(typeof CodeObjects!=="undefined"){
 // page has no in-place "load a different project" path — project state is
 // threaded through hundreds of globals, not one reload-able function — so
 // Company/Project changes just navigate to a fresh /editor URL, same as
-// every other tool already links into this page. #projSettingsPopover
-// (this project's own customer/template assignment, opened from
-// #mainPanel's own ⚙) is a different, deliberately untouched concept —
-// TopNav's own gear is left with nothing wired to it (stays hidden).
+// every other tool already links into this page.
+//
+// renderSettings/onSettingsOpen (2026-08-08): this project's own settings
+// (customer/template assignment, global code objects, voice/audio ranges,
+// live-stop-duration, replay delay — #projSettingsPopover, previously
+// opened from a ⚙ on #mainPanel itself) now live in TopNav's shared gear
+// button instead. renderSettings runs once, the first time the gear is
+// ever opened on this page, and just reparents the existing (unchanged)
+// #projSettingsPopover div into TopNav's popover container — every id
+// inside it that the rest of this file binds to (clientSel, isTemplateChk,
+// the dot-sliders, …) keeps working exactly as before, just under a new
+// parent. onSettingsOpen runs on every open (not just the first) to
+// refresh the one genuinely dynamic bit — the attached global Code Objects
+// chip list — same as the old toggleProjectSettingsPopover() used to do
+// right before showing. TopNav.init() is async and awaited elsewhere in
+// this same call for the map/panel-offset work below, but renderSettings/
+// onSettingsOpen themselves fire later, in response to a real gear click,
+// not during this initial await.
 if(window.TopNav){
-  TopNav.init({navEl:document.getElementById("crossToolNav"), active:"edit", allowAllCompany:false}).then(()=>{
+  TopNav.init({navEl:document.getElementById("crossToolNav"), active:"edit", allowAllCompany:false,
+    renderSettings:(popoverEl)=>{
+      const pop=document.getElementById("projSettingsPopover");
+      pop.style.display="";
+      popoverEl.appendChild(pop);
+    },
+    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); }
+  }).then(()=>{
     const navH=document.getElementById("crossToolNav").getBoundingClientRect().height;
     document.getElementById("map").style.top=navH+"px";
     document.getElementById("mainPanel").style.top=(navH+10)+"px";

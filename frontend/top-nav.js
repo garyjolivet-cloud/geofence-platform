@@ -44,6 +44,21 @@
 // e.g. an admin's own home org; matches the pattern dashboard.html's own
 // orgParam() already used before this module existed), onCompanyChange,
 // onProjectChange.
+//
+// renderSettings(popoverEl): if provided, the ⚙ gear button shows (hidden
+// otherwise) and this is called exactly once, the first time it's ever
+// clicked, with the popover's real container element — build/insert the
+// host page's own settings content into it then. Each page's content is
+// independent; nothing here is shared between pages beyond the container's
+// own chrome (position/sizing/background/outside-click-close), by design —
+// e.g. Fence Editor's project settings today, potentially different
+// per-page defaults on other tools later (Chatterbox, Pipeline Editor,
+// etc.) without changing this module.
+// onSettingsOpen(popoverEl): optional, called every time the popover is
+// about to become visible (including the first, right after
+// renderSettings) — for refreshing whatever part of the host's content is
+// genuinely live/stale-prone, since renderSettings itself only ever runs
+// once.
 (function(){
   "use strict";
 
@@ -144,6 +159,12 @@
         opts.renderSettings(gearPopover);       // page's own backdrop-filter panel, which would clip position:fixed descendants
       }
       if(gearPopover.style.display !== "none"){ closeGearPopover(); return; }
+      // Runs on every open, not just the first (renderSettings above is
+      // build-once) — for host content with genuinely live bits (Fence
+      // Editor's attached Code Objects chip list) that need refreshing each
+      // time, the same way the page's own popover-open handler used to
+      // before this content lived in a shared, page-agnostic container.
+      if(opts.onSettingsOpen) opts.onSettingsOpen(gearPopover);
       gearPopover.style.display = "block"; gearPopover.style.visibility = "hidden";
       const ar = gearBtn.getBoundingClientRect(), mr = gearPopover.getBoundingClientRect();
       let top = ar.bottom + 4;
