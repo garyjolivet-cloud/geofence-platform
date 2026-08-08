@@ -2730,15 +2730,21 @@ async function api(request, env, url) {
       // Aura-1 has its own speaker roster, unrelated to Kokoro's af_bella-style
       // ids — map the same curated voice picker the editor/engine expose so
       // selection still does something when Kokoro (client-side neural TTS)
-      // fails to load and this Workers AI tier is used instead. Unmapped/
-      // missing voice falls through to Aura's own default (angus).
+      // fails to load and this Workers AI tier is used instead.
       const AURA_SPEAKER = {
         af_bella: "asteria", af_nicole: "luna", af_sarah: "athena", af_sky: "stella",
         am_adam: "orion", am_michael: "zeus",
         bf_emma: "hera", bf_isabella: "perseus", bm_george: "arcas", bm_lewis: "helios"
       };
       const ttsInput = { text: text.slice(0, 600) };
-      if (voice && AURA_SPEAKER[voice]) ttsInput.speaker = AURA_SPEAKER[voice];
+      // Every voice picker in this app labels no-selection as "default
+      // (Bella)" — confirmed live (2026-08-07): when Kokoro fails to load
+      // client-side and this endpoint serves instead, an unmapped/missing
+      // voice used to fall through to Aura's own unrelated default speaker
+      // (angus, a British male voice), silently breaking that promise.
+      // Explicitly pin the no-voice case to Bella's Aura equivalent so
+      // "default" means the same thing regardless of which TTS tier serves it.
+      ttsInput.speaker = (voice && AURA_SPEAKER[voice]) || AURA_SPEAKER.af_bella;
       const result = await env.AI.run("@cf/deepgram/aura-1", ttsInput, { returnRawResponse: true });
       return new Response(result.body, {
         status: 200,
