@@ -26,6 +26,14 @@
   button.ghost{background:none}
   input,select,textarea{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px 10px;width:100%}
+  /* A select's own background/color style its closed box fine, but most
+     browsers render the opened dropdown popup with their own default
+     (usually white) background regardless — combined with the light text
+     color inherited into the popup, options become near-invisible white-on-
+     white ("a few white lines", confirmed live 2026-08-07 on zoneSelect
+     params). Styling <option> directly fixes the popup itself where the
+     browser allows it (Chrome/Edge/Firefox all honor this). */
+  select option{background:var(--slate-2);color:var(--snow)}
   textarea{min-height:60px;resize:vertical;line-height:1.4}
   label.field{display:block;font-family:"Barlow Condensed";font-size:11px;text-transform:uppercase;
          letter-spacing:.5px;color:var(--fog);margin:10px 0 4px}
@@ -67,8 +75,17 @@
   .pedge.gate{stroke:var(--amber)}
   .pedge-temp{fill:none;stroke:var(--coral);stroke-width:2;stroke-dasharray:4 3}
   .del-x{fill:var(--hazard);cursor:pointer;font-family:"Barlow Condensed";font-size:12px}
+  /* resize:horizontal always grows/shrinks a box from its *right* edge —
+     fine for .library/.palette (their right edge borders the rest of the
+     layout) but wrong for .props, the rightmost column, whose right edge
+     is the outer window edge (dragging that corner has nowhere to go).
+     direction:rtl flips which edge the native resize handle anchors to
+     (left instead of right) and where it visually sits (bottom-left) —
+     the useful edge here, since .props's left edge borders the canvas.
+     direction:ltr on the content wrapper keeps text/layout reading normally. */
   .props{width:240px;min-width:180px;max-width:60vw;resize:horizontal;overflow:auto;
-         border-left:1px solid var(--rim);padding:12px;flex:0 0 auto}
+         border-left:1px solid var(--rim);padding:12px;flex:0 0 auto;direction:rtl}
+  .props>*{direction:ltr}
   .props h3{font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin:0 0 8px}
   .props .empty{font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
   #errBanner{display:none;background:var(--hazard);color:#fff;font-family:"Barlow Condensed";font-size:12px;
@@ -143,6 +160,7 @@ let libraryOrgId = qs.get("org") || (window.ClientPicker && ClientPicker.resolve
 document.getElementById("backLink").href = "/editor" + (projectId ? "?project=" + encodeURIComponent(projectId) : "");
 
 let bundle = null, zone = null, pipeline = { v: 1, nodes: [], edges: [] };
+let folders = []; // [{id,parentId,name}] for zoneSelect's grouped picker — populated in load()
 let selectedId = null;
 let nextId = 1;
 // Code-object authoring mode only: which node params are exposed for
@@ -209,7 +227,32 @@ document.getElementById("btnNewCodeObject").onclick = async () => {
   } catch (e) { alert("Create failed: " + e.message); }
 };
 
+// Confirmed live (2026-08-07): arriving via the general "Code Library →"
+// link (?project= present, no ?zone=) never fetched the project's bundle at
+// all — so a zoneSelect param edited on any code object from that project's
+// context showed an empty picker even though the project genuinely has
+// stops, because bundle/folders were only ever populated in zone-pipeline
+// mode. Load them whenever projectId is present, regardless of which mode
+// (zone pipeline / code object / blank library browse) we end up in — the
+// zone list is a reasonable thing to have available in all three.
+async function loadProjectContext(){
+  if (!projectId) return;
+  try {
+    const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle");
+    if (r.ok) bundle = await r.json();
+  } catch (e) {}
+  if (!bundle) return;
+  // Folder names for zoneSelect's grouped picker — best-effort: a token-less
+  // visitor context or a fetch failure just leaves everything ungrouped
+  // under "No folder" rather than blocking anything from loading.
+  try {
+    const fr = await fetch("/api/stop-folder?projectId=" + encodeURIComponent(projectId), { headers: { authorization: "Bearer " + getToken() } });
+    folders = fr.ok ? ((await fr.json()).folders || []) : [];
+  } catch (e) { folders = []; }
+}
+
 async function load(){
+  await loadProjectContext();
   if (codeObjectId) return loadCodeObject();
   // zoneId is the actual gate for raw-zone-pipeline mode — projectId alone
   // (no zoneId) means we arrived from the Code Objects palette's "Code
@@ -218,9 +261,7 @@ async function load(){
   // the library browser below like the fully-blank landing does.
   if (zoneId) {
     if (!projectId){ showErr("Missing ?project= in URL"); return; }
-    const r = await fetch("/api/projects/" + encodeURIComponent(projectId) + "/bundle");
-    if (!r.ok){ showErr("Could not load bundle for project " + projectId); return; }
-    bundle = await r.json();
+    if (!bundle){ showErr("Could not load bundle for project " + projectId); return; }
     zone = (bundle.zones || []).find(z => z.id === zoneId);
     if (!zone){ showErr("Zone " + zoneId + " not found in this project's bundle"); return; }
     pipeline = zone.pipeline && zone.pipeline.v === 1 ? zone.pipeline : { v: 1, nodes: [], edges: [] };
@@ -667,6 +708,159 @@ document.addEventListener("mousedown", (e) => {
   }
 });
 
+// Collapsible folder-tree zone picker for zoneSelect params (stop_visited,
+// guide_to_zone, etc.) — deliberately mirrors the Fence Editor's own
+// stop-folder tree interaction (buildStopTree()/buildStopFolderRow() in
+// fence-editor.html: chevron expand/collapse, folder icon+name+count,
+// search auto-expands matching branches) rather than inventing a different
+// paradigm for picking the same data, per explicit user direction
+// (2026-08-07) after an initial flat-grouped-list version. Not a literal
+// code share (that component also does drag-drop reassignment, bulk-select
+// checkboxes, and a rename/delete menu — none of which make sense in a
+// picker whose only job is choosing one target zone), but the same tree
+// shape and interaction. A filter box lives inside the popup, since a plain
+// tree alone is still slow to hunt through at 200 stops.
+function buildZoneSelectField(currentValue){
+  const zones = (bundle && bundle.zones) || [];
+  if (!bundle) {
+    // Code Object authoring mode (no project bundle loaded — reusable
+    // templates aren't tied to one project's zone list) — a live tree here
+    // would look interactive but never have anything to find. Point at the
+    // real mechanism instead: expose this param and pick the target zone
+    // later, per attachment.
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "font-size:12px;color:var(--fog);padding:8px 0";
+    wrap.textContent = "No project loaded — check \"expose to attachments\" below to pick the target zone per-attachment instead.";
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.value = currentValue || "";
+    wrap.appendChild(hidden);
+    wrap._hiddenInput = hidden;
+    return wrap;
+  }
+  // Tree structure, same algorithm as fence-editor.html's buildStopTree().
+  const byId = new Map();
+  const root = { id: null, name: null, children: [], zones: [] };
+  byId.set(null, root);
+  folders.forEach(f => byId.set(f.id, { id: f.id, name: f.name, children: [], zones: [] }));
+  folders.forEach(f => { const node = byId.get(f.id); (byId.get(f.parentId) || root).children.push(node); });
+  zones.forEach(z => { (byId.get(z.folderId) || root).zones.push(z); });
+  (function sortRec(node){
+    node.children.sort((a, b) => a.name.localeCompare(b.name));
+    node.zones.sort((a, b) => a.name.localeCompare(b.name));
+    node.children.forEach(sortRec);
+  })(root);
+
+  const wrap = document.createElement("div");
+  wrap.style.position = "relative";
+  const hidden = document.createElement("input");
+  hidden.type = "hidden";
+  hidden.value = currentValue || "";
+  const text = document.createElement("input");
+  text.type = "text";
+  text.readOnly = true; // tree navigation, not free typing — the filter box lives inside the popup
+  text.style.cursor = "pointer";
+  text.placeholder = "Click to browse stops…";
+  const initZone = zones.find(z => z.id === currentValue);
+  text.value = initZone ? initZone.name : "";
+  const setSelected = (z) => {
+    hidden.value = z.id;
+    text.value = z.name;
+    hidden.dispatchEvent(new Event("input"));
+    closeMenu();
+  };
+
+  let menu = null, searchInput = null, treeBody = null;
+  const expanded = new Set();
+  const onDocDown = (e) => { if (menu && !menu.contains(e.target) && e.target !== text) closeMenu(); };
+  function closeMenu(){ if (menu){ menu.remove(); menu = null; searchInput = null; treeBody = null; document.removeEventListener("mousedown", onDocDown, true); } }
+
+  function matchesSearch(z, q){ return !q || (z.name || "").toLowerCase().includes(q); }
+  function folderMatchesDeep(node, q){
+    if (!q) return true;
+    if (node.name && node.name.toLowerCase().includes(q)) return true;
+    if (node.zones.some(z => matchesSearch(z, q))) return true;
+    return node.children.some(c => folderMatchesDeep(c, q));
+  }
+  function renderNode(node, depth, q){
+    const nodeWrap = document.createElement("div");
+    const isRoot = node.id === null;
+    const isExpanded = isRoot || expanded.has(node.id) || (!!q && folderMatchesDeep(node, q));
+    if (!isRoot) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;padding-left:" + (8 + depth * 14) + "px;"
+        + "cursor:pointer;color:var(--snow)";
+      const chevron = document.createElement("span"); chevron.textContent = isExpanded ? "▾" : "▸"; chevron.style.width = "10px";
+      const icon = document.createElement("span"); icon.textContent = "📁";
+      const nameEl = document.createElement("span"); nameEl.textContent = node.name; nameEl.style.flex = "1";
+      const count = document.createElement("span"); count.textContent = node.zones.length; count.style.cssText = "font-size:11px;color:var(--fog)";
+      row.append(chevron, icon, nameEl, count);
+      row.addEventListener("mouseenter", () => { row.style.background = "rgba(255,106,61,.12)"; });
+      row.addEventListener("mouseleave", () => { row.style.background = ""; });
+      row.addEventListener("mousedown", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (expanded.has(node.id)) expanded.delete(node.id); else expanded.add(node.id);
+        renderTree(searchInput.value);
+      });
+      nodeWrap.appendChild(row);
+    }
+    if (isExpanded) {
+      const kids = document.createElement("div");
+      const visibleChildren = q ? node.children.filter(c => folderMatchesDeep(c, q)) : node.children;
+      const visibleZones = node.zones.filter(z => matchesSearch(z, q));
+      visibleChildren.forEach(c => kids.appendChild(renderNode(c, depth + 1, q)));
+      visibleZones.forEach(z => {
+        const zrow = document.createElement("div");
+        zrow.textContent = z.name;
+        zrow.style.cssText = "padding:6px 8px;padding-left:" + (8 + (depth + 1) * 14) + "px;cursor:pointer;color:var(--snow)";
+        zrow.addEventListener("mouseenter", () => { zrow.style.background = "rgba(255,106,61,.18)"; });
+        zrow.addEventListener("mouseleave", () => { zrow.style.background = ""; });
+        zrow.addEventListener("mousedown", (e) => { e.preventDefault(); setSelected(z); });
+        kids.appendChild(zrow);
+      });
+      if (!visibleChildren.length && !visibleZones.length) {
+        const empty = document.createElement("div");
+        empty.textContent = "empty";
+        empty.style.cssText = "padding:6px 8px;padding-left:" + (8 + (depth + 1) * 14) + "px;font-size:12px;color:var(--fog)";
+        kids.appendChild(empty);
+      }
+      nodeWrap.appendChild(kids);
+    }
+    return nodeWrap;
+  }
+  function renderTree(filterText){
+    treeBody.innerHTML = "";
+    treeBody.appendChild(renderNode(root, 0, (filterText || "").trim().toLowerCase()));
+  }
+  function openMenu(){
+    closeMenu();
+    menu = document.createElement("div");
+    const r = text.getBoundingClientRect();
+    menu.style.cssText = "position:fixed;z-index:500;background:var(--slate-2);"
+      + "border:1px solid var(--rim);border-radius:9px;max-height:320px;display:flex;flex-direction:column;"
+      + "box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:'Barlow Condensed';font-size:13px;"
+      + "top:" + (r.bottom + 4) + "px;left:" + r.left + "px;width:" + Math.max(r.width, 240) + "px";
+    searchInput = document.createElement("input");
+    searchInput.type = "text"; searchInput.placeholder = "Filter…"; searchInput.autocomplete = "off";
+    searchInput.style.cssText = "margin:6px;background:var(--slate);color:var(--snow);border:1px solid var(--rim);"
+      + "border-radius:6px;padding:6px 8px;font-family:'Barlow Condensed';font-size:13px";
+    searchInput.addEventListener("input", () => renderTree(searchInput.value));
+    searchInput.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+    treeBody = document.createElement("div");
+    treeBody.style.cssText = "overflow-y:auto";
+    menu.append(searchInput, treeBody);
+    document.body.appendChild(menu);
+    document.addEventListener("mousedown", onDocDown, true);
+    renderTree("");
+    requestAnimationFrame(() => searchInput.focus());
+  }
+  text.addEventListener("mousedown", (e) => { e.preventDefault(); openMenu(); });
+  wrap.appendChild(text);
+  wrap.appendChild(hidden);
+  wrap._hiddenInput = hidden; // renderProps() wires its save listener to this, not the visible text field
+  return wrap;
+}
+
 function renderProps(){
   const el = document.getElementById("props");
   const node = pipeline.nodes.find(n => n.id === selectedId);
@@ -679,14 +873,14 @@ function renderProps(){
     el.appendChild(label);
     let input;
     let isChipField = false;
+    let isZoneSelect = false;
     if (p.type === "select") {
       input = document.createElement("select");
       p.options.forEach(o => { const opt = document.createElement("option"); opt.value = o; opt.textContent = o; input.appendChild(opt); });
       input.value = node.params[p.id] ?? p.default;
     } else if (p.type === "zoneSelect") {
-      input = document.createElement("select");
-      ((bundle && bundle.zones) || []).forEach(z => { const opt = document.createElement("option"); opt.value = z.id; opt.textContent = z.name; input.appendChild(opt); });
-      input.value = node.params[p.id] ?? "";
+      isZoneSelect = true;
+      input = buildZoneSelectField(node.params[p.id] ?? "");
     } else if (p.type === "boolean") {
       input = document.createElement("input"); input.type = "checkbox"; input.style.width = "auto";
       input.checked = !!(node.params[p.id] ?? p.default);
@@ -737,6 +931,10 @@ function renderProps(){
     }
     if (isChipField) {
       input.addEventListener("input", () => { node.params[p.id] = serializeChipField(input); });
+    } else if (isZoneSelect) {
+      // input is buildZoneSelectField()'s wrapper div — the real value lives
+      // on its wrapped hidden input, not on the wrapper itself.
+      input._hiddenInput.addEventListener("input", () => { node.params[p.id] = input._hiddenInput.value; });
     } else {
       input.addEventListener("input", () => {
         node.params[p.id] = p.type === "boolean" ? input.checked : p.type === "number" ? Number(input.value) : input.value;
