@@ -1,9 +1,10 @@
 // Shared audio clip/folder tree browser — replaces the old single-level
 // "folder tile" rail (audio-studio.html), tab+grid palette (fence-editor.html)
-// and <select>-based folder switcher (library.html) with one real nested
-// tree, backed by GET /api/audio/tree + the audio-folder/audio-clip CRUD
-// endpoints in worker.js. R2 keys are stable/opaque now — rename/move never
-// touch storage, only the audio_folder/audio_clip rows.
+// and <select>-based folder switcher (the old standalone library.html, since
+// retired) with one real nested tree, backed by GET /api/audio/tree + the
+// audio-folder/audio-clip CRUD endpoints in worker.js. R2 keys are
+// stable/opaque now — rename/move never touch storage, only the
+// audio_folder/audio_clip rows.
 //
 // Usage:
 //   const tree = AudioTree.mount(el, {

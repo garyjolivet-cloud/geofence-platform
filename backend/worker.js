@@ -438,7 +438,6 @@ export default {
       "/dashboard": "/dashboard.html",
       "/share": "/share.html",
       "/audio": "/audio-bench.html",
-      "/library": "/library.html",
       "/studio": "/audio-studio.html",
       "/chatterbox": "/chatterbox-studio.html",
       "/field": "/field-recorder.html",

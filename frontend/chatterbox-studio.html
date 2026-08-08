@@ -262,7 +262,7 @@ function _invalidateSpanGeneration(span){
   span._genToken=(span._genToken||0)+1;
 }
 
-/* ---- mp3 encoding (same lamejs pipeline as audio-studio.html/library.html/
+/* ---- mp3 encoding (same lamejs pipeline as audio-studio.html/
    fence-editor.html) — the local service returns wav; every clip in this
    app's Library is stored as mp3, so re-encode client-side before upload. */
 let _lame=null;
