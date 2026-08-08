@@ -6,6 +6,7 @@
 <title>Geofence Platform — Share</title>
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6; }
@@ -38,7 +39,7 @@
 <div class="wrap">
   <header>
     <div class="brand"><div class="glyph"></div><div><h1>Share a tour</h1><p>Geofence Platform</p></div></div>
-    <nav id="topNav"><a href="/">Home</a></nav>
+    <nav id="topNav"></nav>
   </header>
 
   <div class="row">
@@ -96,8 +97,17 @@ function show(id,name){
 sel.onchange=()=>{ if(sel.value) show(sel.value, sel.options[sel.selectedIndex].textContent); else { out.className="state"; out.textContent="Pick a tour to get its link and QR code."; } };
 
 RoleGate.require(['admin','operator','front_desk']).then(me=>{
-  if(me.role==="admin"){
-    ClientPicker.init({navEl:document.getElementById("topNav"), allowAll:false, defaultId:me.orgId, onChange:loadProjects});
+  if(me.role==="admin" && window.TopNav){
+    // active:null — Share isn't one of the persistent bar's tool-link
+    // destinations, so nothing gets highlighted; the bar still gives an
+    // admin the Company/Project pickers plus a way back into any tool.
+    TopNav.init({navEl:document.getElementById("topNav"), active:null, allowAllCompany:false, defaultCompany:me.orgId, onCompanyChange:loadProjects});
+  } else {
+    // Non-admin roles never got a company picker here either (their own
+    // org is used automatically) — but every TopNav tool link is
+    // admin-gated, so don't show them a bar full of links they can't
+    // use. Dashboard is the one place they do have access to.
+    document.getElementById("topNav").innerHTML='<a href="/dashboard">Dashboard</a>';
   }
   loadProjects();
 });
