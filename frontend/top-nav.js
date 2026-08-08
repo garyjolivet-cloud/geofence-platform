@@ -135,11 +135,29 @@
     projWrap.appendChild(projInput);
     navEl.appendChild(projWrap);
 
+    // ---- Home link ---- fills the gap left when per-page "<- Home" links
+    // (Fence Editor's old breadcrumb, etc.) were dropped as this bar rolled
+    // out across every tool — sits directly left of the gear so there's
+    // still one consistent way back to "/" regardless of which tool a page
+    // is showing settings for.
+    const homeLink = document.createElement("a");
+    homeLink.href = "/"; homeLink.title = "Home"; homeLink.textContent = "⌂";
+    homeLink.style.cssText = "display:inline-flex;align-items:center;justify-content:center;"
+      + "background:none;border:1px solid var(--rim,#26344a);color:var(--ice,#8fb6d4);"
+      + "border-radius:8px;padding:6px 10px;text-decoration:none;font-size:15px;flex:0 0 auto";
+    navEl.appendChild(homeLink);
+
     // ---- Settings gear ----
     const gearBtn = document.createElement("button");
     gearBtn.textContent = "⚙"; gearBtn.title = "Settings";
+    // flex:0 0 auto is deliberate, not decorative — at least one host page
+    // (Fence Editor) has a global `button{flex:1 1 auto}` rule that would
+    // otherwise stretch this real <button> to fill the row's entire free
+    // space (confirmed live: rendered ~630px wide instead of icon-sized).
+    // The <a> tool-links next to it aren't affected since they're anchors,
+    // not buttons, but this one needs its own explicit override.
     gearBtn.style.cssText = "background:none;border:1px solid var(--rim,#26344a);color:var(--ice,#8fb6d4);"
-      + "border-radius:8px;padding:6px 10px;cursor:pointer;font-size:15px";
+      + "border-radius:8px;padding:6px 10px;cursor:pointer;font-size:15px;flex:0 0 auto";
     navEl.appendChild(gearBtn);
     let gearPopover = null;
     if(opts.renderSettings){
@@ -152,9 +170,14 @@
       if(!gearPopover){
         gearPopover = document.createElement("div");
         gearPopover.id = "topNavSettingsPopover";
-        gearPopover.style.cssText = "position:fixed;z-index:600;min-width:240px;max-width:92vw;max-height:75vh;"
+        // min-width intentionally tight (2026-08-08) — just enough for the
+        // dot-buttons/selects inside Fence Editor's settings to stay usable,
+        // not the wider fixed panel this content used to live in as its own
+        // floating popover. Revisit if a future renderSettings consumer
+        // needs more room than this.
+        gearPopover.style.cssText = "position:fixed;z-index:600;min-width:180px;max-width:92vw;max-height:75vh;"
           + "overflow-y:auto;background:var(--slate2,#1b2738);border:1px solid var(--rim,#26344a);border-radius:10px;"
-          + "box-shadow:0 8px 20px rgba(0,0,0,.45);padding:12px;display:none";
+          + "box-shadow:0 8px 20px rgba(0,0,0,.45);padding:10px;display:none";
         document.body.appendChild(gearPopover); // top-level sibling of <body>'s children — never nested inside a
         opts.renderSettings(gearPopover);       // page's own backdrop-filter panel, which would clip position:fixed descendants
       }

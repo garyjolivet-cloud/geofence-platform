@@ -31,7 +31,15 @@
          max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
          background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
          backdrop-filter:blur(6px);display:flex;flex-direction:column}
-  .panel.mini{width:36px!important;height:auto!important;padding:8px 6px;overflow:hidden;resize:none}
+  /* min-width/min-height:0 added 2026-08-08 — .panel's own base rule sets
+     min-width:260px;min-height:200px, which (found live, tripped over
+     while testing the just-relocated collapse button) silently defeated
+     this rule's width:36px!important — !important on width doesn't help
+     against a *different*, non-!important property (min-width) still
+     enforcing a 260px floor. A real, apparently long-standing bug, not
+     something today's changes introduced (confirmed via git log — this
+     rule never had a min-width override, even in its original form). */
+  .panel.mini{width:36px!important;height:auto!important;min-width:0;min-height:0;padding:8px 6px;overflow:hidden;resize:none}
   .panel-body{flex:1 1 auto;overflow-y:auto;min-height:0}
   /* Audio palette — floats independently of .panel so it never blocks map stops */
   #audioPalette{position:absolute;top:10px;right:10px;width:280px;height:380px;min-width:220px;min-height:160px;
@@ -105,8 +113,12 @@
      live here when this was its own floating popover — now it's plain
      content living inside TopNav's shared #topNavSettingsPopover container
      (top-nav.js's gearPopover), which already provides all of that. Only
-     the inner flex layout stays. */
-  .proj-settings-popover{display:flex;flex-direction:column;gap:2px}
+     the inner flex layout stays. A real fixed width (not just gearPopover's
+     own min-width bound) is required here — position:fixed;width:auto sizes
+     to its widest UNWRAPPED child by default (e.g. the "global code
+     objects" label's full one-line length), so without this the popover
+     stayed ~390px wide regardless of gearPopover's own min-width. */
+  .proj-settings-popover{display:flex;flex-direction:column;gap:2px;width:190px}
   .gp-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:9999;
              font-family:"Barlow Condensed";font-size:14px;font-weight:600;color:var(--night);
              padding:10px 18px;border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.35);
@@ -259,19 +271,21 @@
            font-family:"Barlow Condensed";font-size:12px;letter-spacing:.3px}
   .spd-btn.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
   #zlist{max-height:35vh;overflow-y:auto;margin-top:2px}
-  /* project setting dot-buttons */
-  .proj-dot-row{display:flex;gap:5px}
-  .proj-dot-btn{display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;
+  /* project setting dot-buttons — stacked vertically (2026-08-08, was a
+     horizontal row of 4) so this popover can be narrow now that it lives
+     in TopNav's shared gearPopover instead of its own wider floating panel */
+  .proj-dot-row{display:flex;flex-direction:column;gap:5px}
+  .proj-dot-btn{display:flex;flex-direction:row;align-items:center;gap:8px;
                 background:var(--slate-2);border:1px solid var(--rim);border-radius:10px;
-                padding:7px 5px;cursor:pointer;transition:.12s}
+                padding:6px 9px;cursor:pointer;transition:.12s}
   .proj-dot-btn:hover{border-color:var(--fog)}
   .proj-dot-btn.active{border-color:var(--coral);background:rgba(255,106,61,.08)}
   .proj-dot-icon{width:13px;height:13px;border-radius:50%;border:2px solid #fff;
                  box-shadow:0 0 0 2px rgba(0,0,0,.45);flex-shrink:0}
   .proj-dot-val{font-family:"Barlow Condensed";font-size:14px;font-weight:700;
-                color:var(--snow);line-height:1.1}
+                color:var(--snow);line-height:1.1;flex:0 0 auto}
   .proj-dot-name{font-family:"Barlow Condensed";font-size:10px;color:var(--fog);
-                 text-transform:uppercase;letter-spacing:.5px;line-height:1}
+                 text-transform:uppercase;letter-spacing:.5px;line-height:1;flex:1}
   .proj-slider-wrap{margin-top:6px;padding:8px 10px;background:var(--slate-2);
                     border:1px solid var(--rim);border-radius:8px}
   .proj-slider-label{font-family:"Barlow Condensed";font-size:11px;color:var(--fog);
@@ -392,31 +406,28 @@
 <div class="panel" id="mainPanel">
   <!-- collapse/expand buttons -->
   <button id="panelExpandBtn" onclick="document.getElementById('mainPanel').classList.remove('mini')" title="Expand panel">▶</button>
-  <!-- breadcrumb: Home › Client (project name lives below, large + bold) — also the panel's draggable header.
-       Bled out to the panel's outer edge (negative margin) with its own padding/border/background so it reads
-       as a distinct titlebar, same as #audioPaletteHead — a plain inset row with no visual boundary was easy
-       to miss as a drag handle. -->
-  <div id="mainPanelHead" style="display:flex;align-items:center;gap:6px;margin:-12px -12px 8px -12px;padding:9px 12px;border-bottom:1px solid var(--rim);border-radius:14px 14px 0 0;background:rgba(255,255,255,.03);font-family:'Barlow Condensed';font-size:12px;cursor:move;user-select:none" title="Drag to move this panel">
-    <span aria-hidden="true" style="color:var(--fog);letter-spacing:-2px;font-size:14px">⋮⋮</span>
-    <a href="/" style="color:var(--fog);text-decoration:none;transition:.12s" onmouseover="this.style.color='var(--ice)'" onmouseout="this.style.color='var(--fog)'">← Home</a>
-    <span style="color:var(--rim)">›</span>
-    <span id="clientCrumb" style="color:var(--fog)">—</span>
-    <!-- Project settings gear moved to the persistent top nav bar (2026-08-08)
-         — see the TopNav.init({renderSettings,onSettingsOpen}) call near the
-         end of this file. -->
-    <button id="panelMinBtn" style="margin-left:auto" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">◀</button>
-  </div>
   <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
   <select id="appSel" style="display:none"><option value="">— app —</option></select>
 
   <!-- editor-only controls — hidden in test mode -->
   <div id="editorControls">
-    <!-- project name — large, bold, high-contrast; the one place to view/rename it -->
-    <span id="projCrumb" contenteditable="true" spellcheck="false"
-          style="display:block;font-family:'Black Han Sans';font-size:22px;line-height:1.15;color:var(--snow);
-                 outline:none;cursor:text;border-bottom:1px dashed var(--rim);margin:0 0 8px;padding:0 0 3px"
-          title="click to rename">new tour</span>
+    <!-- The old breadcrumb titlebar (⋮⋮ drag handle, "Home" link, client
+         name) was removed 2026-08-08 — Home moved to TopNav's own bar
+         (left of its gear), and the client name was redundant with
+         TopNav's own Company picker sitting right next to it. This row is
+         now the panel's drag handle instead (title="Drag..." + cursor:move
+         below); dragging is only suppressed over the contenteditable name
+         itself or the collapse button, so renaming and collapsing both
+         still work normally from here. -->
+    <div id="mainPanelHead" style="display:flex;align-items:flex-end;gap:8px;cursor:move;user-select:none" title="Drag to move this panel">
+      <!-- project name — large, bold, high-contrast; the one place to view/rename it -->
+      <span id="projCrumb" contenteditable="true" spellcheck="false"
+            style="flex:1;min-width:0;font-family:'Black Han Sans';font-size:22px;line-height:1.15;color:var(--snow);
+                   outline:none;cursor:text;border-bottom:1px dashed var(--rim);margin:0 0 8px;padding:0 0 3px"
+            title="click to rename">new tour</span>
+      <button id="panelMinBtn" style="flex:0 0 auto;margin-bottom:8px" onclick="document.getElementById('mainPanel').classList.add('mini')" title="Collapse panel">&#8722;</button>
+    </div>
     <!-- shared status line — publish/upload/delete feedback lands here throughout the editor -->
     <div class="hint" id="platStatus" style="margin:0 0 4px">sign in required for Load, Publish</div>
     <!-- publish -->
@@ -657,10 +668,16 @@
      here in the source (not moved next to the TopNav script wiring) since
      nothing about its own markup changed, only where it ends up mounted. -->
 <div id="projSettingsPopover" class="proj-settings-popover" style="display:none">
-  <label class="k" style="margin:0">customer (Publish assigns this project to it)</label>
-  <div class="row" style="margin:0 0 4px;gap:6px">
-    <select id="clientSel" style="flex:1" title="Publish will assign this project to whichever customer is selected"><option value="">— unassigned —</option></select>
-  </div>
+  <!-- Customer row removed from view 2026-08-08 — redundant now that this
+       popover sits right next to TopNav's own Company picker in the same
+       bar. clientSel itself is untouched and still fully functional
+       (still populated/auto-selected from the loaded project's own orgId,
+       still what Publish reads via afOrgId()) — every existing read of it
+       elsewhere in this file keeps working exactly as before, it's just
+       not a visible row in this popup anymore. Rare override case (assign
+       a project to a DIFFERENT client than its workspace's default) has
+       no UI right now; revisit if that's ever actually needed again. -->
+  <select id="clientSel" style="display:none"><option value="">— unassigned —</option></select>
   <label class="chk" style="margin:0 0 4px" title="A template is a reusable master copy — front desk picks it to stamp out dated, guide-assigned tours from it. It is never run directly.">
     <input type="checkbox" id="isTemplateChk"> this is a template (not a specific dated tour)
   </label>
@@ -719,14 +736,14 @@
 </div>
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
-     move/delete/combine/upload) lives in Audio Studio — "Open in Studio"
-     in the header. Floats independently of mainPanel (drag the header,
-     resize from the bottom-right corner) so it never blocks the map's own
-     stops. -->
+     move/delete/combine/upload) lives in Audio Studio, reachable via
+     TopNav's own "Audio Studio" tool link now (this header's own "Open in
+     Studio" link was removed 2026-08-08 as redundant with it). Floats
+     independently of mainPanel (drag the header, resize from the
+     bottom-right corner) so it never blocks the map's own stops. -->
 <div id="audioPalette">
   <div id="audioPaletteHead">
     <span class="ttl">&#128193; Audio Palette</span>
-    <a href="/studio" id="afOpenStudio" class="ghost" style="color:var(--coral);text-decoration:none">Open in Studio &rarr;</a>
     <button id="afRefresh" class="ghost" title="Refresh">&#8635;</button>
     <button id="audioPaletteMin" class="ghost" title="Minimize">&#8722;</button>
   </div>
@@ -1823,7 +1840,6 @@ let _activeProjSetting=null;
 function selectZone(i){ sel=i; render(); refreshProps(); }
 function refreshProps(){
   const box=document.getElementById("props");
-  const _osLink=document.getElementById("afOpenStudio"); if(_osLink) _osLink.href=afOpenStudioHref();
   if(sel<0 || !zones[sel]){ box.style.display="none"; pAudioStopPlay(); return; }
   const z=zones[sel]; box.style.display="block";
   document.getElementById("pTitle").textContent=z.shape.type.toUpperCase()+" stop";
@@ -2172,7 +2188,6 @@ async function loadApps(sel){
       apps.map(a=>'<option value="'+a.id+'">'+(a.name||a.id)+'</option>').join("");
     if(keep) as.value=keep;
     else if(apps.length===1) as.value=apps[0].id;
-    updateClientCrumb();
   }catch(e){}
 }
 // customer picker — which client (customer) this project is uploaded to
@@ -2235,21 +2250,12 @@ function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
 function afAppId(){ const el=document.getElementById("appSel"); return (el&&el.value)||null; }
 
-function afOpenStudioHref(){
-  const pid=afProjectId(); if(!pid) return "/studio";
-  const org=afOrgId();
-  let href=(org?"/studio?asClient="+encodeURIComponent(org)+"&":"/studio?")+"project="+encodeURIComponent(pid);
-  if(sel>=0){
-    const z=zones[sel];
-    href+="&zone="+encodeURIComponent(z.id)+"&bearing="+encodeURIComponent(z.bearingDeg!=null?z.bearingDeg:90);
-  }
-  return href;
-}
-// Computed at click time rather than relying solely on the reactive updates in
-// refreshProps() — those can go stale (e.g. skipped by an unrelated error
-// earlier in a handler), silently sending you to Studio's bare project picker
-// instead of the project you were just editing.
-document.getElementById("afOpenStudio").addEventListener("click",e=>{ e.currentTarget.href=afOpenStudioHref(); });
+// afOpenStudioHref()/the Audio Palette's own "Open in Studio" link (with a
+// deep link straight to the selected stop's zone/bearing in Audio Studio)
+// were removed 2026-08-08 as redundant with TopNav's "Audio Studio" tool
+// link. That tool link only knows project/company, not zone-level context —
+// jumping into Studio no longer lands pre-selected on a specific stop, a
+// known small capability loss accepted along with the removal.
 
 /* ---- Audio palette: floating panel (drag header to move, resize from the
    bottom-right corner via native CSS resize, minimize via the header button) ---- */
@@ -2286,7 +2292,13 @@ document.getElementById("audioPaletteMin").onclick=e=>{
 (function(){
   const head=document.getElementById("mainPanelHead"), pnl=document.getElementById("mainPanel");
   head.addEventListener("mousedown",e=>{
-    if(e.target.closest("button")) return; // don't drag when clicking collapse/expand
+    // Don't drag when clicking the collapse button, or when clicking into
+    // the contenteditable project name to rename/position a cursor in it —
+    // this row does double duty as both the drag handle and the rename
+    // field's own row since 2026-08-08 (the old dedicated titlebar row
+    // above it was removed as redundant with TopNav).
+    if(e.target.closest("button")) return;
+    if(e.target.closest("#projCrumb")) return;
     const rect=pnl.getBoundingClientRect();
     pnl.style.left=rect.left+"px"; pnl.style.top=rect.top+"px";
     const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
@@ -2315,7 +2327,6 @@ const audioTree=AudioTree.mount(document.getElementById("afTreeHost"),{
 document.getElementById("afRefresh").onclick=doAudioRefresh;
 function doAudioRefresh(){
   document.getElementById("afNoOrg").style.display = afOrgId()?"none":"block";
-  document.getElementById("afOpenStudio").href=afOpenStudioHref();
   audioTree.refresh({ projectId: afProjectId(), projectLabel: projName()||afProjectId(), orgId: afOrgId() });
   loadStopFolders();
   loadWalkingPaths().then(updateWalkingPathBtnLabel);
@@ -3421,11 +3432,8 @@ function toast(msg,kind){
   requestAnimationFrame(()=>t.classList.add("show"));
   setTimeout(()=>{ t.classList.remove("show"); setTimeout(()=>t.remove(),300); },4000);
 }
-function updateClientCrumb(){
-  const as=document.getElementById("appSel");
-  const opt=as.options[as.selectedIndex];
-  document.getElementById("clientCrumb").textContent=(opt&&opt.value)?opt.text:"—";
-}
+// updateClientCrumb() removed 2026-08-08 along with #clientCrumb itself
+// (the old breadcrumb row) — its two call sites below no longer call it.
 async function loadFromPlatform(id){
   if(!id){ ps().textContent="no project specified"; return; }
   try{
@@ -3452,7 +3460,7 @@ async function loadFromPlatform(id){
         if(pr.ok){ const pj=await pr.json(); const match=(pj.projects||[]).find(p=>p.id===id); if(match&&match.appId) realAppId=match.appId; }
       }catch(e){}
     }
-    if(realAppId){ document.getElementById("appSel").value=realAppId; updateClientCrumb(); }
+    if(realAppId){ document.getElementById("appSel").value=realAppId; }
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
