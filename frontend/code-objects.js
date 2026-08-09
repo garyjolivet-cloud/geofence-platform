@@ -120,12 +120,37 @@
       background:var(--slate-2,#1b2738);border:1px solid var(--rim,#2e3f58);border-radius:12px;
       box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:'Barlow Condensed',sans-serif;
       color:var(--snow,#eef4fb);user-select:none}
-    .co-float.collapsed{resize:none}
+    /* min-width/min-height:0 (2026-08-08) — .co-float's own base rule sets
+       min-width:200px;min-height:160px, which silently defeated the
+       collapse handler's own float.style.width/height="" reset (same bug
+       class just found and fixed for Fence Editor's #mainPanel.mini —
+       a non-!important min-width/min-height still enforces its floor
+       even once width/height are cleared back to auto). Also explicit
+       width/height:auto so the collapsed box shrinks to fit just the
+       head row instead of keeping whatever size .co-float-body needed. */
+    .co-float.collapsed{resize:none;width:auto;height:auto;min-width:0;min-height:0}
     .co-float-head{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 10px;
       border-bottom:1px solid var(--rim,#2e3f58);cursor:grab;font-size:13px;font-weight:600;
       letter-spacing:.5px;text-transform:uppercase;color:var(--coral,#ff6a3d)}
     .co-float-head .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .co-float-head button{background:none;border:none;color:var(--fog,#8aa5bf);cursor:pointer;font-size:14px;padding:0 2px}
+    /* .ttl's overflow:hidden;text-overflow:ellipsis (needed so it doesn't
+       blow out the expanded panel's fixed width) fights .co-float.collapsed's
+       auto-width sizing — a shrink-to-fit flex container doesn't expand for
+       a flex:1 child allowed to shrink below its own text width, so the
+       title stayed truncated to "CODE OBJE..." even with room to spare
+       once collapsed. Collapsed only needs its own natural size. */
+    .co-float.collapsed .co-float-head .ttl{flex:0 0 auto;overflow:visible;text-overflow:clip}
+    /* Matches Fence Editor's #audioPaletteMin "hyphen in an oval" look
+       (2026-08-08) — same small rounded-pill button, consistent across
+       every floating panel's collapse toggle now. flex:0 0 auto is
+       required, not decorative — confirmed live this button rendered
+       ~107px wide (vs. audioPaletteMin's ~24px) without it: Fence
+       Editor's own global button{flex:1 1 auto} rule was winning for the
+       one property this rule didn't set, the same trap TopNav's gear
+       button hit earlier this session. */
+    .co-float-head button{background:var(--slate,#141d2b);border:1px solid var(--rim,#2e3f58);border-radius:9px;
+      color:var(--snow,#eef4fb);cursor:pointer;font-size:13px;padding:3px 8px;flex:0 0 auto}
+    .co-float-head button:hover{border-color:var(--fog,#8aa5bf)}
     .co-float-body{padding:8px;flex:1 1 auto;overflow-y:auto;min-height:0}
     .co-float.collapsed .co-float-body{display:none}
     .co-float.embedded{position:static;width:100%;height:100%;display:flex;flex-direction:column;
@@ -522,6 +547,44 @@
         // leaving a big empty box parked over the map.
         if (collapsed) { float.style.width = ""; float.style.height = ""; }
       };
+      // Shrink/grow-to-fit (2026-08-08, made symmetric same day after
+      // initial shrink-only version): folding a tree folder used to leave a
+      // big blank scrollable area below it, and unfolding one back open
+      // needed a manual resize-handle drag to actually see the newly-
+      // revealed rows. First shrink attempt compared body.scrollHeight to
+      // body.clientHeight — wrong measurement, confirmed live: scrollHeight
+      // on a non-overflowing element is clamped to (never reports less
+      // than) clientHeight, so it can't detect "content got shorter than
+      // the available box" at all, only genuine overflow. refresh() also
+      // rebuilds body's children wholesale each time (a hint div, the tree,
+      // sometimes a button) rather than one stable wrapper, so there's no
+      // single element whose own box height to track the way Fence
+      // Editor's #afTreeHost works for the Audio Palette. Measuring from
+      // the last child's actual rendered bottom edge instead works
+      // regardless of how many children exist or how they're laid out
+      // (this container isn't even flex — plain block flow). Tracks that
+      // measurement across mutations and adjusts the panel by however much
+      // it changed, in either direction, capped at .co-float's own CSS
+      // max-height (so a huge expand still scrolls past that point rather
+      // than growing forever).
+      function contentBottom() {
+        if (!body.lastElementChild) return body.getBoundingClientRect().top;
+        return body.lastElementChild.getBoundingClientRect().bottom;
+      }
+      let lastBottom = contentBottom(), shrinkRaf = null;
+      new MutationObserver(() => {
+        if (shrinkRaf) return;
+        shrinkRaf = requestAnimationFrame(() => {
+          shrinkRaf = null;
+          const newBottom = contentBottom();
+          if (!float.classList.contains("collapsed") && newBottom !== lastBottom) {
+            const delta = newBottom - lastBottom; // +ve = grew, -ve = shrank
+            const curFloatH = float.getBoundingClientRect().height;
+            float.style.height = Math.max(160, curFloatH + delta) + "px"; // 160 matches .co-float's own min-height; max-height is already CSS-capped
+          }
+          lastBottom = newBottom;
+        });
+      }).observe(body, { childList: true, subtree: true });
     }
 
     _mountEls = { float, head, body };

@@ -58,15 +58,27 @@
                 backdrop-filter:blur(6px);display:flex;flex-direction:column}
   #audioPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
   #audioPalette.mini #audioPaletteBody{display:none}
+  /* .ttl's normal overflow:hidden;text-overflow:ellipsis (needed so a long
+     project name doesn't blow out the expanded header's fixed width)
+     fights auto-width sizing when mini: a shrink-to-fit flex container
+     doesn't expand to fit a flex:1 child that's allowed to shrink below
+     its own text width, so the title stayed truncated/covered by the
+     button even with room to spare. Collapsed only needs its own natural
+     size, not ellipsis-truncation. */
+  #audioPalette.mini #audioPaletteHead .ttl{flex:0 0 auto;overflow:visible;text-overflow:clip}
   #audioPaletteHead{display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:move;user-select:none;
                     border-bottom:1px solid var(--rim);flex:0 0 auto;font-family:"Barlow Condensed";font-size:12px;
                     font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ice)}
   #audioPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #audioPaletteHead button,#audioPaletteHead a{flex:0 0 auto;padding:3px 8px;font-size:13px}
   #audioPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
-  #panelMinBtn{background:none;border:none;color:var(--fog);cursor:pointer;padding:2px 4px;
-               font-size:14px;line-height:1;flex-shrink:0;margin-left:auto}
-  #panelMinBtn:hover{color:var(--snow)}
+  /* Restyled 2026-08-08 to match #audioPaletteMin's "hyphen in an oval"
+     look (same background/border/radius/padding — that button gets it
+     for free from the generic button{} rule; this one previously
+     overrode it away to background:none;border:none). */
+  #panelMinBtn{background:var(--slate);border:1px solid var(--rim);border-radius:9px;color:var(--snow);
+               cursor:pointer;padding:3px 8px;font-size:13px;line-height:1;flex-shrink:0;margin-left:auto}
+  #panelMinBtn:hover{border-color:var(--fog)}
   .panel h1{font-family:"Black Han Sans";font-size:17px;margin:0 0 4px}
   .panel h1 .v{font-family:"Barlow Condensed";font-size:12px;color:var(--coral);font-weight:600}
   .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
@@ -412,37 +424,45 @@
   <!-- hidden: appSel kept for data binding only -->
   <select id="appSel" style="display:none"><option value="">— app —</option></select>
 
-  <!-- Project-name row: the panel's drag handle, its rename field, and its
-       collapse/expand toggle, all in one — and, since 2026-08-08, the ONE
-       thing that stays visible when the panel is collapsed (.panel.mini
-       hides #editorControls below, not this row), same "head always
-       visible, body hides" pattern #audioPalette already uses. Lives
-       outside #editorControls (unlike everything below it) specifically so
-       it isn't swept up by that div's own test-mode display:none — the
-       project name and collapse toggle now stay usable in Test Mode too,
-       not just the normal editing view. Dragging is suppressed over the
-       contenteditable name itself and over the button, so renaming and
-       collapsing both still work normally from here. -->
-  <div id="mainPanelHead" style="display:flex;align-items:flex-end;gap:8px;cursor:move;user-select:none" title="Drag to move this panel">
-    <span id="projCrumb" contenteditable="true" spellcheck="false"
-          style="flex:1;min-width:0;font-family:'Black Han Sans';font-size:22px;line-height:1.15;color:var(--snow);
-                 outline:none;cursor:text;border-bottom:1px dashed var(--rim);margin:0 0 8px;padding:0 0 3px"
-          title="click to rename">new tour</span>
-    <button id="panelMinBtn" style="flex:0 0 auto;margin-bottom:8px" title="Collapse panel">&#8722;</button>
+  <!-- Panel title row: the panel's drag handle and its collapse/expand
+       toggle — and, since 2026-08-08, the ONE thing that stays visible when
+       the panel is collapsed (.panel.mini hides everything else below, not
+       this row), same "head always visible, body hides" pattern
+       #audioPalette/the Code Objects palette already use. A fixed label
+       ("Region Editor") now, not the loaded project's own name — that's
+       shown in TopNav's Project field already; renaming a project moved to
+       the homepage's tree "..." menu (or renameProjectRoot(), still
+       reachable from the stop tree's own root row). #projCrumb itself
+       stays in the DOM (just display:none) since projName() and a long
+       list of call sites still read/write its textContent as the actual
+       backing data for the currently-loaded project's name — only the
+       *visible* label changed, not that underlying wiring. Lives outside
+       #editorControls (unlike everything below it) specifically so it
+       isn't swept up by that div's own test-mode display:none. -->
+  <div id="mainPanelHead" style="display:flex;align-items:center;gap:8px;cursor:move;user-select:none" title="Drag to move this panel">
+    <span style="flex:1;min-width:0;font-family:'Barlow Condensed';font-size:12px;font-weight:700;
+                 text-transform:uppercase;letter-spacing:.5px;color:var(--ice)">🗺️ Region Editor</span>
+    <span id="projCrumb" style="display:none">new tour</span>
+    <button id="panelMinBtn" style="flex:0 0 auto" title="Collapse panel">&#8722;</button>
+  </div>
+
+  <!-- Publish + Test, side by side. Test (unlike Publish) stays outside
+       #editorControls and outside the mini-hide selector's reach on
+       purpose — it's also the "✕ Exit test" button once test mode starts,
+       so it can't be hidden by the same mechanism that hides Publish;
+       enterTestMode()/exitTestMode() hide #publishBtn directly instead. -->
+  <div class="row" style="margin:0 0 4px">
+    <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
+    <button id="testModeBtn" class="ghost" style="flex:1">▶ Test</button>
   </div>
 
   <!-- editor-only controls — hidden in test mode -->
   <div id="editorControls">
-    <!-- shared status line — publish/upload/delete feedback lands here throughout the editor -->
-    <div class="hint" id="platStatus" style="margin:0 0 4px">sign in required for Load, Publish</div>
-    <!-- publish -->
-    <div class="row" style="margin:0">
-      <button id="publishBtn" class="on" style="flex:1">Publish ▲</button>
-    </div>
-  </div>
-
-  <div class="row" style="margin:6px 0 2px">
-    <button id="testModeBtn" class="ghost" style="flex:1">▶ Test</button>
+    <!-- shared status line — publish/upload/delete feedback lands here
+         throughout the editor; starts empty now (was static instructional
+         text) but every ps().textContent/.innerHTML write elsewhere in
+         this file is unchanged. -->
+    <div class="hint" id="platStatus" style="margin:0 0 4px"></div>
   </div>
 
   <!-- SIM PANEL — visible in test mode only -->
@@ -2213,22 +2233,10 @@ async function loadClients(sel){
 // "— unassigned —" even when the published bundle had one set.
 const _appsLoaded=loadApps();
 const _clientsLoaded=loadClients();
-// Editable tour name in breadcrumb
-(()=>{
-  const el=document.getElementById("projCrumb");
-  el.addEventListener("keydown",e=>{
-    if(e.key==="Enter"){ e.preventDefault(); el.blur(); }
-  });
-  el.addEventListener("blur",()=>{
-    const v=(el.textContent||"").trim();
-    el.textContent=v||"new tour";
-    autoSave();
-  });
-  el.addEventListener("focus",()=>{
-    const range=document.createRange(); range.selectNodeContents(el);
-    const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
-  });
-})();
+// #projCrumb's inline-rename keydown/blur/focus handlers were removed
+// 2026-08-08 along with its contenteditable attribute (now display:none,
+// a pure data holder — see the mainPanelHead comment above). They can
+// never fire on a display:none element anyway.
 const aStat=()=>{const el=document.getElementById("pAudioStatus");if(el)el.style.display="block";return el;};
 const aBar=()=>document.getElementById("pAudioBar");
 const aFill=()=>document.getElementById("pAudioFill");
@@ -2276,6 +2284,38 @@ document.getElementById("audioPaletteMin").onclick=e=>{
   document.getElementById("audioPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
   if(wasMini) doAudioRefresh();
 };
+// Shrink/grow-to-fit (2026-08-08, made symmetric same day after initial
+// shrink-only version): folding a tree folder used to leave a big blank
+// scrollable area below it, and unfolding one back open needed a manual
+// resize-handle drag to actually see the newly-revealed rows. First shrink
+// attempt compared #audioPaletteBody's scrollHeight to its clientHeight —
+// wrong measurement, confirmed live: scrollHeight on a non-overflowing
+// element is clamped to (never reports less than) clientHeight, so it
+// can't detect "content got shorter than the available box" at all, only
+// genuine overflow. What actually needs watching is #afTreeHost's own
+// natural height (it isn't flex-stretched by its column-flex parent, so it
+// genuinely shrinks/grows with its rendered row count) — MutationObserver
+// tracks that height across every fold/unfold and adjusts the panel by
+// however much it changed, in either direction, capped at the panel's own
+// CSS max-height (so a huge expand still scrolls past that point rather
+// than growing forever).
+(function(){
+  const palette=document.getElementById("audioPalette"), host=document.getElementById("afTreeHost");
+  let lastH=host.getBoundingClientRect().height, raf=null;
+  new MutationObserver(()=>{
+    if(raf) return;
+    raf=requestAnimationFrame(()=>{
+      raf=null;
+      const newH=host.getBoundingClientRect().height;
+      if(!palette.classList.contains("mini") && newH!==lastH){
+        const delta=newH-lastH; // +ve = grew, -ve = shrank
+        const curPanelH=palette.getBoundingClientRect().height;
+        palette.style.height=Math.max(160,curPanelH+delta)+"px"; // 160 matches #audioPalette's own min-height; max-height is already CSS-capped
+      }
+      lastH=newH;
+    });
+  }).observe(host, {childList:true, subtree:true});
+})();
 (function(){
   const head=document.getElementById("audioPaletteHead"), pal=document.getElementById("audioPalette");
   head.addEventListener("mousedown",e=>{
@@ -2297,13 +2337,8 @@ document.getElementById("audioPaletteMin").onclick=e=>{
 (function(){
   const head=document.getElementById("mainPanelHead"), pnl=document.getElementById("mainPanel");
   head.addEventListener("mousedown",e=>{
-    // Don't drag when clicking the collapse button, or when clicking into
-    // the contenteditable project name to rename/position a cursor in it —
-    // this row does double duty as both the drag handle and the rename
-    // field's own row since 2026-08-08 (the old dedicated titlebar row
-    // above it was removed as redundant with TopNav).
+    // Don't drag when clicking the collapse button.
     if(e.target.closest("button")) return;
-    if(e.target.closest("#projCrumb")) return;
     const rect=pnl.getBoundingClientRect();
     pnl.style.left=rect.left+"px"; pnl.style.top=rect.top+"px";
     const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
@@ -3480,7 +3515,11 @@ async function loadFromPlatform(id){
     if(realAppId){ document.getElementById("appSel").value=realAppId; }
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
-    ps().textContent="loaded v"+(b.bundleVersion||"?")+" — pick a customer above if needed, then Publish to save";
+    // No standing "loaded v..." status text on a normal load anymore
+    // (2026-08-08, per explicit request to remove the descriptive line
+    // above Publish) — ps() stays reserved for real transient feedback
+    // (errors, publish-in-progress/success) elsewhere in this file, most
+    // of which already have a matching toast() too.
     // Setting .value on <select> above doesn't fire a "change" event, so the
     // Code Objects palette's own change-listener (which is what normally
     // re-fetches it for the right org) never runs on a project load — it's
@@ -4695,6 +4734,7 @@ function enterTestMode(){
   } else simAvatar.setLngLat([c.lng,c.lat]);
   document.getElementById("editSection").style.display="none";
   document.getElementById("editorControls").style.display="none";
+  document.getElementById("publishBtn").style.display="none"; // Test now shares Publish's old row and outlives editorControls's own hide
   document.getElementById("audioPalette").style.display="none"; // no clip-assignment during a simulated walk
   document.getElementById("simPanel").style.display="flex";
   document.getElementById("testModeBtn").textContent="✕ Exit test";
@@ -4716,6 +4756,7 @@ function exitTestMode(){
   render();
   document.getElementById("editSection").style.display="";
   document.getElementById("editorControls").style.display="";
+  document.getElementById("publishBtn").style.display="";
   document.getElementById("audioPalette").style.display="flex";
   document.getElementById("simPanel").style.display="none";
   document.getElementById("testModeBtn").textContent="▶ Test";
