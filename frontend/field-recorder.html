@@ -204,6 +204,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
       <button id="btnModePers" class="mode-btn sel" onclick="setMode('persistent')">Persistent</button>
       <button id="btnModeLive" class="mode-btn"     onclick="setMode('live')">Live ⬤</button>
       <button id="btnModePath" class="mode-btn"     onclick="setMode('path')">🥾 Path</button>
+      <button id="btnModeRecord" class="mode-btn"   onclick="setMode('record')">🎥 Record</button>
     </div>
     <div id="activityRow">
       <button id="actWalk"  class="act-btn sel" onclick="setActivity('walk')">🚶</button>
@@ -224,6 +225,18 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
       <button class="fbt" id="btnPathToggle" onclick="togglePathRecording()">🥾 Start Walking</button>
       <div id="pathStats" class="hint" style="flex:1;text-align:center"></div>
       <button class="fbt" id="btnPathSave" style="display:none" onclick="savePathRecording()">💾 Save Path</button>
+    </div>
+    <div id="recordBtns" style="display:none;align-items:center;gap:8px">
+      <input id="recordTypeInput" list="recordTypeList" placeholder="type (e.g. Patrol Sweep)" style="max-width:150px;min-width:0">
+      <datalist id="recordTypeList">
+        <option value="Patrol Sweep">
+        <option value="Freeride Run">
+        <option value="Trail Ride">
+        <option value="Ski Tour">
+        <option value="Incident">
+      </datalist>
+      <button class="fbt" id="btnRecordToggle" onclick="toggleRecordSession()">⏺ Start Recording</button>
+      <div id="recordStats" class="hint" style="flex:1;text-align:center"></div>
     </div>
     <div id="status">Starting up…</div>
     <div id="proxDebug" style="font-size:11px;color:var(--fog);text-align:center;opacity:.8;display:flex;align-items:center;justify-content:center;gap:8px">
@@ -372,6 +385,11 @@ let pathMode      = false;  // "Walking Path" recording mode — separate from l
 let pathRecording = false;
 let pathPoints    = [];     // {lat,lon,acc,t} — buffered in memory only; IndexedDB/network untouched until Save
 let currentAppId  = null;   // resolved alongside projectName below — needed to scope a saved walking path
+let recordMode      = false;  // RECORD tab visible — separate from recordSessionId (whether a session is actually running, which continues regardless of visible tab)
+let recordSessionId = null;   // active record_session id on the server, or null
+let recordBuffer     = [];    // {lat,lon,acc,heading,ts} points not yet flushed to the server
+let recordStartedAt  = null;
+let recordLastFlushAt = 0;
 let liveStops     = [];     // successfully published live stops (in-memory for this session)
 let currentLiveStop = null; // the stop object currently mid-recording in Live mode, if any — lets
                              // the guide attach a code object before "Stop Recording" finalizes it
@@ -1113,6 +1131,73 @@ async function savePathRecording(){
   }catch(e){ alert("Save failed: "+e.message); }
 }
 
+/* ── RECORD: DVR-style GPS session capture (patrol sweeps, freeride runs,
+   trail-use recording, etc.) — reviewed/played back later in /record.
+   Unlike Walking Path above, points are flushed to the server periodically
+   while recording (not all at once at Save) since a session can run much
+   longer than a single walked path, and a crash/lost tab shouldn't lose
+   the whole thing. ============================================ */
+function updateRecordStatsUI(){
+  const el=document.getElementById("recordStats"); if(!el) return;
+  const secs=recordStartedAt?Math.round((Date.now()-recordStartedAt)/1000):0;
+  const mm=String(Math.floor(secs/60)).padStart(2,"0"), ss=String(secs%60).padStart(2,"0");
+  el.textContent=mm+":"+ss+" · "+recordBuffer.length+" buffered";
+}
+// keepalive fetch (not navigator.sendBeacon) on purpose — sendBeacon can't
+// set an Authorization header, and this endpoint isn't public. keepalive
+// gets the same "survives page unload" guarantee while still authenticating.
+function flushRecordBuffer(){
+  if(!recordSessionId || !recordBuffer.length) return;
+  const pts=recordBuffer.splice(0, recordBuffer.length);
+  recordLastFlushAt=Date.now();
+  fetch(`/api/projects/${encodeURIComponent(projId)}/record/sessions/${encodeURIComponent(recordSessionId)}/positions`,{
+    method:"POST", keepalive:true,
+    headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+    body:JSON.stringify({points:pts})
+  }).catch(()=>{ recordBuffer.unshift(...pts); }); // failed — put back so the next flush retries
+}
+async function toggleRecordSession(){
+  if(!recordSessionId){
+    if(!projId){ alert("No project selected."); return; }
+    const type=(document.getElementById("recordTypeInput")?.value||"").trim();
+    try{
+      const r=await fetch(`/api/projects/${encodeURIComponent(projId)}/record/sessions`,{
+        method:"POST",
+        headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+        body:JSON.stringify({type})
+      });
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(j.error||r.statusText);
+      recordSessionId=j.id;
+      recordBuffer=[];
+      recordStartedAt=Date.now();
+      recordLastFlushAt=Date.now();
+      document.getElementById("btnRecordToggle").textContent="⏹ Stop Recording";
+      document.getElementById("recordTypeInput").disabled=true;
+      updateRecordStatsUI();
+      setStatus("Recording started");
+    }catch(e){ alert("Couldn't start recording: "+e.message); }
+    return;
+  }
+  flushRecordBuffer();
+  const sid=recordSessionId;
+  try{
+    await fetch(`/api/projects/${encodeURIComponent(projId)}/record/sessions/${encodeURIComponent(sid)}`,{
+      method:"PATCH",
+      headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({stop:true})
+    });
+    setStatus("Recording saved");
+  }catch(e){ alert("Couldn't stop cleanly (points already saved up to the last flush): "+e.message); }
+  recordSessionId=null;
+  recordStartedAt=null;
+  document.getElementById("btnRecordToggle").textContent="⏺ Start Recording";
+  document.getElementById("recordTypeInput").disabled=false;
+  document.getElementById("recordStats").textContent="";
+}
+window.addEventListener("pagehide", ()=>{ if(recordSessionId) flushRecordBuffer(); });
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden" && recordSessionId) flushRecordBuffer(); });
+
 // Field Recorder was recording-only — no way to hear a stop's audio just by
 // walking near it like the real walk engine does, so a project's own author
 // couldn't verify newly published content without a separate walk-test
@@ -1191,15 +1276,25 @@ function speakViaBrowserTts(text){
   }catch(e){ setStatus("TTS threw: "+e.message); }
 }
 
+// Bumped on every playCandidate() call — an in-flight sayViaTts() fetch
+// checks its own snapshot against the live value before actually playing,
+// so a slow fetch for a stop the visitor has already walked past (or away
+// from entirely) can't hijack the shared <audio> element once it finally
+// resolves. Not tied to _nearStopId, since testNearestNow() (the manual
+// test button) intentionally calls playCandidate() outside that dedup
+// state — a plain call-generation counter covers both callers correctly.
+let _playToken = 0;
 function playCandidate(c){
   if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
+  const myToken = ++_playToken;
   if(c.url) playStopAudio(c.url);
   else if(c.say){
     setStatus("Loading speech…");
     sayViaTts(c.say).then(url=>{
+      if(myToken!==_playToken) return; // superseded — a newer candidate started (or nothing's nearby anymore) while this fetch was in flight
       setStatus("🔊 "+c.say.slice(0,60));
       playStopAudio(url);
-    }).catch(()=>speakViaBrowserTts(c.say));
+    }).catch(()=>{ if(myToken===_playToken) speakViaBrowserTts(c.say); });
   }
 }
 
@@ -1249,6 +1344,7 @@ function checkProximityAudio(lat, lon){
     playCandidate(nearest);
   } else if(!nearest && _nearStopId!==null){
     _nearStopId = null;
+    _playToken++; // invalidate any in-flight say-only TTS fetch for the stop just left
     if(_contentEl && !_contentEl.paused){ _contentEl.pause(); _playingUrl=null; }
   }
 }
@@ -1257,11 +1353,23 @@ function checkProximityAudio(lat, lon){
 function setMode(mode){
   if(mode === "path"){
     pathMode = true;
+    recordMode = false;
+    liveMode = false;
+    updateModeUI();
+    return;
+  }
+  if(mode === "record"){
+    // RECORD keeps running in the background regardless of which footer tab
+    // is showing (the watchPosition callback checks recordSessionId, not
+    // recordMode) — switching tabs is purely which controls are visible.
+    recordMode = true;
+    pathMode = false;
     liveMode = false;
     updateModeUI();
     return;
   }
   pathMode = false;
+  recordMode = false;
   if(mode === "live"){
     const tok = getToken();
     if(!tok){
@@ -1293,13 +1401,15 @@ function setActivity(act){
 
 function updateModeUI(){
   const isLive = liveMode;
-  document.getElementById("btnModePers").classList.toggle("sel", !isLive && !pathMode);
-  document.getElementById("btnModeLive").classList.toggle("sel",  isLive && !pathMode);
+  document.getElementById("btnModePers").classList.toggle("sel", !isLive && !pathMode && !recordMode);
+  document.getElementById("btnModeLive").classList.toggle("sel",  isLive && !pathMode && !recordMode);
   document.getElementById("btnModePath").classList.toggle("sel",  pathMode);
-  document.getElementById("activityRow").classList.toggle("show", isLive && !pathMode);
+  document.getElementById("btnModeRecord").classList.toggle("sel", recordMode);
+  document.getElementById("activityRow").classList.toggle("show", isLive && !pathMode && !recordMode);
   // Footer buttons
-  document.getElementById("ftrBtns").style.display  = pathMode ? "none" : "flex";
-  document.getElementById("pathBtns").style.display = pathMode ? "flex" : "none";
+  document.getElementById("ftrBtns").style.display    = (pathMode || recordMode) ? "none" : "flex";
+  document.getElementById("pathBtns").style.display   = pathMode ? "flex" : "none";
+  document.getElementById("recordBtns").style.display = recordMode ? "flex" : "none";
   document.getElementById("btnMark").style.display = isLive ? "none" : "flex";
   document.getElementById("btnRec").style.display  = isLive ? "none" : "flex";
   document.getElementById("btnLive").style.display = isLive ? "flex" : "none";
@@ -1339,6 +1449,14 @@ async function initPermissions(){
       // elevation profile below simply treats a path with no altitude data as
       // "no elevation available" rather than guessing.
       if(pathRecording){ pathPoints.push({lat,lon,acc,alt:(altitude!=null&&!isNaN(altitude))?altitude:null,t:pos.timestamp}); updatePathStatsUI(); }
+      // RECORD capture runs off recordSessionId, independent of which footer
+      // tab is currently visible (recordMode) — starting a session and then
+      // switching to Persistent/Live/Path to do other work must not stop it.
+      if(recordSessionId){
+        recordBuffer.push({lat,lon,acc,heading:(heading!=null&&!isNaN(heading))?heading:null,ts:pos.timestamp});
+        updateRecordStatsUI();
+        if(recordBuffer.length>=30 || Date.now()-recordLastFlushAt>=20000) flushRecordBuffer();
+      }
       document.getElementById("btnMark").disabled = false;
       refreshMap();
       // refreshPublishedZones() only ever got one shot (map 'load' event) and
@@ -1636,12 +1754,24 @@ function initConnectivity(){
   }, 30000);
 }
 
+// Same restriction-3 fix as playCandidate's say-only branch (sayViaTts's
+// own header comment above has the full explanation): raw
+// speechSynthesis.speak() called from a non-gesture context (these fire
+// from the offline/online events and a 30s health-check interval, neither
+// a real tap) is silent on iOS with no reliable unlock. Route through
+// /api/tts + the shared, gesture-unlocked <audio> element instead, same as
+// every other GPS/background-triggered announcement in this file — a
+// signal-lost alert that can't itself be heard defeats the point.
+function _announce(text){
+  sayViaTts(text).then(playStopAudio).catch(()=>speakViaBrowserTts(text));
+}
+
 function onSignalLost(){
   if(!signalOk) return;
   signalOk = false;
   document.getElementById("signalBanner").classList.add("show");
   playSignalChime(false);
-  try{ speechSynthesis.speak(Object.assign(new SpeechSynthesisUtterance("Signal lost"),{volume:1,rate:1})); }catch(e){}
+  _announce("Signal lost");
 }
 
 function onSignalRestored(){
@@ -1649,7 +1779,7 @@ function onSignalRestored(){
   signalOk = true;
   document.getElementById("signalBanner").classList.remove("show");
   playSignalChime(true);
-  try{ speechSynthesis.speak(Object.assign(new SpeechSynthesisUtterance("Signal restored"),{volume:1,rate:1})); }catch(e){}
+  _announce("Signal restored");
   setTimeout(retryQueue, 800);
 }
 

@@ -58,6 +58,32 @@ async function cleanupLiveZones(env) {
   await env.DB.prepare("DELETE FROM presence WHERE updated_at < ?").bind(Date.now() - 60000).run().catch(() => {});
 }
 
+// RECORD retention sweep: deletes unlocked, ended sessions (and their
+// position_history) once a project's record_retention_days has elapsed.
+// Day-granularity, so the shared 5-minute cron tick is more than fine —
+// no dedicated trigger needed. locked=1 rows (including incident clips,
+// locked by default) are excluded outright — that's what lets a flagged
+// incident survive this sweep. Capped per tick so a project that just
+// enabled retention on a long capture history can't try to delete a huge
+// backlog in one statement.
+async function cleanupOldRecordings(env) {
+  const now = Date.now();
+  const { results: expired } = await env.DB.prepare(
+    `SELECT rs.id FROM record_session rs
+     JOIN project p ON p.id = rs.project_id
+     WHERE p.record_retention_days IS NOT NULL
+       AND rs.locked = 0
+       AND rs.ended_at IS NOT NULL
+       AND rs.ended_at < (? - p.record_retention_days * 86400000)
+     LIMIT 500`
+  ).bind(now).all();
+  const ids = (expired || []).map(r => r.id);
+  if (!ids.length) return;
+  const ph = ids.map(() => "?").join(",");
+  await env.DB.prepare(`DELETE FROM position_history WHERE session_id IN (${ph})`).bind(...ids).run().catch(() => {});
+  await env.DB.prepare(`DELETE FROM record_session WHERE id IN (${ph})`).bind(...ids).run().catch(() => {});
+}
+
 // Every table with a project_id/projectId column, kept in one place so the
 // single-project DELETE and the app-cascade DELETE loop can't drift apart
 // again — they used to only clean event/published_bundle, silently leaving
@@ -84,6 +110,9 @@ async function deleteProjectRows(env, pid) {
   await env.DB.prepare("DELETE FROM chatterbox_script WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM audio_folder WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM stop_folder WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM position_history WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM record_session WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM record_folder WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
   // Any remaining un-migrated legacy R2 audio still sitting under "<pid>/..."
   if (env.AUDIO) {
@@ -443,6 +472,7 @@ export default {
       "/field": "/field-recorder.html",
       "/pipeline": "/pipeline-editor.html",
       "/code-library": "/pipeline-editor.html", // retired standalone page — the library is now an inline sidebar on /pipeline
+      "/record": "/record.html",
       "/login": "/login.html",
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
@@ -466,18 +496,30 @@ export default {
   },
 
   async scheduled(event, env) {
-    if (event.cron === "*/5 * * * *") {
-      await cleanupLiveZones(env);
-      return;
-    }
-    // At 15:00 UTC (8am MST): saveSnowSnapshot() already calls scrapeWeather()
-    // internally — calling it again here would double-fetch the site and
-    // double-insert into weather_cache for the same reading.
-    if (event.cron === "0 15 * * *") {
-      await saveSnowSnapshot(env);
-    } else {
-      // Every other hour: just update the real-time cache for Groq context
-      await scrapeWeather(env);
+    // Unlike their manual-trigger routes (POST /api/weather, POST
+    // /api/snow-history), which wrap the same calls in try/catch and
+    // return a JSON error, this had none — an upstream page-layout change
+    // (scrapeWeather already anticipates this: "No Dogtooth data rows
+    // found", "Row too short") threw uncaught here, silently skipping that
+    // hour's cache update or that day's 8am snow snapshot with no signal
+    // anywhere in-app, only visible via Cloudflare's own exception logs.
+    try {
+      if (event.cron === "*/5 * * * *") {
+        await cleanupLiveZones(env);
+        await cleanupOldRecordings(env);
+        return;
+      }
+      // At 15:00 UTC (8am MST): saveSnowSnapshot() already calls scrapeWeather()
+      // internally — calling it again here would double-fetch the site and
+      // double-insert into weather_cache for the same reading.
+      if (event.cron === "0 15 * * *") {
+        await saveSnowSnapshot(env);
+      } else {
+        // Every other hour: just update the real-time cache for Groq context
+        await scrapeWeather(env);
+      }
+    } catch (e) {
+      console.error("scheduled(" + event.cron + ") failed:", e.message);
     }
   }
 };
@@ -641,6 +683,14 @@ async function api(request, env, url) {
     if (!A) return json({ error: "authentication required" }, 401, AC);
     if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
     const uid = decodeURIComponent(muser[1]);
+    // Non-master callers may only touch accounts in their own org — without
+    // this, any operator/admin session could edit or hard-delete ANY
+    // account platform-wide (including other companies' admins) just by
+    // knowing/guessing a uid.
+    if (!A.master) {
+      const targetOrg = await env.DB.prepare("SELECT org_id FROM user_account WHERE id=?").bind(uid).first();
+      if (!targetOrg || targetOrg.org_id !== A.appId) return json({ error: "unauthorized" }, 403, AC);
+    }
     if (method === "PUT") {
       const b = await request.json().catch(() => ({}));
       let newRole = b.role || null;
@@ -673,8 +723,13 @@ async function api(request, env, url) {
     if (!A) return json({ error: "authentication required" }, 401, AC);
     if (!A.master && A.role !== "operator" && A.role !== "admin") return json({ error: "operator access required" }, 403, AC);
     const uid = decodeURIComponent(museri[1]);
-    const user = await env.DB.prepare("SELECT id,email,name FROM user_account WHERE id=?").bind(uid).first().catch(() => null);
+    const user = await env.DB.prepare("SELECT id,email,name,org_id FROM user_account WHERE id=?").bind(uid).first().catch(() => null);
     if (!user) return json({ error: "user not found" }, 404, AC);
+    // Same cross-org guard as PUT/DELETE above — reissuing an invite token
+    // for an account outside the caller's own org would hand back a raw
+    // token (in the response below) that can set that account's password
+    // via the public /api/auth/set-password endpoint.
+    if (!A.master && user.org_id !== A.appId) return json({ error: "unauthorized" }, 403, AC);
     const rawToken = randomHex(32);
     const tokenHash = await sha256hex(rawToken);
     await env.DB.prepare("UPDATE user_account SET invite_token=?,invite_expires=? WHERE id=?")
@@ -819,6 +874,18 @@ async function api(request, env, url) {
       }
       await env.DB.prepare("DELETE FROM user_session WHERE user_id IN (SELECT id FROM user_account WHERE org_id=?)").bind(cid).run();
       await env.DB.prepare("DELETE FROM user_account WHERE org_id=?").bind(cid).run();
+      // Cascade previously stopped at projects/staff, silently orphaning
+      // every other org_id-scoped table. POST /api/clients only checks for
+      // a CURRENTLY-existing id/slug, so a new company onboarded under a
+      // reused slug would otherwise silently inherit the deleted client's
+      // private Chatterbox voice palette, custom code objects, and paid
+      // entitlement grants. code_object.org_id can be NULL (built-in
+      // templates, shared across every org) — the org_id=? filter already
+      // excludes those, same as every other org-scoped query in this file.
+      await env.DB.prepare("DELETE FROM chatterbox_voice WHERE org_id=?").bind(cid).run();
+      await env.DB.prepare("DELETE FROM code_object WHERE org_id=?").bind(cid).run();
+      await env.DB.prepare("DELETE FROM code_object_folder WHERE org_id=?").bind(cid).run();
+      await env.DB.prepare("DELETE FROM org_entitlement WHERE org_id=?").bind(cid).run();
     }
     await env.DB.prepare("DELETE FROM client WHERE id=?").bind(cid).run();
     await logAudit(env, request, A, "client.delete", cid);
@@ -987,7 +1054,7 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
@@ -1019,6 +1086,28 @@ async function api(request, env, url) {
     await deleteProjectRows(env, pid);
     await logAudit(env, request, { keyId: "master" }, "project.delete", pid);
     return json({ ok: true, deleted: pid }, 200, AC);
+  }
+
+  // --- RECORD retention setting (days before unlocked recordings auto-
+  // delete). Separate from the PUT above on purpose: that one requires a
+  // full booking-detail payload (name, etc.) and only edits tour scheduling
+  // fields — retention is an operational/infra setting that must apply
+  // immediately on its own, not bundled with booking edits. Surfaced from
+  // #projSettingsPopover in fence-editor.html. ---
+  if (mdp && method === "PATCH") {
+    const pid = decodeURIComponent(mdp[1]);
+    const A = await auth(request, env);
+    const proj = await env.DB.prepare("SELECT appId FROM project WHERE id=?").bind(pid).first();
+    if (!proj) return json({ error: "project not found" }, 404, AC);
+    if (!scopeOk(A, "publish", proj.appId)) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    if (!("record_retention_days" in b)) return json({ error: "record_retention_days required" }, 400, AC);
+    const days = b.record_retention_days === null ? null : Number(b.record_retention_days);
+    if (days !== null && (!Number.isFinite(days) || days < 0)) return json({ error: "invalid record_retention_days" }, 400, AC);
+    await env.DB.prepare("UPDATE project SET record_retention_days=?, updatedAt=? WHERE id=?")
+      .bind(days, new Date().toISOString(), pid).run();
+    await logAudit(env, request, A, "project.retention.update", pid + " -> " + days);
+    return json({ ok: true, id: pid, record_retention_days: days }, 200, AC);
   }
 
   // --- edit a scheduled tour's booking details (name/time/guide/visitor);
@@ -1381,9 +1470,14 @@ async function api(request, env, url) {
     }
 
     if (method === "PUT") {
-      // Size guard: reject bundles over 1 MB
-      const body = await request.text();
-      if (body.length > 1_000_000) return json({ error: "bundle too large (max 1 MB)" }, 413, AC);
+      // Size guard: reject bundles over 1 MB. Measured on the raw byte
+      // buffer, not the decoded string — String.length counts UTF-16 code
+      // units, so multibyte content (accented text, CJK, emoji in stop
+      // names/say text) could be up to ~3x its .length in real UTF-8 bytes,
+      // letting a bundle well past the documented 1 MB cap slip through.
+      const buf = await request.arrayBuffer();
+      if (buf.byteLength > 1_000_000) return json({ error: "bundle too large (max 1 MB)" }, 413, AC);
+      const body = new TextDecoder().decode(buf);
       let bundle;
       try { bundle = JSON.parse(body); }
       catch (e) { return json({ error: "invalid JSON" }, 400); }
@@ -1467,8 +1561,14 @@ async function api(request, env, url) {
       }
       // Only auto-create the project row if the editor explicitly opts in
       if (proj) {
-        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId), is_template=? WHERE id=?")
-          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, bundle.isTemplate ? 1 : 0, pid).run();
+        // is_template COALESCE'd like every other optional field here — it
+        // used to be set unconditionally, so any publisher that omits
+        // isTemplate from the bundle JSON (a future/alternate publisher,
+        // e.g. Field Recorder's own publish path mentioned above) would
+        // silently flip an existing template project back to non-template
+        // on its next publish.
+        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId), is_template=COALESCE(?,is_template) WHERE id=?")
+          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, bundle.isTemplate != null ? (bundle.isTemplate ? 1 : 0) : null, pid).run();
       } else {
         await env.DB.prepare(
           "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
@@ -1538,6 +1638,267 @@ async function api(request, env, url) {
     }
   }
 
+  // --- RECORD: GPS/motion session recording + playback (patrol sweeps,
+  // freeride runs, trail-use recording for bike/nordic clubs, incident
+  // clips). This is operational/liability data, not public like presence —
+  // write needs publish/audio scope (same as a guide's field tools), read
+  // additionally allows analytics scope (an operator reviewing without
+  // publish rights). See migrations/0028_record_sessions.sql. ---
+  async function recordWriteAuthOk(env, A, projectId) {
+    const appId = await projectAppId(env, projectId);
+    return scopeOk(A, "publish", appId) || scopeOk(A, "audio", appId);
+  }
+  async function recordReadAuthOk(env, A, projectId) {
+    const appId = await projectAppId(env, projectId);
+    return scopeOk(A, "analytics", appId) || scopeOk(A, "publish", appId) || scopeOk(A, "audio", appId);
+  }
+
+  const mrs = path.match(/^\/api\/projects\/([^/]+)\/record\/sessions$/);
+  if (mrs) {
+    const pid = decodeURIComponent(mrs[1]);
+    if (method === "POST") {
+      const A = await auth(request, env);
+      if (!(await recordWriteAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+      const b = await request.json().catch(() => ({}));
+      if (b.folderId) {
+        const folder = await env.DB.prepare("SELECT id FROM record_folder WHERE id=? AND project_id=?").bind(b.folderId, pid).first();
+        if (!folder) return json({ error: "folder not found" }, 404, AC);
+      }
+      const id = crypto.randomUUID();
+      const now = Date.now();
+      await env.DB.prepare(
+        "INSERT INTO record_session (id,project_id,folder_id,type,user_id,label,notes,started_at,ended_at,locked,source_session_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      ).bind(id, pid, b.folderId || null, (b.type || "").trim(), A.userId || null, (b.label || "").trim(), (b.notes || "").trim(), now, null, 0, null, now, now).run();
+      await logAudit(env, request, A, "record.session.start", id);
+      return json({ id, startedAt: now }, 201, AC);
+    }
+    if (method === "GET") {
+      const A = await auth(request, env);
+      if (!(await recordReadAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+      const folderId = url.searchParams.get("folderId");
+      const from = url.searchParams.get("from"), to = url.searchParams.get("to");
+      const conds = ["project_id=?"], binds = [pid];
+      if (folderId === "root") conds.push("folder_id IS NULL");
+      else if (folderId) { conds.push("folder_id=?"); binds.push(folderId); }
+      if (from) { conds.push("started_at>=?"); binds.push(Number(from)); }
+      if (to) { conds.push("started_at<=?"); binds.push(Number(to)); }
+      const { results } = await env.DB.prepare(
+        "SELECT id,folder_id AS folderId,type,label,notes,started_at AS startedAt,ended_at AS endedAt,locked,source_session_id AS sourceSessionId FROM record_session WHERE " +
+        conds.join(" AND ") + " ORDER BY started_at DESC"
+      ).bind(...binds).all();
+      return json({ sessions: results || [] }, 200, AC);
+    }
+  }
+
+  const mrsid = path.match(/^\/api\/projects\/([^/]+)\/record\/sessions\/([^/]+)$/);
+  if (mrsid && method === "PATCH") {
+    const pid = decodeURIComponent(mrsid[1]), sid = decodeURIComponent(mrsid[2]);
+    const A = await auth(request, env);
+    if (!(await recordWriteAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+    const row = await env.DB.prepare("SELECT project_id AS projectId, ended_at AS endedAt FROM record_session WHERE id=?").bind(sid).first();
+    if (!row || row.projectId !== pid) return json({ error: "session not found" }, 404, AC);
+    const b = await request.json().catch(() => ({}));
+    if (b.stop && row.endedAt != null) return json({ error: "session already stopped" }, 409, AC);
+    if (b.folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM record_folder WHERE id=? AND project_id=?").bind(b.folderId, pid).first();
+      if (!folder) return json({ error: "folder not found" }, 404, AC);
+    }
+    const sets = ["updated_at=?"], binds = [Date.now()];
+    if (b.stop) { sets.push("ended_at=?"); binds.push(Date.now()); }
+    if (b.label !== undefined) { sets.push("label=?"); binds.push(String(b.label).trim()); }
+    if (b.notes !== undefined) { sets.push("notes=?"); binds.push(String(b.notes).trim()); }
+    if (b.locked !== undefined) { sets.push("locked=?"); binds.push(b.locked ? 1 : 0); }
+    if (b.folderId !== undefined) { sets.push("folder_id=?"); binds.push(b.folderId || null); }
+    binds.push(sid);
+    await env.DB.prepare(`UPDATE record_session SET ${sets.join(",")} WHERE id=?`).bind(...binds).run();
+    await logAudit(env, request, A, "record.session.update", sid);
+    return json({ ok: true, id: sid }, 200, AC);
+  }
+
+  const mrpos = path.match(/^\/api\/projects\/([^/]+)\/record\/sessions\/([^/]+)\/positions$/);
+  if (mrpos && method === "POST") {
+    const pid = decodeURIComponent(mrpos[1]), sid = decodeURIComponent(mrpos[2]);
+    const A = await auth(request, env);
+    if (!(await recordWriteAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+    const row = await env.DB.prepare("SELECT project_id AS projectId, ended_at AS endedAt FROM record_session WHERE id=?").bind(sid).first();
+    if (!row || row.projectId !== pid) return json({ error: "session not found" }, 404, AC);
+    if (row.endedAt != null) return json({ error: "session already stopped" }, 409, AC);
+    const b = await request.json().catch(() => ({}));
+    const points = (Array.isArray(b.points) ? b.points : []).slice(0, 500).filter(p => p && p.lat != null && p.lon != null);
+    if (!points.length) return json({ error: "need a non-empty points array" }, 400, AC);
+    const stmts = points.map(p => env.DB.prepare(
+      "INSERT INTO position_history (session_id,project_id,lat,lon,acc,heading,ts) VALUES (?,?,?,?,?,?,?)"
+    ).bind(sid, pid, p.lat, p.lon, p.acc ?? null, p.heading ?? null, p.ts || Date.now()));
+    await env.DB.batch(stmts);
+    return json({ ok: true, accepted: stmts.length }, 200, AC);
+  }
+
+  // Cut a trimmed range out of a session and save it as its own permanent,
+  // locked-by-default recording — a real copy of the point range, not a
+  // saved pointer, so it survives even after retention purges the source
+  // session (the motion-data equivalent of protecting a clip on a DVR).
+  const mrclip = path.match(/^\/api\/projects\/([^/]+)\/record\/sessions\/([^/]+)\/clip$/);
+  if (mrclip && method === "POST") {
+    const pid = decodeURIComponent(mrclip[1]), sid = decodeURIComponent(mrclip[2]);
+    const A = await auth(request, env);
+    if (!(await recordWriteAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+    const src = await env.DB.prepare("SELECT project_id AS projectId, folder_id AS folderId, type, label FROM record_session WHERE id=?").bind(sid).first();
+    if (!src || src.projectId !== pid) return json({ error: "source session not found" }, 404, AC);
+    const b = await request.json().catch(() => ({}));
+    const from = Number(b.from), to = Number(b.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return json({ error: "need a valid from/to range" }, 400, AC);
+    let folderId = b.folderId !== undefined ? (b.folderId || null) : src.folderId;
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM record_folder WHERE id=? AND project_id=?").bind(folderId, pid).first();
+      if (!folder) return json({ error: "folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    const label = (b.label || "").trim() || (src.label ? src.label + " (clip)" : "Incident clip");
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO record_session (id,project_id,folder_id,type,user_id,label,notes,started_at,ended_at,locked,source_session_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      ).bind(id, pid, folderId, src.type || "", A.userId || null, label, (b.notes || "").trim(), from, to, b.locked === 0 ? 0 : 1, sid, now, now),
+      env.DB.prepare(
+        "INSERT INTO position_history (session_id,project_id,lat,lon,acc,heading,ts) SELECT ?,project_id,lat,lon,acc,heading,ts FROM position_history WHERE session_id=? AND ts BETWEEN ? AND ?"
+      ).bind(id, sid, from, to)
+    ]);
+    await logAudit(env, request, A, "record.session.clip", id + " (from " + sid + ")");
+    return json({ id }, 201, AC);
+  }
+
+  const mrposread = path.match(/^\/api\/projects\/([^/]+)\/record\/positions$/);
+  if (mrposread && method === "GET") {
+    const pid = decodeURIComponent(mrposread[1]);
+    const A = await auth(request, env);
+    if (!(await recordReadAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+    const sessionId = url.searchParams.get("session");
+    const from = url.searchParams.get("from"), to = url.searchParams.get("to");
+    let results;
+    if (sessionId) {
+      const sess = await env.DB.prepare("SELECT id FROM record_session WHERE id=? AND project_id=?").bind(sessionId, pid).first();
+      if (!sess) return json({ error: "session not found" }, 404, AC);
+      ({ results } = await env.DB.prepare(
+        "SELECT session_id AS sessionId,lat,lon,acc,heading,ts FROM position_history WHERE session_id=? ORDER BY ts LIMIT 50000"
+      ).bind(sessionId).all());
+    } else {
+      if (!from || !to) return json({ error: "need session, or from and to" }, 400, AC);
+      ({ results } = await env.DB.prepare(
+        "SELECT session_id AS sessionId,lat,lon,acc,heading,ts FROM position_history WHERE project_id=? AND ts BETWEEN ? AND ? ORDER BY session_id, ts LIMIT 50000"
+      ).bind(pid, Number(from), Number(to)).all());
+    }
+    return json({ points: results || [] }, 200, AC);
+  }
+
+  // Density heatmap for the "danger zone" view — grid-bucketed count of
+  // position_history rows, a dwell-time proxy (see record.html). Not a
+  // separate recording mode: it's computed on demand from whatever's
+  // already been captured.
+  const mrheat = path.match(/^\/api\/projects\/([^/]+)\/record\/heatmap$/);
+  if (mrheat && method === "GET") {
+    const pid = decodeURIComponent(mrheat[1]);
+    const A = await auth(request, env);
+    if (!(await recordReadAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+    const gridM = Math.max(3, Math.min(200, Number(url.searchParams.get("gridM")) || 15));
+    const step = gridM / 111320; // rough metres->degrees; fine at the scale this tool operates over
+    const from = url.searchParams.get("from"), to = url.searchParams.get("to");
+    const conds = ["project_id=?"], binds = [pid];
+    if (from) { conds.push("ts>=?"); binds.push(Number(from)); }
+    if (to) { conds.push("ts<=?"); binds.push(Number(to)); }
+    const { results } = await env.DB.prepare(
+      `SELECT ROUND(lat/?)*? AS lat, ROUND(lon/?)*? AS lon, COUNT(*) AS count FROM position_history WHERE ${conds.join(" AND ")} GROUP BY 1,2`
+    ).bind(step, step, step, step, ...binds).all();
+    return json({ gridM, cells: results || [] }, 200, AC);
+  }
+
+  // --- RECORD folders: organize sessions into a tree, same shape/behavior
+  // as stop_folder/walking_path_folder — always project-scoped, and (unlike
+  // audio_folder) deleting a folder moves its sessions up to the parent
+  // instead of destroying them, since a recorded session is expensive or
+  // impossible to redo and often kept for liability. ---
+  async function collectRecordFolderSubtreeIds(env, rootId) {
+    const ids = [rootId]; let frontier = [rootId];
+    while (frontier.length) {
+      const ph = frontier.map(() => "?").join(",");
+      const { results } = await env.DB.prepare(`SELECT id FROM record_folder WHERE parent_id IN (${ph})`).bind(...frontier).all();
+      frontier = (results || []).map(r => r.id);
+      ids.push(...frontier);
+    }
+    return ids;
+  }
+
+  if (path === "/api/record-folder" && method === "GET") {
+    const A = await auth(request, env);
+    const projectId = url.searchParams.get("projectId");
+    if (!projectId) return json({ error: "projectId required" }, 400, AC);
+    if (!(await recordWriteAuthOk(env, A, projectId)) && !(await recordReadAuthOk(env, A, projectId))) return json({ error: "unauthorized" }, 401, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,parent_id AS parentId,name FROM record_folder WHERE project_id=? ORDER BY name"
+    ).bind(projectId).all();
+    return json({ folders: results || [] }, 200, AC);
+  }
+
+  if (path === "/api/record-folder" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const projectId = (b.projectId || "").trim(), name = (b.name || "").trim();
+    const parentId = b.parentId || null;
+    if (!projectId || !name) return json({ error: "projectId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
+    if (!(await recordWriteAuthOk(env, A, projectId))) return json({ error: "unauthorized" }, 401, AC);
+    if (parentId) {
+      const parent = await env.DB.prepare("SELECT id FROM record_folder WHERE id=? AND project_id=?").bind(parentId, projectId).first();
+      if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare("INSERT INTO record_folder (id,project_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+      .bind(id, projectId, parentId, name, now, now).run();
+    await logAudit(env, request, A, "recordfolder.create", projectId + "/" + name);
+    return json({ id, projectId, parentId, name }, 201, AC);
+  }
+
+  const mRecordFolder = path.match(/^\/api\/record-folder\/([^/]+)$/);
+  if (mRecordFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mRecordFolder[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT project_id AS projectId,parent_id AS parentId,name FROM record_folder WHERE id=?").bind(folderId).first();
+    if (!row) return json({ error: "folder not found" }, 404, AC);
+    if (!(await recordWriteAuthOk(env, A, row.projectId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      const folderIds = await collectRecordFolderSubtreeIds(env, folderId);
+      const fph = folderIds.map(() => "?").join(",");
+      const { meta } = await env.DB.prepare(
+        `UPDATE record_session SET folder_id=?, updated_at=? WHERE project_id=? AND folder_id IN (${fph})`
+      ).bind(row.parentId, Date.now(), row.projectId, ...folderIds).run();
+      await env.DB.prepare(`DELETE FROM record_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "recordfolder.delete", folderId + " (" + (meta.changes || 0) + " sessions moved up)");
+      return json({ ok: true, deletedFolders: folderIds.length, movedSessions: meta.changes || 0 }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, parentId = row.parentId;
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.parentId !== undefined) {
+      const newParentId = b.parentId || null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM record_folder WHERE id=? AND project_id=?").bind(newParentId, row.projectId).first();
+        if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+        const subtreeIds = await collectRecordFolderSubtreeIds(env, folderId);
+        if (subtreeIds.includes(newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
+      }
+      parentId = newParentId;
+    }
+    await env.DB.prepare("UPDATE record_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+      .bind(name, parentId, new Date().toISOString(), folderId).run();
+    await logAudit(env, request, A, "recordfolder.update", folderId);
+    return json({ id: folderId, name, parentId }, 200, AC);
+  }
+
   // --- device register (public) ---
   if (path === "/api/devices" && method === "POST") {
     const b = await request.json();
@@ -1594,9 +1955,12 @@ async function api(request, env, url) {
 
   // --- analytics ingest: idempotent batch, gated by consent ---
   if (path === "/api/events" && method === "POST") {
-    // Size guard: reject payloads over 500 KB
-    const body = await request.text();
-    if (body.length > 500_000) return json({ error: "payload too large (max 500 KB)" }, 413);
+    // Size guard: reject payloads over 500 KB — measured on raw bytes, not
+    // the decoded string's UTF-16 .length, same reasoning as the bundle
+    // guard above.
+    const buf = await request.arrayBuffer();
+    if (buf.byteLength > 500_000) return json({ error: "payload too large (max 500 KB)" }, 413);
+    const body = new TextDecoder().decode(buf);
     let b;
     try { b = JSON.parse(body); }
     catch (e) { return json({ error: "invalid JSON" }, 400); }

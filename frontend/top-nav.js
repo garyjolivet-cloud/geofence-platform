@@ -87,6 +87,7 @@
     { key:"audio",        label:"Audio Studio",  href:"/studio" },
     { key:"chatterbox",   label:"Chatterbox",    href:"/chatterbox" },
     { key:"code-library", label:"Code Library",  href:"/code-library" },
+    { key:"record",       label:"Record",        href:"/record" },
     { key:"dashboard",    label:"Dashboard",     href:"/dashboard" },
     { key:"clients",      label:"Clients",       href:"/clients" }
   ];
@@ -456,11 +457,20 @@
         defaultId: opts.defaultCompany,
         onChange: async (newCompany) => {
           company = newCompany || "";
-          if(opts.onCompanyChange){ opts.onCompanyChange(company); await loadProjects(); refreshToolHrefs(); return; }
           // Company changed — the current project (if any) belongs to the
           // OLD company's list, so it's no longer valid context. Drop it
           // rather than carry a project id that silently means nothing (or
-          // worse, means a different project) under the new company.
+          // worse, means a different project) under the new company. This
+          // used to only happen in the full-page-navigation branch below —
+          // the onCompanyChange (hot-swap-in-place) branch left `project`
+          // and projInput.value pointing at the old company's project,
+          // confirmed live: every TOOLS link (rebuilt by refreshToolHrefs()
+          // right after) carried the stale id straight into the new
+          // company's tools, e.g. Edit opening company B's editor against
+          // company A's project.
+          project = ""; setProject("");
+          projInput.value = "";
+          if(opts.onCompanyChange){ opts.onCompanyChange(company); await loadProjects(); refreshToolHrefs(); return; }
           location.href = toolHref(location.pathname, "", company);
         }
       });

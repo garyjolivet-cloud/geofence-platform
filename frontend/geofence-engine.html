@@ -1980,8 +1980,17 @@ function toggleSim(){
   document.getElementById('btnSim').classList.toggle('on',simMode);
   HUD.el('pill').textContent=simMode?'SIM':'OFF';
   HUD.el('pill').className='pill '+(simMode?'sim':'');
-  if(simMode){ if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;}
-    GPSFilter.reset(); Geofencer.reset(); HUD.prev=null;
+  // Reset on EVERY toggle, not just entering sim — btnStart/pill's onclick
+  // calls toggleSim() specifically to LEAVE sim mode before starting live
+  // GPS, and used to hit this whole block's else-case (nothing), so a zone
+  // left "in" during sim testing carried straight into live tracking and
+  // fired a spurious exit (with a bogus dur/move) the instant a real fix
+  // arrived somewhere else — corrupting any pipeline flag/counter gated on
+  // that zone's exit before the real walk even started. Matches the
+  // unconditional reset already done on every bundle (re)load.
+  if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;}
+  GPSFilter.reset(); Geofencer.reset(); HUD.prev=null;
+  if(simMode){
     Audio.unlock(); Audio.unlocked=true;
     Clarity.init(); if(Clarity.ctx && Clarity.ctx.state==='suspended') Clarity.ctx.resume();
     SpatialVoice.ensure();

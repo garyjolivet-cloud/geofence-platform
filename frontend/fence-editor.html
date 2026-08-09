@@ -758,6 +758,15 @@
     <option value="600">10 min</option>
     <option value="1800">30 min</option>
   </select>
+  <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
+  <label class="k" style="margin-top:2px" title="How long RECORD sessions (patrol sweeps, freeride runs, etc.) are kept before auto-deleting. Locked sessions and incident clips are never auto-deleted regardless of this setting. Applies immediately — not part of Publish.">🎥 recording retention</label>
+  <select id="recordRetentionDays">
+    <option value="" selected>keep forever (no auto-delete)</option>
+    <option value="7">7 days</option>
+    <option value="14">14 days</option>
+    <option value="30">30 days</option>
+    <option value="90">90 days</option>
+  </select>
 </div>
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
@@ -875,7 +884,21 @@ function autoSave(){
     try{
       const id=_currentProjectId||slug(projName())||null;
       if(!id||!zones.length) return;
-      const snap={id,name:projName(),zones,savedAt:Date.now()};
+      // Project-level settings — these used to only be read live from the
+      // DOM/state at Publish time, never part of the draft snapshot, so a
+      // crash/reload before Publishing lost them silently even though zone
+      // edits were already protected by this same mechanism. Optional
+      // chaining so a future markup change just skips a field rather than
+      // breaking the whole autosave.
+      const snap={id,name:projName(),zones,savedAt:Date.now(),
+        audioRange:document.getElementById("audioRange")?.value,
+        audioClear:document.getElementById("audioClear")?.value,
+        stopVisRadius:document.getElementById("stopVisRadius")?.value,
+        isTemplate:document.getElementById("isTemplateChk")?.checked,
+        liveTtlMs:document.getElementById("liveTtlMs")?.value,
+        audioRetriggerDelayS:document.getElementById("audioRetriggerDelayS")?.value,
+        walkingPathIds:selectedWalkingPathIds.slice(),
+        globalCodeObjects:globalCodeObjects.slice()};
       localStorage.setItem(DRAFT_KEY,JSON.stringify(snap));
     }catch(e){}
   },800);
@@ -900,10 +923,22 @@ function autoRestore(){
       "<button class=\"gp-c-restore\">Restore</button><button class=\"gp-c-discard\">Discard</button>";
     document.body.appendChild(b);
     requestAnimationFrame(()=>b.classList.add("show"));
-    b.querySelector(".gp-c-restore").onclick=()=>{
+    b.querySelector(".gp-c-restore").onclick=async()=>{
       zones=snap.zones; sel=-1;
       _currentProjectId=snap.id||null;
       document.getElementById("projCrumb").textContent=label;
+      // Restore the project-level settings saved alongside zones above —
+      // each guarded so an older draft saved before this field existed
+      // just leaves that one setting at whatever the fresh page already
+      // defaulted to, instead of throwing and aborting the whole restore.
+      if(snap.audioRange!=null) document.getElementById("audioRange").value=snap.audioRange;
+      if(snap.audioClear!=null) document.getElementById("audioClear").value=snap.audioClear;
+      if(snap.stopVisRadius!=null) document.getElementById("stopVisRadius").value=snap.stopVisRadius;
+      if(snap.isTemplate!=null) document.getElementById("isTemplateChk").checked=snap.isTemplate;
+      if(snap.liveTtlMs!=null) document.getElementById("liveTtlMs").value=snap.liveTtlMs;
+      if(snap.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=snap.audioRetriggerDelayS;
+      if(Array.isArray(snap.globalCodeObjects)) globalCodeObjects=snap.globalCodeObjects.slice();
+      if(Array.isArray(snap.walkingPathIds) && snap.walkingPathIds.length) await loadActiveWalkingPathData(snap.walkingPathIds);
       render(); refreshProps();
       ps().textContent="draft restored ("+snap.zones.length+" zone"+(snap.zones.length===1?"":"s")+") — Publish to save to D1";
       b.remove();
@@ -2104,7 +2139,15 @@ function pAudioTogglePlay(){
 }
 document.getElementById("pAudioPlay").addEventListener("click",pAudioTogglePlay);
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
-bindProp("pName",z=>{ z.name=document.getElementById("pName").value; z.id=uniqueZoneId(slug(z.name),z); });
+bindProp("pName",z=>{
+  const oldId=z.id;
+  z.name=document.getElementById("pName").value; z.id=uniqueZoneId(slug(z.name),z);
+  // coBulkSel (bulk-assign checkboxes) is a Set of zone ids — rename
+  // changes z.id (it's slug-derived from the name), so without this the
+  // stop silently unchecks itself on the next render and any subsequent
+  // bulk move/attach quietly skips it, with no error shown anywhere.
+  if(coBulkSel.has(oldId)){ coBulkSel.delete(oldId); coBulkSel.add(z.id); }
+});
 bindProp("pSay",z=>{ z.say=document.getElementById("pSay").value; });
 bindProp("pDwell",z=>{ z.dwellS=+document.getElementById("pDwell").value||20; });
 document.getElementById("pMoveMode").addEventListener("input",()=>{
@@ -2262,6 +2305,38 @@ document.getElementById("pAudioClear").onclick=async()=>{
 function afProjectId(){ return _currentProjectId||slug(projName())||null; }
 function afOrgId(){ const el=document.getElementById("clientSel"); return (el&&el.value)||null; }
 function afAppId(){ const el=document.getElementById("appSel"); return (el&&el.value)||null; }
+
+// RECORD retention (#recordRetentionDays): unlike liveTtlMs/audioRetriggerDelayS
+// above, this is an operational/infra setting, not a bundle field — it must
+// persist immediately on change and take effect right away, not wait for the
+// next Publish. Loaded fresh every time the settings popover opens (project
+// row may not exist yet pre-publish, so a fetch failure/404 just leaves the
+// default "keep forever" showing rather than erroring).
+async function loadRecordRetention(){
+  const sel=document.getElementById("recordRetentionDays"); if(!sel) return;
+  const pid=afProjectId(); if(!pid){ sel.value=""; return; }
+  try{
+    const r=await fetch("/api/projects?org="+encodeURIComponent(afOrgId()||""),{headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok) return;
+    const j=await r.json();
+    const proj=(j.projects||[]).find(p=>p.id===pid);
+    sel.value=(proj&&proj.record_retention_days!=null)?String(proj.record_retention_days):"";
+  }catch(e){}
+}
+document.getElementById("recordRetentionDays")?.addEventListener("change",async()=>{
+  const sel=document.getElementById("recordRetentionDays");
+  const pid=afProjectId();
+  if(!pid){ alert("Save/publish this tour first."); return; }
+  const days=sel.value===""?null:+sel.value;
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid),{
+      method:"PATCH",
+      headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({record_retention_days:days})
+    });
+    if(!r.ok){ const e=await r.json().catch(()=>({})); alert("couldn't save retention: "+(e.error||r.status)); }
+  }catch(e){ alert("couldn't save retention: "+e.message); }
+});
 
 // afOpenStudioHref()/the Audio Palette's own "Open in Studio" link (with a
 // deep link straight to the selected stop's zone/bearing in Audio Studio)
@@ -2453,7 +2528,8 @@ document.getElementById("cmbRender").onclick=async()=>{
 };
 document.getElementById("pFires").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].fires=document.getElementById("pFires").value;
-  document.getElementById("dwellRow").style.display=zones[sel].fires==="dwell"?"flex":"none"; });
+  document.getElementById("dwellRow").style.display=zones[sel].fires==="dwell"?"flex":"none";
+  autoSave(); });
 document.getElementById("pVoice").addEventListener("change",()=>{ if(sel<0)return;
   zones[sel].ttsVoice=document.getElementById("pVoice").value||null; autoSave(); });
 document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById("pSay").value.trim();
@@ -2871,6 +2947,13 @@ async function deleteWpPath(p){
     const r=await fetch("/api/walking-path/"+p.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
     if(selectedWalkingPathIds.includes(p.id)) await toggleWalkingPath(p.id,false);
+    // Clear onPathId on any stop snapped to this path — the drag handler
+    // already falls back to free-drag gracefully for a dangling reference
+    // (walkingPathsActive.find() just returns undefined), but left alone
+    // it exports into every future published bundle forever with nothing
+    // in the UI ever showing the stop is orphaned this way.
+    const affected=zones.filter(z=>z.onPathId===p.id);
+    if(affected.length){ affected.forEach(z=>z.onPathId=null); autoSave(); render(); }
     openWalkingPathPicker(_wpPickerAnchor);
   }catch(err){ alert("Delete failed: "+err.message); }
 }
@@ -3073,7 +3156,12 @@ function renameZone(zoneId){
   const z=zones.find(zz=>zz.id===zoneId); if(!z) return;
   const name=(prompt("Rename stop:",z.name)||"").trim();
   if(!name||name===z.name) return;
+  const oldId=z.id;
   z.name=name; z.id=uniqueZoneId(slug(z.name),z);
+  // Same coBulkSel id-swap as the pName field binding above — this is the
+  // other of the two places a zone gets renamed (⋯ menu vs. typing in the
+  // properties panel), and both change z.id the same way.
+  if(coBulkSel.has(oldId)){ coBulkSel.delete(oldId); coBulkSel.add(z.id); }
   if(document.getElementById("pName")&&sel>=0&&zones[sel]===z) document.getElementById("pName").value=z.name;
   render(); refreshProps();
 }
@@ -3530,9 +3618,29 @@ async function loadFromPlatform(id){
     doAudioRefresh();
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
+// Publish-time geometry sanity check. The map's own drag handles already
+// clamp radius/etc. to a sane minimum while dragging, but an imported bundle
+// (Import button, or a hand-edited bundle pasted into the export/import
+// textarea) bypasses that entirely — nothing else here rejects a degenerate
+// shape, so it would otherwise reach the live engine unfireable (a visitor's
+// GPS track can't "cross" a zero-length tripline, or land inside a <3-point
+// polygon) with no warning anywhere until a real visitor never triggers it.
+function validateZoneGeometry(zs){
+  const problems=[];
+  zs.forEach(z=>{
+    const s=z.shape;
+    if(s.type==="circle" && !(s.radiusM>0)) problems.push('"'+z.name+'" — circle radius must be greater than 0');
+    else if(s.type==="polygon" && (!s.coords || s.coords.length<3)) problems.push('"'+z.name+'" — polygon needs at least 3 points');
+    else if(s.type==="tripline" && !(haversineM(s.from,s.to)>0.5)) problems.push('"'+z.name+'" — tripline endpoints are the same point (or nearly so)');
+  });
+  return problems;
+}
 async function publishToPlatform(){
   const b=exportBundle(); const id=b.project;
   if(!b.zones.length){ ps().textContent="no stops to publish — draw at least one"; toast("No stops to publish — draw at least one on the map first.","warn"); return; }
+  const geomProblems=validateZoneGeometry(zones);
+  if(geomProblems.length){ ps().textContent="publish blocked — fix stop geometry first";
+    toast("Can't publish — fix these stops first: "+geomProblems.join("; "),"err"); return; }
   const token=getToken();
   if(!token){ ps().textContent="publish cancelled"; toast("Publish cancelled — no login/token available.","err"); return; }
   ps().textContent="publishing "+id+"…";
@@ -4988,7 +5096,7 @@ if(window.TopNav){
       pop.style.display="";
       popoverEl.appendChild(pop);
     },
-    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); }
+    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); }
   }).then(()=>{
     const navH=document.getElementById("crossToolNav").getBoundingClientRect().height;
     document.getElementById("map").style.top=navH+"px";

@@ -1154,14 +1154,30 @@ document.getElementById("recToggle").onclick=async()=>{
       const ab=await blob.arrayBuffer();
       const tmp=new AudioContext(); const buf=await tmp.decodeAudioData(ab); await tmp.close();
       const peaks=_buildPeaks(buf);
+      const name="recording-"+new Date().toISOString().slice(11,19).replace(/:/g,"")+".mp3";
+      // Upload to the project's own folder immediately, before the segment
+      // ever touches the timeline — a segment with sourceKey/sourceUrl:null
+      // only exists as an in-memory AudioBuffer, and serializeTimeline()
+      // (auto-draft + named Session Save both use it) stores that null
+      // verbatim. On reload, applyTimelineData() tries to re-fetch it via
+      // getBufAndPeaks(null), fails, and silently drops the segment —
+      // confirmed live (2026-08-08): a recording left un-exported was wiped
+      // with no warning on navigate-away/reload, defeating the exact thing
+      // draft persistence exists to prevent. Uploading eagerly (mirrors the
+      // Spatial "Bake" flow's own "not yet saved" handling above) means a
+      // recording is durable from the moment it's added, same as a clip
+      // dragged in from the tree.
+      const mp3Blob=await _encodeMp3(buf);
+      const target={ scope:"project", scopeId:studio.projectId, folderId:null };
+      const {url,r2Key}=await uploadBlob(mp3Blob,target,name,"audio/mpeg");
       const existing=selSegId!=null?findSeg(selSegId):null;
       const track=existing?existing.t:newTrack("Recording");
-      const seg={ id:nextSegId++, sourceKey:null, sourceUrl:null, buf, peaks, f0:0, f1:1,
+      const seg={ id:nextSegId++, sourceKey:r2Key, sourceUrl:url, sourceScope:target.scope, sourceScopeId:target.scopeId, sourceFolderId:null, buf, peaks, f0:0, f1:1,
         trackOffsetSec: track.segments.length?Math.max(...track.segments.map(segEndSec)):playheadSec,
         fadeInSec:0.01, fadeOutSec:0.01, gainDb:0, loopToFill:false, spatialFilter:null,
-        label:"recording-"+new Date().toISOString().slice(11,19).replace(/:/g,"") };
+        label:name };
       track.segments.push(seg); selSegId=seg.id; renderTimelineUI();
-    }catch(e){ alert("decode failed: "+e.message); }
+    }catch(e){ alert("recording save failed: "+e.message); }
   };
   _recRec.start(500);
   _recT0=Date.now();

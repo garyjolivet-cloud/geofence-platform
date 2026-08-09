@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chase Life — Record</title>
+<script src="role-gate.js"></script>
+<script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<script>RoleGate.require(['admin','operator']);</script>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
+         --snow:#ffffff;--ice:#c8dff2;--fog:#8aa5bf;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow);overflow:hidden}
+  body{display:flex;flex-direction:column}
+  .hdr{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rim);background:rgba(10,16,24,.95);flex:0 0 auto}
+  .hdr h1{font-family:"Black Han Sans";font-size:17px;margin:0;flex:0 0 auto}
+  .hdr .crumb{font-family:"Barlow Condensed";font-size:13px;color:var(--fog);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+         font-size:12px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:8px;
+         padding:7px 12px;cursor:pointer}
+  button.on,button.sel{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  button.ghost{background:none}
+  button.danger{border-color:var(--hazard);color:var(--hazard)}
+  button:disabled{opacity:.4;cursor:default}
+  input,select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
+         color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:6px 9px}
+  .hint{font-family:"Barlow";font-size:12px;color:var(--fog)}
+
+  #noProjectHint{padding:20px;text-align:center}
+
+  #recordScreen{flex:1;display:none;min-height:0}
+  #recordScreen.show{display:flex}
+
+  .rail{width:300px;flex:0 0 auto;border-right:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;background:rgba(255,255,255,.01);
+        resize:horizontal;overflow:auto;min-width:220px;max-width:60vw}
+  .rail-body{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px;min-height:0}
+  .crumb-row{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+  .crumb-row button{font-size:10px;padding:4px 8px}
+  /* Plain text rows, not icon tiles — a folder name and a recording's
+     label/type/time/duration are exactly as informative as text; a
+     graphic would only earn its place if it conveyed something text
+     can't (a thumbnail, a map preview), which nothing here does. */
+  .folder-list{display:flex;flex-direction:column;gap:1px}
+  .folder-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px;cursor:pointer;
+              font-family:'Barlow Condensed';font-size:12px;color:var(--ice)}
+  .folder-row:hover{background:rgba(255,255,255,.05)}
+  .folder-row.new{color:var(--fog)}
+  .folder-row .fr-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .folder-row .fr-actions{display:none;gap:4px;flex:0 0 auto}
+  .folder-row:hover .fr-actions{display:flex}
+  .folder-row .fr-actions button{padding:1px 5px;font-size:10px;border:none;background:none;color:var(--fog)}
+  .folder-row .fr-actions button:hover{color:var(--ice)}
+
+  .session-list{display:flex;flex-direction:column;gap:1px}
+  .session-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px;cursor:pointer}
+  .session-row:hover{background:rgba(255,255,255,.05)}
+  .session-row .sr-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+              font-family:'Barlow Condensed';font-size:12px;color:var(--ice)}
+  .rail-foot{padding:8px;border-top:1px solid var(--rim);flex:0 0 auto;display:flex;flex-direction:column;gap:6px}
+  .rail-foot .row{display:flex;gap:6px;align-items:center}
+  .rail-foot input[type=date]{flex:1;min-width:0}
+
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+  .tabs{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--rim);flex:0 0 auto}
+  #heatmapControls{display:none;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--rim);flex:0 0 auto;flex-wrap:wrap}
+  #map{flex:1;min-height:0}
+
+  #transport{border-top:1px solid var(--rim);padding:8px 12px;display:flex;flex-direction:column;gap:6px;flex:0 0 auto;background:rgba(10,16,24,.9)}
+  .tl-row{display:flex;align-items:center;gap:8px}
+  .tl-row label{font-family:'Barlow Condensed';font-size:10px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px;width:62px;flex:0 0 auto}
+  .tl-row input[type=range]{flex:1;accent-color:var(--coral)}
+  #timeReadout,#trimInReadout,#trimOutReadout{font-family:'Barlow Condensed';font-size:11px;color:var(--ice);width:150px;text-align:right;flex:0 0 auto}
+  #transportBtns{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>🎥 Record</h1>
+  <span class="crumb" id="hdrCrumb"></span>
+</div>
+<div id="topNav"></div>
+
+<div id="noProjectHint" class="hint">Pick a company and project from the bar above to get started.</div>
+
+<div id="recordScreen">
+  <div class="rail">
+    <div class="rail-body" id="railBody"></div>
+    <div class="rail-foot">
+      <div class="row">
+        <input id="dateFromInput" type="date">
+        <span class="hint">to</span>
+        <input id="dateToInput" type="date">
+      </div>
+      <div class="row">
+        <button id="btnDateFilter" class="ghost" style="flex:1">🔎 Filter by date</button>
+        <button id="btnDateClear" class="ghost" style="flex:1">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="tabs">
+      <button id="tabPlayback" class="sel" onclick="switchTab('playback')">▶ Playback</button>
+      <button id="tabHeatmap" onclick="switchTab('heatmap')">🔥 Danger Zones</button>
+    </div>
+
+    <div id="heatmapControls">
+      <label class="hint">grid size</label>
+      <select id="heatmapGridM">
+        <option value="8">8 m</option>
+        <option value="15" selected>15 m</option>
+        <option value="30">30 m</option>
+        <option value="60">60 m</option>
+      </select>
+      <button id="btnHeatmapRefresh">Refresh</button>
+      <span class="hint">Density of recorded position pings — a dwell-time proxy, not a precise seconds figure outside the Garmin bridge's steady 1Hz feed.</span>
+    </div>
+
+    <div id="map"></div>
+
+    <div id="transport">
+      <div class="tl-row">
+        <label>Playhead</label>
+        <input type="range" id="scrubPlayhead" min="0" max="1000" value="0">
+        <span id="timeReadout">—</span>
+      </div>
+      <div class="tl-row">
+        <label>Trim In</label>
+        <input type="range" id="scrubTrimIn" min="0" max="1000" value="0">
+        <span id="trimInReadout">—</span>
+      </div>
+      <div class="tl-row">
+        <label>Trim Out</label>
+        <input type="range" id="scrubTrimOut" min="0" max="1000" value="1000">
+        <span id="trimOutReadout">—</span>
+      </div>
+      <div id="transportBtns">
+        <button id="btnPlayPause">▶ Play</button>
+        <select id="speedSel">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+          <option value="8">8x</option>
+        </select>
+        <span class="hint" id="selectedCountHint"></span>
+        <span style="flex:1"></span>
+        <button id="btnExport" class="ghost">⬇ Export trim</button>
+        <button id="btnSaveClip">✂ Save as Incident Clip</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function getToken(){ return localStorage.getItem("gp.session")||""; }
+function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+/* ============================================================
+   State
+   ============================================================ */
+const S = {
+  projectId:null,
+  folders:[], folderId:null,   // current open folder id (null = root)
+  sessions:[],                 // sessions in the current folder (+ date filter)
+  dateFrom:null, dateTo:null,
+  selected:new Set(),          // session ids picked for playback
+  points:{},                   // sessionId -> [{lat,lon,ts}]
+  markers:{},                  // sessionId -> maplibregl.Marker
+  rangeStart:null, rangeEnd:null,
+  playheadTs:null, trimInTs:null, trimOutTs:null,
+  playing:false, speed:1, playTimer:null,
+  tab:"playback"
+};
+let map;
+const TRACK_COLORS=["#ff6a3d","#38e0a6","#c8dff2","#ffc24d","#ff2f4e","#b96fff"];
+function colorFor(i){ return TRACK_COLORS[i%TRACK_COLORS.length]; }
+
+/* ============================================================
+   Folder tree — own tile-based browser (same visual convention as Audio
+   Studio's rail, not the shared AudioTree widget itself: stop_folder set
+   the precedent that each domain gets its own tree rather than reusing
+   one cross-domain component). Deleting a folder moves its recordings up
+   to the parent (server-side, /api/record-folder), never destroys them.
+   ============================================================ */
+function folderById(id){ return S.folders.find(f=>f.id===id); }
+function folderPath(id){
+  const chain=[]; let f=id?folderById(id):null;
+  while(f){ chain.unshift(f); f=f.parentId?folderById(f.parentId):null; }
+  return chain;
+}
+function childFolders(parentId){ return S.folders.filter(f=>(f.parentId||null)===(parentId||null)).sort((a,b)=>a.name.localeCompare(b.name)); }
+function collectSubtreeIds(rootId){
+  const ids=[rootId]; let frontier=[rootId];
+  while(frontier.length){
+    const next=S.folders.filter(f=>frontier.includes(f.parentId)).map(f=>f.id);
+    ids.push(...next); frontier=next;
+  }
+  return ids;
+}
+function pickFolderPrompt(label, excludeSubtreeRootId){
+  const excludeIds = excludeSubtreeRootId ? collectSubtreeIds(excludeSubtreeRootId) : [];
+  const options=[{id:null,label:"Root"}].concat(
+    S.folders.filter(f=>!excludeIds.includes(f.id)).map(f=>({id:f.id,label:folderPath(f.id).map(x=>x.name).join(" / ")}))
+  );
+  const listStr=options.map((o,i)=>i+": "+o.label).join("\n");
+  const idx=prompt(label+"\n\n"+listStr+"\n\nEnter a number (cancel = leave unchanged):");
+  if(idx===null || idx.trim()==="") return undefined;
+  const opt=options[Number(idx)];
+  return opt?opt.id:undefined;
+}
+
+async function loadFolders(){
+  if(!S.projectId){ S.folders=[]; renderRail(); return; }
+  const r=await fetch("/api/record-folder?projectId="+encodeURIComponent(S.projectId),{headers:{authorization:"Bearer "+getToken()}});
+  const j=r.ok?await r.json():{folders:[]};
+  S.folders=j.folders||[];
+  renderRail();
+}
+function openFolder(id){ S.folderId=id||null; loadSessions(); }
+async function createFolder(){
+  const name=(prompt("Folder name:")||"").trim();
+  if(!name) return;
+  const r=await fetch("/api/record-folder",{
+    method:"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+    body:JSON.stringify({projectId:S.projectId, name, parentId:S.folderId})
+  });
+  if(!r.ok){ const e=await r.json().catch(()=>({})); alert(e.error||"couldn't create folder"); return; }
+  await loadFolders();
+}
+async function renameFolder(id){
+  const f=folderById(id); if(!f) return;
+  const name=(prompt("Rename folder:",f.name)||"").trim();
+  if(!name || name===f.name) return;
+  await fetch("/api/record-folder/"+encodeURIComponent(id),{
+    method:"PATCH", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"}, body:JSON.stringify({name})
+  });
+  await loadFolders();
+}
+async function moveFolder(id){
+  const targetId=pickFolderPrompt("Move this folder into which folder?", id);
+  if(targetId===undefined) return;
+  const r=await fetch("/api/record-folder/"+encodeURIComponent(id),{
+    method:"PATCH", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"}, body:JSON.stringify({parentId:targetId})
+  });
+  if(!r.ok){ const e=await r.json().catch(()=>({})); alert(e.error||"couldn't move folder"); return; }
+  await loadFolders();
+}
+async function deleteFolder(id){
+  const f=folderById(id); if(!f) return;
+  if(!confirm('Delete folder "'+f.name+'"? Recordings inside move up to its parent folder — they are never deleted by this.')) return;
+  await fetch("/api/record-folder/"+encodeURIComponent(id),{ method:"DELETE", headers:{authorization:"Bearer "+getToken()} });
+  if(S.folderId===id) S.folderId=f.parentId||null;
+  await loadFolders();
+}
+
+function renderRail(){
+  const body=document.getElementById("railBody");
+  const crumbs=folderPath(S.folderId);
+  let html='<div class="crumb-row">';
+  html+='<button onclick="openFolder(null)">🎥 Root</button>';
+  crumbs.forEach(f=>{ html+=' / <button onclick="openFolder(\''+f.id+'\')">'+esc(f.name)+'</button>'; });
+  html+='</div><div class="folder-list">';
+  childFolders(S.folderId).forEach(f=>{
+    html+='<div class="folder-row">'
+        + '<span class="fr-name" onclick="openFolder(\''+f.id+'\')">📁 '+esc(f.name)+'</span>'
+        + '<span class="fr-actions">'
+        +   '<button onclick="event.stopPropagation();renameFolder(\''+f.id+'\')" title="Rename">✎</button>'
+        +   '<button onclick="event.stopPropagation();moveFolder(\''+f.id+'\')" title="Move">⇢</button>'
+        +   '<button onclick="event.stopPropagation();deleteFolder(\''+f.id+'\')" title="Delete">🗑</button>'
+        + '</span></div>';
+  });
+  html+='<div class="folder-row new" onclick="createFolder()">＋ New folder</div>';
+  html+='</div><div class="session-list" id="sessionList"></div>';
+  body.innerHTML=html;
+  renderSessionList();
+}
+
+/* ============================================================
+   Sessions — recordings filed in the current folder, plus an optional
+   date-range filter layered on top (finding "what happened last Tuesday"
+   without caring which folder it's filed under).
+   ============================================================ */
+async function loadSessions(){
+  if(!S.projectId){ S.sessions=[]; renderSessionList(); return; }
+  const params=new URLSearchParams();
+  params.set("folderId", S.folderId||"root");
+  if(S.dateFrom) params.set("from", String(new Date(S.dateFrom).getTime()));
+  if(S.dateTo) params.set("to", String(new Date(S.dateTo).getTime()+86399999));
+  const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/sessions?"+params.toString(),{headers:{authorization:"Bearer "+getToken()}});
+  const j=r.ok?await r.json():{sessions:[]};
+  S.sessions=j.sessions||[];
+  renderSessionList();
+}
+function fmtDur(ms){ if(ms==null) return "recording…"; const s=Math.round(ms/1000); return Math.floor(s/60)+"m "+String(s%60).padStart(2,"0")+"s"; }
+// Full date + time-of-day (not just a date) — a recording's clock time is
+// the whole point of a DVR-style browser, so every place a timestamp shows
+// up (this list, the transport readouts below) uses this, not just a date.
+function fmtWhen(ts){ return new Date(ts).toLocaleString([], {dateStyle:"medium", timeStyle:"short"}); }
+function renderSessionList(){
+  const el=document.getElementById("sessionList"); if(!el) return;
+  if(!S.sessions.length){ el.innerHTML='<div class="hint" style="padding:10px 0;text-align:center">No recordings in this folder.</div>'; return; }
+  el.innerHTML=S.sessions.map(s=>{
+    const dur=s.endedAt?fmtDur(s.endedAt-s.startedAt):"recording…";
+    const desc=(s.label||"(untitled)")+" — "+(s.type||"recording")+" — "+fmtWhen(s.startedAt)+" — "+dur+(s.locked?" — 🔒 locked":"");
+    return '<label class="session-row">'
+      + '<input type="checkbox" '+(S.selected.has(s.id)?"checked":"")+' onchange="toggleSelect(\''+s.id+'\',this.checked)">'
+      + '<span class="sr-text" title="'+esc(desc)+'">'+esc(desc)+'</span>'
+      + '<button class="ghost" onclick="event.preventDefault();moveSessionToFolder(\''+s.id+'\')" title="Move to folder">⇢</button>'
+      + '</label>';
+  }).join("");
+}
+async function moveSessionToFolder(id){
+  const targetId=pickFolderPrompt("Move this recording into which folder?", null);
+  if(targetId===undefined) return;
+  await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/sessions/"+encodeURIComponent(id),{
+    method:"PATCH", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"}, body:JSON.stringify({folderId:targetId})
+  });
+  await loadSessions();
+}
+document.getElementById("btnDateFilter").addEventListener("click",()=>{
+  S.dateFrom=document.getElementById("dateFromInput").value||null;
+  S.dateTo=document.getElementById("dateToInput").value||null;
+  loadSessions();
+});
+document.getElementById("btnDateClear").addEventListener("click",()=>{
+  S.dateFrom=null; S.dateTo=null;
+  document.getElementById("dateFromInput").value=""; document.getElementById("dateToInput").value="";
+  loadSessions();
+});
+
+/* ============================================================
+   Map — one shared instance for both the Playback and Danger Zones tabs
+   (same map, different layers toggled visible/hidden), same base-style
+   convention as field-recorder.html/fence-editor.html.
+   ============================================================ */
+function initMap(){
+  map = new maplibregl.Map({
+    container:"map",
+    style:{version:8,
+      sources:{base:{type:"raster",
+        tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize:256,attribution:"Esri"}},
+      layers:[{id:"base",type:"raster",source:"base"}]},
+    center:[0,0], zoom:2
+  });
+  map.addControl(new maplibregl.NavigationControl({showCompass:false}),"top-left");
+  map.on("load",()=>{
+    map.addSource("heatmap-src",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addLayer({id:"heatmap-layer",type:"heatmap",source:"heatmap-src",layout:{visibility:"none"},
+      paint:{
+        "heatmap-weight":["interpolate",["linear"],["get","count"],0,0,50,1],
+        "heatmap-intensity":1,
+        "heatmap-radius":18,
+        "heatmap-opacity":0.75
+      }});
+  });
+}
+function trackGeoJSON(pts){ return {type:"Feature",geometry:{type:"LineString",coordinates:pts.map(p=>[p.lon,p.lat])}}; }
+function addSessionLayer(id, idx){
+  if(!map.isStyleLoaded()) return;
+  const pts=S.points[id]||[];
+  const color=colorFor(idx);
+  const srcId="record-track-"+id;
+  if(!map.getSource(srcId)){
+    map.addSource(srcId,{type:"geojson",data:trackGeoJSON(pts)});
+    map.addLayer({id:srcId+"-line",type:"line",source:srcId,paint:{"line-color":color,"line-width":3}});
+  }
+  const el=document.createElement("div");
+  el.style.cssText="width:14px;height:14px;border-radius:50%;background:"+color+";border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,.6)";
+  const marker=new maplibregl.Marker({element:el});
+  if(pts.length){ marker.setLngLat([pts[0].lon,pts[0].lat]).addTo(map); }
+  S.markers[id]=marker;
+  if(pts.length){
+    const bounds=pts.reduce((b,p)=>b.extend([p.lon,p.lat]), new maplibregl.LngLatBounds([pts[0].lon,pts[0].lat],[pts[0].lon,pts[0].lat]));
+    map.fitBounds(bounds,{padding:60,maxZoom:17});
+  }
+}
+function removeSessionLayer(id){
+  const marker=S.markers[id]; if(marker) marker.remove();
+  delete S.markers[id];
+  const srcId="record-track-"+id;
+  if(map.getLayer(srcId+"-line")) map.removeLayer(srcId+"-line");
+  if(map.getSource(srcId)) map.removeSource(srcId);
+}
+
+/* ============================================================
+   Playback — multi-session sync off one shared clock: each selected
+   session's marker is interpolated between its two nearest points to
+   the current playhead timestamp, hidden if that session doesn't cover
+   this instant. This is what makes multi-rider comparison work.
+   ============================================================ */
+function toggleSelect(id, checked){
+  if(checked) S.selected.add(id); else S.selected.delete(id);
+  loadPlaybackData();
+}
+async function loadPlaybackData(){
+  for(const id of S.selected){
+    if(!S.points[id]){
+      const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/positions?session="+encodeURIComponent(id),{headers:{authorization:"Bearer "+getToken()}});
+      const j=r.ok?await r.json():{points:[]};
+      S.points[id]=(j.points||[]).map(p=>({lat:p.lat,lon:p.lon,ts:p.ts}));
+    }
+  }
+  Object.keys(S.markers).forEach(id=>{ if(!S.selected.has(id)) removeSessionLayer(id); });
+  let idx=0;
+  S.selected.forEach(id=>{ if(!S.markers[id]) addSessionLayer(id, idx); idx++; });
+  computeRange();
+  renderPlaybackFrame();
+  document.getElementById("selectedCountHint").textContent=S.selected.size+" session(s) selected";
+}
+function computeRange(){
+  let min=Infinity, max=-Infinity;
+  S.selected.forEach(id=>{ (S.points[id]||[]).forEach(p=>{ if(p.ts<min) min=p.ts; if(p.ts>max) max=p.ts; }); });
+  if(!isFinite(min)){ S.rangeStart=S.rangeEnd=S.playheadTs=S.trimInTs=S.trimOutTs=null; return; }
+  S.rangeStart=min; S.rangeEnd=max; S.trimInTs=min; S.trimOutTs=max; S.playheadTs=min;
+  [["scrubPlayhead",min],["scrubTrimIn",min],["scrubTrimOut",max]].forEach(([id,val])=>{
+    const el=document.getElementById(id); el.min=min; el.max=max; el.value=val;
+  });
+  updateTrimReadouts();
+}
+function updateTrimReadouts(){
+  document.getElementById("trimInReadout").textContent = S.trimInTs!=null ? fmtWhen(S.trimInTs) : "—";
+  document.getElementById("trimOutReadout").textContent = S.trimOutTs!=null ? fmtWhen(S.trimOutTs) : "—";
+}
+function interp(id, ts){
+  const pts=S.points[id]; if(!pts || !pts.length) return null;
+  if(ts<pts[0].ts || ts>pts[pts.length-1].ts) return null;
+  let lo=pts[0], hi=pts[pts.length-1];
+  for(let i=0;i<pts.length-1;i++){ if(pts[i].ts<=ts && pts[i+1].ts>=ts){ lo=pts[i]; hi=pts[i+1]; break; } }
+  if(hi.ts===lo.ts) return {lat:lo.lat,lon:lo.lon};
+  const f=(ts-lo.ts)/(hi.ts-lo.ts);
+  return {lat:lo.lat+(hi.lat-lo.lat)*f, lon:lo.lon+(hi.lon-lo.lon)*f};
+}
+function renderPlaybackFrame(){
+  if(S.playheadTs==null) return;
+  S.selected.forEach(id=>{
+    const marker=S.markers[id]; if(!marker) return;
+    const pos=interp(id, S.playheadTs);
+    if(pos){ marker.getElement().style.display=""; marker.setLngLat([pos.lon,pos.lat]); }
+    else marker.getElement().style.display="none";
+  });
+  document.getElementById("timeReadout").textContent = S.playheadTs ? fmtWhen(S.playheadTs) : "—";
+}
+document.getElementById("scrubPlayhead").addEventListener("input",e=>{ S.playheadTs=Number(e.target.value); renderPlaybackFrame(); });
+document.getElementById("scrubTrimIn").addEventListener("input",e=>{
+  S.trimInTs=Number(e.target.value);
+  if(S.trimOutTs!=null && S.trimInTs>S.trimOutTs){ S.trimOutTs=S.trimInTs; document.getElementById("scrubTrimOut").value=S.trimOutTs; }
+  updateTrimReadouts();
+});
+document.getElementById("scrubTrimOut").addEventListener("input",e=>{
+  S.trimOutTs=Number(e.target.value);
+  if(S.trimInTs!=null && S.trimOutTs<S.trimInTs){ S.trimInTs=S.trimOutTs; document.getElementById("scrubTrimIn").value=S.trimInTs; }
+  updateTrimReadouts();
+});
+document.getElementById("speedSel").addEventListener("change",e=>{ S.speed=Number(e.target.value); });
+document.getElementById("btnPlayPause").addEventListener("click",()=>{ S.playing ? pausePlayback() : startPlayback(); });
+function startPlayback(){
+  if(S.rangeStart==null) return;
+  if(S.playheadTs==null || S.playheadTs>=S.rangeEnd) S.playheadTs=S.rangeStart;
+  S.playing=true;
+  document.getElementById("btnPlayPause").textContent="⏸ Pause";
+  let last=performance.now();
+  S.playTimer=setInterval(()=>{
+    const now=performance.now(); const dt=now-last; last=now;
+    S.playheadTs=Math.min(S.rangeEnd, S.playheadTs + dt*S.speed);
+    document.getElementById("scrubPlayhead").value=S.playheadTs;
+    renderPlaybackFrame();
+    if(S.playheadTs>=S.rangeEnd) pausePlayback();
+  }, 100);
+}
+function pausePlayback(){
+  S.playing=false;
+  document.getElementById("btnPlayPause").textContent="▶ Play";
+  if(S.playTimer) clearInterval(S.playTimer);
+  S.playTimer=null;
+}
+
+/* ============================================================
+   Trim actions — Export (client-side download, no server round-trip) and
+   Save as Incident Clip (server-side copy into a new locked, independently
+   retained recording — POST .../clip).
+   ============================================================ */
+function downloadBlob(filename, content, mime){
+  const blob=new Blob([content],{type:mime});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+function toGPX(pts,name){
+  const trkpts=pts.map(p=>'<trkpt lat="'+p.lat+'" lon="'+p.lon+'"><time>'+new Date(p.ts).toISOString()+'</time></trkpt>').join("\n");
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="geofence-platform RECORD"><trk><name>'+esc(name)+'</name><trkseg>\n'+trkpts+'\n</trkseg></trk></gpx>';
+}
+document.getElementById("btnExport").addEventListener("click",()=>{
+  if(!S.selected.size || S.trimInTs==null){ alert("Select at least one recording first."); return; }
+  const fmt=(prompt('Export as "gpx" or "json"?','gpx')||"").trim().toLowerCase();
+  if(fmt!=="gpx" && fmt!=="json") return;
+  S.selected.forEach(id=>{
+    const pts=(S.points[id]||[]).filter(p=>p.ts>=S.trimInTs && p.ts<=S.trimOutTs);
+    if(!pts.length) return;
+    const sess=S.sessions.find(s=>s.id===id);
+    const name=(sess&&sess.label)||id;
+    if(fmt==="json") downloadBlob(name+".json", JSON.stringify(pts,null,2), "application/json");
+    else downloadBlob(name+".gpx", toGPX(pts,name), "application/gpx+xml");
+  });
+});
+document.getElementById("btnSaveClip").addEventListener("click",async()=>{
+  if(!S.selected.size || S.trimInTs==null){ alert("Select at least one recording and a trim range first."); return; }
+  const label=(prompt("Label this incident clip:")||"").trim();
+  if(!label) return;
+  const targetId=pickFolderPrompt("Save into which folder? (cancel = same folder as the source recording)", null);
+  let saved=0;
+  for(const id of S.selected){
+    const body={from:S.trimInTs, to:S.trimOutTs, label};
+    if(targetId!==undefined) body.folderId=targetId;
+    const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/sessions/"+encodeURIComponent(id)+"/clip",{
+      method:"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"}, body:JSON.stringify(body)
+    });
+    if(r.ok) saved++; else { const e=await r.json().catch(()=>({})); alert("Couldn't save clip: "+(e.error||r.status)); }
+  }
+  if(saved) alert(saved+" incident clip(s) saved.");
+  await loadSessions();
+});
+
+/* ============================================================
+   Danger Zones tab — computed heatmap over whatever position history
+   already exists, not a separate capture mode.
+   ============================================================ */
+function switchTab(tab){
+  S.tab=tab;
+  document.getElementById("tabPlayback").classList.toggle("sel", tab==="playback");
+  document.getElementById("tabHeatmap").classList.toggle("sel", tab==="heatmap");
+  document.getElementById("heatmapControls").style.display = tab==="heatmap" ? "flex" : "none";
+  document.getElementById("transport").style.display = tab==="playback" ? "flex" : "none";
+  if(map.getLayer("heatmap-layer")) map.setLayoutProperty("heatmap-layer","visibility", tab==="heatmap"?"visible":"none");
+  S.selected.forEach(id=>{
+    const lyr="record-track-"+id+"-line";
+    if(map.getLayer(lyr)) map.setLayoutProperty(lyr,"visibility", tab==="playback"?"visible":"none");
+    const marker=S.markers[id]; if(marker) marker.getElement().style.display = tab==="playback" ? "" : "none";
+  });
+  if(tab==="playback") renderPlaybackFrame();
+  else refreshHeatmap();
+}
+async function refreshHeatmap(){
+  if(!S.projectId) return;
+  const gridM=document.getElementById("heatmapGridM").value;
+  const params=new URLSearchParams({gridM});
+  if(S.dateFrom) params.set("from", String(new Date(S.dateFrom).getTime()));
+  if(S.dateTo) params.set("to", String(new Date(S.dateTo).getTime()+86399999));
+  const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/heatmap?"+params.toString(),{headers:{authorization:"Bearer "+getToken()}});
+  const j=r.ok?await r.json():{cells:[]};
+  const features=(j.cells||[]).map(c=>({type:"Feature",geometry:{type:"Point",coordinates:[c.lon,c.lat]},properties:{count:c.count}}));
+  if(map.getSource("heatmap-src")) map.getSource("heatmap-src").setData({type:"FeatureCollection",features});
+  if(features.length){
+    const bounds=features.reduce((b,f)=>b.extend(f.geometry.coordinates), new maplibregl.LngLatBounds(features[0].geometry.coordinates,features[0].geometry.coordinates));
+    map.fitBounds(bounds,{padding:60,maxZoom:17});
+  }
+}
+document.getElementById("btnHeatmapRefresh").addEventListener("click", refreshHeatmap);
+
+/* ============================================================
+   Init / routing — company then project (TopNav's job), same pattern as
+   Audio Studio: resolve the initial project directly via
+   TopNav.resolveProject() before/alongside TopNav.init(), since
+   onProjectChange only fires on a later manual switch, not the initial load.
+   ============================================================ */
+function showNoProject(){
+  document.getElementById("noProjectHint").style.display="block";
+  document.getElementById("recordScreen").classList.remove("show");
+  document.getElementById("hdrCrumb").textContent="";
+}
+function showRecordScreen(){
+  document.getElementById("noProjectHint").style.display="none";
+  document.getElementById("recordScreen").classList.add("show");
+}
+async function enterProject(id, proj){
+  S.projectId=id; S.folderId=null; S.selected=new Set(); S.points={};
+  Object.keys(S.markers).forEach(removeSessionLayer);
+  pausePlayback();
+  document.getElementById("hdrCrumb").textContent = (proj && proj.name) || id;
+  showRecordScreen();
+  if(!proj){
+    try{
+      const r=await fetch("/api/projects?org="+encodeURIComponent(currentOrg()),{headers:{authorization:"Bearer "+getToken()}});
+      const j=r.ok?await r.json():{projects:[]};
+      const p=(j.projects||[]).find(x=>x.id===id);
+      if(p) document.getElementById("hdrCrumb").textContent=p.name||p.id;
+    }catch(e){}
+  }
+  await Promise.all([loadFolders(), loadSessions()]);
+}
+
+initMap();
+if(window.TopNav){
+  TopNav.init({
+    navEl: document.getElementById("topNav"),
+    active: "record",
+    onCompanyChange: ()=>{ S.projectId=null; showNoProject(); },
+    onProjectChange: (id, proj)=>{ if(id) enterProject(id, proj); else showNoProject(); }
+  });
+}
+const _initialProjectId = window.TopNav && TopNav.resolveProject && TopNav.resolveProject();
+if(_initialProjectId) enterProject(_initialProjectId, null);
+else showNoProject();
+</script>
+</body>
+</html>

@@ -421,7 +421,24 @@ function evalGraph(g, fix, smoothedPos, evt) {
       case "trigger.always": cache[id].out = true; break;
       case "trigger.dwell": {
         const need = (node.params && node.params.seconds) || 10;
-        cache[id].out = evt.dwellSeconds != null && evt.dwellSeconds >= need;
+        const met = evt.dwellSeconds != null && evt.dwellSeconds >= need;
+        // "gate" output (this block's own declared port type, same as
+        // trigger.zone_enter/zone_exit) means a one-tick pulse, not "true
+        // for as long as dwelling" — but evt.dwellSeconds only grows
+        // across ticks within one zone visit (tick() runs on every GPS fix
+        // while inside), so without this latch every downstream node saw
+        // "true" on every single tick once past the threshold: confirmed
+        // live this was restarting GuidanceBot from scratch and firing
+        // unlimited concurrent webhook POSTs for as long as the visitor
+        // stood there, instead of once. g is created fresh by load() on
+        // zone enter and discarded by unload() on exit, so this latch
+        // can't leak into the next visit. Reuses the same g._nodeState
+        // per-node persistent-state store logic.cooldown already
+        // establishes below, rather than a second ad-hoc map.
+        const dwellState = (g._nodeState = g._nodeState || {});
+        const dst = (dwellState[id] = dwellState[id] || { fired: false });
+        cache[id].out = met && !dst.fired;
+        if (met) dst.fired = true;
         break;
       }
       case "data.weather": {

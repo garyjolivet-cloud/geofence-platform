@@ -497,6 +497,11 @@ function deleteNode(id){
   pipeline.nodes = pipeline.nodes.filter(n => n.id !== id);
   pipeline.edges = pipeline.edges.filter(e => e.from.n !== id && e.to.n !== id);
   if (selectedId === id) selectedId = null;
+  // exposedParams is keyed "nodeId:paramKey" — without this, deleting an
+  // exposed node left its entries behind, saved into paramSchema on the
+  // next Save as a phantom per-attachment override control pointing at a
+  // node id that no longer exists in the template.
+  Object.keys(exposedParams).forEach(key => { if (key.startsWith(id + ":")) delete exposedParams[key]; });
   render();
 }
 
@@ -973,6 +978,18 @@ function renderProps(){
       expRow.appendChild(cb);
       expRow.appendChild(document.createTextNode("expose to attachments"));
       el.appendChild(expRow);
+      // Keep the exposed default in sync with further edits to this field —
+      // the checkbox handler above only snapshots node.params[p.id] once,
+      // at check-time. Without this, correcting the value after exposing
+      // it (e.g. fixing a typo in an already-exposed Speak text) still
+      // saved the OLD value to paramSchema[].default, silently diverging
+      // from the live template. Registered after the field's own "input"
+      // listener above (whichever branch created it), so node.params[p.id]
+      // is already current by the time this runs.
+      const fieldEl = isZoneSelect ? input._hiddenInput : input;
+      fieldEl.addEventListener("input", () => {
+        if (key in exposedParams) exposedParams[key].default = node.params[p.id];
+      });
     }
   });
 }
