@@ -1811,6 +1811,130 @@ async function api(request, env, url) {
     return json({ gridM, cells: results || [] }, 200, AC);
   }
 
+  // --- RECORD schedule: a per-project planning calendar for staff
+  // recording windows (multiple dates per project). This is a reference
+  // calendar only, not an auto-trigger — a record_session only ever gets
+  // created because a device is physically running field-recorder.html
+  // with an operator pressing Start/Stop; nothing here changes that. See
+  // migrations/0029_record_schedule.sql. ---
+  const mrsched = path.match(/^\/api\/projects\/([^/]+)\/record\/schedule$/);
+  if (mrsched) {
+    const pid = decodeURIComponent(mrsched[1]);
+    if (method === "POST") {
+      const A = await auth(request, env);
+      if (!(await recordWriteAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+      const b = await request.json().catch(() => ({}));
+      const startsAt = Number(b.startsAt), endsAt = Number(b.endsAt);
+      if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || endsAt <= startsAt) {
+        return json({ error: "need a valid startsAt/endsAt range" }, 400, AC);
+      }
+      const id = crypto.randomUUID();
+      const now = Date.now();
+      await env.DB.prepare(
+        "INSERT INTO record_schedule (id,project_id,starts_at,ends_at,label,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
+      ).bind(id, pid, startsAt, endsAt, (b.label || "").trim(), now, now).run();
+      await logAudit(env, request, A, "record.schedule.create", id);
+      return json({ id }, 201, AC);
+    }
+    if (method === "GET") {
+      const A = await auth(request, env);
+      if (!(await recordReadAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+      const from = url.searchParams.get("from"), to = url.searchParams.get("to");
+      const conds = ["project_id=?"], binds = [pid];
+      // overlap test, not a strict-containment one -- a window that only
+      // partially overlaps the requested range should still show up on a
+      // month view that includes its start or end day.
+      if (from) { conds.push("ends_at>=?"); binds.push(Number(from)); }
+      if (to) { conds.push("starts_at<=?"); binds.push(Number(to)); }
+      const { results } = await env.DB.prepare(
+        "SELECT id,starts_at AS startsAt,ends_at AS endsAt,label FROM record_schedule WHERE " + conds.join(" AND ") + " ORDER BY starts_at"
+      ).bind(...binds).all();
+      return json({ windows: results || [] }, 200, AC);
+    }
+  }
+
+  const mrschedid = path.match(/^\/api\/projects\/([^/]+)\/record\/schedule\/([^/]+)$/);
+  if (mrschedid && (method === "PATCH" || method === "DELETE")) {
+    const pid = decodeURIComponent(mrschedid[1]), sid = decodeURIComponent(mrschedid[2]);
+    const A = await auth(request, env);
+    if (!(await recordWriteAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+    const row = await env.DB.prepare("SELECT project_id AS projectId FROM record_schedule WHERE id=?").bind(sid).first();
+    if (!row || row.projectId !== pid) return json({ error: "schedule window not found" }, 404, AC);
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM record_schedule WHERE id=?").bind(sid).run();
+      await logAudit(env, request, A, "record.schedule.delete", sid);
+      return json({ ok: true, deleted: sid }, 200, AC);
+    }
+    const b = await request.json().catch(() => ({}));
+    const sets = ["updated_at=?"], binds = [Date.now()];
+    if (b.startsAt !== undefined) { sets.push("starts_at=?"); binds.push(Number(b.startsAt)); }
+    if (b.endsAt !== undefined) { sets.push("ends_at=?"); binds.push(Number(b.endsAt)); }
+    if (b.label !== undefined) { sets.push("label=?"); binds.push(String(b.label).trim()); }
+    binds.push(sid);
+    await env.DB.prepare(`UPDATE record_schedule SET ${sets.join(",")} WHERE id=?`).bind(...binds).run();
+    await logAudit(env, request, A, "record.schedule.update", sid);
+    return json({ ok: true, id: sid }, 200, AC);
+  }
+
+  // --- RECORD tripline crossing counts: replay a session's recorded track
+  // through the same crossing test the live engine uses (Geo.lineCross /
+  // Geo.toXY in geofence-engine.html, ~line 328-365) against a chosen
+  // tripline zone pulled from the project's published bundle. A read-only
+  // replay over already-captured data, same "computed on demand" approach
+  // as the heatmap above — not a new capture mode. The math below is a
+  // verbatim mirror of the live engine's; a fix to the live crossing logic
+  // should be checked against this copy too (same caution as the EKF
+  // three-call-site mirror documented in CLAUDE.md). ---
+  function mPerDegLonRec(lat) { return 111320 * Math.cos(lat * Math.PI / 180); }
+  function toXYRec(p, ref) { return { x: (p[1] - ref[1]) * mPerDegLonRec(ref[0]), y: (p[0] - ref[0]) * 111320 }; }
+  function ccwRec(p, q, r) { return (r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x); }
+  function lineCrossRec(prev, cur, from, to, ref) {
+    const A = toXYRec(prev, ref), B = toXYRec(cur, ref), C = toXYRec(from, ref), D = toXYRec(to, ref);
+    const d1 = ccwRec(C, D, A), d2 = ccwRec(C, D, B), d3 = ccwRec(A, B, C), d4 = ccwRec(A, B, D);
+    return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+  }
+  const TRIPLINE_COOLDOWN_MS = 4000; // matches Geofencer's live cooldown, so a lingering track near the line isn't double-counted
+
+  const mrtrip = path.match(/^\/api\/projects\/([^/]+)\/record\/tripline-counts$/);
+  if (mrtrip && method === "GET") {
+    const pid = decodeURIComponent(mrtrip[1]);
+    const A = await auth(request, env);
+    if (!(await recordReadAuthOk(env, A, pid))) return json({ error: "unauthorized" }, 401, AC);
+    const zoneId = url.searchParams.get("zoneId");
+    if (!zoneId) return json({ error: "zoneId required" }, 400, AC);
+    const bundleRow = await env.DB.prepare("SELECT json FROM published_bundle WHERE projectId=? ORDER BY version DESC LIMIT 1").bind(pid).first();
+    if (!bundleRow) return json({ error: "project has no published bundle" }, 404, AC);
+    let bundle;
+    try { bundle = JSON.parse(bundleRow.json); } catch (e) { return json({ error: "bundle is corrupt" }, 500, AC); }
+    const zone = (bundle.zones || []).find(z => z.id === zoneId);
+    const targetLayer = zone && (zone.layers || []).find(l => l.kind === "target" && l.geometry && l.geometry.type === "tripline");
+    if (!targetLayer) return json({ error: "zone not found or is not a tripline zone" }, 404, AC);
+    const ref = bundle.ref || targetLayer.geometry.from;
+
+    const from = url.searchParams.get("from"), to = url.searchParams.get("to");
+    const conds = ["project_id=?"], binds = [pid];
+    if (from) { conds.push("ts>=?"); binds.push(Number(from)); }
+    if (to) { conds.push("ts<=?"); binds.push(Number(to)); }
+    const { results } = await env.DB.prepare(
+      `SELECT session_id AS sessionId, lat, lon, ts FROM position_history WHERE ${conds.join(" AND ")} ORDER BY session_id, ts`
+    ).bind(...binds).all();
+
+    const bySession = {};
+    let totalCount = 0;
+    const prevBySession = {}, cooldownUntilBySession = {};
+    for (const p of (results || [])) {
+      const prev = prevBySession[p.sessionId];
+      if (prev && !(cooldownUntilBySession[p.sessionId] > p.ts) &&
+          lineCrossRec([prev.lat, prev.lon], [p.lat, p.lon], targetLayer.geometry.from, targetLayer.geometry.to, ref)) {
+        bySession[p.sessionId] = (bySession[p.sessionId] || 0) + 1;
+        totalCount++;
+        cooldownUntilBySession[p.sessionId] = p.ts + TRIPLINE_COOLDOWN_MS;
+      }
+      prevBySession[p.sessionId] = p;
+    }
+    return json({ zoneId, count: totalCount, bySession }, 200, AC);
+  }
+
   // --- RECORD folders: organize sessions into a tree, same shape/behavior
   // as stop_folder/walking_path_folder — always project-scoped, and (unlike
   // audio_folder) deleting a folder moves its sessions up to the parent

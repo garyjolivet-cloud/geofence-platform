@@ -68,6 +68,7 @@
   .main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
   .tabs{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--rim);flex:0 0 auto}
   #heatmapControls{display:none;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--rim);flex:0 0 auto;flex-wrap:wrap}
+  #triplineControls{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--rim);flex:0 0 auto;flex-wrap:wrap}
   #map{flex:1;min-height:0}
 
   #transport{border-top:1px solid var(--rim);padding:8px 12px;display:flex;flex-direction:column;gap:6px;flex:0 0 auto;background:rgba(10,16,24,.9)}
@@ -76,6 +77,29 @@
   .tl-row input[type=range]{flex:1;accent-color:var(--coral)}
   #timeReadout,#trimInReadout,#trimOutReadout{font-family:'Barlow Condensed';font-size:11px;color:var(--ice);width:150px;text-align:right;flex:0 0 auto}
   #transportBtns{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+
+  /* Schedule tab — a per-project planning calendar, same visual convention
+     as dashboard.html's Calendar tab (month grid, click-a-day detail) but
+     scoped to one project and showing multiple timed windows per day
+     instead of one scheduled_date per project. */
+  #scheduleView{display:none;flex:1;min-height:0;overflow-y:auto;padding:14px 16px;flex-direction:column;gap:12px}
+  .sched-nav{display:flex;align-items:center;gap:10px}
+  .sched-nav h2{font-family:'Black Han Sans';font-size:16px;margin:0;flex:1}
+  .sched-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .sched-dow{font-family:'Barlow Condensed';font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--fog);text-align:center;padding:4px 0}
+  .sched-day{min-height:76px;border:1px solid var(--rim);border-radius:9px;padding:5px 6px;background:var(--slate-2);cursor:pointer;display:flex;flex-direction:column;gap:2px}
+  .sched-day:hover{border-color:var(--coral)}
+  .sched-day.empty{background:none;border:none;cursor:default}
+  .sched-day.today{border-color:var(--ice)}
+  .sched-day .sd-num{font-family:'Barlow Condensed';font-weight:700;font-size:12px;color:var(--fog)}
+  .sched-entry{font-size:11px;border-radius:5px;padding:2px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--coral);color:#1a0d07;font-weight:600}
+  .sched-more{font-size:10px;color:var(--fog)}
+  #scheduleDaySection{border:1px solid var(--rim);border-radius:10px;padding:12px;display:none;flex-direction:column;gap:8px}
+  .sched-win-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--rim)}
+  .sched-win-row:last-child{border-bottom:none}
+  .sched-win-row .sw-text{flex:1;font-family:'Barlow Condensed';font-size:13px;color:var(--ice)}
+  #scheduleAddForm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-top:6px;border-top:1px solid var(--rim)}
+  #scheduleAddForm input[type=text]{flex:1;min-width:120px}
 </style>
 </head>
 <body>
@@ -107,6 +131,7 @@
     <div class="tabs">
       <button id="tabPlayback" class="sel" onclick="switchTab('playback')">▶ Playback</button>
       <button id="tabHeatmap" onclick="switchTab('heatmap')">🔥 Danger Zones</button>
+      <button id="tabSchedule" onclick="switchTab('schedule')">📅 Schedule</button>
     </div>
 
     <div id="heatmapControls">
@@ -121,7 +146,34 @@
       <span class="hint">Density of recorded position pings — a dwell-time proxy, not a precise seconds figure outside the Garmin bridge's steady 1Hz feed.</span>
     </div>
 
+    <div id="triplineControls">
+      <label class="hint">tripline zone</label>
+      <select id="triplineZoneSel"><option value="">(no tripline zones published)</option></select>
+      <button id="btnTriplineCount">Count crossings</button>
+      <span class="hint" id="triplineResultHint">Counts how many times the checked recording(s) crossed the chosen tripline — same crossing test the live engine uses.</span>
+    </div>
+
     <div id="map"></div>
+
+    <div id="scheduleView">
+      <div class="sched-nav">
+        <button id="schedPrev" class="ghost">◀</button>
+        <h2 id="schedMonthLabel"></h2>
+        <button id="schedNext" class="ghost">▶</button>
+      </div>
+      <div class="sched-grid" id="schedGrid"></div>
+      <div id="scheduleDaySection">
+        <div class="hint" id="schedDayTitle" style="font-size:14px;color:var(--snow)"></div>
+        <div id="schedDayList"></div>
+        <div id="scheduleAddForm">
+          <input type="time" id="schedStartTime" value="09:00">
+          <span class="hint">to</span>
+          <input type="time" id="schedEndTime" value="10:00">
+          <input type="text" id="schedLabel" placeholder="Label (optional)">
+          <button id="btnSchedAdd">+ Add window</button>
+        </div>
+      </div>
+    </div>
 
     <div id="transport">
       <div class="tl-row">
@@ -537,16 +589,21 @@ function switchTab(tab){
   S.tab=tab;
   document.getElementById("tabPlayback").classList.toggle("sel", tab==="playback");
   document.getElementById("tabHeatmap").classList.toggle("sel", tab==="heatmap");
+  document.getElementById("tabSchedule").classList.toggle("sel", tab==="schedule");
   document.getElementById("heatmapControls").style.display = tab==="heatmap" ? "flex" : "none";
+  document.getElementById("triplineControls").style.display = tab==="playback" ? "flex" : "none";
   document.getElementById("transport").style.display = tab==="playback" ? "flex" : "none";
-  if(map.getLayer("heatmap-layer")) map.setLayoutProperty("heatmap-layer","visibility", tab==="heatmap"?"visible":"none");
-  S.selected.forEach(id=>{
+  document.getElementById("map").style.display = tab==="schedule" ? "none" : "block";
+  document.getElementById("scheduleView").style.display = tab==="schedule" ? "flex" : "none";
+  if(tab!=="schedule" && map.getLayer("heatmap-layer")) map.setLayoutProperty("heatmap-layer","visibility", tab==="heatmap"?"visible":"none");
+  if(tab!=="schedule") S.selected.forEach(id=>{
     const lyr="record-track-"+id+"-line";
     if(map.getLayer(lyr)) map.setLayoutProperty(lyr,"visibility", tab==="playback"?"visible":"none");
     const marker=S.markers[id]; if(marker) marker.getElement().style.display = tab==="playback" ? "" : "none";
   });
   if(tab==="playback") renderPlaybackFrame();
-  else refreshHeatmap();
+  else if(tab==="heatmap") refreshHeatmap();
+  else if(tab==="schedule") loadScheduleMonth();
 }
 async function refreshHeatmap(){
   if(!S.projectId) return;
@@ -564,6 +621,134 @@ async function refreshHeatmap(){
   }
 }
 document.getElementById("btnHeatmapRefresh").addEventListener("click", refreshHeatmap);
+
+/* ============================================================
+   Tripline crossing counts — read-only replay over already-recorded
+   sessions (backend/worker.js's .../record/tripline-counts), same
+   "computed on demand" approach as the heatmap. The zone list comes from
+   the project's published bundle — tripline geometry lives there, not in
+   any RECORD table.
+   ============================================================ */
+async function loadTriplineZones(){
+  const sel=document.getElementById("triplineZoneSel");
+  sel.innerHTML='<option value="">(loading…)</option>';
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/bundle");
+    if(!r.ok){ sel.innerHTML='<option value="">(no published bundle)</option>'; return; }
+    const bundle=await r.json();
+    const triplineZones=(bundle.zones||[]).filter(z=>(z.layers||[]).some(l=>l.kind==="target"&&l.geometry&&l.geometry.type==="tripline"));
+    sel.innerHTML = triplineZones.length
+      ? triplineZones.map(z=>'<option value="'+esc(z.id)+'">'+esc(z.name||z.id)+'</option>').join("")
+      : '<option value="">(no tripline zones published)</option>';
+  }catch(e){ sel.innerHTML='<option value="">(couldn\'t load zones)</option>'; }
+}
+document.getElementById("btnTriplineCount").addEventListener("click",async()=>{
+  const zoneId=document.getElementById("triplineZoneSel").value;
+  const hint=document.getElementById("triplineResultHint");
+  if(!zoneId){ hint.textContent="Pick a tripline zone first."; return; }
+  const params=new URLSearchParams({zoneId});
+  if(S.dateFrom) params.set("from", String(new Date(S.dateFrom).getTime()));
+  if(S.dateTo) params.set("to", String(new Date(S.dateTo).getTime()+86399999));
+  hint.textContent="Counting…";
+  const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/tripline-counts?"+params.toString(),{headers:{authorization:"Bearer "+getToken()}});
+  if(!r.ok){ const e=await r.json().catch(()=>({})); hint.textContent="Couldn't count: "+(e.error||r.status); return; }
+  const j=await r.json();
+  const sessionCount=Object.keys(j.bySession||{}).length;
+  hint.textContent = j.count+" crossing(s) across "+sessionCount+" recording(s)"+(S.dateFrom||S.dateTo?" in the filtered date range":"")+".";
+});
+
+/* ============================================================
+   Schedule tab — a per-project planning calendar for staff recording
+   windows. Reference only, mirrors dashboard.html's Calendar tab pattern
+   (month grid, click-a-day detail) but scoped to this project and showing
+   multiple timed windows per day instead of one scheduled_date.
+   ============================================================ */
+function pad2r(n){ return String(n).padStart(2,"0"); }
+let schedYear=null, schedMonth=null; // schedMonth is 0-based
+let _schedByDay={};
+let _schedOpenDay=null;
+function initSchedIfNeeded(){ if(schedYear==null){ const n=new Date(); schedYear=n.getFullYear(); schedMonth=n.getMonth(); } }
+function dayStr(y,m,d){ return y+"-"+pad2r(m+1)+"-"+pad2r(d); }
+function fmtHM(ts){ return new Date(ts).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}); }
+async function loadScheduleMonth(){
+  if(!S.projectId) return;
+  initSchedIfNeeded();
+  _schedOpenDay=null;
+  document.getElementById("scheduleDaySection").style.display="none";
+  const monthStart=new Date(schedYear,schedMonth,1).getTime();
+  const monthEnd=new Date(schedYear,schedMonth+1,0,23,59,59,999).getTime();
+  const params=new URLSearchParams({from:String(monthStart), to:String(monthEnd)});
+  const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/schedule?"+params.toString(),{headers:{authorization:"Bearer "+getToken()}});
+  const j=r.ok?await r.json():{windows:[]};
+  renderSchedGrid(j.windows||[]);
+}
+function renderSchedGrid(windows){
+  document.getElementById("schedMonthLabel").textContent=new Date(schedYear,schedMonth,1).toLocaleDateString([], {month:"long", year:"numeric"});
+  const byDay={};
+  windows.forEach(w=>{
+    const d=new Date(w.startsAt);
+    const ds=dayStr(d.getFullYear(),d.getMonth(),d.getDate());
+    (byDay[ds]=byDay[ds]||[]).push(w);
+  });
+  _schedByDay=byDay;
+  const firstDow=new Date(schedYear,schedMonth,1).getDay();
+  const daysInMonth=new Date(schedYear,schedMonth+1,0).getDate();
+  const today=new Date(); const todayStr=dayStr(today.getFullYear(),today.getMonth(),today.getDate());
+  let html=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=>'<div class="sched-dow">'+d+'</div>').join("");
+  for(let i=0;i<firstDow;i++) html+='<div class="sched-day empty"></div>';
+  for(let d=1;d<=daysInMonth;d++){
+    const ds=dayStr(schedYear,schedMonth,d);
+    const entries=(byDay[ds]||[]).slice().sort((a,b)=>a.startsAt-b.startsAt);
+    const shown=entries.slice(0,3);
+    html+='<div class="sched-day'+(ds===todayStr?' today':'')+'" onclick="openSchedDay(\''+ds+'\')">'
+      +'<div class="sd-num">'+d+'</div>'
+      +shown.map(w=>'<div class="sched-entry">'+fmtHM(w.startsAt)+' '+esc(w.label||"Recording")+'</div>').join('')
+      +(entries.length>3?'<div class="sched-more">+'+(entries.length-3)+' more</div>':'')
+      +'</div>';
+  }
+  document.getElementById("schedGrid").innerHTML=html;
+}
+function openSchedDay(ds){
+  _schedOpenDay=ds;
+  const entries=(_schedByDay[ds]||[]).slice().sort((a,b)=>a.startsAt-b.startsAt);
+  document.getElementById("schedDayTitle").textContent=new Date(ds+"T12:00:00").toLocaleDateString([], {weekday:"long", month:"long", day:"numeric", year:"numeric"});
+  document.getElementById("schedDayList").innerHTML = entries.length
+    ? entries.map(w=>
+        '<div class="sched-win-row">'
+        +'<span class="sw-text">'+fmtHM(w.startsAt)+' – '+fmtHM(w.endsAt)+(w.label?' — '+esc(w.label):'')+'</span>'
+        +'<button class="ghost" onclick="deleteSchedWindow(\''+w.id+'\')">🗑</button>'
+        +'</div>').join("")
+    : '<div class="hint" style="padding:6px 0">No windows planned for this day.</div>';
+  document.getElementById("scheduleDaySection").style.display="flex";
+}
+document.getElementById("btnSchedAdd").addEventListener("click",async()=>{
+  if(!_schedOpenDay) return;
+  const startTime=document.getElementById("schedStartTime").value||"09:00";
+  const endTime=document.getElementById("schedEndTime").value||"10:00";
+  const label=document.getElementById("schedLabel").value.trim();
+  const startsAt=new Date(_schedOpenDay+"T"+startTime+":00").getTime();
+  const endsAt=new Date(_schedOpenDay+"T"+endTime+":00").getTime();
+  if(endsAt<=startsAt){ alert("End time must be after start time."); return; }
+  const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/schedule",{
+    method:"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+    body:JSON.stringify({startsAt,endsAt,label})
+  });
+  if(!r.ok){ const e=await r.json().catch(()=>({})); alert(e.error||"couldn't add window"); return; }
+  document.getElementById("schedLabel").value="";
+  await loadScheduleMonth();
+  openSchedDay(_schedOpenDay);
+});
+async function deleteSchedWindow(id){
+  if(!confirm("Remove this planned recording window?")) return;
+  const day=_schedOpenDay;
+  await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/schedule/"+encodeURIComponent(id),{
+    method:"DELETE", headers:{authorization:"Bearer "+getToken()}
+  });
+  await loadScheduleMonth();
+  if(day) openSchedDay(day);
+}
+document.getElementById("schedPrev").addEventListener("click",()=>{ initSchedIfNeeded(); schedMonth--; if(schedMonth<0){schedMonth=11;schedYear--;} loadScheduleMonth(); });
+document.getElementById("schedNext").addEventListener("click",()=>{ initSchedIfNeeded(); schedMonth++; if(schedMonth>11){schedMonth=0;schedYear++;} loadScheduleMonth(); });
 
 /* ============================================================
    Init / routing — company then project (TopNav's job), same pattern as
@@ -594,7 +779,7 @@ async function enterProject(id, proj){
       if(p) document.getElementById("hdrCrumb").textContent=p.name||p.id;
     }catch(e){}
   }
-  await Promise.all([loadFolders(), loadSessions()]);
+  await Promise.all([loadFolders(), loadSessions(), loadTriplineZones()]);
 }
 
 initMap();
