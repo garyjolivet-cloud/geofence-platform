@@ -2371,51 +2371,57 @@ function dockMainPanel(){
   pnl.style.left="10px";
   pnl.style.top=(navBarHeight()+10)+"px";
 }
+// Docking chain (2026-08-11, rebuilt after a live screenshot showed Audio
+// Palette painting over MapLibre's own zoom control, and Key sitting left
+// of Code Objects instead of being the rightmost item): #mapKeyBtn is now
+// the one fixed anchor (far right, same row as everything else) — every
+// other floating asset chains left of whichever neighbor is already
+// resolved, left to right: Satellite → Code Objects → Audio Palette → Key.
+// MapLibre's own zoom control (added with no explicit position, so it
+// defaults to top-right inside #map — the exact same corner this whole
+// row lives in) gets pushed down by this row's real measured height so
+// "Key above the sizing arrows" is actually true instead of the two
+// fighting over the same pixels.
+function dockKeyBtn(){
+  const btn=document.getElementById("mapKeyBtn");
+  btn.style.right="10px";
+  btn.style.top=(navBarHeight()+10)+"px";
+}
 function dockAudioPalette(){
+  dockKeyBtn(); // Key is the fixed anchor everything else in this row chains off of
   const pal=document.getElementById("audioPalette");
+  const keyRect=document.getElementById("mapKeyBtn").getBoundingClientRect();
   pal.style.left="auto";
-  pal.style.right="10px";
+  pal.style.right=(Math.round(window.innerWidth-keyRect.left)+10)+"px";
   pal.style.top=(navBarHeight()+10)+"px";
-  // Not repositionBaseAndKey() here — Code Objects may still be at a stale
-  // position at this exact moment (it re-docks separately, right after this
-  // call in every call site), and repositionBaseAndKey() needs to see BOTH
-  // panels' final rects to clear whichever currently extends furthest
-  // left. It's wired as CodeObjects' own onDock callback instead, so it
-  // always runs last, after both are settled.
 }
 function codeObjectsHome(){
-  // Always docks immediately to the left of Audio Palette's current edge —
-  // same rule whether collapsed (matches the reference screenshot's row of
-  // pills) or expanded (2026-08-11: previously docked *below* Audio
-  // Palette when expanded, which the user flagged as still overlapping/
-  // wrong — a fixed right offset anchored to Audio Palette's own left edge
-  // means Code Objects' box only ever grows down-and-left from that corner,
-  // so it can never encroach into Audio Palette regardless of either
-  // panel's current size).
+  // Docks immediately to the left of Audio Palette's current edge — same
+  // rule whether collapsed (matches the reference screenshot's row of
+  // pills) or expanded (a fixed right offset anchored to Audio Palette's
+  // own left edge means Code Objects' box only ever grows down-and-left
+  // from that corner, so it can never encroach into Audio Palette
+  // regardless of either panel's current size).
   const apRect=document.getElementById("audioPalette").getBoundingClientRect();
   return { top:apRect.top, right:Math.round(window.innerWidth-apRect.left)+10 };
 }
-// The basemap picker (.base) and #mapKeyBtn used to sit at a hardcoded
-// right:10px — the exact same top-right anchor #audioPalette also docks to.
-// Confirmed live (2026-08-11): with Audio Palette expanded, both controls
-// were rendering directly underneath it (audioPalette's higher z-index won),
-// completely unreachable until Audio Palette happened to be collapsed. Then,
-// once Code Objects started docking *beside* Audio Palette when collapsed
-// (rather than below it), the same bug reappeared against Code Objects
-// instead — confirmed live a second time. Now clears whichever of the two
-// currently extends furthest left, not just Audio Palette alone. Called as
-// CodeObjects' own onDock callback (see mount() below) so it always runs
-// after both panels' positions are actually final.
+// Places the basemap picker (.base) immediately left of Code Objects'
+// current edge, and pushes MapLibre's zoom control down clear of the
+// whole Satellite/Code Objects/Audio Palette/Key row. Called as Code
+// Objects' own onDock callback (see mount() below) so it always runs
+// after every other panel in the chain has already settled into its
+// final position for this pass.
 function repositionBaseAndKey(){
-  const apRect=document.getElementById("audioPalette").getBoundingClientRect();
   const coFloat=document.querySelector(".co-float");
-  const leftmost=coFloat?Math.min(apRect.left, coFloat.getBoundingClientRect().left):apRect.left;
-  const gapFromRight=Math.round(window.innerWidth-leftmost)+10;
+  const leftEdge=coFloat?coFloat.getBoundingClientRect().left:document.getElementById("audioPalette").getBoundingClientRect().left;
   const navH=navBarHeight();
-  document.querySelector(".base").style.right=gapFromRight+"px";
-  document.querySelector(".base").style.top=(navH+10)+"px";
-  document.getElementById("mapKeyBtn").style.right=gapFromRight+"px";
-  document.getElementById("mapKeyBtn").style.top=(navH+44)+"px";
+  const base=document.querySelector(".base");
+  base.style.right=(Math.round(window.innerWidth-leftEdge)+10)+"px";
+  base.style.top=(navH+10)+"px";
+  const keyRect=document.getElementById("mapKeyBtn").getBoundingClientRect();
+  const mapRect=document.getElementById("map").getBoundingClientRect();
+  const zoomCtrl=document.querySelector(".maplibregl-ctrl-top-right");
+  if(zoomCtrl) zoomCtrl.style.marginTop=Math.max(0,Math.round(keyRect.bottom-mapRect.top)+10)+"px";
 }
 
 /* ---- Audio palette: floating panel (drag header to move, resize from the
@@ -2430,11 +2436,11 @@ document.getElementById("audioPaletteMin").onclick=e=>{
   const wasMini=p.classList.contains("mini");
   p.classList.toggle("mini");
   document.getElementById("audioPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
-  dockAudioPalette();
-  // Code Objects docks relative to Audio Palette (beside it when both are
-  // collapsed, below it when Audio Palette is expanded), which just moved —
-  // redock it too so the two never end up either overlapping or leaving a
-  // stale gap. Its own onDock callback also re-clears .base/#mapKeyBtn.
+  dockAudioPalette(); // also re-anchors Key, which Audio Palette chains off of
+  // Code Objects docks immediately left of Audio Palette, which just
+  // moved — redock it too so the two never end up either overlapping or
+  // leaving a stale gap. Its own onDock callback also re-clears
+  // .base/the zoom control against the whole updated row.
   if(window.CodeObjects) CodeObjects.dock();
   if(wasMini) doAudioRefresh();
 };
@@ -5194,8 +5200,8 @@ if(window.TopNav){
     const ap=document.getElementById("audioPalette");
     if(!ap.classList.contains("mini")){ ap.classList.add("mini"); document.getElementById("audioPaletteMin").innerHTML="&#43;"; }
     dockMainPanel();
-    dockAudioPalette();
-    if(window.CodeObjects) CodeObjects.dock(); // startCollapsed:true already at mount; its onDock also repositions .base/#mapKeyBtn clear of both it and Audio Palette
+    dockAudioPalette(); // also anchors Key
+    if(window.CodeObjects) CodeObjects.dock(); // startCollapsed:true already at mount; its onDock also positions .base and pushes the map's zoom control clear of this whole row
     map.resize();
   });
 }
