@@ -93,11 +93,14 @@
   .sched-day.today{border-color:var(--ice)}
   .sched-day .sd-num{font-family:'Barlow Condensed';font-weight:700;font-size:12px;color:var(--fog)}
   .sched-entry{font-size:11px;border-radius:5px;padding:2px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--coral);color:#1a0d07;font-weight:600}
+  .sched-entry.actual{background:var(--go)}
   .sched-more{font-size:10px;color:var(--fog)}
   #scheduleDaySection{border:1px solid var(--rim);border-radius:10px;padding:12px;display:none;flex-direction:column;gap:8px}
   .sched-win-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--rim)}
   .sched-win-row:last-child{border-bottom:none}
   .sched-win-row .sw-text{flex:1;font-family:'Barlow Condensed';font-size:13px;color:var(--ice)}
+  .sched-win-row.editable{cursor:pointer;border-radius:6px}
+  .sched-win-row.editable:hover{background:rgba(255,255,255,.05)}
   #scheduleAddForm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-top:6px;border-top:1px solid var(--rim)}
   #scheduleAddForm input[type=text]{flex:1;min-width:120px}
 </style>
@@ -166,11 +169,15 @@
         <div class="hint" id="schedDayTitle" style="font-size:14px;color:var(--snow)"></div>
         <div id="schedDayList"></div>
         <div id="scheduleAddForm">
+          <input type="date" id="schedStartDate">
           <input type="time" id="schedStartTime" value="09:00">
           <span class="hint">to</span>
+          <input type="date" id="schedEndDate">
           <input type="time" id="schedEndTime" value="10:00">
           <input type="text" id="schedLabel" placeholder="Label (optional)">
           <button id="btnSchedAdd">+ Add window</button>
+          <button id="btnSchedDelete" class="ghost" style="display:none">🗑 Delete</button>
+          <button id="btnSchedCancelEdit" class="ghost" style="display:none">Cancel edit</button>
         </div>
       </div>
     </div>
@@ -666,10 +673,38 @@ document.getElementById("btnTriplineCount").addEventListener("click",async()=>{
 function pad2r(n){ return String(n).padStart(2,"0"); }
 let schedYear=null, schedMonth=null; // schedMonth is 0-based
 let _schedByDay={};
+let _schedSessByDay={};
 let _schedOpenDay=null;
+let _schedEditingId=null;
 function initSchedIfNeeded(){ if(schedYear==null){ const n=new Date(); schedYear=n.getFullYear(); schedMonth=n.getMonth(); } }
 function dayStr(y,m,d){ return y+"-"+pad2r(m+1)+"-"+pad2r(d); }
 function fmtHM(ts){ return new Date(ts).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}); }
+function dateInputStr(ts){ const d=new Date(ts); return dayStr(d.getFullYear(),d.getMonth(),d.getDate()); }
+function timeInputStr(ts){ const d=new Date(ts); return pad2r(d.getHours())+":"+pad2r(d.getMinutes()); }
+function resetSchedForm(ds){
+  _schedEditingId=null;
+  document.getElementById("schedStartDate").value=ds;
+  document.getElementById("schedEndDate").value=ds;
+  document.getElementById("schedStartTime").value="09:00";
+  document.getElementById("schedEndTime").value="10:00";
+  document.getElementById("schedLabel").value="";
+  document.getElementById("btnSchedAdd").textContent="+ Add window";
+  document.getElementById("btnSchedDelete").style.display="none";
+  document.getElementById("btnSchedCancelEdit").style.display="none";
+}
+function editSchedWindow(id){
+  const w=(_schedByDay[_schedOpenDay]||[]).find(x=>x.id===id);
+  if(!w) return;
+  _schedEditingId=id;
+  document.getElementById("schedStartDate").value=dateInputStr(w.startsAt);
+  document.getElementById("schedStartTime").value=timeInputStr(w.startsAt);
+  document.getElementById("schedEndDate").value=dateInputStr(w.endsAt);
+  document.getElementById("schedEndTime").value=timeInputStr(w.endsAt);
+  document.getElementById("schedLabel").value=w.label||"";
+  document.getElementById("btnSchedAdd").textContent="Save changes";
+  document.getElementById("btnSchedDelete").style.display="";
+  document.getElementById("btnSchedCancelEdit").style.display="";
+}
 async function loadScheduleMonth(){
   if(!S.projectId) return;
   initSchedIfNeeded();
@@ -678,11 +713,18 @@ async function loadScheduleMonth(){
   const monthStart=new Date(schedYear,schedMonth,1).getTime();
   const monthEnd=new Date(schedYear,schedMonth+1,0,23,59,59,999).getTime();
   const params=new URLSearchParams({from:String(monthStart), to:String(monthEnd)});
-  const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/schedule?"+params.toString(),{headers:{authorization:"Bearer "+getToken()}});
-  const j=r.ok?await r.json():{windows:[]};
-  renderSchedGrid(j.windows||[]);
+  // Planned windows and actual recorded sessions are two different things —
+  // fetch both so the calendar can show "what's planned" alongside "what
+  // was actually recorded" for the same day, not just the plan.
+  const [schedR,sessR]=await Promise.all([
+    fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/schedule?"+params.toString(),{headers:{authorization:"Bearer "+getToken()}}),
+    fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/sessions?"+params.toString(),{headers:{authorization:"Bearer "+getToken()}})
+  ]);
+  const schedJ=schedR.ok?await schedR.json():{windows:[]};
+  const sessJ=sessR.ok?await sessR.json():{sessions:[]};
+  renderSchedGrid(schedJ.windows||[], sessJ.sessions||[]);
 }
-function renderSchedGrid(windows){
+function renderSchedGrid(windows, sessions){
   document.getElementById("schedMonthLabel").textContent=new Date(schedYear,schedMonth,1).toLocaleDateString([], {month:"long", year:"numeric"});
   const byDay={};
   windows.forEach(w=>{
@@ -691,6 +733,13 @@ function renderSchedGrid(windows){
     (byDay[ds]=byDay[ds]||[]).push(w);
   });
   _schedByDay=byDay;
+  const sessByDay={};
+  sessions.forEach(s=>{
+    const d=new Date(s.startedAt);
+    const ds=dayStr(d.getFullYear(),d.getMonth(),d.getDate());
+    (sessByDay[ds]=sessByDay[ds]||[]).push(s);
+  });
+  _schedSessByDay=sessByDay;
   const firstDow=new Date(schedYear,schedMonth,1).getDay();
   const daysInMonth=new Date(schedYear,schedMonth+1,0).getDate();
   const today=new Date(); const todayStr=dayStr(today.getFullYear(),today.getMonth(),today.getDate());
@@ -698,12 +747,16 @@ function renderSchedGrid(windows){
   for(let i=0;i<firstDow;i++) html+='<div class="sched-day empty"></div>';
   for(let d=1;d<=daysInMonth;d++){
     const ds=dayStr(schedYear,schedMonth,d);
-    const entries=(byDay[ds]||[]).slice().sort((a,b)=>a.startsAt-b.startsAt);
-    const shown=entries.slice(0,3);
+    const planned=(byDay[ds]||[]).slice().sort((a,b)=>a.startsAt-b.startsAt);
+    const actual=(sessByDay[ds]||[]).slice().sort((a,b)=>a.startedAt-b.startedAt);
+    const shownPlanned=planned.slice(0,2);
+    const shownActual=actual.slice(0,2);
+    const moreCount=Math.max(0,planned.length-2)+Math.max(0,actual.length-2);
     html+='<div class="sched-day'+(ds===todayStr?' today':'')+'" onclick="openSchedDay(\''+ds+'\')">'
       +'<div class="sd-num">'+d+'</div>'
-      +shown.map(w=>'<div class="sched-entry">'+fmtHM(w.startsAt)+' '+esc(w.label||"Recording")+'</div>').join('')
-      +(entries.length>3?'<div class="sched-more">+'+(entries.length-3)+' more</div>':'')
+      +shownPlanned.map(w=>'<div class="sched-entry">'+fmtHM(w.startsAt)+' '+esc(w.label||"Planned")+'</div>').join('')
+      +shownActual.map(s=>'<div class="sched-entry actual">'+fmtHM(s.startedAt)+' '+esc(s.label||"Recorded")+'</div>').join('')
+      +(moreCount>0?'<div class="sched-more">+'+moreCount+' more</div>':'')
       +'</div>';
   }
   document.getElementById("schedGrid").innerHTML=html;
@@ -711,32 +764,59 @@ function renderSchedGrid(windows){
 function openSchedDay(ds){
   _schedOpenDay=ds;
   const entries=(_schedByDay[ds]||[]).slice().sort((a,b)=>a.startsAt-b.startsAt);
+  const sessEntries=(_schedSessByDay[ds]||[]).slice().sort((a,b)=>a.startedAt-b.startedAt);
   document.getElementById("schedDayTitle").textContent=new Date(ds+"T12:00:00").toLocaleDateString([], {weekday:"long", month:"long", day:"numeric", year:"numeric"});
-  document.getElementById("schedDayList").innerHTML = entries.length
+  let html="";
+  if(sessEntries.length){
+    html+='<div class="hint" style="padding:6px 0 2px;text-transform:uppercase;font-size:10px;letter-spacing:.4px">Actually recorded</div>';
+    html+=sessEntries.map(s=>
+      '<div class="sched-win-row">'
+      +'<span class="sw-text">'+fmtHM(s.startedAt)+' – '+(s.endedAt?fmtHM(s.endedAt):"in progress")+(s.label?' — '+esc(s.label):'')+(s.type?' ('+esc(s.type)+')':'')+'</span>'
+      +'</div>').join("");
+  }
+  html+='<div class="hint" style="padding:6px 0 2px;text-transform:uppercase;font-size:10px;letter-spacing:.4px">Planned</div>';
+  html += entries.length
     ? entries.map(w=>
-        '<div class="sched-win-row">'
-        +'<span class="sw-text">'+fmtHM(w.startsAt)+' – '+fmtHM(w.endsAt)+(w.label?' — '+esc(w.label):'')+'</span>'
-        +'<button class="ghost" onclick="deleteSchedWindow(\''+w.id+'\')">🗑</button>'
+        '<div class="sched-win-row editable" ondblclick="editSchedWindow(\''+w.id+'\')" title="Double-click to edit">'
+        +'<span class="sw-text">'+fmtDayHM(w.startsAt)+' – '+fmtDayHM(w.endsAt)+(w.label?' — '+esc(w.label):'')+'</span>'
+        +'<button class="ghost" onclick="event.stopPropagation();deleteSchedWindow(\''+w.id+'\')">🗑</button>'
         +'</div>').join("")
     : '<div class="hint" style="padding:6px 0">No windows planned for this day.</div>';
+  document.getElementById("schedDayList").innerHTML=html;
   document.getElementById("scheduleDaySection").style.display="flex";
+  resetSchedForm(ds);
+}
+function fmtDayHM(ts){
+  const d=new Date(ts);
+  const ds=dayStr(d.getFullYear(),d.getMonth(),d.getDate());
+  return (ds===_schedOpenDay?"":d.toLocaleDateString([], {month:"short",day:"numeric"})+" ")+fmtHM(ts);
 }
 document.getElementById("btnSchedAdd").addEventListener("click",async()=>{
   if(!_schedOpenDay) return;
+  const startDate=document.getElementById("schedStartDate").value||_schedOpenDay;
+  const endDate=document.getElementById("schedEndDate").value||startDate;
   const startTime=document.getElementById("schedStartTime").value||"09:00";
   const endTime=document.getElementById("schedEndTime").value||"10:00";
   const label=document.getElementById("schedLabel").value.trim();
-  const startsAt=new Date(_schedOpenDay+"T"+startTime+":00").getTime();
-  const endsAt=new Date(_schedOpenDay+"T"+endTime+":00").getTime();
-  if(endsAt<=startsAt){ alert("End time must be after start time."); return; }
-  const r=await fetch("/api/projects/"+encodeURIComponent(S.projectId)+"/record/schedule",{
-    method:"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+  const startsAt=new Date(startDate+"T"+startTime+":00").getTime();
+  const endsAt=new Date(endDate+"T"+endTime+":00").getTime();
+  if(endsAt<=startsAt){ alert("End must be after start."); return; }
+  const editingId=_schedEditingId;
+  const url="/api/projects/"+encodeURIComponent(S.projectId)+"/record/schedule"+(editingId?("/"+encodeURIComponent(editingId)):"");
+  const r=await fetch(url,{
+    method:editingId?"PATCH":"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
     body:JSON.stringify({startsAt,endsAt,label})
   });
-  if(!r.ok){ const e=await r.json().catch(()=>({})); alert(e.error||"couldn't add window"); return; }
-  document.getElementById("schedLabel").value="";
+  if(!r.ok){ const e=await r.json().catch(()=>({})); alert(e.error||"couldn't save window"); return; }
+  const day=_schedOpenDay;
   await loadScheduleMonth();
-  openSchedDay(_schedOpenDay);
+  openSchedDay(day);
+});
+document.getElementById("btnSchedDelete").addEventListener("click",async()=>{
+  if(_schedEditingId) await deleteSchedWindow(_schedEditingId);
+});
+document.getElementById("btnSchedCancelEdit").addEventListener("click",()=>{
+  resetSchedForm(_schedOpenDay);
 });
 async function deleteSchedWindow(id){
   if(!confirm("Remove this planned recording window?")) return;
