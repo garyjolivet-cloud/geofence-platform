@@ -2376,22 +2376,40 @@ function dockAudioPalette(){
   pal.style.left="auto";
   pal.style.right="10px";
   pal.style.top=(navBarHeight()+10)+"px";
-  repositionBaseAndKey();
+  // Not repositionBaseAndKey() here — Code Objects may still be at a stale
+  // position at this exact moment (it re-docks separately, right after this
+  // call in every call site), and repositionBaseAndKey() needs to see BOTH
+  // panels' final rects to clear whichever currently extends furthest
+  // left. It's wired as CodeObjects' own onDock callback instead, so it
+  // always runs last, after both are settled.
 }
-function codeObjectsHome(){
-  const apBottom=document.getElementById("audioPalette").getBoundingClientRect().bottom;
-  return { top:Math.max(navBarHeight()+10, apBottom+10), right:10 };
+function codeObjectsHome(collapsed){
+  const apRect=document.getElementById("audioPalette").getBoundingClientRect();
+  if(collapsed){
+    // Collapsed pill sits in the same row as Audio Palette's own collapsed
+    // pill, immediately to its left — matches the reference screenshot
+    // (three collapsed pills in one row under the nav bar), not stacked
+    // underneath the way the expanded panel does.
+    return { top:apRect.top, right:Math.round(window.innerWidth-apRect.left)+10 };
+  }
+  return { top:Math.max(navBarHeight()+10, apRect.bottom+10), right:10 };
 }
 // The basemap picker (.base) and #mapKeyBtn used to sit at a hardcoded
 // right:10px — the exact same top-right anchor #audioPalette also docks to.
 // Confirmed live (2026-08-11): with Audio Palette expanded, both controls
 // were rendering directly underneath it (audioPalette's higher z-index won),
-// completely unreachable until Audio Palette happened to be collapsed. Now
-// pinned just left of Audio Palette's actual current left edge instead of a
-// fixed offset, so they track it regardless of Audio Palette's width.
+// completely unreachable until Audio Palette happened to be collapsed. Then,
+// once Code Objects started docking *beside* Audio Palette when collapsed
+// (rather than below it), the same bug reappeared against Code Objects
+// instead — confirmed live a second time. Now clears whichever of the two
+// currently extends furthest left, not just Audio Palette alone. Called as
+// CodeObjects' own onDock callback (see mount() below) so it always runs
+// after both panels' positions are actually final.
 function repositionBaseAndKey(){
   const apRect=document.getElementById("audioPalette").getBoundingClientRect();
-  const gapFromRight=Math.round(window.innerWidth-apRect.left)+10;
+  const coFloat=document.querySelector(".co-float");
+  const leftmost=coFloat?Math.min(apRect.left, coFloat.getBoundingClientRect().left):apRect.left;
+  const gapFromRight=Math.round(window.innerWidth-leftmost)+10;
   const navH=navBarHeight();
   document.querySelector(".base").style.right=gapFromRight+"px";
   document.querySelector(".base").style.top=(navH+10)+"px";
@@ -2412,9 +2430,10 @@ document.getElementById("audioPaletteMin").onclick=e=>{
   p.classList.toggle("mini");
   document.getElementById("audioPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
   dockAudioPalette();
-  // Code Objects stacks directly below Audio Palette's bottom edge, which
-  // just moved (mini shrinks the box) — redock it too so the two never end
-  // up either overlapping or leaving a stale gap.
+  // Code Objects docks relative to Audio Palette (beside it when both are
+  // collapsed, below it when Audio Palette is expanded), which just moved —
+  // redock it too so the two never end up either overlapping or leaving a
+  // stale gap. Its own onDock callback also re-clears .base/#mapKeyBtn.
   if(window.CodeObjects) CodeObjects.dock();
   if(wasMini) doAudioRefresh();
 };
@@ -5103,6 +5122,8 @@ const AudioLab = {
 if(typeof CodeObjects!=="undefined"){
   CodeObjects.mount(document.body, {
     dock:codeObjectsHome,
+    onDock:repositionBaseAndKey,
+    startCollapsed:true,
     getOrgId:()=>document.getElementById("clientSel").value||null,
     getProjectId:()=>afProjectId(),
     getToken:getToken,
@@ -5161,9 +5182,19 @@ if(window.TopNav){
     onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); }
   }).then(()=>{
     document.getElementById("map").style.top=navBarHeight()+"px";
+    // Boot state (2026-08-11): every time the editor opens, all three
+    // floating panels start collapsed and docked under the nav bar — not
+    // just when a user manually collapses one. Matches the reference
+    // screenshot ("when edit is selected, this is how popups should
+    // look") — a row of three collapsed pills, not full-size panels
+    // fighting each other for space on load.
+    const mp=document.getElementById("mainPanel");
+    if(!mp.classList.contains("mini")){ mp.classList.add("mini"); document.getElementById("panelMinBtn").innerHTML="&#43;"; }
+    const ap=document.getElementById("audioPalette");
+    if(!ap.classList.contains("mini")){ ap.classList.add("mini"); document.getElementById("audioPaletteMin").innerHTML="&#43;"; }
     dockMainPanel();
-    dockAudioPalette(); // also repositions .base/#mapKeyBtn clear of it
-    if(window.CodeObjects) CodeObjects.dock();
+    dockAudioPalette();
+    if(window.CodeObjects) CodeObjects.dock(); // startCollapsed:true already at mount; its onDock also repositions .base/#mapKeyBtn clear of both it and Audio Palette
     map.resize();
   });
 }

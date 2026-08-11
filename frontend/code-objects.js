@@ -117,7 +117,13 @@
     .co-float{position:fixed;z-index:400;bottom:16px;right:16px;width:220px;height:380px;
       min-width:200px;min-height:160px;max-width:92vw;max-height:calc(100vh - 20px);
       resize:both;overflow:auto;display:flex;flex-direction:column;
-      background:var(--slate-2,#1b2738);border:1px solid var(--rim,#2e3f58);border-radius:12px;
+      /* Matches Fence Editor's #mainPanel/#audioPalette exactly (2026-08-11)
+         — was a flat opaque var(--slate-2), visibly a different, darker,
+         non-translucent shade next to those two panels' blurred
+         rgba(10,16,24,.93). All three floating panels on that page need to
+         read as one family. */
+      background:rgba(10,16,24,.93);backdrop-filter:blur(6px);
+      border:1px solid var(--rim,#2e3f58);border-radius:12px;
       box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:'Barlow Condensed',sans-serif;
       color:var(--snow,#eef4fb);user-select:none}
     /* min-width/min-height:0 (2026-08-08) — .co-float's own base rule sets
@@ -523,11 +529,12 @@
     opts = opts || {};
     injectStyle();
     const float = document.createElement("div");
-    float.className = opts.embedded ? "co-float embedded" : "co-float";
+    const startCollapsed = !opts.embedded && !!opts.startCollapsed;
+    float.className = opts.embedded ? "co-float embedded" : (startCollapsed ? "co-float collapsed" : "co-float");
     float.innerHTML = opts.embedded
       ? '<div class="co-float-body"></div>'
       : '<div class="co-float-head"><span class="ttl">🧩 Code Objects</span>' +
-        '<button class="co-toggle" title="collapse">–</button></div>' +
+        '<button class="co-toggle" title="collapse">' + (startCollapsed ? "+" : "–") + '</button></div>' +
         '<div class="co-float-body"><div class="co-empty">loading…</div></div>';
     (container || document.body).appendChild(float);
 
@@ -600,21 +607,29 @@
   }
 
   // Snaps the floating palette back to the host-supplied home slot —
-  // opts.dock(), a function returning {top,right} in px (host recomputes it
-  // fresh each call, e.g. from Audio Palette's current rendered bottom edge,
-  // so this stays correct even if the host's own layout changed since
-  // mount). Called once at mount and again on every collapse/expand toggle;
+  // opts.dock(collapsed), a function returning {top,right} in px (host
+  // recomputes it fresh each call, e.g. from Audio Palette's current
+  // rendered edge, so this stays correct even if the host's own layout
+  // changed since mount). Passes this panel's own current collapsed state
+  // so the host can put the collapsed pill in a different spot than the
+  // expanded panel (e.g. beside a sibling's pill vs. stacked below its full
+  // body). Called once at mount and again on every collapse/expand toggle;
   // a free drag in between is untouched. No-op for embedded mode (no
   // floating chrome to move) or if the host didn't pass opts.dock.
   function dock() {
     if (!_mountEls || !_mountOpts || _mountOpts.embedded || !_mountOpts.dock) return;
-    const pos = _mountOpts.dock();
+    const pos = _mountOpts.dock(_mountEls.float.classList.contains("collapsed"));
     if (!pos) return;
     const { float } = _mountEls;
     float.style.left = "auto";
     float.style.bottom = "auto";
     if (pos.top != null) float.style.top = pos.top + "px";
     if (pos.right != null) float.style.right = pos.right + "px";
+    // Lets the host react to this panel's position actually changing (e.g.
+    // re-clearing a third, unrelated control that shares the same corner) —
+    // fires after the position write above so the host reads this panel's
+    // final rect, not its pre-dock one.
+    if (_mountOpts.onDock) _mountOpts.onDock();
   }
 
   // Re-fetches the (org-gated) list and re-renders cards — call this when
