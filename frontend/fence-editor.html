@@ -2351,37 +2351,35 @@ document.getElementById("recordRetentionDays")?.addEventListener("change",async(
 // jumping into Studio no longer lands pre-selected on a specific stop, a
 // known small capability loss accepted along with the removal.
 
-/* ---- Home-docking (2026-08-11): all three floating panels (Region
-   Editor/#mainPanel, #audioPalette, the Code Objects palette) snap back to
-   a fixed, non-overlapping slot under the persistent top nav bar whenever
-   their own collapse/expand button is clicked. Free-dragging a panel while
-   it's open is untouched — only the toggle itself re-homes it, instead of
-   leaving it wherever a drag last left it (previously nothing ever reset
-   position, so a dragged-then-collapsed panel could end up stranded well
-   below the fold with no way back short of a page reload). Region Editor
-   docks top-left (its own side); Audio Palette docks top-right; Code
-   Objects docks top-right too, stacked directly below Audio Palette's
-   current rendered bottom edge (recomputed fresh every call, so it tracks
-   Audio Palette even if that panel has been resized or is mini) — matches
-   the "own side, don't overlap" layout confirmed against a real
-   screenshot. */
+/* ---- Home-docking (2026-08-11, revised again same day): Region Editor,
+   Audio Palette, and Code Objects snap back to a fixed, non-overlapping
+   slot under the persistent top nav bar whenever their own collapse/
+   expand button is clicked — free-dragging a panel while it's open is
+   untouched, only the toggle itself re-homes it. Expanded, Region Editor
+   still gets its own side of the screen (docks top-left, independent of
+   everything else). Collapsed, all three join one evenly-spaced row at
+   the RIGHT end of the nav bar per explicit user request — Region Editor
+   no longer sits alone at top-left when it's just a small pill; there's
+   no reason to split one pill off from the other two.
+
+   Docking chain, right to left: #mapKeyBtn is the one fixed anchor (far
+   right) — Audio Palette chains off Key, Code Objects chains off Audio
+   Palette, Region Editor chains off Code Objects *only while mini*
+   (otherwise it's independently docked top-left), and the basemap picker
+   chains off whichever of those now extends furthest left. MapLibre's own
+   zoom control (added with no explicit position, so it defaults to
+   top-right inside #map — the same corner this whole row lives in) gets
+   pushed down by the row's real measured height so Key sits cleanly above
+   it instead of the two overlapping. */
 function navBarHeight(){ return document.getElementById("crossToolNav").getBoundingClientRect().height; }
 function dockMainPanel(){
+  // Only the "own side of the screen" expanded position — see
+  // dockCollapsedRow() below for where a *mini* Region Editor actually
+  // lands (in the right-end row, not here).
   const pnl=document.getElementById("mainPanel");
   pnl.style.left="10px";
   pnl.style.top=(navBarHeight()+10)+"px";
 }
-// Docking chain (2026-08-11, rebuilt after a live screenshot showed Audio
-// Palette painting over MapLibre's own zoom control, and Key sitting left
-// of Code Objects instead of being the rightmost item): #mapKeyBtn is now
-// the one fixed anchor (far right, same row as everything else) — every
-// other floating asset chains left of whichever neighbor is already
-// resolved, left to right: Satellite → Code Objects → Audio Palette → Key.
-// MapLibre's own zoom control (added with no explicit position, so it
-// defaults to top-right inside #map — the exact same corner this whole
-// row lives in) gets pushed down by this row's real measured height so
-// "Key above the sizing arrows" is actually true instead of the two
-// fighting over the same pixels.
 function dockKeyBtn(){
   const btn=document.getElementById("mapKeyBtn");
   btn.style.right="10px";
@@ -2397,24 +2395,34 @@ function dockAudioPalette(){
 }
 function codeObjectsHome(){
   // Docks immediately to the left of Audio Palette's current edge — same
-  // rule whether collapsed (matches the reference screenshot's row of
-  // pills) or expanded (a fixed right offset anchored to Audio Palette's
-  // own left edge means Code Objects' box only ever grows down-and-left
-  // from that corner, so it can never encroach into Audio Palette
-  // regardless of either panel's current size).
+  // rule whether collapsed or expanded (a fixed right offset anchored to
+  // Audio Palette's own left edge means Code Objects' box only ever grows
+  // down-and-left from that corner, so it can never encroach into Audio
+  // Palette regardless of either panel's current size).
   const apRect=document.getElementById("audioPalette").getBoundingClientRect();
   return { top:apRect.top, right:Math.round(window.innerWidth-apRect.left)+10 };
 }
-// Places the basemap picker (.base) immediately left of Code Objects'
-// current edge, and pushes MapLibre's zoom control down clear of the
-// whole Satellite/Code Objects/Audio Palette/Key row. Called as Code
-// Objects' own onDock callback (see mount() below) so it always runs
-// after every other panel in the chain has already settled into its
-// final position for this pass.
-function repositionBaseAndKey(){
+// Finishes the right-end row every time any of {Region Editor, Audio
+// Palette, Code Objects} changes collapse state or moves: places a *mini*
+// Region Editor immediately left of Code Objects (an *expanded* Region
+// Editor is left alone — dockMainPanel() already put it top-left,
+// independent of this row entirely), places the basemap picker immediately
+// left of whichever now extends furthest left, and pushes MapLibre's zoom
+// control down clear of the whole row. Called as Code Objects' own onDock
+// callback (see mount() below) so it always runs after Audio Palette/Code
+// Objects have settled into their final positions for this pass.
+function dockCollapsedRow(){
+  const mp=document.getElementById("mainPanel");
   const coFloat=document.querySelector(".co-float");
-  const leftEdge=coFloat?coFloat.getBoundingClientRect().left:document.getElementById("audioPalette").getBoundingClientRect().left;
+  const coRect=coFloat?coFloat.getBoundingClientRect():document.getElementById("audioPalette").getBoundingClientRect();
   const navH=navBarHeight();
+  let leftEdge=coRect.left;
+  if(mp.classList.contains("mini")){
+    mp.style.left="auto";
+    mp.style.right=(Math.round(window.innerWidth-coRect.left)+10)+"px";
+    mp.style.top=(navH+10)+"px";
+    leftEdge=mp.getBoundingClientRect().left;
+  }
   const base=document.querySelector(".base");
   base.style.right=(Math.round(window.innerWidth-leftEdge)+10)+"px";
   base.style.top=(navH+10)+"px";
@@ -2522,7 +2530,13 @@ document.getElementById("panelMinBtn").onclick=e=>{
   const wasMini=p.classList.contains("mini");
   p.classList.toggle("mini");
   document.getElementById("panelMinBtn").innerHTML=wasMini?"&#8722;":"&#43;";
-  dockMainPanel();
+  // Expanding: back to its own side, top-left, independent of the row.
+  // Collapsing: dockCollapsedRow() (below) picks it up and slots it into
+  // the right-end row instead — either way, that call also re-settles the
+  // basemap picker/zoom control against whatever the row's new leftmost
+  // edge is.
+  if(wasMini) dockMainPanel();
+  dockCollapsedRow();
 };
 // Drag-source-only clip browser — all editing (rename/move/copy/delete/
 // upload) lives in Audio Studio, so this mounts audio-tree.js read-only.
@@ -5129,7 +5143,7 @@ const AudioLab = {
 if(typeof CodeObjects!=="undefined"){
   CodeObjects.mount(document.body, {
     dock:codeObjectsHome,
-    onDock:repositionBaseAndKey,
+    onDock:dockCollapsedRow,
     startCollapsed:true,
     getOrgId:()=>document.getElementById("clientSel").value||null,
     getProjectId:()=>afProjectId(),
@@ -5190,18 +5204,16 @@ if(window.TopNav){
   }).then(()=>{
     document.getElementById("map").style.top=navBarHeight()+"px";
     // Boot state (2026-08-11): every time the editor opens, all three
-    // floating panels start collapsed and docked under the nav bar — not
-    // just when a user manually collapses one. Matches the reference
-    // screenshot ("when edit is selected, this is how popups should
-    // look") — a row of three collapsed pills, not full-size panels
-    // fighting each other for space on load.
+    // floating panels start collapsed, joined into one evenly-spaced row
+    // at the right end of the nav bar — not just when a user manually
+    // collapses one, and not with Region Editor split off alone at
+    // top-left the way an *expanded* Region Editor docks.
     const mp=document.getElementById("mainPanel");
     if(!mp.classList.contains("mini")){ mp.classList.add("mini"); document.getElementById("panelMinBtn").innerHTML="&#43;"; }
     const ap=document.getElementById("audioPalette");
     if(!ap.classList.contains("mini")){ ap.classList.add("mini"); document.getElementById("audioPaletteMin").innerHTML="&#43;"; }
-    dockMainPanel();
     dockAudioPalette(); // also anchors Key
-    if(window.CodeObjects) CodeObjects.dock(); // startCollapsed:true already at mount; its onDock also positions .base and pushes the map's zoom control clear of this whole row
+    if(window.CodeObjects) CodeObjects.dock(); // startCollapsed:true already at mount; its onDock (dockCollapsedRow) also places mini Region Editor, .base, and pushes the map's zoom control clear of the whole row
     map.resize();
   });
 }
