@@ -2383,16 +2383,17 @@ function dockAudioPalette(){
   // left. It's wired as CodeObjects' own onDock callback instead, so it
   // always runs last, after both are settled.
 }
-function codeObjectsHome(collapsed){
+function codeObjectsHome(){
+  // Always docks immediately to the left of Audio Palette's current edge —
+  // same rule whether collapsed (matches the reference screenshot's row of
+  // pills) or expanded (2026-08-11: previously docked *below* Audio
+  // Palette when expanded, which the user flagged as still overlapping/
+  // wrong — a fixed right offset anchored to Audio Palette's own left edge
+  // means Code Objects' box only ever grows down-and-left from that corner,
+  // so it can never encroach into Audio Palette regardless of either
+  // panel's current size).
   const apRect=document.getElementById("audioPalette").getBoundingClientRect();
-  if(collapsed){
-    // Collapsed pill sits in the same row as Audio Palette's own collapsed
-    // pill, immediately to its left — matches the reference screenshot
-    // (three collapsed pills in one row under the nav bar), not stacked
-    // underneath the way the expanded panel does.
-    return { top:apRect.top, right:Math.round(window.innerWidth-apRect.left)+10 };
-  }
-  return { top:Math.max(navBarHeight()+10, apRect.bottom+10), right:10 };
+  return { top:apRect.top, right:Math.round(window.innerWidth-apRect.left)+10 };
 }
 // The basemap picker (.base) and #mapKeyBtn used to sit at a hardcoded
 // right:10px — the exact same top-right anchor #audioPalette also docks to.
