@@ -158,7 +158,13 @@
   .status{position:absolute;bottom:10px;right:10px;z-index:5;background:rgba(10,16,24,.9);border:1px solid var(--rim);
           border-radius:9px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice)}
   .base{position:absolute;top:10px;right:10px;z-index:5}
-  .base select{width:auto}
+  /* Explicit dark styling (2026-08-11) rather than relying purely on the
+     global input/select rule below — this is the one pulldown that sits
+     directly in <body>, outside every panel, and was rendering in the
+     browser's native (light) select chrome instead of matching every other
+     dropdown in the app. */
+  .base select{width:auto;background:rgba(10,16,24,.9);color:var(--snow);border:1px solid var(--rim);
+               border-radius:9px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px}
   /* map key button + modal */
   #mapKeyBtn{position:absolute;top:44px;right:10px;z-index:6;background:rgba(10,16,24,.9);
              border:1px solid var(--rim);border-radius:9px;padding:5px 11px;
@@ -2345,6 +2351,54 @@ document.getElementById("recordRetentionDays")?.addEventListener("change",async(
 // jumping into Studio no longer lands pre-selected on a specific stop, a
 // known small capability loss accepted along with the removal.
 
+/* ---- Home-docking (2026-08-11): all three floating panels (Region
+   Editor/#mainPanel, #audioPalette, the Code Objects palette) snap back to
+   a fixed, non-overlapping slot under the persistent top nav bar whenever
+   their own collapse/expand button is clicked. Free-dragging a panel while
+   it's open is untouched — only the toggle itself re-homes it, instead of
+   leaving it wherever a drag last left it (previously nothing ever reset
+   position, so a dragged-then-collapsed panel could end up stranded well
+   below the fold with no way back short of a page reload). Region Editor
+   docks top-left (its own side); Audio Palette docks top-right; Code
+   Objects docks top-right too, stacked directly below Audio Palette's
+   current rendered bottom edge (recomputed fresh every call, so it tracks
+   Audio Palette even if that panel has been resized or is mini) — matches
+   the "own side, don't overlap" layout confirmed against a real
+   screenshot. */
+function navBarHeight(){ return document.getElementById("crossToolNav").getBoundingClientRect().height; }
+function dockMainPanel(){
+  const pnl=document.getElementById("mainPanel");
+  pnl.style.left="10px";
+  pnl.style.top=(navBarHeight()+10)+"px";
+}
+function dockAudioPalette(){
+  const pal=document.getElementById("audioPalette");
+  pal.style.left="auto";
+  pal.style.right="10px";
+  pal.style.top=(navBarHeight()+10)+"px";
+  repositionBaseAndKey();
+}
+function codeObjectsHome(){
+  const apBottom=document.getElementById("audioPalette").getBoundingClientRect().bottom;
+  return { top:Math.max(navBarHeight()+10, apBottom+10), right:10 };
+}
+// The basemap picker (.base) and #mapKeyBtn used to sit at a hardcoded
+// right:10px — the exact same top-right anchor #audioPalette also docks to.
+// Confirmed live (2026-08-11): with Audio Palette expanded, both controls
+// were rendering directly underneath it (audioPalette's higher z-index won),
+// completely unreachable until Audio Palette happened to be collapsed. Now
+// pinned just left of Audio Palette's actual current left edge instead of a
+// fixed offset, so they track it regardless of Audio Palette's width.
+function repositionBaseAndKey(){
+  const apRect=document.getElementById("audioPalette").getBoundingClientRect();
+  const gapFromRight=Math.round(window.innerWidth-apRect.left)+10;
+  const navH=navBarHeight();
+  document.querySelector(".base").style.right=gapFromRight+"px";
+  document.querySelector(".base").style.top=(navH+10)+"px";
+  document.getElementById("mapKeyBtn").style.right=gapFromRight+"px";
+  document.getElementById("mapKeyBtn").style.top=(navH+44)+"px";
+}
+
 /* ---- Audio palette: floating panel (drag header to move, resize from the
    bottom-right corner via native CSS resize, minimize via the header button) ---- */
 function unminimizeAudioPalette(){
@@ -2357,6 +2411,11 @@ document.getElementById("audioPaletteMin").onclick=e=>{
   const wasMini=p.classList.contains("mini");
   p.classList.toggle("mini");
   document.getElementById("audioPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
+  dockAudioPalette();
+  // Code Objects stacks directly below Audio Palette's bottom edge, which
+  // just moved (mini shrinks the box) — redock it too so the two never end
+  // up either overlapping or leaving a stale gap.
+  if(window.CodeObjects) CodeObjects.dock();
   if(wasMini) doAudioRefresh();
 };
 // Shrink/grow-to-fit (2026-08-08, made symmetric same day after initial
@@ -2437,6 +2496,7 @@ document.getElementById("panelMinBtn").onclick=e=>{
   const wasMini=p.classList.contains("mini");
   p.classList.toggle("mini");
   document.getElementById("panelMinBtn").innerHTML=wasMini?"&#8722;":"&#43;";
+  dockMainPanel();
 };
 // Drag-source-only clip browser — all editing (rename/move/copy/delete/
 // upload) lives in Audio Studio, so this mounts audio-tree.js read-only.
@@ -2484,6 +2544,7 @@ function renderCombineLanes(){
     row.appendChild(nm); row.appendChild(laneSel);
     if(seg.lane==="bg"){
       const vol=document.createElement("input"); vol.type="range"; vol.min="0"; vol.max="100"; vol.value=seg.volPct;
+      vol.style.accentColor="var(--coral)";
       vol.oninput=()=>{ seg.volPct=+vol.value; };
       row.appendChild(vol);
     }
@@ -5041,6 +5102,7 @@ const AudioLab = {
 // which mode is active, just what to act on right now.
 if(typeof CodeObjects!=="undefined"){
   CodeObjects.mount(document.body, {
+    dock:codeObjectsHome,
     getOrgId:()=>document.getElementById("clientSel").value||null,
     getProjectId:()=>afProjectId(),
     getToken:getToken,
@@ -5098,12 +5160,10 @@ if(window.TopNav){
     },
     onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); }
   }).then(()=>{
-    const navH=document.getElementById("crossToolNav").getBoundingClientRect().height;
-    document.getElementById("map").style.top=navH+"px";
-    document.getElementById("mainPanel").style.top=(navH+10)+"px";
-    document.getElementById("audioPalette").style.top=(navH+10)+"px";
-    document.querySelector(".base").style.top=(navH+10)+"px";
-    document.getElementById("mapKeyBtn").style.top=(navH+44)+"px";
+    document.getElementById("map").style.top=navBarHeight()+"px";
+    dockMainPanel();
+    dockAudioPalette(); // also repositions .base/#mapKeyBtn clear of it
+    if(window.CodeObjects) CodeObjects.dock();
     map.resize();
   });
 }

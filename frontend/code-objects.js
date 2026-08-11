@@ -541,6 +541,11 @@
         float.classList.toggle("collapsed");
         const collapsed = float.classList.contains("collapsed");
         head.querySelector(".co-toggle").textContent = collapsed ? "+" : "–";
+        // Re-dock on every toggle (2026-08-11) — a free drag while open is
+        // still allowed, but the collapse/expand button itself always
+        // returns the panel to its host-supplied home slot instead of
+        // leaving it wherever a drag last left it. See dock() below.
+        dock();
         // Collapsing hides the tree/card list, so any manual resize made to
         // browse it (drag the bottom-right corner) is no longer doing
         // anything useful — drop back to the default footprint instead of
@@ -589,8 +594,27 @@
 
     _mountEls = { float, head, body };
     _mountOpts = opts;
+    dock();
     await refresh();
     return float;
+  }
+
+  // Snaps the floating palette back to the host-supplied home slot —
+  // opts.dock(), a function returning {top,right} in px (host recomputes it
+  // fresh each call, e.g. from Audio Palette's current rendered bottom edge,
+  // so this stays correct even if the host's own layout changed since
+  // mount). Called once at mount and again on every collapse/expand toggle;
+  // a free drag in between is untouched. No-op for embedded mode (no
+  // floating chrome to move) or if the host didn't pass opts.dock.
+  function dock() {
+    if (!_mountEls || !_mountOpts || _mountOpts.embedded || !_mountOpts.dock) return;
+    const pos = _mountOpts.dock();
+    if (!pos) return;
+    const { float } = _mountEls;
+    float.style.left = "auto";
+    float.style.bottom = "auto";
+    if (pos.top != null) float.style.top = pos.top + "px";
+    if (pos.right != null) float.style.right = pos.right + "px";
   }
 
   // Re-fetches the (org-gated) list and re-renders cards — call this when
@@ -639,5 +663,5 @@
 
   function getCached() { return _cache || []; }
 
-  window.CodeObjects = { mount, refresh, attach, detach, summarize, renderBadge, makeDroppable, fetchList, latestVersion, openMatrix, getCached };
+  window.CodeObjects = { mount, refresh, dock, attach, detach, summarize, renderBadge, makeDroppable, fetchList, latestVersion, openMatrix, getCached };
 })();
