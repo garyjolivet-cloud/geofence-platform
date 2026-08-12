@@ -238,6 +238,92 @@ async function copyFolderSubtree(env, sourceFolderId, srcScope, srcScopeId, targ
   return newId;
 }
 
+// --- Asset library (3D models: glTF/GLB), Phase 0 of the AR/3D plan ---
+// Structurally identical to the audio_folder/audio_clip tree above — same
+// project/library scoping, same permanent-opaque-r2_key convention — with
+// one addition: kind='url' rows (an externally-hosted glTF link) have no
+// r2_key at all and skip R2 entirely. Auth is deliberately the *same*
+// audio/publish scopes as the audio tree (assetScopeAuthOk delegates to
+// audioScopeAuthOk unchanged) — 3D assets are just another kind of project
+// media alongside audio, not a new permission tier. Split this out into its
+// own scope later if that stops being true.
+const assetScopeAuthOk = audioScopeAuthOk;
+async function assetWouldCreateCycle(env, folderId, newParentId) {
+  if (!newParentId) return false;
+  if (newParentId === folderId) return true;
+  let cur = newParentId, seen = new Set();
+  while (cur) {
+    if (cur === folderId) return true;
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    const row = await env.DB.prepare("SELECT parent_id FROM asset_folder WHERE id=?").bind(cur).first();
+    cur = row ? row.parent_id : null;
+  }
+  return false;
+}
+async function collectAssetFolderSubtree(env, scope, scopeId, rootFolderId) {
+  const ids = [rootFolderId];
+  let frontier = [rootFolderId];
+  while (frontier.length) {
+    const ph = frontier.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT id FROM asset_folder WHERE scope=? AND scope_id=? AND parent_id IN (${ph})`
+    ).bind(scope, scopeId, ...frontier).all();
+    frontier = (results || []).map(r => r.id);
+    ids.push(...frontier);
+  }
+  return ids;
+}
+async function rescopeAssetFolderSubtree(env, rootFolderId, srcScope, srcScopeId, targetScope, targetScopeId, targetParentId) {
+  const folderIds = await collectAssetFolderSubtree(env, srcScope, srcScopeId, rootFolderId);
+  const ph = folderIds.map(() => "?").join(",");
+  const now = new Date().toISOString();
+  await env.DB.prepare(`UPDATE asset_folder SET scope=?, scope_id=?, updated_at=? WHERE id IN (${ph})`)
+    .bind(targetScope, targetScopeId, now, ...folderIds).run();
+  await env.DB.prepare("UPDATE asset_folder SET parent_id=? WHERE id=?").bind(targetParentId, rootFolderId).run();
+  await env.DB.prepare(`UPDATE asset_object SET scope=?, scope_id=?, updated_at=? WHERE folder_id IN (${ph})`)
+    .bind(targetScope, targetScopeId, now, ...folderIds).run();
+}
+// Duplicates one asset row. kind='upload' copies the underlying R2 object
+// under a fresh stable key (same reasoning as copyClipRow — separate copies
+// so trimming/deleting one never affects the other); kind='url' just copies
+// the metadata row, since there's no R2 object to duplicate.
+async function copyAssetRow(env, row, targetScope, targetScopeId, targetFolderId, overrideName) {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  let r2Key = null;
+  if (row.kind === "upload") {
+    if (!env.MODELS) throw new Error("no models bucket bound");
+    const obj = await env.MODELS.get(row.r2_key);
+    if (!obj) throw new Error("source asset missing in R2: " + row.r2_key);
+    const ext = (row.r2_key.match(/\.[^.\/]+$/) || [""])[0];
+    r2Key = "model/" + crypto.randomUUID() + ext;
+    await env.MODELS.put(r2Key, obj.body, { httpMetadata: obj.httpMetadata });
+  }
+  await env.DB.prepare(
+    "INSERT INTO asset_object (id,scope,scope_id,folder_id,name,kind,r2_key,source_url,format,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+  ).bind(id, targetScope, targetScopeId, targetFolderId, overrideName || row.name, row.kind, r2Key, row.kind === "url" ? row.source_url : null, row.format, row.size_bytes || null, now, now).run();
+  return id;
+}
+async function copyAssetFolderSubtree(env, sourceFolderId, srcScope, srcScopeId, targetScope, targetScopeId, targetParentId) {
+  const src = await env.DB.prepare("SELECT name FROM asset_folder WHERE id=? AND scope=? AND scope_id=?")
+    .bind(sourceFolderId, srcScope, srcScopeId).first();
+  if (!src) throw new Error("source folder not found");
+  const newId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO asset_folder (id,scope,scope_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+    .bind(newId, targetScope, targetScopeId, targetParentId, src.name, now, now).run();
+  const { results: objs } = await env.DB.prepare(
+    "SELECT id,name,kind,r2_key,source_url,format,size_bytes FROM asset_object WHERE scope=? AND scope_id=? AND folder_id=?"
+  ).bind(srcScope, srcScopeId, sourceFolderId).all();
+  for (const o of (objs || [])) await copyAssetRow(env, o, targetScope, targetScopeId, newId);
+  const { results: subfolders } = await env.DB.prepare(
+    "SELECT id FROM asset_folder WHERE scope=? AND scope_id=? AND parent_id=?"
+  ).bind(srcScope, srcScopeId, sourceFolderId).all();
+  for (const sf of (subfolders || [])) await copyAssetFolderSubtree(env, sf.id, srcScope, srcScopeId, targetScope, targetScopeId, newId);
+  return newId;
+}
+
 async function scrapeWeather(env) {
   const resp = await fetch('https://kickinghorseresort.com/conditions/advanced-weather-data/', {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GeofencePlatform/1.0)' },
@@ -902,7 +988,7 @@ async function api(request, env, url) {
     // actually filter the workspace list.
     if (!A) return json({ apps: [] }, 200, AC);
     const scopedOrg = A.master ? (url.searchParams.get("org") || null) : A.appId;
-    const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt, " +
+    const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt,a.three_d_enabled AS threeDEnabled, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
@@ -941,10 +1027,14 @@ async function api(request, env, url) {
     const name = (b.name || "").trim();
     if (!name) return json({ error: "name required" }, 400, AC);
     const now = new Date().toISOString();
-    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), updatedAt=? WHERE id=?")
-      .bind(name, b.description ?? null, now, aid).run();
+    // threeDEnabled is the single tenant-level flag gating the whole AR/3D
+    // upgrade (terrain on all 5 map surfaces + AR-object authoring in the
+    // editor) — omit the field entirely to leave it unchanged.
+    const threeD = b.threeDEnabled === undefined ? null : (b.threeDEnabled ? 1 : 0);
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, threeD, now, aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
-    return json({ ok: true, id: aid, name }, 200, AC);
+    return json({ ok: true, id: aid, name, threeDEnabled: threeD }, 200, AC);
   }
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
@@ -2602,6 +2692,300 @@ async function api(request, env, url) {
     return json({ id: clipId, name, folderId, scope, scopeId }, 200, AC);
   }
 
+  // --- Asset tree: 3D model library (glTF/GLB), same shape as /api/audio/tree ---
+  if (path === "/api/assets/tree" && method === "GET") {
+    const A = await auth(request, env);
+    const pid = url.searchParams.get("project");
+    const scopeParam = url.searchParams.get("scope");
+
+    if (pid) {
+      const proj = await env.DB.prepare("SELECT appId,orgId FROM project WHERE id=? OR slug=? LIMIT 1").bind(pid, pid).first();
+      const appId = proj ? proj.appId : null;
+      if (!scopeOk(A, "audio", appId) && !scopeOk(A, "publish", appId)) return json({ error: "unauthorized" }, 401, AC);
+      const [pf, po] = await Promise.all([
+        env.DB.prepare("SELECT id,parent_id AS parentId,name FROM asset_folder WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all(),
+        env.DB.prepare("SELECT id,folder_id AS folderId,name,kind,r2_key AS r2Key,source_url AS sourceUrl,format,size_bytes AS sizeBytes,created_at AS createdAt FROM asset_object WHERE scope='project' AND scope_id=? ORDER BY name").bind(pid).all()
+      ]);
+      const orgId = url.searchParams.get("org") || (proj && proj.orgId) || null;
+      let library = null;
+      if (orgId && (await libraryScopeOk(env, A, orgId))) {
+        const [lf, lo] = await Promise.all([
+          env.DB.prepare("SELECT id,parent_id AS parentId,name FROM asset_folder WHERE scope='library' AND scope_id=? ORDER BY name").bind(orgId).all(),
+          env.DB.prepare("SELECT id,folder_id AS folderId,name,kind,r2_key AS r2Key,source_url AS sourceUrl,format,size_bytes AS sizeBytes,created_at AS createdAt FROM asset_object WHERE scope='library' AND scope_id=? ORDER BY name").bind(orgId).all()
+        ]);
+        library = {
+          scope: "library", scopeId: orgId, folders: lf.results || [],
+          objects: (lo.results || []).map(o => ({ ...o, url: o.kind === "url" ? o.sourceUrl : "/api/models/" + o.r2Key }))
+        };
+      }
+      return json({
+        project: {
+          scope: "project", scopeId: pid, folders: pf.results || [],
+          objects: (po.results || []).map(o => ({ ...o, url: o.kind === "url" ? o.sourceUrl : "/api/models/" + o.r2Key }))
+        },
+        library
+      }, 200, AC);
+    }
+
+    if (scopeParam === "library") {
+      const libOrgId = url.searchParams.get("org");
+      if (!libOrgId) return json({ error: "?scope=library needs &org=<clientId>" }, 400, AC);
+      if (!(await libraryScopeOk(env, A, libOrgId))) return json({ error: "unauthorized" }, 401, AC);
+      const [lf, lo] = await Promise.all([
+        env.DB.prepare("SELECT id,parent_id AS parentId,name FROM asset_folder WHERE scope='library' AND scope_id=? ORDER BY name").bind(libOrgId).all(),
+        env.DB.prepare("SELECT id,folder_id AS folderId,name,kind,r2_key AS r2Key,source_url AS sourceUrl,format,size_bytes AS sizeBytes,created_at AS createdAt FROM asset_object WHERE scope='library' AND scope_id=? ORDER BY name").bind(libOrgId).all()
+      ]);
+      return json({
+        library: {
+          scope: "library", scopeId: libOrgId, folders: lf.results || [],
+          objects: (lo.results || []).map(o => ({ ...o, url: o.kind === "url" ? o.sourceUrl : "/api/models/" + o.r2Key }))
+        }
+      }, 200, AC);
+    }
+
+    return json({ error: "specify ?project=<id> or ?scope=library&org=<clientId>" }, 400, AC);
+  }
+
+  if (path === "/api/asset-folder" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const scope = b.scope, scopeId = (b.scopeId || "").trim(), name = (b.name || "").trim();
+    const parentId = b.parentId || null;
+    if (!["project", "library"].includes(scope)) return json({ error: "scope must be 'project' or 'library'" }, 400, AC);
+    if (!scopeId || !name) return json({ error: "scopeId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
+    if (!(await assetScopeAuthOk(env, A, scope, scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    if (parentId) {
+      const parent = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(parentId, scope, scopeId).first();
+      if (!parent) return json({ error: "parent folder not found in this scope" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare("INSERT INTO asset_folder (id,scope,scope_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+      .bind(id, scope, scopeId, parentId, name, now, now).run();
+    await logAudit(env, request, A, "asset.folder.create", scope + "/" + scopeId + "/" + name);
+    return json({ id, scope, scopeId, parentId, name }, 201, AC);
+  }
+
+  const mAssetFolderCopy = path.match(/^\/api\/asset-folder\/([^/]+)\/copy$/);
+  if (mAssetFolderCopy && method === "POST") {
+    const folderId = decodeURIComponent(mAssetFolderCopy[1]);
+    const A = await auth(request, env);
+    const src = await env.DB.prepare("SELECT scope,scope_id AS scopeId FROM asset_folder WHERE id=?").bind(folderId).first();
+    if (!src) return json({ error: "folder not found" }, 404, AC);
+    if (!(await assetScopeAuthOk(env, A, src.scope, src.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const targetScope = b.targetScope || src.scope;
+    const targetScopeId = b.targetScopeId || src.scopeId;
+    const targetParentId = b.targetParentId || null;
+    if (!["project", "library"].includes(targetScope)) return json({ error: "invalid targetScope" }, 400, AC);
+    if (!(await assetScopeAuthOk(env, A, targetScope, targetScopeId))) return json({ error: "unauthorized on target" }, 401, AC);
+    if (targetParentId) {
+      const parent = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(targetParentId, targetScope, targetScopeId).first();
+      if (!parent) return json({ error: "target parent folder not found" }, 404, AC);
+    }
+    try {
+      const newId = await copyAssetFolderSubtree(env, folderId, src.scope, src.scopeId, targetScope, targetScopeId, targetParentId);
+      await logAudit(env, request, A, "asset.folder.copy", folderId + " -> " + newId);
+      return json({ id: newId }, 201, AC);
+    } catch (e) {
+      return json({ error: "copy failed: " + e.message }, 500, AC);
+    }
+  }
+
+  const mAssetFolder = path.match(/^\/api\/asset-folder\/([^/]+)$/);
+  if (mAssetFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mAssetFolder[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT scope,scope_id AS scopeId,parent_id AS parentId,name FROM asset_folder WHERE id=?").bind(folderId).first();
+    if (!row) return json({ error: "folder not found" }, 404, AC);
+    if (!(await assetScopeAuthOk(env, A, row.scope, row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      const folderIds = await collectAssetFolderSubtree(env, row.scope, row.scopeId, folderId);
+      const fph = folderIds.map(() => "?").join(",");
+      const { results: objs } = await env.DB.prepare(
+        `SELECT id,kind,r2_key FROM asset_object WHERE scope=? AND scope_id=? AND folder_id IN (${fph})`
+      ).bind(row.scope, row.scopeId, ...folderIds).all();
+      for (const o of (objs || [])) if (o.kind === "upload" && env.MODELS) await env.MODELS.delete(o.r2_key).catch(() => {});
+      if ((objs || []).length) {
+        const oph = objs.map(() => "?").join(",");
+        await env.DB.prepare(`DELETE FROM asset_object WHERE id IN (${oph})`).bind(...objs.map(o => o.id)).run();
+      }
+      await env.DB.prepare(`DELETE FROM asset_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "asset.folder.delete", folderId + " (" + (objs || []).length + " objects)");
+      return json({ ok: true, deletedFolders: folderIds.length, deletedObjects: (objs || []).length }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name;
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+
+    const targetScope = b.targetScope || row.scope;
+    const targetScopeId = b.targetScopeId || row.scopeId;
+    const crossScope = targetScope !== row.scope || targetScopeId !== row.scopeId;
+
+    if (crossScope) {
+      if (!["project", "library"].includes(targetScope)) return json({ error: "invalid targetScope" }, 400, AC);
+      if (!(await assetScopeAuthOk(env, A, targetScope, targetScopeId))) return json({ error: "unauthorized on target" }, 401, AC);
+      const newParentId = b.parentId !== undefined ? (b.parentId || null) : null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(newParentId, targetScope, targetScopeId).first();
+        if (!parent) return json({ error: "target parent folder not found" }, 404, AC);
+      }
+      await rescopeAssetFolderSubtree(env, folderId, row.scope, row.scopeId, targetScope, targetScopeId, newParentId);
+      if (name !== row.name) await env.DB.prepare("UPDATE asset_folder SET name=?, updated_at=? WHERE id=?").bind(name, new Date().toISOString(), folderId).run();
+      await logAudit(env, request, A, "asset.folder.move", folderId + " " + row.scope + "/" + row.scopeId + " -> " + targetScope + "/" + targetScopeId);
+      return json({ id: folderId, name, parentId: newParentId, scope: targetScope, scopeId: targetScopeId }, 200, AC);
+    }
+
+    let parentId = row.parentId;
+    if (b.parentId !== undefined) {
+      const newParentId = b.parentId || null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(newParentId, row.scope, row.scopeId).first();
+        if (!parent) return json({ error: "parent folder not found in this scope" }, 404, AC);
+        if (await assetWouldCreateCycle(env, folderId, newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
+      }
+      parentId = newParentId;
+    }
+    await env.DB.prepare("UPDATE asset_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+      .bind(name, parentId, new Date().toISOString(), folderId).run();
+    await logAudit(env, request, A, "asset.folder.update", folderId);
+    return json({ id: folderId, name, parentId, scope: row.scope, scopeId: row.scopeId }, 200, AC);
+  }
+
+  // POST /api/asset-object: two shapes under one endpoint. Default is a
+  // binary GLB/glTF upload (mirrors /api/audio-clip's PUT-style body read).
+  // ?kind=url takes a JSON body referencing an externally-hosted model
+  // instead — no R2 write at all, r2_key stays NULL.
+  if (path === "/api/asset-object" && method === "POST" && url.searchParams.get("kind") === "url") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const scope = b.scope, scopeId = (b.scopeId || "").trim(), name = (b.name || "").trim();
+    const folderId = b.folderId || null;
+    const sourceUrl = (b.sourceUrl || "").trim();
+    const format = b.format === "gltf" ? "gltf" : "glb";
+    if (!["project", "library"].includes(scope)) return json({ error: "scope must be 'project' or 'library'" }, 400, AC);
+    if (!scopeId || !name || !sourceUrl) return json({ error: "scopeId, name, and sourceUrl required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "asset name can't contain /" }, 400, AC);
+    try { new URL(sourceUrl); } catch (e) { return json({ error: "sourceUrl must be a valid URL" }, 400, AC); }
+    if (!(await assetScopeAuthOk(env, A, scope, scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(folderId, scope, scopeId).first();
+      if (!folder) return json({ error: "folder not found in this scope" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO asset_object (id,scope,scope_id,folder_id,name,kind,r2_key,source_url,format,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,'url',NULL,?,?,NULL,?,?)"
+    ).bind(id, scope, scopeId, folderId, name, sourceUrl, format, now, now).run();
+    await logAudit(env, request, A, "asset.object.create.url", scope + "/" + scopeId + "/" + name);
+    return json({ id, name, folderId, kind: "url", url: sourceUrl }, 201, AC);
+  }
+
+  if (path === "/api/asset-object" && method === "POST") {
+    if (!env.MODELS) return json({ error: "no models bucket bound" }, 500);
+    const A = await auth(request, env);
+    const scope = url.searchParams.get("scope");
+    const scopeId = (url.searchParams.get("scopeId") || "").trim();
+    const folderId = url.searchParams.get("folderId") || null;
+    const name = (url.searchParams.get("name") || "").trim();
+    if (!["project", "library"].includes(scope)) return json({ error: "scope must be 'project' or 'library'" }, 400, AC);
+    if (!scopeId || !name) return json({ error: "scopeId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "asset name can't contain /" }, 400, AC);
+    if (!(await assetScopeAuthOk(env, A, scope, scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(folderId, scope, scopeId).first();
+      if (!folder) return json({ error: "folder not found in this scope" }, 404, AC);
+    }
+    const ext = (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+    const format = ext === ".gltf" ? "gltf" : "glb";
+    const r2Key = "model/" + crypto.randomUUID() + (ext || ".glb");
+    const ct = request.headers.get("content-type") || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+    const buf = await request.arrayBuffer();
+    await env.MODELS.put(r2Key, buf, { httpMetadata: { contentType: ct } });
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO asset_object (id,scope,scope_id,folder_id,name,kind,r2_key,source_url,format,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,'upload',?,NULL,?,?,?,?)"
+    ).bind(id, scope, scopeId, folderId, name, r2Key, format, buf.byteLength, now, now).run();
+    await logAudit(env, request, A, "asset.object.create", scope + "/" + scopeId + "/" + name);
+    return json({ id, name, folderId, kind: "upload", r2Key, url: "/api/models/" + r2Key }, 201, AC);
+  }
+
+  const mAssetCopy = path.match(/^\/api\/asset-object\/([^/]+)\/copy$/);
+  if (mAssetCopy && method === "POST") {
+    const assetId = decodeURIComponent(mAssetCopy[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare(
+      "SELECT scope,scope_id AS scopeId,folder_id AS folderId,name,kind,r2_key,source_url,format,size_bytes FROM asset_object WHERE id=?"
+    ).bind(assetId).first();
+    if (!row) return json({ error: "asset not found" }, 404, AC);
+    if (!(await assetScopeAuthOk(env, A, row.scope, row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const targetScope = b.targetScope || row.scope;
+    const targetScopeId = b.targetScopeId || row.scopeId;
+    const targetFolderId = b.targetFolderId !== undefined ? (b.targetFolderId || null) : row.folderId;
+    if (!["project", "library"].includes(targetScope)) return json({ error: "invalid targetScope" }, 400, AC);
+    if (!(await assetScopeAuthOk(env, A, targetScope, targetScopeId))) return json({ error: "unauthorized on target" }, 401, AC);
+    if (targetFolderId) {
+      const folder = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(targetFolderId, targetScope, targetScopeId).first();
+      if (!folder) return json({ error: "target folder not found" }, 404, AC);
+    }
+    try {
+      const newId = await copyAssetRow(env, row, targetScope, targetScopeId, targetFolderId, b.name);
+      await logAudit(env, request, A, "asset.object.copy", assetId + " -> " + newId);
+      return json({ id: newId }, 201, AC);
+    } catch (e) {
+      return json({ error: "copy failed: " + e.message }, 500, AC);
+    }
+  }
+
+  const mAsset = path.match(/^\/api\/asset-object\/([^/]+)$/);
+  if (mAsset && (method === "PATCH" || method === "DELETE")) {
+    const assetId = decodeURIComponent(mAsset[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare(
+      "SELECT scope,scope_id AS scopeId,folder_id AS folderId,name,kind,r2_key FROM asset_object WHERE id=?"
+    ).bind(assetId).first();
+    if (!row) return json({ error: "asset not found" }, 404, AC);
+    if (!(await assetScopeAuthOk(env, A, row.scope, row.scopeId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      if (row.kind === "upload" && env.MODELS) await env.MODELS.delete(row.r2_key).catch(() => {});
+      await env.DB.prepare("DELETE FROM asset_object WHERE id=?").bind(assetId).run();
+      await logAudit(env, request, A, "asset.object.delete", assetId);
+      return json({ ok: true, deleted: assetId }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, folderId = row.folderId, scope = row.scope, scopeId = row.scopeId;
+    if (b.scope !== undefined || b.scopeId !== undefined) {
+      scope = b.scope || row.scope;
+      scopeId = b.scopeId || row.scopeId;
+      if (!["project", "library"].includes(scope)) return json({ error: "invalid scope" }, 400, AC);
+      if (!(await assetScopeAuthOk(env, A, scope, scopeId))) return json({ error: "unauthorized on target scope" }, 401, AC);
+      folderId = null;
+    }
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.folderId !== undefined) folderId = b.folderId || null;
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM asset_folder WHERE id=? AND scope=? AND scope_id=?").bind(folderId, scope, scopeId).first();
+      if (!folder) return json({ error: "folder not found in target scope" }, 404, AC);
+    }
+    await env.DB.prepare("UPDATE asset_object SET name=?, folder_id=?, scope=?, scope_id=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, scope, scopeId, new Date().toISOString(), assetId).run();
+    await logAudit(env, request, A, "asset.object.update", assetId);
+    return json({ id: assetId, name, folderId, scope, scopeId }, 200, AC);
+  }
+
   // --- Studio sessions: saved timeline arrangements (which clips, trim
   // points, fades, gain, spatial filter — never raw audio), organized in the
   // same audio_folder tree as clips so an Act/Scene structure is just
@@ -3184,6 +3568,24 @@ async function api(request, env, url) {
       await logAudit(env, request, A, "audio.delete", key);
       return json({ ok: true, deleted: key }, 200, AC);
     }
+  }
+
+  // --- serve a 3D model (glTF/GLB) from R2, public streaming read only —
+  // uploads/deletes go through /api/asset-object above, same split as
+  // /api/audio/:key vs /api/audio-clip. ---
+  if (path.startsWith("/api/models/") && method === "GET") {
+    const key = decodeURIComponent(path.slice("/api/models/".length)).trim();
+    if (!key) return json({ error: "need a model key" }, 400);
+    if (!env.MODELS) return json({ error: "no models bucket bound (create R2 'geofence-models' + binding)" }, 500);
+    let obj = null;
+    try { obj = await env.MODELS.get(key); }
+    catch (e) { return new Response("invalid key", { status: 404, headers: CORS_PUBLIC }); }
+    if (!obj) return new Response("not found", { status: 404, headers: CORS_PUBLIC });
+    const h = new Headers(CORS_PUBLIC);
+    h.set("content-type", (obj.httpMetadata && obj.httpMetadata.contentType) || "model/gltf-binary");
+    h.set("cache-control", "public, max-age=31536000, immutable"); // r2_key is a permanent opaque id — safe to cache hard, same reasoning as audio clip URLs
+    if (obj.httpEtag) h.set("etag", obj.httpEtag);
+    return new Response(obj.body, { headers: h });
   }
 
   // --- whisper STT transcription ---

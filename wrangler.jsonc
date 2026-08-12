@@ -22,6 +22,10 @@
     {
       "binding": "AUDIO",
       "bucket_name": "geofence-audio"
+    },
+    {
+      "binding": "MODELS",
+      "bucket_name": "geofence-models"
     }
   ],
   "ai": {

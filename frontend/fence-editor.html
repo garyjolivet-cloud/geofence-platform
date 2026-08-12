@@ -58,6 +58,24 @@
                 backdrop-filter:blur(6px);display:flex;flex-direction:column}
   #audioPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
   #audioPalette.mini #audioPaletteBody{display:none}
+  /* AR/3D asset palette — same floating-panel shape as #audioPalette (drag
+     header, resize corner, minimize), independently positioned/draggable.
+     Unlike Audio Palette (drag-source only, editing lives in Audio Studio),
+     this one owns full CRUD itself — there's no separate "3D Studio". */
+  #assetPalette{position:absolute;top:10px;left:340px;width:280px;height:340px;min-width:220px;min-height:160px;
+                max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
+                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:6;
+                backdrop-filter:blur(6px);display:none;flex-direction:column}
+  #assetPalette.on{display:flex}
+  #assetPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
+  #assetPalette.mini #assetPaletteBody{display:none}
+  #assetPalette.mini #assetPaletteHead .ttl{flex:0 0 auto;overflow:visible;text-overflow:clip}
+  #assetPaletteHead{display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:move;user-select:none;
+                    border-bottom:1px solid var(--rim);flex:0 0 auto;font-family:"Barlow Condensed";font-size:12px;
+                    font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ice)}
+  #assetPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #assetPaletteHead button{flex:0 0 auto;padding:3px 8px;font-size:13px}
+  #assetPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
   /* .ttl's normal overflow:hidden;text-overflow:ellipsis (needed so a long
      project name doesn't blow out the expanded header's fixed width)
      fights auto-width sizing when mini: a shrink-to-fit flex container
@@ -348,6 +366,7 @@
 <script src="/kalman-filter.js"></script>
 <script src="/code-objects.js"></script>
 <script src="/audio-tree.js"></script>
+<script src="/asset-tree.js"></script>
 </head>
 <body>
 <div id="crossToolNav"></div>
@@ -794,6 +813,20 @@
   </div>
 </div>
 
+<div id="assetPalette">
+  <div id="assetPaletteHead">
+    <span class="ttl">&#129481; AR Objects</span>
+    <button id="asUploadBtn" class="ghost" title="Upload a GLB/glTF file">&#8593;</button>
+    <button id="asRefresh" class="ghost" title="Refresh">&#8635;</button>
+    <button id="assetPaletteMin" class="ghost" title="Minimize">&#8722;</button>
+  </div>
+  <div id="assetPaletteBody">
+    <div id="asNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to see its shared Library here too</div>
+    <div id="asTreeHost"></div>
+    <div class="hint">select a stop, then click + on an object to attach it (plays its animation once when that stop's trigger fires)</div>
+  </div>
+</div>
+<input type="file" id="asUploadInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" style="display:none">
 
 <div id="trimOverlay">
   <div id="trimBox">
@@ -1257,7 +1290,13 @@ function makeZone(name,shape){
            onPathId:null,
            // Per-stop Kokoro voice override for TTS (spoken line). null
            // means "use the default voice" (af_bella).
-           ttsVoice:null };
+           ttsVoice:null,
+           // AR/3D objects placed on this stop (asset ref + anchor offset +
+           // rotation/scale + which animation clip plays, once, on trigger).
+           // Empty by default — most stops have none. See
+           // zoneToEngine/engineToZone/editorToSimBundle for the other 3
+           // mirror locations this field must stay in sync with.
+           arObjects:[] };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
@@ -2099,7 +2138,7 @@ function renderGlobalCodeObjectsChips(){
 
 /* ---- zone list rows drop target (audio clips + code objects) ---- */
 function _makeZoneRowDroppable(rowEl, zoneIdx){
-  rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
+  rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")||e.dataTransfer.types.includes("application/x-asset-object-json")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
   rowEl.ondragleave=()=>rowEl.style.background="";
   rowEl.ondrop=e=>{ e.preventDefault();rowEl.style.background="";
     const codeObjectId=e.dataTransfer.getData("codeobjectid");
@@ -2111,6 +2150,11 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
       }
       return;
     }
+    const assetJson=e.dataTransfer.getData("application/x-asset-object-json");
+    if(assetJson){
+      attachArObjectToZone(zoneIdx,JSON.parse(assetJson));
+      return;
+    }
     const audioUrl=e.dataTransfer.getData("audiourl");
     if(!audioUrl)return;
     zones[zoneIdx][zoneAudioField(zones[zoneIdx])]=audioUrl;
@@ -2119,6 +2163,23 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
     }
     render(); // refresh the map's 🔊 badge for this stop
   };
+}
+// Adds one arObjects entry to a stop — the single place both the AR
+// palette's "+" button and the stop-list drop target funnel through, so
+// the default anchor/scale/autoSave behavior can't drift between the two.
+function attachArObjectToZone(zoneIdx,asset){
+  if(zoneIdx<0||!zones[zoneIdx])return;
+  const z=zones[zoneIdx];
+  z.arObjects=z.arObjects||[];
+  z.arObjects.push({
+    id:crypto.randomUUID(), name:asset.name,
+    src: asset.kind==="url" ? {url:asset.url} : {assetId:asset.id},
+    anchor:{latOffsetM:0,lonOffsetM:0,altM:0}, rotationDeg:{x:0,y:0,z:0}, scale:1,
+    animationClip:null, occlusion:true
+  });
+  const st=document.getElementById("status"); if(st) st.textContent=asset.name+" attached to "+z.name;
+  render();
+  autoSave();
 }
 let _paPlaying=null;
 function pAudioStopPlay(){
@@ -2255,15 +2316,27 @@ function openProjSlider(type){
 }
 
 // app picker — organize projects into apps so they don't blend
+let _appsCache=[]; // last-loaded /api/apps rows, reused by updateAssetPaletteVisibility()
 async function loadApps(sel){
   try{ const r=await fetch("/api/apps",{headers:{authorization:"Bearer "+getToken()}}); const apps=(await r.json()).apps||[];
+    _appsCache=apps;
     const as=document.getElementById("appSel"); const keep=sel||as.value;
     as.innerHTML='<option value="">— unsorted —</option>'+
       apps.map(a=>'<option value="'+a.id+'">'+(a.name||a.id)+'</option>').join("");
     if(keep) as.value=keep;
     else if(apps.length===1) as.value=apps[0].id;
+    updateAssetPaletteVisibility();
   }catch(e){}
 }
+// Asset Palette (AR/3D objects) is gated by the single app-level
+// three_d_enabled flag — same flag that will turn on terrain across every
+// map surface. Re-checked whenever the app picker changes, since a project
+// can be re-homed to a different workspace without a page reload.
+function updateAssetPaletteVisibility(){
+  const app=_appsCache.find(a=>a.id===document.getElementById("appSel").value);
+  document.getElementById("assetPalette").classList.toggle("on", !!(app&&app.threeDEnabled));
+}
+document.getElementById("appSel").onchange=updateAssetPaletteVisibility;
 // customer picker — which client (customer) this project is uploaded to
 async function loadClients(sel){
   try{ const r=await fetch("/api/clients",{headers:{authorization:"Bearer "+getToken()}}); const clients=(await r.json()).clients||[];
@@ -2558,6 +2631,92 @@ function doAudioRefresh(){
   loadStopFolders();
   loadWalkingPaths().then(updateWalkingPathBtnLabel);
 }
+
+/* ---- AR/3D Asset Palette: same floating-panel behavior as Audio Palette
+   (drag header, resize corner, minimize, shrink/grow-to-fit), full CRUD
+   (unlike Audio Palette, there's no separate "3D Studio" to defer to) ---- */
+const assetTree=AssetTree.mount(document.getElementById("asTreeHost"),{
+  mode:"project",
+  projectId: afProjectId(),
+  projectLabel: projName()||afProjectId(),
+  orgId: afOrgId(),
+  getToken,
+  readOnly:false,
+  onPick: asset=>{
+    if(sel<0){ const st=document.getElementById("status"); if(st) st.textContent="select a stop first, then click + on an AR object"; return; }
+    attachArObjectToZone(sel,asset);
+  },
+  onAddUrl: target=>{
+    if(!target){ alert("pick a folder (or the project/library root) first"); return; }
+    const name=prompt("Name for this asset (e.g. deer.glb):"); if(!name)return;
+    const sourceUrl=prompt("glTF/GLB URL:"); if(!sourceUrl)return;
+    const format=/\.gltf(\?|$)/i.test(sourceUrl)?"gltf":"glb";
+    AssetTree.addUrl({scope:target.scope,scopeId:target.scopeId,folderId:target.folderId,name,sourceUrl,format,getToken})
+      .then(()=>assetTree.refresh())
+      .catch(e=>alert("Add URL failed: "+e.message));
+  },
+  onError: msg=>{ const st=document.getElementById("status"); if(st) st.textContent="AR asset error: "+msg; }
+});
+document.getElementById("asRefresh").onclick=doAssetRefresh;
+function doAssetRefresh(){
+  document.getElementById("asNoOrg").style.display = afOrgId()?"none":"block";
+  assetTree.refresh({ projectId: afProjectId(), projectLabel: projName()||afProjectId(), orgId: afOrgId() });
+}
+document.getElementById("asUploadBtn").onclick=()=>document.getElementById("asUploadInput").click();
+document.getElementById("asUploadInput").onchange=async e=>{
+  const file=e.target.files[0]; e.target.value=""; if(!file)return;
+  const target=assetTree.getUploadTarget();
+  if(!target){ alert("pick a folder (or the project/library root) first"); return; }
+  try{
+    await AssetTree.upload(file,{scope:target.scope,scopeId:target.scopeId,folderId:target.folderId,name:file.name,mimeType:file.type,getToken});
+    assetTree.refresh();
+  }catch(err){ alert("Upload failed: "+err.message); }
+};
+function unminimizeAssetPalette(){
+  const p=document.getElementById("assetPalette");
+  if(p.classList.contains("mini")){ p.classList.remove("mini"); doAssetRefresh(); }
+}
+document.getElementById("assetPaletteMin").onclick=e=>{
+  e.stopPropagation();
+  const p=document.getElementById("assetPalette");
+  const wasMini=p.classList.contains("mini");
+  p.classList.toggle("mini");
+  document.getElementById("assetPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
+  if(wasMini) doAssetRefresh();
+};
+(function(){
+  const palette=document.getElementById("assetPalette"), host=document.getElementById("asTreeHost");
+  let lastH=host.getBoundingClientRect().height, raf=null;
+  new MutationObserver(()=>{
+    if(raf) return;
+    raf=requestAnimationFrame(()=>{
+      raf=null;
+      const newH=host.getBoundingClientRect().height;
+      if(!palette.classList.contains("mini") && newH!==lastH){
+        const delta=newH-lastH;
+        const curPanelH=palette.getBoundingClientRect().height;
+        palette.style.height=Math.max(160,curPanelH+delta)+"px";
+      }
+      lastH=newH;
+    });
+  }).observe(host, {childList:true, subtree:true});
+})();
+(function(){
+  const head=document.getElementById("assetPaletteHead"), pal=document.getElementById("assetPalette");
+  head.addEventListener("mousedown",e=>{
+    if(e.target.closest("button")) return;
+    const rect=pal.getBoundingClientRect();
+    pal.style.left=rect.left+"px"; pal.style.top=rect.top+"px";
+    const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
+    const onMove=me=>{
+      const maxLeft=window.innerWidth-40, maxTop=window.innerHeight-40;
+      pal.style.left=Math.min(maxLeft,Math.max(0,startLeft+(me.clientX-startX)))+"px";
+      pal.style.top=Math.min(maxTop,Math.max(0,startTop+(me.clientY-startY)))+"px";
+    };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+})();
 
 /* ---- Combine (blend) modal: Main sequence + optional Background lane ---- */
 let _cmbSegs=[]; // {o, lane:'main'|'bg', f0,f1, buf(after decode), volPct}
@@ -3519,6 +3678,7 @@ function zoneToEngine(z){
   // publish+reload doesn't silently drop every stop's snapped-to-path status.
   if(z.onPathId) zo.onPathId=z.onPathId;
   if(z.ttsVoice) zo.ttsVoice=z.ttsVoice;
+  if(z.arObjects&&z.arObjects.length) zo.arObjects=z.arObjects;
   if(isPath){
     zo.path=s.coords.map(LL);
     zo.movementMode=z.movementMode||"walk";
@@ -3603,6 +3763,7 @@ function engineToZone(zo,legacyPathId){
   // bundle's own (single, legacy) walkingPathId as legacyPathId.
   z.onPathId = zo.onPathId || (zo.onPath ? (legacyPathId||null) : null);
   z.ttsVoice=zo.ttsVoice||null;
+  z.arObjects=Array.isArray(zo.arObjects)?zo.arObjects:[];
   if(isPath){
     z.movementMode=zo.movementMode||"walk";
     z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
@@ -3702,6 +3863,9 @@ async function loadFromPlatform(id){
       }catch(e){}
     }
     if(realAppId){ document.getElementById("appSel").value=realAppId; }
+    // .value= doesn't fire onchange — updateAssetPaletteVisibility() needs
+    // an explicit call here too, same as the picker's own onchange handler.
+    updateAssetPaletteVisibility();
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     // No standing "loaded v..." status text on a normal load anymore
@@ -3717,6 +3881,7 @@ async function loadFromPlatform(id){
     // it explicitly, same as the audio tree's doAudioRefresh() call already does.
     if(window.CodeObjects) CodeObjects.refresh(true);
     doAudioRefresh();
+    doAssetRefresh();
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
 // Publish-time geometry sanity check. The map's own drag handles already
@@ -4595,7 +4760,11 @@ function editorToSimBundle(){
       // was copied from the live zone into the sim snapshot, but ttsVoice
       // never was — every stop in Test Mode silently spoke as the default
       // voice regardless of what was actually selected/published.
-      ttsVoice:z.ttsVoice||null};
+      ttsVoice:z.ttsVoice||null,
+      // Same class of field this comment warns about above — added here
+      // deliberately alongside ttsVoice so Test Mode can render+animate the
+      // stop's AR object(s) on trigger, not just log that one would appear.
+      arObjects:(z.arObjects&&z.arObjects.length)?z.arObjects:[]};
     if(s.type==="path"){
       out.path=s.coords.map(c=>[c[1],c[0]]);
       out.movementMode=z.movementMode||"walk";
@@ -5167,7 +5336,7 @@ if(typeof CodeObjects!=="undefined"){
       autoSave();
     }
   });
-  document.getElementById("clientSel").addEventListener("change",()=>{ CodeObjects.refresh(); doAudioRefresh(); });
+  document.getElementById("clientSel").addEventListener("change",()=>{ CodeObjects.refresh(); doAudioRefresh(); doAssetRefresh(); });
 }
 
 // Cross-tool nav bar — full-width strip above the map, unlike every other
