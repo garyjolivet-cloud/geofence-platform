@@ -1594,6 +1594,26 @@ async function api(request, env, url) {
       // a workspace under the new client instead, unless bundle.appId was
       // explicitly given.
       const movingClients = orgOverride && existingProj && existingProj.orgId !== orgOverride;
+      // Guard against a real incident (2026-08-12): the editor's default
+      // placeholder project name ("new tour") slugifies to a fixed id, so a
+      // brand-new session in workspace A that collides with an older
+      // unrelated project of the same id already owned by workspace B used
+      // to silently update B's project in place — publish reported success,
+      // but nothing ever appeared in A, with no error at all. bundle.appId
+      // reflects which workspace THIS publish actually believes it belongs
+      // to (set from the editor's own current ?app= context); if that
+      // disagrees with the id's real existing owner, and this isn't an
+      // explicit master-driven client move (movingClients), it's an
+      // accidental id collision, not an intentional republish — refuse
+      // rather than silently overwriting the wrong project.
+      if (existingProj && bundle.appId && bundle.appId !== existingAppId && !movingClients) {
+        const ownerApp = await env.DB.prepare("SELECT name FROM app WHERE id=?").bind(existingAppId).first();
+        return json({
+          error: "a project with this id already exists under a different workspace" +
+            (ownerApp && ownerApp.name ? " (\"" + ownerApp.name + "\")" : "") +
+            " — rename this project before publishing so it gets a different id"
+        }, 409, AC);
+      }
       // Resolve appId — auto-assign so project always surfaces on home screen
       let resolvedAppId = (movingClients ? null : existingAppId) || bundle.appId || null;
       if (!resolvedAppId) {

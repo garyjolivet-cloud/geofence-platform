@@ -3930,6 +3930,14 @@ const _qs=new URLSearchParams(location.search);
 const _pid=_qs.get("project"); if(_pid) loadFromPlatform(_pid);
 const _aid=_qs.get("app");
 if(_aid) loadApps(_aid); // pre-select app from home page "+" button
+// A brand-new session (app picked, no existing project to load) starts with
+// the static "new tour" placeholder — if nobody renames it before Publish,
+// its slug ("new-tour") can collide with an older unrelated project of the
+// same id under a different workspace (real incident, 2026-08-12; see the
+// matching server-side guard in worker.js's bundle PUT handler for the
+// actual fix). Giving every fresh session a unique-looking default name
+// makes that collision rare in the first place, on top of that guard.
+if(_aid && !_pid) document.getElementById("projCrumb").textContent="New Tour "+Date.now().toString(36).slice(-4);
 
 /* ════════════════════════════════════════════════════
    AUDIO TRIMMER
