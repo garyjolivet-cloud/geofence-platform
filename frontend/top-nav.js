@@ -317,7 +317,13 @@
         if(r.ok) apps = (await r.json()).apps || [];
       }catch(e){}
       let appId = null;
-      if(apps.length){
+      // Real feedback, 2026-08-12: asking "which workspace?" when the
+      // selected company only HAS one is a pointless extra step that reads
+      // as confusing rather than helpful — the answer is never in doubt.
+      // Only prompt when there's an actual choice to make.
+      if(apps.length===1){
+        appId = apps[0].id;
+      } else if(apps.length){
         const names = apps.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");
         const pick = prompt("Which workspace?\n"+names+"\n\n(enter a number, or a new name to create one)", apps[0].name||apps[0].id);
         if(!pick) return;
