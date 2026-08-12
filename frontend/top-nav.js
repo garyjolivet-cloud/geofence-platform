@@ -261,7 +261,12 @@
       newRow.style.cssText = "padding:8px 10px;cursor:pointer;color:var(--coral,#ff6a3d);font-weight:600;border-bottom:1px solid var(--rim,#26344a)";
       newRow.addEventListener("mouseenter", () => newRow.style.background="rgba(255,106,61,.12)");
       newRow.addEventListener("mouseleave", () => newRow.style.background="");
-      newRow.addEventListener("mousedown", (e) => { e.preventDefault(); closeMenu(); startNewProject(); });
+      // Real bug, 2026-08-12: whatever the user had already typed into
+      // projInput (hoping it would BE the new project's name — a completely
+      // reasonable reading of a text box labeled "Project…") was silently
+      // thrown away here. Captured now and threaded through startNewProject()
+      // so it actually becomes the tour's name instead of a random default.
+      newRow.addEventListener("mousedown", (e) => { e.preventDefault(); const typedName=projInput.value.trim(); closeMenu(); startNewProject(typedName); });
       menu.appendChild(newRow);
 
       if(!matches.length){
@@ -304,7 +309,7 @@
     // ---- "+ New Project" — requires a company, picks/creates a workspace,
     // then lands on Fence Editor for a brand-new (unpublished) project.
     // Mirrors index.html's newTour()/newClient() flow. ----
-    async function startNewProject(){
+    async function startNewProject(presetName){
       if(!company){ alert("Pick a company first."); return; }
       let apps = [];
       try{
@@ -325,7 +330,12 @@
         appId = await createWorkspace(name);
       }
       if(!appId) return;
-      location.href = "/editor?app="+encodeURIComponent(appId)+"&asClient="+encodeURIComponent(company);
+      let url = "/editor?app="+encodeURIComponent(appId)+"&asClient="+encodeURIComponent(company);
+      // Carries through whatever the user already typed as the tour's name,
+      // instead of discarding it and landing on a random default they then
+      // have to notice and retype — see the caller's comment.
+      if(presetName) url += "&name="+encodeURIComponent(presetName);
+      location.href = url;
     }
     async function createWorkspace(name){
       if(!name) return null;

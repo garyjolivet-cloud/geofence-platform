@@ -3954,7 +3954,11 @@ if(_aid) loadApps(_aid); // pre-select app from home page "+" button
 // matching server-side guard in worker.js's bundle PUT handler for the
 // actual fix). Giving every fresh session a unique-looking default name
 // makes that collision rare in the first place, on top of that guard.
-if(_aid && !_pid) document.getElementById("projCrumb").textContent="New Tour "+Date.now().toString(36).slice(-4);
+// ?name= (set by top-nav.js's "+ New Project" flow when the user had
+// already typed a name into the Project… box before clicking it — that text
+// used to be silently discarded) takes priority over the random default.
+const _presetName=_qs.get("name");
+if(_aid && !_pid) document.getElementById("projCrumb").textContent=_presetName||("New Tour "+Date.now().toString(36).slice(-4));
 // #projCrumb is written from several places (draft restore, loadFromPlatform,
 // publish success, renameProjectRoot, the fresh-default line above) — kept
 // in sync with the real, directly-typeable #projNameInput both ways:
