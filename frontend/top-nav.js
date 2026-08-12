@@ -71,6 +71,23 @@
     return getProject();
   }
 
+  // Sidecar for a project that's been "created" (picked in the Project
+  // pulldown, name chosen) but has no D1 row yet — publishing is what
+  // actually creates the row (lazy creation, deliberate — see worker.js's
+  // createIfMissing), so between those two moments something has to carry
+  // the id/name/workspace/org a fresh project was created under. Single
+  // slot, like PROJECT_KEY/gp.activeClient — only ever holds the most
+  // recently created pending project, not a list.
+  const PENDING_KEY = "gp.pendingProject";
+  function getPendingProject(){
+    try{ const raw=localStorage.getItem(PENDING_KEY); return raw?JSON.parse(raw):null; }catch(e){ return null; }
+  }
+  function setPendingProject(id, name, appId, orgId){
+    setProject(id);
+    try{ localStorage.setItem(PENDING_KEY, JSON.stringify({id, name, appId, orgId})); }catch(e){}
+  }
+  function clearPendingProject(){ try{ localStorage.removeItem(PENDING_KEY); }catch(e){} }
+
   function getToken(){
     try{ return localStorage.getItem("gp.session")||localStorage.getItem("gp.admin")||""; }catch(e){ return ""; }
   }
@@ -204,19 +221,39 @@
     });
 
     // ---- Tool links ----
+    // Gated on !company||!project — no tool is reachable until both a
+    // workspace and a project are selected, no exceptions (Dashboard/Clients
+    // included, per explicit product decision even though those two pages
+    // have no internal notion of "project" today). An href-less <a> drops
+    // out of tab order and does nothing on click/Enter by construction, so
+    // there's no separate click-handler/keyboard-a11y gap to also patch.
     const toolLinks = {};
     TOOLS.forEach(t => {
       const a = document.createElement("a");
       a.textContent = t.label;
       a.style.cssText = PILL;
       if(t.key === opts.active){ a.style.color = "var(--snow,#eef4fb)"; a.style.borderColor = "var(--coral,#ff6a3d)"; }
-      a.href = toolHref(t.href, project, company);
       navEl.appendChild(a);
       toolLinks[t.key] = a;
     });
     function refreshToolHrefs(){
-      TOOLS.forEach(t => { toolLinks[t.key].href = toolHref(t.href, project, company); });
+      const gated = !company || !project;
+      TOOLS.forEach(t => {
+        const a = toolLinks[t.key];
+        if(gated){
+          a.removeAttribute("href");
+          a.setAttribute("aria-disabled","true");
+          a.title = "Select a workspace and project first";
+          a.style.opacity = "0.4"; a.style.cursor = "not-allowed";
+        } else {
+          a.href = toolHref(t.href, project, company);
+          a.removeAttribute("aria-disabled");
+          a.title = "";
+          a.style.opacity = ""; a.style.cursor = "";
+        }
+      });
     }
+    refreshToolHrefs();
 
     // ---- Project pulldown behavior ----
     let menu = null, highlighted = -1;
@@ -230,6 +267,17 @@
         const r = await fetch("/api/projects?org="+encodeURIComponent(company), { headers:{authorization:"Bearer "+getToken()} });
         if(r.ok) projects = (await r.json()).projects || [];
       }catch(e){}
+      // A just-created project has no D1 row until first Publish, so it
+      // never comes back from the fetch above — without this, navigating to
+      // a second gated page re-fetches from scratch and the Project
+      // pulldown goes blank even though gating correctly shows the tools as
+      // unlocked. Splice it back in from the sidecar whenever it matches
+      // this company and isn't already in the real list (i.e. hasn't been
+      // published yet).
+      const pending = getPendingProject();
+      if(pending && pending.orgId === company && !projects.some(p => p.id === pending.id)){
+        projects.push({ id: pending.id, name: pending.name, appId: pending.appId, orgId: pending.orgId, _pending: true });
+      }
     }
     function projectLabel(p){ return p.name || p.id; }
     function selectProject(p){
@@ -306,9 +354,13 @@
     projInput.addEventListener("click", () => openMenu(""));
     projInput.addEventListener("input", () => openMenu(projInput.value));
 
-    // ---- "+ New Project" — requires a company, picks/creates a workspace,
-    // then lands on Fence Editor for a brand-new (unpublished) project.
-    // Mirrors index.html's newTour()/newClient() flow. ----
+    // ---- "+ New Project" — the ONE place a new project gets created
+    // (2026-08-12 redesign: index.html's separate "+ New tour" links were
+    // removed). Requires a company, picks/creates a workspace, then just
+    // selects the new project in this pulldown and unlocks the gated tool
+    // links — it does NOT navigate anywhere. Publishing (from whichever
+    // tool the user picks next) is what actually creates the D1 row;
+    // fence-editor.html's loadFromPlatform() adopts this id on its 404. ----
     async function startNewProject(presetName){
       if(!company){ alert("Pick a company first."); return; }
       let apps = [];
@@ -336,12 +388,18 @@
         appId = await createWorkspace(name);
       }
       if(!appId) return;
-      let url = "/editor?app="+encodeURIComponent(appId)+"&asClient="+encodeURIComponent(company);
-      // Carries through whatever the user already typed as the tour's name,
-      // instead of discarding it and landing on a random default they then
-      // have to notice and retype — see the caller's comment.
-      if(presetName) url += "&name="+encodeURIComponent(presetName);
-      location.href = url;
+      // Timestamp+random, deliberately not a slug of the name — decouples
+      // the id from a later rename, and this repo's own 409 collision guard
+      // (worker.js's bundle PUT handler) only gets stronger from ids being
+      // harder to accidentally collide, not weaker.
+      const id = "tour-"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+      const name = (presetName||"").trim() || ("New Tour "+Date.now().toString(36).slice(-4));
+      project = id;
+      setPendingProject(id, name, appId, company);
+      projects.push({ id, name, appId, orgId: company, _pending: true });
+      projInput.value = name;
+      closeMenu();
+      refreshToolHrefs();
     }
     async function createWorkspace(name){
       if(!name) return null;
@@ -515,5 +573,6 @@
   function setCompany(id){ if(window.ClientPicker) window.ClientPicker.set(id); }
   function resolveCompany(){ return window.ClientPicker ? window.ClientPicker.resolve() : ""; }
 
-  window.TopNav = { getCompany, setCompany, resolveCompany, getProject, setProject, resolveProject, init };
+  window.TopNav = { getCompany, setCompany, resolveCompany, getProject, setProject, resolveProject,
+    getPendingProject, setPendingProject, clearPendingProject, init };
 })();

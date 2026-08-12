@@ -3857,7 +3857,33 @@ async function loadFromPlatform(id){
   if(!id){ ps().textContent="no project specified"; return; }
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle");
-    if(!r.ok){ const e=await r.json().catch(()=>({})); ps().textContent=e.error||("nothing published yet for "+id); return; }
+    if(!r.ok){
+      // Real bug fixed 2026-08-12: this used to just show a status string
+      // and return, leaving _currentProjectId unset — meaning exportBundle()
+      // fell back to slugifying whatever name happened to be on screen at
+      // Publish time, silently diverging from the id TopNav/the Project
+      // picker thought was "current". A project this genuinely happens for
+      // isn't an error case anymore now that creation (top-nav.js's
+      // startNewProject()) only ever sets pending state and never publishes
+      // anything itself — every brand-new project arrives here exactly this
+      // way. Adopt the id unconditionally so the two can't disagree.
+      const e=await r.json().catch(()=>({}));
+      _currentProjectId=id;
+      const pending=(window.TopNav&&TopNav.getPendingProject&&TopNav.getPendingProject())||null;
+      if(pending && pending.id===id){
+        document.getElementById("projCrumb").textContent=pending.name||id;
+        await _appsLoaded;
+        if(pending.appId){ await loadApps(pending.appId); }
+        document.getElementById("clientSel").value=pending.orgId||"";
+        updateAssetPaletteVisibility();
+      } else {
+        // Stale/absent sidecar (direct link, bookmark, another tab) — same
+        // unique-suffix fallback name a fresh session has always used.
+        document.getElementById("projCrumb").textContent="New Tour "+Date.now().toString(36).slice(-4);
+      }
+      ps().textContent=e.error||("nothing published yet for "+id+" — draw a stop and Publish to save it");
+      return;
+    }
     const b=await r.json();
     _currentProjectId=id;
     document.getElementById("out").value=JSON.stringify(b,null,2);

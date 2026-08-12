@@ -230,15 +230,6 @@ const UNSORTED_ID="__unsorted__";
 let expandedClients=null; // Set<clientId|UNSORTED_ID> — seeded on first load(), then a normal expand/collapse toggle set
 
 function appsForClient(cid){ return _apps.filter(a=>a.orgId===cid); }
-// The default workspace created alongside every new client shares its id
-// (see worker.js's client-create handler) — prefer that one so "+ New tour"
-// never has to ask which workspace, matching the ghosted-workspace intent.
-function defaultAppIdForClient(cid){
-  const apps=appsForClient(cid);
-  if(!apps.length) return null;
-  const def=apps.find(a=>a.id===cid);
-  return def?def.id:apps[0].id;
-}
 function projectsForClient(cid){
   const appIds=new Set(appsForClient(cid).map(a=>a.id));
   return _projects.filter(p=>appIds.has(p.appId));
@@ -278,10 +269,10 @@ function clientNode(client, overrideProjects){
   if(expanded){
     inner+='<div class="c-children">';
     projects.forEach(p=>{ inner+=projectRow(p, client.id); });
-    if(client.id!=null){
-      const appId=defaultAppIdForClient(client.id);
-      if(appId) inner+=`<div class="p-add" onclick="newTour('${escJs(appId)}')">+ New tour</div>`;
-    } else if(!projects.length){
+    // "+ New tour" removed 2026-08-12 — project creation now happens in
+    // exactly one place, the Project pulldown in the shared top nav bar
+    // (top-nav.js's startNewProject()), not scattered per-workspace here too.
+    if(client.id==null && !projects.length){
       inner+='<div class="p-add" style="cursor:default;color:var(--fog)">nothing unsorted</div>';
     }
     inner+='</div>';
@@ -388,27 +379,6 @@ async function renameClient(id, current){
     else{ const j=await r.json().catch(()=>({})); alert("Rename failed: "+(j.error||r.status));
       if(r.status===401) try{localStorage.removeItem("gp.admin");}catch(e){} }
   }catch(e){ alert("Failed: "+e.message); }
-}
-
-function newTour(appId){
-  // Starting a new tour under a specific workspace must make that
-  // workspace's own client the active one everywhere else in the app
-  // (ClientPicker's localStorage-persisted selection) — otherwise a user
-  // who clicks "+ New tour" under Client B while Client A is still active
-  // from earlier browsing keeps landing in Client A for every OTHER action
-  // afterward, even though this specific tour itself resolves correctly
-  // (real incident, 2026-08-12; see the matching fix in clients.html for
-  // the create-a-new-client case this generalizes).
-  let orgId=null;
-  if(appId){
-    const app=_apps.find(a=>a.id===appId);
-    orgId=app&&app.orgId||null;
-    if(orgId && window.ClientPicker) ClientPicker.set(orgId);
-  }
-  let url="/editor";
-  if(appId) url+="?app="+encodeURIComponent(appId);
-  if(orgId) url+=(url.includes("?")?"&":"?")+"asClient="+encodeURIComponent(orgId);
-  location.href=url;
 }
 
 async function deleteClient(id,name){
@@ -584,11 +554,12 @@ function setApi(ok,text){
   document.getElementById("apidot").className="dot "+(ok?"ok":"bad");
   document.getElementById("apitext").textContent=text;
 }
-// This page lists every project across every client at once — TopNav's own
-// Project pulldown/"picking a project" concept doesn't map onto "stay here,"
-// it maps onto "go work on it," same as every tour card's own "Edit" link.
-TopNav.init({navEl:document.getElementById("topNav"), active:"clients", allowAllCompany:true, onCompanyChange:load,
-  onProjectChange:(id)=>{ location.href="/editor?project="+encodeURIComponent(id); }});
+// onProjectChange auto-navigate-to-editor override removed 2026-08-12 —
+// selecting a project and choosing which tool to open it in are two
+// separate, deliberate steps now (same reasoning as removing "+ New tour"
+// above); this page reloads itself with ?project= like every other gated
+// page's default behavior, which it simply doesn't consume for anything.
+TopNav.init({navEl:document.getElementById("topNav"), active:"clients", allowAllCompany:true, onCompanyChange:load});
 load();
 </script>
 </body>
