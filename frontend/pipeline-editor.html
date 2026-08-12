@@ -151,7 +151,13 @@
 
 <script>
 const qs = new URLSearchParams(location.search);
-const projectId = qs.get("project");
+// Falls back to TopNav's shared active-project (localStorage), matching
+// audio-studio.html/record.html — added 2026-08-12. Only enriches the
+// zone-picker's grouped dropdown (loadProjectContext()); library-browse
+// mode is gated purely by zoneId/codeObjectId below, never by this, so a
+// bare /pipeline visit with no project still shows the library exactly as
+// before, just without any Project pulldown pre-selection to draw from.
+const projectId = qs.get("project") || (window.TopNav && TopNav.resolveProject()) || null;
 const zoneId = qs.get("zone");
 // codeObjectId is reassignable — picking a different object from the inline
 // library sidebar (see showLibrary()/onCardClick below) switches modes in

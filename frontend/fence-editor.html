@@ -444,6 +444,24 @@
   </div>
 </div>
 
+<!-- No project selected — added 2026-08-12 as part of the nav consolidation
+     (project creation/selection moved to the shared top-nav Project picker;
+     this page used to just boot into a blank, contextless session instead
+     of ever showing this). Top-level sibling of #mainPanel/#body, never
+     nested inside a backdrop-filter panel — same containing-block trap
+     already documented for #projSettingsPopover. Mirrors audio-studio.html's
+     #noProjectHint/showNoProject() pattern; can appear at the same time as
+     the draft-restore banner (autoRestore()) — one explains there's nothing
+     selected, the other offers to recover unsaved local work — rather than
+     the restore banner being the only thing a bare visit ever shows. -->
+<div id="noProjectHint" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(6,10,16,.82);
+     align-items:center;justify-content:center;text-align:center;font-family:'Barlow Condensed'">
+  <div style="max-width:340px;color:var(--ice,#c8dff2);font-size:15px;line-height:1.5">
+    <div style="font-size:28px;margin-bottom:10px">🗺️</div>
+    Pick a company and project from the bar above to get started.
+  </div>
+</div>
+
 <div class="panel" id="mainPanel">
   <div class="panel-body">
   <!-- hidden: appSel kept for data binding only -->
@@ -947,6 +965,8 @@ function autoSave(){
       // chaining so a future markup change just skips a field rather than
       // breaking the whole autosave.
       const snap={id,name:projName(),zones,savedAt:Date.now(),
+        appId:document.getElementById("appSel")?.value||null,
+        orgId:document.getElementById("clientSel")?.value||null,
         audioRange:document.getElementById("audioRange")?.value,
         audioClear:document.getElementById("audioClear")?.value,
         stopVisRadius:document.getElementById("stopVisRadius")?.value,
@@ -983,6 +1003,18 @@ function autoRestore(){
       zones=snap.zones; sel=-1;
       _currentProjectId=snap.id||null;
       document.getElementById("projCrumb").textContent=label;
+      hideNoProject();
+      // A restore used to leave TopNav's own state completely untouched —
+      // the editor would show a loaded (draft) project while the shared nav
+      // bar's gating, and every other tool's Project pulldown, still
+      // thought nothing was selected at all. Storing it here means the
+      // *next* navigation (switching tools, reloading) picks it up
+      // correctly via the same pending-project sidecar loadFromPlatform()'s
+      // 404 path already reads; this tab's already-mounted nav bar won't
+      // re-render its own gating mid-session from a plain localStorage
+      // write (no cross-module event for that), but that's an existing,
+      // much smaller gap than never persisting the selection at all.
+      if(window.TopNav && snap.id) TopNav.setPendingProject(snap.id, label, snap.appId||null, snap.orgId||null);
       // Restore the project-level settings saved alongside zones above —
       // each guarded so an older draft saved before this field existed
       // just leaves that one setting at whatever the fresh page already
@@ -1634,7 +1666,7 @@ map.on("load",()=>{
      layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,0.8],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#b96fff","text-halo-color":"#0a1018","text-halo-width":1.2,"text-opacity":0.8}});
   render();
-  if(!_pid && !_aid) autoRestore(); // skip if loading a project or starting a new tour from home
+  if(!_pid) autoRestore(); // skip if loading a real project — can coexist with the no-project hint otherwise
 });
 
 /* ---- map clicks + zone select/drag ---- */
@@ -3969,22 +4001,16 @@ document.getElementById("publishBtn").onclick=publishToPlatform;
 // nuke are master-only operations that don't belong in the day-to-day
 // per-tour editing view.
 
+// Project selection is TopNav's job now (?project=/localStorage["gp.activeProject"])
+// — same pattern audio-studio.html/record.html already use. A bare ?app=
+// (the old homepage "+ New tour" signal) is dead now that top-nav.js's
+// startNewProject() never emits it — treated identically to nothing selected.
+function showNoProject(){ document.getElementById("noProjectHint").style.display="flex"; }
+function hideNoProject(){ document.getElementById("noProjectHint").style.display="none"; }
 const _qs=new URLSearchParams(location.search);
-const _pid=_qs.get("project"); if(_pid) loadFromPlatform(_pid);
-const _aid=_qs.get("app");
-if(_aid) loadApps(_aid); // pre-select app from home page "+" button
-// A brand-new session (app picked, no existing project to load) starts with
-// the static "new tour" placeholder — if nobody renames it before Publish,
-// its slug ("new-tour") can collide with an older unrelated project of the
-// same id under a different workspace (real incident, 2026-08-12; see the
-// matching server-side guard in worker.js's bundle PUT handler for the
-// actual fix). Giving every fresh session a unique-looking default name
-// makes that collision rare in the first place, on top of that guard.
-// ?name= (set by top-nav.js's "+ New Project" flow when the user had
-// already typed a name into the Project… box before clicking it — that text
-// used to be silently discarded) takes priority over the random default.
-const _presetName=_qs.get("name");
-if(_aid && !_pid) document.getElementById("projCrumb").textContent=_presetName||("New Tour "+Date.now().toString(36).slice(-4));
+const _pid=(window.TopNav && TopNav.resolveProject())||null;
+if(_pid){ hideNoProject(); loadFromPlatform(_pid); }
+else showNoProject();
 // #projCrumb is written from several places (draft restore, loadFromPlatform,
 // publish success, renameProjectRoot, the fresh-default line above) — kept
 // in sync with the real, directly-typeable #projNameInput both ways:
