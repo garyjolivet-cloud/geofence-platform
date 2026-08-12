@@ -395,6 +395,17 @@
           const r = await fetch("/api/apps/"+encodeURIComponent(app.id)+"?cascade=true",{method:"DELETE",headers:{authorization:"Bearer "+token}});
           if(r.ok) openManagePanel(); else alert("Delete failed: "+r.status);
         });
+        // Single tenant-level toggle for the whole AR/3D upgrade (terrain on
+        // every map surface once built, plus the Fence Editor's AR Objects
+        // panel today) — every project in this workspace shares it, there's
+        // no per-project override. See design-a-best-in-cosmic-pudding.md.
+        mkBtn(app.threeDEnabled ? "3D: On" : "3D: Off", async () => {
+          const next = !app.threeDEnabled;
+          if(!confirm((next?"Turn ON":"Turn OFF")+' 3D mode for "'+(app.name||app.id)+'"? This affects every project in this workspace.')) return;
+          const token = askToken(); if(!token) return;
+          const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,threeDEnabled:next})});
+          if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
+        });
         if(apps.length > 1) mkBtn("Merge into…", async () => {
           const others = apps.filter(a => a.id!==app.id);
           const names = others.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");
