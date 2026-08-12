@@ -468,6 +468,19 @@
     <span style="flex:1;min-width:0;font-family:'Barlow Condensed';font-size:12px;font-weight:700;
                  text-transform:uppercase;letter-spacing:.5px;color:var(--ice)">🗺️ Region Editor</span>
     <span id="projCrumb" style="display:none">new tour</span>
+    <!-- Visible mirror of #projCrumb (still the real backing data) + a
+         one-click rename, added 2026-08-12 — renaming was reachable only
+         via a buried "⋯" menu on the stop tree's root row
+         (openStopFolderMenu/renameProjectRoot), which nobody could find for
+         a brand-new never-published project. Real incident: a fresh
+         session's default name ("new tour") collided with an unrelated
+         project of the same id in another workspace, and once the
+         server-side guard for that (see worker.js) started correctly
+         rejecting the publish, there was no discoverable way to act on
+         "rename this project" at all. -->
+    <span id="projCrumbVisible" title="Click to rename this tour" style="flex:0 0 auto;max-width:140px;overflow:hidden;text-overflow:ellipsis;
+                 white-space:nowrap;font-family:'Barlow Condensed';font-size:12px;color:var(--fog);cursor:pointer"
+          onmousedown="event.stopPropagation()" onclick="renameProjectRoot()"></span>
     <button id="panelMinBtn" style="flex:0 0 auto" title="Collapse panel">&#8722;</button>
   </div>
 
@@ -3938,6 +3951,18 @@ if(_aid) loadApps(_aid); // pre-select app from home page "+" button
 // actual fix). Giving every fresh session a unique-looking default name
 // makes that collision rare in the first place, on top of that guard.
 if(_aid && !_pid) document.getElementById("projCrumb").textContent="New Tour "+Date.now().toString(36).slice(-4);
+// #projCrumb is written from several places (draft restore, loadFromPlatform,
+// publish success, renameProjectRoot, the fresh-default line above) — a
+// MutationObserver mirrors it into the visible #projCrumbVisible label
+// unconditionally, so a future write site can't silently miss syncing the
+// visible copy the way per-stop fields have repeatedly missed one of their
+// mirror locations in this file.
+(function(){
+  const src=document.getElementById("projCrumb"), dst=document.getElementById("projCrumbVisible");
+  const sync=()=>{ dst.textContent=src.textContent||""; };
+  sync();
+  new MutationObserver(sync).observe(src,{childList:true,characterData:true,subtree:true});
+})();
 
 /* ════════════════════════════════════════════════════
    AUDIO TRIMMER
