@@ -248,7 +248,16 @@ $("createBtn").onclick=async()=>{
     const j=await r.json().catch(()=>({}));
     if(!r.ok){ msg.textContent="✕ "+(j.error||"create failed"); return; }
     $("cliName").value=""; $("cliSlug").value="";
-    msg.textContent="✓ Created "+name;
+    // Real incident, 2026-08-12: creating a client here never made it the
+    // active client anywhere else in the app (client-picker.js's
+    // localStorage-persisted "gp.activeClient" is untouched by this page
+    // entirely) — every subsequent "+ New workspace"/"+ New Project" action
+    // on any other page silently kept using whichever client was active
+    // BEFORE this one got created, with no indication anything was wrong.
+    // Setting it here closes that gap at the source instead of relying on
+    // the user to notice and manually switch the picker.
+    try{ localStorage.setItem("gp.activeClient", j.id); }catch(e){}
+    msg.textContent="✓ Created "+name+" — it's now your active client everywhere else in the app.";
     loadClients();
   }catch(e){ msg.textContent="✕ network error"; }
 };
