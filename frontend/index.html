@@ -391,8 +391,23 @@ async function renameClient(id, current){
 }
 
 function newTour(appId){
+  // Starting a new tour under a specific workspace must make that
+  // workspace's own client the active one everywhere else in the app
+  // (ClientPicker's localStorage-persisted selection) — otherwise a user
+  // who clicks "+ New tour" under Client B while Client A is still active
+  // from earlier browsing keeps landing in Client A for every OTHER action
+  // afterward, even though this specific tour itself resolves correctly
+  // (real incident, 2026-08-12; see the matching fix in clients.html for
+  // the create-a-new-client case this generalizes).
+  let orgId=null;
+  if(appId){
+    const app=_apps.find(a=>a.id===appId);
+    orgId=app&&app.orgId||null;
+    if(orgId && window.ClientPicker) ClientPicker.set(orgId);
+  }
   let url="/editor";
   if(appId) url+="?app="+encodeURIComponent(appId);
+  if(orgId) url+=(url.includes("?")?"&":"?")+"asClient="+encodeURIComponent(orgId);
   location.href=url;
 }
 
