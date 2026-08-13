@@ -627,7 +627,7 @@ const SAMPLE = {
 const BASES = {
   sat:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],attr:"Esri, Maxar"},
   topo:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],attr:"Esri"},
-  osm:{tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],attr:"© OpenStreetMap"}
+  osm:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"],attr:"Esri"}
 };
 function styleFor(k){ return {version:8,
   sources:{base:{type:"raster",tiles:BASES[k].tiles,tileSize:256,attribution:BASES[k].attr}},
