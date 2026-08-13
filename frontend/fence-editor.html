@@ -29,7 +29,7 @@
   .cond{font-family:"Barlow Condensed",sans-serif}
   .panel{position:absolute;top:10px;left:10px;width:312px;min-width:260px;min-height:200px;
          max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
-         background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:5;
+         background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;padding:12px;z-index:60;
          backdrop-filter:blur(6px);display:flex;flex-direction:column}
   /* min-width/min-height:0 (2026-08-08) — .panel's own base rule sets
      min-width:260px;min-height:200px, which would otherwise silently
@@ -52,9 +52,9 @@
   .panel.mini > .panel-body > *:not(#mainPanelHead):not(#appSel){display:none}
   .panel-body{flex:1 1 auto;overflow-y:auto;min-height:0}
   /* Audio palette — floats independently of .panel so it never blocks map stops */
-  #audioPalette{position:absolute;top:10px;right:10px;width:280px;height:380px;min-width:220px;min-height:160px;
+  #audioPalette{position:absolute;top:10px;right:10px;width:280px;min-width:220px;min-height:200px;
                 max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
-                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:6;
+                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:60;
                 backdrop-filter:blur(6px);display:flex;flex-direction:column}
   #audioPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
   #audioPalette.mini #audioPaletteBody{display:none}
@@ -459,8 +459,12 @@
      z-index:50. Real bug found live, 2026-08-12: this started at z-index:400,
      sitting on top of the nav bar entirely and silently swallowing every
      click on it, including the one input you need to get out of this
-     screen in the first place. Must stay below 50, above the floating
-     panels underneath it (.panel/#audioPalette/#assetPalette top out at 6). -->
+     screen in the first place. Must stay below 50. Above #assetPalette
+     (the AR/3D panel, out of scope, still z-index:6). Since 2026-08-13
+     .panel/#audioPalette moved to z-index:60 (so they can float above the
+     nav bar when dragged, same as Code Objects' .co-float always has at
+     400) — this hint no longer sits above them, matching Code Objects'
+     own long-standing precedent of floating above this hint too. -->
 <div id="noProjectHint" style="display:none;position:fixed;inset:0;z-index:20;background:rgba(6,10,16,.82);
      align-items:center;justify-content:center;text-align:center;font-family:'Barlow Condensed'">
   <div style="max-width:340px;color:var(--ice,#c8dff2);font-size:15px;line-height:1.5">
@@ -2498,12 +2502,15 @@ document.getElementById("recordRetentionDays")?.addEventListener("change",async(
    Docking chain, right to left: #mapKeyBtn is the one fixed anchor (far
    right) — Audio Palette chains off Key, Code Objects chains off Audio
    Palette, Region Editor chains off Code Objects *only while mini*
-   (otherwise it's independently docked top-left), and the basemap picker
-   chains off whichever of those now extends furthest left. MapLibre's own
-   zoom control (added with no explicit position, so it defaults to
-   top-right inside #map — the same corner this whole row lives in) gets
-   pushed down by the row's real measured height so Key sits cleanly above
-   it instead of the two overlapping. */
+   (otherwise it's independently docked top-left). The basemap picker
+   (.base) is no longer part of this row (2026-08-13, real feedback — it
+   used to trail whichever panel extended furthest left, landing mid-screen
+   instead of where a user expects a basemap toggle to live) — it's now
+   permanently pinned top-right, directly above Key, regardless of what
+   else is docked. MapLibre's own zoom control (added with no explicit
+   position, so it defaults to top-right inside #map — the same corner
+   this whole row lives in) gets pushed down by the row's real measured
+   height so Key sits cleanly above it instead of the two overlapping. */
 function navBarHeight(){ return document.getElementById("crossToolNav").getBoundingClientRect().height; }
 function dockMainPanel(){
   // Only the "own side of the screen" expanded position — see
@@ -2514,16 +2521,27 @@ function dockMainPanel(){
   pnl.style.top=(navBarHeight()+10)+"px";
 }
 function dockKeyBtn(){
+  // navH+44, not +10 (2026-08-13) — .base (the basemap picker) now
+  // permanently docks at navH+10, directly above Key, preserving the
+  // original static CSS's 34px gap between them (top:10 vs top:44) just
+  // shifted down to clear the real nav bar height.
   const btn=document.getElementById("mapKeyBtn");
   btn.style.right="10px";
-  btn.style.top=(navBarHeight()+10)+"px";
+  btn.style.top=(navBarHeight()+44)+"px";
 }
 function dockAudioPalette(){
   dockKeyBtn(); // Key is the fixed anchor everything else in this row chains off of
   const pal=document.getElementById("audioPalette");
   const keyRect=document.getElementById("mapKeyBtn").getBoundingClientRect();
+  // Anchors off whichever of Key or .base extends furthest left (2026-08-13)
+  // — .base is pinned at a fixed right:10px now (see dockCollapsedRow()),
+  // not derived from this row, so if the basemap select ever renders wider
+  // than the Key button, Audio Palette still can't overlap its corner.
+  const baseEl=document.querySelector(".base");
+  const baseRect=baseEl?baseEl.getBoundingClientRect():keyRect;
+  const anchorLeft=Math.min(keyRect.left, baseRect.left);
   pal.style.left="auto";
-  pal.style.right=(Math.round(window.innerWidth-keyRect.left)+10)+"px";
+  pal.style.right=(Math.round(window.innerWidth-anchorLeft)+10)+"px";
   pal.style.top=(navBarHeight()+10)+"px";
 }
 function codeObjectsHome(){
@@ -2539,26 +2557,25 @@ function codeObjectsHome(){
 // Palette, Code Objects} changes collapse state or moves: places a *mini*
 // Region Editor immediately left of Code Objects (an *expanded* Region
 // Editor is left alone — dockMainPanel() already put it top-left,
-// independent of this row entirely), places the basemap picker immediately
-// left of whichever now extends furthest left, and pushes MapLibre's zoom
-// control down clear of the whole row. Called as Code Objects' own onDock
-// callback (see mount() below) so it always runs after Audio Palette/Code
-// Objects have settled into their final positions for this pass.
+// independent of this row entirely), pins the basemap picker permanently
+// above Key (2026-08-13 — no longer trails this row at all, see
+// dockKeyBtn()), and pushes MapLibre's zoom control down clear of the
+// whole row. Called as Code Objects' own onDock callback (see mount()
+// below) so it always runs after Audio Palette/Code Objects have settled
+// into their final positions for this pass.
 function dockCollapsedRow(){
   const mp=document.getElementById("mainPanel");
   const coFloat=document.querySelector(".co-float");
   const coRect=coFloat?coFloat.getBoundingClientRect():document.getElementById("audioPalette").getBoundingClientRect();
   const navH=navBarHeight();
-  let leftEdge=coRect.left;
   if(mp.classList.contains("mini")){
     mp.style.left="auto";
     mp.style.right=(Math.round(window.innerWidth-coRect.left)+10)+"px";
     mp.style.top=(navH+10)+"px";
-    leftEdge=mp.getBoundingClientRect().left;
   }
   const base=document.querySelector(".base");
-  base.style.right=(Math.round(window.innerWidth-leftEdge)+10)+"px";
-  base.style.top=(navH+10)+"px";
+  base.style.right="10px";        // always far-right, matching Key — no longer parked left of whatever's docked
+  base.style.top=(navH+10)+"px";  // directly above Key, which docks at navH+44 (see dockKeyBtn())
   const keyRect=document.getElementById("mapKeyBtn").getBoundingClientRect();
   const mapRect=document.getElementById("map").getBoundingClientRect();
   const zoomCtrl=document.querySelector(".maplibregl-ctrl-top-right");
@@ -2585,38 +2602,6 @@ document.getElementById("audioPaletteMin").onclick=e=>{
   if(window.CodeObjects) CodeObjects.dock();
   if(wasMini) doAudioRefresh();
 };
-// Shrink/grow-to-fit (2026-08-08, made symmetric same day after initial
-// shrink-only version): folding a tree folder used to leave a big blank
-// scrollable area below it, and unfolding one back open needed a manual
-// resize-handle drag to actually see the newly-revealed rows. First shrink
-// attempt compared #audioPaletteBody's scrollHeight to its clientHeight —
-// wrong measurement, confirmed live: scrollHeight on a non-overflowing
-// element is clamped to (never reports less than) clientHeight, so it
-// can't detect "content got shorter than the available box" at all, only
-// genuine overflow. What actually needs watching is #afTreeHost's own
-// natural height (it isn't flex-stretched by its column-flex parent, so it
-// genuinely shrinks/grows with its rendered row count) — MutationObserver
-// tracks that height across every fold/unfold and adjusts the panel by
-// however much it changed, in either direction, capped at the panel's own
-// CSS max-height (so a huge expand still scrolls past that point rather
-// than growing forever).
-(function(){
-  const palette=document.getElementById("audioPalette"), host=document.getElementById("afTreeHost");
-  let lastH=host.getBoundingClientRect().height, raf=null;
-  new MutationObserver(()=>{
-    if(raf) return;
-    raf=requestAnimationFrame(()=>{
-      raf=null;
-      const newH=host.getBoundingClientRect().height;
-      if(!palette.classList.contains("mini") && newH!==lastH){
-        const delta=newH-lastH; // +ve = grew, -ve = shrank
-        const curPanelH=palette.getBoundingClientRect().height;
-        palette.style.height=Math.max(160,curPanelH+delta)+"px"; // 160 matches #audioPalette's own min-height; max-height is already CSS-capped
-      }
-      lastH=newH;
-    });
-  }).observe(host, {childList:true, subtree:true});
-})();
 (function(){
   const head=document.getElementById("audioPaletteHead"), pal=document.getElementById("audioPalette");
   head.addEventListener("mousedown",e=>{
@@ -5470,7 +5455,6 @@ if(typeof CodeObjects!=="undefined"){
   CodeObjects.mount(document.body, {
     dock:codeObjectsHome,
     onDock:dockCollapsedRow,
-    startCollapsed:true,
     getOrgId:()=>document.getElementById("clientSel").value||null,
     getProjectId:()=>afProjectId(),
     getToken:getToken,
@@ -5543,17 +5527,18 @@ if(window.TopNav){
     }
   }).then(()=>{
     document.getElementById("map").style.top=navBarHeight()+"px";
-    // Boot state (2026-08-11): every time the editor opens, all three
-    // floating panels start collapsed, joined into one evenly-spaced row
-    // at the right end of the nav bar — not just when a user manually
-    // collapses one, and not with Region Editor split off alone at
-    // top-left the way an *expanded* Region Editor docks.
-    const mp=document.getElementById("mainPanel");
-    if(!mp.classList.contains("mini")){ mp.classList.add("mini"); document.getElementById("panelMinBtn").innerHTML="&#43;"; }
-    const ap=document.getElementById("audioPalette");
-    if(!ap.classList.contains("mini")){ ap.classList.add("mini"); document.getElementById("audioPaletteMin").innerHTML="&#43;"; }
+    // Boot state (2026-08-13, reversing the 2026-08-11 "start collapsed"
+    // behavior per explicit user request): all three floating panels start
+    // EXPANDED, each independently docked to its own home position —
+    // Region Editor top-left (dockMainPanel()), Code Objects and Audio
+    // Palette right side (codeObjectsHome()/dockAudioPalette()). Nothing
+    // forces .mini here anymore; dockMainPanel() must still be called
+    // explicitly though, since it's otherwise only invoked from the
+    // un-minimize toggle handler, and the panel's static top:10px CSS
+    // alone doesn't account for the real nav bar height.
+    dockMainPanel();
     dockAudioPalette(); // also anchors Key
-    if(window.CodeObjects) CodeObjects.dock(); // startCollapsed:true already at mount; its onDock (dockCollapsedRow) also places mini Region Editor, .base, and pushes the map's zoom control clear of the whole row
+    if(window.CodeObjects) CodeObjects.dock(); // its onDock (dockCollapsedRow) also docks .base and pushes the map's zoom control clear of the row
     map.resize();
   });
 }

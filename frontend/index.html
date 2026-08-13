@@ -406,6 +406,10 @@ async function deleteProject(id,name){
         const pending=TopNav.getPendingProject();
         if(pending && pending.id===id) TopNav.clearPendingProject();
       }
+      // Real bug, 2026-08-13: this tree's own delete only refreshed its own
+      // load() — TopNav's separate Project pulldown kept the deleted project
+      // cached until a full reload. See top-nav.js's refreshProjects().
+      if(window.TopNav && TopNav.refreshProjects) TopNav.refreshProjects();
       load();
     }
     else{ const j=await r.json().catch(()=>({})); alert("Delete failed: "+(j.error||r.status)); }
@@ -453,6 +457,7 @@ async function submitCombine(){
     const j=await r.json().catch(()=>({}));
     if(!r.ok){ msg.textContent="Merge failed: "+(j.error||r.status); return; }
     closeCombineModal();
+    if(window.TopNav && TopNav.refreshProjects) TopNav.refreshProjects();
     await load();
     alert('Merged into "'+name+'". Open it in the editor to review.');
   }catch(e){ msg.textContent="Failed: "+e.message; }
@@ -469,7 +474,7 @@ async function copyProject(p){
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(p.id)+"/copy",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+token},
       body:JSON.stringify({name})});
-    if(r.ok) load();
+    if(r.ok){ if(window.TopNav && TopNav.refreshProjects) TopNav.refreshProjects(); load(); }
     else{ const j=await r.json().catch(()=>({})); alert("Copy failed: "+(j.error||r.status)); }
   }catch(e){ alert("Failed: "+e.message); }
 }
@@ -485,7 +490,7 @@ async function renameProject(p){
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(p.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},
       body:JSON.stringify({name, scheduledTime:p.scheduled_time||null, guideId:p.guide_id||null, visitorName:p.visitor_name||null})});
-    if(r.ok) load();
+    if(r.ok){ if(window.TopNav && TopNav.refreshProjects) TopNav.refreshProjects(); load(); }
     else{ const j=await r.json().catch(()=>({})); alert("Rename failed: "+(j.error||r.status)); }
   }catch(e){ alert("Failed: "+e.message); }
 }

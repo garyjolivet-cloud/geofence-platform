@@ -117,6 +117,19 @@
 
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
+  // Single source of truth for "does this project row have a published
+  // stop yet" — was previously computed inline, separately, at both
+  // selectProject() and init()'s tail, the exact "field parity" duplication
+  // pattern this codebase has been bitten by before (see CLAUDE.md's
+  // editorToSimBundle() note). zoneCount (server-known) wins when present;
+  // hasStops (a locally-pushed just-created row) is the fallback; anything
+  // with neither is assumed to already have stops (permissive default, same
+  // reasoning as the original inline version — wrongly gating a real
+  // existing project shut is worse than the reverse).
+  function computeHasStops(p){
+    return (p.zoneCount !== undefined) ? (p.zoneCount > 0) : (p.hasStops !== undefined ? p.hasStops : true);
+  }
+
   function toolHref(base, projectId, companyId){
     const parts=[];
     if(projectId) parts.push("project="+encodeURIComponent(projectId));
@@ -283,6 +296,25 @@
       if(entry) entry.hasStops = true;
       refreshToolHrefs();
     };
+    // Real bug, 2026-08-13: deleting a project from index.html's own
+    // Client->Project tree ("..." menu -> Delete) only ever refreshed that
+    // tree's own separate fetch (via its local load()) — TopNav mounts a
+    // SECOND, independent copy of the project list for its own Project
+    // pulldown, and nothing told *that* one to refetch. A deleted (or
+    // multiple-clicks-duplicated-then-cleaned-up) project kept showing in
+    // the pulldown, confirmed live via screenshot, until a full page
+    // reload or company switch happened to force loadProjects() again.
+    // The Manage-workspaces panel's own inline delete handler already got
+    // this right (loadProjects() + clear selection if it was active) —
+    // exposing the same sequence here so any other page's mutation (not
+    // just this panel's own UI) can trigger the same refresh.
+    window.TopNav.refreshProjects = async function(){
+      await loadProjects();
+      if(project && !projects.some(p => p.id === project)){
+        project = ""; setProject(""); projInput.value = ""; projectHasStops = true;
+      }
+      refreshToolHrefs();
+    };
 
     // ---- Project pulldown behavior ----
     let menu = null, highlighted = -1;
@@ -305,13 +337,27 @@
       // published yet).
       const pending = getPendingProject();
       if(pending && pending.orgId === company && !projects.some(p => p.id === pending.id)){
-        projects.push({ id: pending.id, name: pending.name, appId: pending.appId, orgId: pending.orgId, _pending: true });
+        // hasStops:false explicit here (not left undefined) — a pending
+        // sidecar entry is by definition a project that hasn't been
+        // published yet, so computeHasStops() must never fall through to
+        // its permissive default for this row.
+        projects.push({ id: pending.id, name: pending.name, appId: pending.appId, orgId: pending.orgId, _pending: true, hasStops: false });
       }
+    }
+    function findUnfinishedProject(){
+      // Real feedback, 2026-08-13: startNewProject() eagerly creates a real
+      // D1 row on every click with no check for an existing one already
+      // sitting empty — clicking "+ New Project" a few times in a row
+      // silently produced that many stopless projects. This scans the
+      // current company's own project list (already loaded/kept fresh by
+      // loadProjects()) for the first one with no published stop; the
+      // "+ New Project" row itself is blocked whenever this returns non-null.
+      return projects.find(p => !computeHasStops(p));
     }
     function projectLabel(p){ return p.name || p.id; }
     function selectProject(p){
       project = p.id; setProject(project);
-      projectHasStops = (p.zoneCount !== undefined) ? (p.zoneCount > 0) : (p.hasStops !== undefined ? p.hasStops : true);
+      projectHasStops = computeHasStops(p);
       projInput.value = projectLabel(p);
       closeMenu();
       refreshToolHrefs();
@@ -334,17 +380,26 @@
       menu = document.createElement("div");
       menu.style.cssText = menuBoxCss();
 
+      const blockingProject = findUnfinishedProject();
       const newRow = document.createElement("div");
       newRow.textContent = "+ New Project";
-      newRow.style.cssText = "padding:8px 10px;cursor:pointer;color:var(--coral,#ff6a3d);font-weight:600;border-bottom:1px solid var(--rim,#26344a)";
-      newRow.addEventListener("mouseenter", () => newRow.style.background="rgba(255,106,61,.12)");
-      newRow.addEventListener("mouseleave", () => newRow.style.background="");
-      // Real bug, 2026-08-12: whatever the user had already typed into
-      // projInput (hoping it would BE the new project's name — a completely
-      // reasonable reading of a text box labeled "Project…") was silently
-      // thrown away here. Captured now and threaded through startNewProject()
-      // so it actually becomes the tour's name instead of a random default.
-      newRow.addEventListener("mousedown", (e) => { e.preventDefault(); const typedName=projInput.value.trim(); closeMenu(); startNewProject(typedName); });
+      if(blockingProject){
+        // Real feedback, 2026-08-13: block rather than create a second
+        // eagerly-created empty project — see findUnfinishedProject() above.
+        newRow.title = "Finish \""+projectLabel(blockingProject)+"\" first";
+        newRow.style.cssText = "padding:8px 10px;cursor:not-allowed;color:var(--fog,#5b7088);font-weight:600;border-bottom:1px solid var(--rim,#26344a)";
+        newRow.addEventListener("mousedown", (e) => { e.preventDefault(); closeMenu(); showBlockedInfo(blockingProject); });
+      } else {
+        newRow.style.cssText = "padding:8px 10px;cursor:pointer;color:var(--coral,#ff6a3d);font-weight:600;border-bottom:1px solid var(--rim,#26344a)";
+        newRow.addEventListener("mouseenter", () => newRow.style.background="rgba(255,106,61,.12)");
+        newRow.addEventListener("mouseleave", () => newRow.style.background="");
+        // Real bug, 2026-08-12: whatever the user had already typed into
+        // projInput (hoping it would BE the new project's name — a completely
+        // reasonable reading of a text box labeled "Project…") was silently
+        // thrown away here. Captured now and threaded through startNewProject()
+        // so it actually becomes the tour's name instead of a random default.
+        newRow.addEventListener("mousedown", (e) => { e.preventDefault(); const typedName=projInput.value.trim(); closeMenu(); startNewProject(typedName); });
+      }
       menu.appendChild(newRow);
 
       if(!matches.length){
@@ -373,6 +428,39 @@
 
       document.body.appendChild(menu);
       document.addEventListener("mousedown", onDocDown, true);
+    }
+    // Real feedback, 2026-08-13: an alert()/prompt() would work but this
+    // codebase deliberately avoids native dialogs everywhere else (see
+    // CLAUDE.md/project memory) in favor of graphical, dismissable panels —
+    // this mirrors that convention rather than reaching for alert().
+    function showBlockedInfo(p){
+      const existing = document.getElementById("tnBlockedInfo");
+      if(existing) existing.remove();
+      const box = document.createElement("div");
+      box.id = "tnBlockedInfo";
+      box.style.cssText = "position:fixed;z-index:700;left:50%;top:50%;transform:translate(-50%,-50%);"
+        + "background:var(--slate2,#1b2738);border:1px solid var(--coral,#ff6a3d);border-radius:10px;"
+        + "padding:16px 18px;max-width:340px;box-shadow:0 12px 32px rgba(0,0,0,.5);"
+        + "font-family:'Barlow Condensed';color:var(--snow,#eef4fb)";
+      box.innerHTML =
+        '<div style="font-weight:700;color:var(--coral,#ff6a3d);margin-bottom:8px;font-size:15px">Finish your current project first</div>'
+        + '<div style="font-size:13px;line-height:1.45;margin-bottom:14px">&ldquo;'+esc(projectLabel(p))+'&rdquo; doesn&rsquo;t have any stops yet. '
+        + 'Open Edit, add at least one stop, and Publish it before starting another new project.</div>'
+        + '<div style="display:flex;gap:8px;justify-content:flex-end">'
+        + '<button type="button" id="tnBlockedClose" style="padding:6px 12px;border-radius:6px;border:1px solid var(--rim,#26344a);'
+        + 'background:transparent;color:var(--snow,#eef4fb);cursor:pointer;font-family:inherit">Close</button>'
+        + '<button type="button" id="tnBlockedEdit" style="padding:6px 12px;border-radius:6px;border:none;'
+        + 'background:var(--coral,#ff6a3d);color:#141d2b;font-weight:700;cursor:pointer;font-family:inherit">Go to Edit</button>'
+        + '</div>';
+      document.body.appendChild(box);
+      function close(){ box.remove(); document.removeEventListener("mousedown", onBoxDocDown, true); }
+      function onBoxDocDown(e){ if(!box.contains(e.target)) close(); }
+      document.addEventListener("mousedown", onBoxDocDown, true);
+      box.querySelector("#tnBlockedClose").addEventListener("click", close);
+      box.querySelector("#tnBlockedEdit").addEventListener("click", () => {
+        close();
+        location.href = toolHref("/editor", p.id, company);
+      });
     }
     function menuBoxCss(){
       const r = projInput.getBoundingClientRect();
@@ -646,8 +734,7 @@
     // pending sidecar's case) has no `initialProj` from the real fetch, so
     // it correctly falls through to the sidecar-aware default below instead.
     if(initialProj && !initialProj._pending){
-      projectHasStops = (initialProj.zoneCount !== undefined) ? (initialProj.zoneCount > 0)
-        : (initialProj.hasStops !== undefined ? initialProj.hasStops : true);
+      projectHasStops = computeHasStops(initialProj);
     } else if(project){
       // Either the sidecar-spliced pending entry (no zoneCount, not
       // published yet) or no matching project row was found at all —
