@@ -3997,7 +3997,20 @@ async function publishToPlatform(){
       method:"PUT", headers:{"content-type":"application/json","authorization":"Bearer "+token},
       body:JSON.stringify({...b, createIfMissing:true}) });
     const j=await r.json().catch(()=>({}));
-    if(r.ok){ _currentProjectId=id; document.getElementById("projCrumb").textContent=b.name||id; ps().innerHTML="published v"+j.version+" ✓"; toast("Published \""+(b.name||id)+"\" v"+j.version+" ✓","ok"); }
+    if(r.ok){
+      _currentProjectId=id; document.getElementById("projCrumb").textContent=b.name||id; ps().innerHTML="published v"+j.version+" ✓"; toast("Published \""+(b.name||id)+"\" v"+j.version+" ✓","ok");
+      // Real bug traced 2026-08-12: the picker's pending-project sidecar was
+      // only ever cleared when a project got deleted — never at the moment
+      // it actually became real (this first successful publish). A project
+      // published, then deleted later, left a stale sidecar entry that kept
+      // resurrecting a ghost in the Project pulldown forever, since nothing
+      // had ever retired its "not published yet" marker once it stopped
+      // being true. Clear it here too, the instant it's no longer pending.
+      if(window.TopNav && TopNav.getPendingProject){
+        const pending=TopNav.getPendingProject();
+        if(pending && pending.id===id) TopNav.clearPendingProject();
+      }
+    }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared, try again"; toast("Unauthorized — log in again and retry.","err"); }
     else { ps().textContent="publish failed: "+(j.error||("HTTP "+r.status)); toast("Publish failed: "+(j.error||("HTTP "+r.status)),"err"); }
   }catch(e){ ps().textContent="publish failed: "+e.message; toast("Publish failed: "+e.message,"err"); }
