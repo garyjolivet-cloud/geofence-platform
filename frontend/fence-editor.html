@@ -5470,7 +5470,21 @@ if(window.TopNav){
       pop.style.display="";
       popoverEl.appendChild(pop);
     },
-    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); }
+    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); },
+    // Real gap found via live testing, 2026-08-12: creating a project via
+    // the picker while already sitting on a bare /editor correctly unlocked
+    // the nav buttons but left THIS page's own "no project selected" hint
+    // up — nothing here ever found out. No network round-trip needed; the
+    // creation event already carries everything loadFromPlatform()'s
+    // pending-sidecar prefill (State B) would otherwise have to re-fetch.
+    onProjectCreated:(id,name,appId,orgId)=>{
+      hideNoProject();
+      _currentProjectId=id;
+      document.getElementById("projCrumb").textContent=name||id;
+      if(appId) loadApps(appId);
+      document.getElementById("clientSel").value=orgId||"";
+      updateAssetPaletteVisibility();
+    }
   }).then(()=>{
     document.getElementById("map").style.top=navBarHeight()+"px";
     // Boot state (2026-08-11): every time the editor opens, all three

@@ -354,39 +354,42 @@
     projInput.addEventListener("click", () => openMenu(""));
     projInput.addEventListener("input", () => openMenu(projInput.value));
 
+    // A "workspace" (the app table) is purely an internal grouping detail —
+    // every client gets exactly one, auto-created alongside it with an id
+    // MATCHING the client's own id (see worker.js's client-create handler:
+    // `INSERT INTO app (id,orgId,...) VALUES (?,?,...)` bound to
+    // `(clientId, clientId, ...)`). Real feedback, 2026-08-12: surfacing
+    // this as a "which workspace?" question during project creation — first
+    // as a confusing native prompt(), then as a nicer-but-still-visible
+    // custom picker — was wrong at a more basic level than either UI
+    // attempt: the user's own mental model is Client -> Project, full stop,
+    // and creating a project should never reference a workspace at all.
+    // This resolves (or silently recreates, if it was ever deleted) that
+    // one matching-id workspace and returns its id — no prompt, no picker,
+    // ever, for this flow. POST /api/apps is already idempotent on a
+    // matching id (worker.js returns the existing row instead of erroring),
+    // so this is safe to call every time without a GET-first round trip.
+    async function ensureDefaultWorkspace(){
+      const token = askToken(); if(!token) return null;
+      try{
+        const r = await fetch("/api/apps",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+token},
+          body:JSON.stringify({id:company, orgId:company, name:company})});
+        if(r.ok) return (await r.json()).id;
+      }catch(e){}
+      return null;
+    }
+
     // ---- "+ New Project" — the ONE place a new project gets created
     // (2026-08-12 redesign: index.html's separate "+ New tour" links were
-    // removed). Requires a company, picks/creates a workspace, then just
-    // selects the new project in this pulldown and unlocks the gated tool
-    // links — it does NOT navigate anywhere. Publishing (from whichever
-    // tool the user picks next) is what actually creates the D1 row;
-    // fence-editor.html's loadFromPlatform() adopts this id on its 404. ----
+    // removed). Requires a company, silently resolves its default workspace
+    // (see ensureDefaultWorkspace above), then just selects the new project
+    // in this pulldown and unlocks the gated tool links — it does NOT
+    // navigate anywhere. Publishing (from whichever tool the user picks
+    // next) is what actually creates the D1 row; fence-editor.html's
+    // loadFromPlatform() adopts this id on its 404. ----
     async function startNewProject(presetName){
       if(!company){ alert("Pick a company first."); return; }
-      let apps = [];
-      try{
-        const r = await fetch("/api/apps?org="+encodeURIComponent(company), { headers:{authorization:"Bearer "+getToken()} });
-        if(r.ok) apps = (await r.json()).apps || [];
-      }catch(e){}
-      let appId = null;
-      // Real feedback, 2026-08-12: asking "which workspace?" when the
-      // selected company only HAS one is a pointless extra step that reads
-      // as confusing rather than helpful — the answer is never in doubt.
-      // Only prompt when there's an actual choice to make.
-      if(apps.length===1){
-        appId = apps[0].id;
-      } else if(apps.length){
-        const names = apps.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");
-        const pick = prompt("Which workspace?\n"+names+"\n\n(enter a number, or a new name to create one)", apps[0].name||apps[0].id);
-        if(!pick) return;
-        const idx = parseInt(pick,10);
-        if(!isNaN(idx) && apps[idx-1]) appId = apps[idx-1].id;
-        else appId = await createWorkspace(pick.trim());
-      } else {
-        const name = (prompt("No workspaces yet for this company — name the first one:")||"").trim();
-        if(!name) return;
-        appId = await createWorkspace(name);
-      }
+      const appId = await ensureDefaultWorkspace();
       if(!appId) return;
       // Timestamp+random, deliberately not a slug of the name — decouples
       // the id from a later rename, and this repo's own 409 collision guard
@@ -400,19 +403,17 @@
       projInput.value = name;
       closeMenu();
       refreshToolHrefs();
+      // Distinct from onProjectChange (which is for switching to an
+      // EXISTING project, and reloads the page by default if the host
+      // doesn't handle it) — this one has no default behavior at all when
+      // absent, purely opt-in, so pages that don't wire it up keep the
+      // "stay put, no navigation" behavior exactly as specified. Real gap
+      // found via live testing, 2026-08-12: without this, a page already
+      // showing its own "no project selected" state (fence-editor.html's
+      // #noProjectHint) never found out a project now exists — the nav
+      // buttons correctly unlocked, but the page content stayed stuck.
+      if(opts.onProjectCreated) opts.onProjectCreated(id, name, appId, company);
     }
-    async function createWorkspace(name){
-      if(!name) return null;
-      const token = askToken(); if(!token) return null;
-      try{
-        const r = await fetch("/api/apps",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name,orgId:company})});
-        if(r.ok) return (await r.json()).id;
-        const j = await r.json().catch(()=>({}));
-        alert("Couldn't create workspace: "+(j.error||r.status));
-      }catch(e){ alert("Failed: "+e.message); }
-      return null;
-    }
-
     // ---- Management panel — rename/delete workspace, delete project,
     // combine, merge. Same endpoints/auth as index.html, ported not redesigned. ----
     let managePopover = null;
