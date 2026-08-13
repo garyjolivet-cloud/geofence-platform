@@ -160,6 +160,9 @@ let BUNDLE = { ref:[0,0], zones:[] };
 // Mirrored verbatim from geofence-engine.html/fence-editor.html's SimFencer
 // — see project memory's "verbatim mirror" note.
 let WALKING_PATHS = []; // [{id,latlon,elev,cum,cumGain,cumLoss,totalGainM,totalLossM},...]
+// Same stable per-path color palette as fence-editor.html's walkingPathsActive
+// (that file's own comment already calls this out as meant to mirror here).
+const WP_COLOR_PALETTE=["#ffc24d","#38e0a6","#5eb1ff","#ff6a9d","#c792ff","#ffab5e","#5ee6e6","#ff8c66"];
 const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of a path; farther, use the raw/smoothed fix as-is
 // Progress-tracking state (distance/elevation/ETA along the CURRENTLY
 // snapped-to path) — feeds PipelineRuntime.setPathProgress() when that
@@ -172,7 +175,7 @@ async function loadWalkingPaths(b){
   _pathWalkStartT = null; _pathWalkStartDistM = null; _pathWalkStartPathId = null;
   if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress(null);
   const ids = b && Array.isArray(b.walkingPathIds) ? b.walkingPathIds : (b && b.walkingPathId ? [b.walkingPathId] : []);
-  if(!ids.length) return;
+  if(!ids.length){ renderWalkPaths(); return; }
   await Promise.all(ids.map(async id=>{
     try{
       const r = await fetch('/api/walking-path/'+id,{cache:'no-store'});
@@ -190,6 +193,21 @@ async function loadWalkingPaths(b){
     }catch(e){} // a single path failing to load just skips that one, matches the old single-path silent-degrade behavior
   }));
   WALKING_PATHS.sort((a,b2)=>ids.indexOf(a.id)-ids.indexOf(b2.id)); // stable order regardless of fetch-completion timing
+  renderWalkPaths();
+}
+// Draws every active Walking Path as a line — net-new (3D-mode plan item
+// A's 3rd bullet). Same source/layer id and paint as fence-editor.html's
+// own "walkpath"/"walkpath-line" for visual consistency. Called after
+// every loadWalkingPaths() change AND re-added after a basemap swap (see
+// setBase() below) since map.setStyle() wipes this source too, same as
+// the terrain source.
+function renderWalkPaths(){
+  if(!map.getSource("walkpath")) return;
+  map.getSource("walkpath").setData(fc(WALKING_PATHS.map((p,i)=>({
+    type:"Feature",
+    properties:{id:p.id, color:WP_COLOR_PALETTE[i%WP_COLOR_PALETTE.length]},
+    geometry:{type:"LineString", coordinates:p.latlon.map(ll=>[ll[1],ll[0]])}
+  }))));
 }
 const Audio = {
   on:true, ctx:null, keepAlive:null,
@@ -678,6 +696,14 @@ map.on("load",()=>{
     filter:["==",["geometry-type"],"Point"],
     paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-stroke-color":"#0a1018","circle-stroke-width":1}});
 
+  // Walking Path line(s) — distinct from the "path"/"path-line" source just
+  // above, which is the author's manually-DRAWN test path (drawMode), not
+  // the real recorded Walking Path feature.
+  map.addSource("walkpath",{type:"geojson",data:fc([])});
+  map.addLayer({id:"walkpath-line",type:"line",source:"walkpath",
+    paint:{"line-color":["get","color"],"line-width":3,"line-opacity":0.55,"line-dasharray":[1,1.4]}});
+  renderWalkPaths(); // in case loadWalkingPaths() already ran before this source existed
+
   map.addSource("ghost",{type:"geojson",data:fc([])});
   map.addLayer({id:"ghost",type:"circle",source:"ghost",
     paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
@@ -1022,6 +1048,9 @@ function setBase(k){ map.setStyle(styleFor(k));
         paint:{"line-color":"#8fb6d4","line-width":2,"line-dasharray":[1.5,1.5]}});
       map.addLayer({id:"path-pts",type:"circle",source:"path",filter:["==",["geometry-type"],"Point"],
         paint:{"circle-radius":4,"circle-color":"#8fb6d4","circle-stroke-color":"#0a1018","circle-stroke-width":1}});
+      map.addSource("walkpath",{type:"geojson",data:fc([])});
+      map.addLayer({id:"walkpath-line",type:"line",source:"walkpath",
+        paint:{"line-color":["get","color"],"line-width":3,"line-opacity":0.55,"line-dasharray":[1,1.4]}});
       map.addSource("ghost",{type:"geojson",data:fc([])});
       map.addLayer({id:"ghost",type:"circle",source:"ghost",paint:{"circle-radius":5,"circle-color":"#38e0a6","circle-opacity":0.7}});
       map.addSource("ambient",{type:"geojson",data:fc([])});
@@ -1034,6 +1063,10 @@ function setBase(k){ map.setStyle(styleFor(k));
         paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.4}});
       refreshZones(); drawPath();
     }
+    // Walking Path data survives the style swap (WALKING_PATHS itself isn't
+    // touched by setStyle()) — just needs re-drawing onto the freshly
+    // recreated "walkpath" source above.
+    renderWalkPaths();
     // Terrain (3D Mode) is wiped by the same setStyle() that wiped
     // everything else above — re-add + re-apply every basemap swap, not
     // just guarded by the `if(!map.getSource("fences"))` block those share,

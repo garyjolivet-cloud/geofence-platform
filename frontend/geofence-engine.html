@@ -291,6 +291,11 @@ let _activeLinkGuide = null;  // guide ID from walk link — used to filter live
 // progress-tracking arrays); the visitor snaps onto whichever active path is
 // nearest, if any is within WALKING_PATH_SNAP_M (see Geofencer.update()).
 let WALKING_PATHS = []; // [{id,latlon,elev,cum,cumGain,cumLoss,totalGainM,totalLossM},...]
+// Same stable per-path color palette as fence-editor.html's walkingPathsActive
+// (that file's own comment already calls this out as meant to mirror here) —
+// first entry matches the old single-path amber so one active path looks
+// the same as it always has.
+const WP_COLOR_PALETTE=["#ffc24d","#38e0a6","#5eb1ff","#ff6a9d","#c792ff","#ffab5e","#5ee6e6","#ff8c66"];
 const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of a path; farther, use the raw/smoothed fix as-is
 // Progress-tracking state (distance/elevation/ETA along the CURRENTLY
 // snapped-to path) — feeds PipelineRuntime.setPathProgress(), read by any
@@ -305,7 +310,7 @@ async function loadWalkingPaths(b){
   _pathWalkStartT = null; _pathWalkStartDistM = null; _pathWalkStartPathId = null;
   if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress(null);
   const ids = b && Array.isArray(b.walkingPathIds) ? b.walkingPathIds : (b && b.walkingPathId ? [b.walkingPathId] : []);
-  if(!ids.length) return;
+  if(!ids.length){ MapView.setWalkPaths(WALKING_PATHS); return; }
   await Promise.all(ids.map(async id=>{
     try{
       const r = await fetch('/api/walking-path/'+id,{cache:'no-store'});
@@ -323,6 +328,7 @@ async function loadWalkingPaths(b){
     }catch(e){} // a single path failing to load just skips that one, matches the old single-path silent-degrade behavior
   }));
   WALKING_PATHS.sort((a,b2)=>ids.indexOf(a.id)-ids.indexOf(b2.id)); // stable order regardless of fetch-completion timing
+  MapView.setWalkPaths(WALKING_PATHS);
 }
 
 /* ============================ GEO MATH ============================ */
@@ -1519,6 +1525,18 @@ const MapView = {
       this.map.addLayer({id:'stop-fadeband',type:'fill',source:'stop-audio',filter:['==','kind','fadeband'],
         paint:{'fill-color':'#6fbfff','fill-opacity':['get','op']}});
 
+      // Walking Path line(s) — net-new (3D-mode plan item A's 3rd bullet):
+      // WALKING_PATHS was already loaded for progress-tracking math
+      // (centerNow/setPathProgress) but never actually drawn on this map.
+      // Same source/layer id and paint as fence-editor.html's own
+      // "walkpath"/"walkpath-line" for visual consistency; draped over
+      // terrain automatically by MapLibre when 3D Mode is on, same as
+      // every other 2D layer here — no per-point elevation encoding needed.
+      this.map.addSource('walkpath',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'walkpath-line',type:'line',source:'walkpath',
+        paint:{'line-color':['get','color'],'line-width':3,'line-opacity':0.55,'line-dasharray':[1,1.4]}});
+      this.setWalkPaths(WALKING_PATHS); // in case loadWalkingPaths() already ran before this source existed
+
       // 3D Mode terrain (3D-mode plan, Step 3) — same free, no-auth
       // Terrarium DEM source as fence-editor.html. This page has no
       // basemap switcher at all (confirmed during scoping — nothing here
@@ -1529,6 +1547,18 @@ const MapView = {
         tileSize:256,encoding:'terrarium',maxzoom:15});
       this.updateTerrain();
     });
+  },
+  // Renders every active Walking Path as a line, called from
+  // loadWalkingPaths() every time WALKING_PATHS changes (bundle load,
+  // offline-cache fallback) and once from the load handler above in case
+  // that already ran before the 'walkpath' source existed.
+  setWalkPaths(paths){
+    if(!this.map || !this.map.getSource('walkpath')) return;
+    this.map.getSource('walkpath').setData(fc(paths.map((p,i)=>({
+      type:'Feature',
+      properties:{id:p.id, color:WP_COLOR_PALETTE[i%WP_COLOR_PALETTE.length]},
+      geometry:{type:'LineString', coordinates:p.latlon.map(ll=>[ll[1],ll[0]])}
+    }))));
   },
   // BUNDLE.threeDEnabled is denormalized into the published bundle by
   // fence-editor.html's exportBundle() (3D-mode plan, architecture note B)
