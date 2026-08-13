@@ -196,6 +196,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     <span id="roleBadge" title="" style="font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 6px;border-radius:5px;background:var(--slate2);color:var(--fog);flex-shrink:0"></span>
     <span id="projName">Field</span>
     <button id="btnQr" onclick="showFieldQr()" title="QR code to open this on your phone" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">▦</button>
+    <button id="btnTilt" onclick="onTiltClick()" title="Tilt to see terrain (3D Mode)" style="display:none;background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⛰</button>
     <button id="btnClear" onclick="clearCurrentSession()" title="Clear local data" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⚡</button>
     <button id="btnPub" disabled>✓ Pub</button>
   </div>
@@ -398,6 +399,22 @@ let publishedZones = [];    // the project's real published tour stops (fence-ed
 let projSpatialRangeM = null, projSpatialClearM = null;  // project-wide audio-fade defaults, for the blue-ring/grey-cone stop marker
 let signalOk      = true;
 let db, map;
+// 3D Mode terrain (3D-mode plan, Step 4) — set from the published bundle's
+// threeDEnabled field (loadPublishedBundle()) the same way geofence-engine.html
+// reads it; missing/not-yet-loaded is treated as off, same as everywhere else.
+const TERRAIN_SOURCE_ID="terrain-dem";
+let threeDEnabled=false;
+function updateTerrain(){
+  if(!map || !map.getSource(TERRAIN_SOURCE_ID)) return;
+  map.setTerrain(threeDEnabled?{source:TERRAIN_SOURCE_ID,exaggeration:1}:null);
+  const btn=document.getElementById("btnTilt");
+  if(btn) btn.style.display=threeDEnabled?"inline-block":"none";
+  if(!threeDEnabled) map.easeTo({pitch:0});
+}
+function onTiltClick(){
+  if(!map) return;
+  map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
+}
 
 /* ── helpers ────────────────────────────────────────── */
 function circularMean(degs){
@@ -699,8 +716,17 @@ function initMap(){
       layers:[{id:"base",type:"raster",source:"base"}]},
     center:[0,0], zoom:2
   });
-  map.addControl(new maplibregl.NavigationControl({showCompass:false}),"top-left");
+  map.addControl(new maplibregl.NavigationControl({showCompass:false,visualizePitch:true}),"top-left");
   map.on("load",()=>{
+    // 3D Mode terrain (3D-mode plan, Step 4) — same free Terrarium DEM
+    // source as the other map pages. No basemap switcher here (confirmed:
+    // no setStyle() call anywhere in this file), so no re-add-on-styledata
+    // concern like geofence-sim.html has.
+    map.addSource(TERRAIN_SOURCE_ID,{type:"raster-dem",
+      tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+      tileSize:256,encoding:"terrarium",maxzoom:15});
+    updateTerrain();
+
     // published tour stops (from the fence editor) — a read-only reference layer so
     // anyone live in this project, guide or admin, can see the real stops on the map
     // even if this browser has never locally recorded anything for this project
@@ -779,6 +805,8 @@ async function loadPublishedBundle(){
     publishedZones=Array.isArray(b.zones)?b.zones:[];
     projSpatialRangeM = b.spatialRangeM!=null ? b.spatialRangeM : null;
     projSpatialClearM = b.spatialClearM!=null ? b.spatialClearM : null;
+    threeDEnabled = !!b.threeDEnabled;
+    updateTerrain();
     refreshPublishedZones(); renderStopList();
     if(warn) warn.style.display="none";
   }catch(e){

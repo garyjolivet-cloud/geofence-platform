@@ -93,6 +93,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
         <button class="sm" id="btnSat" class="on">Satellite</button>
         <button class="sm" id="btnTopo">Topo</button>
         <button class="sm" id="btnOSM">Streets</button>
+        <button class="sm" id="btnTilt" style="display:none" title="Tilt to see terrain (3D Mode)">⛰ Tilt</button>
       </div>
     </div>
 
@@ -615,8 +616,39 @@ function styleFor(k){ return {version:8,
   layers:[{id:"base",type:"raster",source:"base"}]}; }
 
 const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:[-117.0547,51.3027],zoom:16});
-map.addControl(new maplibregl.NavigationControl());
+map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.addControl(new maplibregl.ScaleControl({maxWidth:120,unit:"metric"}));
+
+/* ---- 3D Mode: terrain (3D-mode plan, Step 4) ----
+   Same free Terrarium DEM source as fence-editor.html/geofence-engine.html.
+   UNLIKE those two, this page's basemap switcher (setBase() below) DOES
+   call a full map.setStyle() — confirmed during scoping (3d-plan.md) that
+   this wipes any raster-dem source and setTerrain() call along with
+   everything else, so terrain has to be re-added inside the SAME
+   map.once("styledata", ...) callback setBase() already uses to re-add
+   every other layer, not just once at initial load. */
+const TERRAIN_SOURCE_ID="terrain-dem";
+function addTerrainSource(){
+  if(!map.getSource(TERRAIN_SOURCE_ID)){
+    map.addSource(TERRAIN_SOURCE_ID,{type:"raster-dem",
+      tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+      tileSize:256,encoding:"terrarium",maxzoom:15});
+  }
+}
+// BUNDLE.threeDEnabled is denormalized into the published bundle by
+// fence-editor.html's exportBundle() — same field geofence-engine.html
+// reads, so any project loaded here "from platform" already carries it.
+function updateTerrain(){
+  if(!map.getSource(TERRAIN_SOURCE_ID)) return;
+  const on=!!BUNDLE.threeDEnabled;
+  map.setTerrain(on?{source:TERRAIN_SOURCE_ID,exaggeration:1}:null);
+  const btn=document.getElementById("btnTilt");
+  if(btn) btn.style.display=on?"inline-block":"none";
+  if(!on) map.easeTo({pitch:0});
+}
+document.getElementById("btnTilt").onclick=()=>{
+  map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
+};
 
 let labelMarkers=[];        // HTML markers for zone names + live phase
 let PATH=[];                // [[lat,lon],...] drawn path
@@ -661,6 +693,9 @@ map.on("load",()=>{
   map.addLayer({id:"ambient-lbl",type:"symbol",source:"ambient",
     layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.4],"text-font":["Open Sans Regular"]},
     paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.4}});
+
+  addTerrainSource();
+  updateTerrain();
 
   const pid=new URLSearchParams(location.search).get("project");
   if(pid){ loadBundle(SAMPLE,"sample walk"); loadProjectFromPlatform(pid); }
@@ -768,12 +803,26 @@ function zoneNearestDistM(z,p,nowMs){
 let prevP=null, fixCount=0;
 function feed(lat,lon,acc,t){
   window.__lastAcc=acc;
-  const sm=GPSFilter.push({lat,lon,acc,t});
-  // No altitude input wired into the desktop simulator yet (that's the
-  // separate "sim gets 3D/BLE preview" phase of the 3D-mode plan) — sm.alt
-  // stays null, and Geofencer.altOk() already treats a null p.alt as
-  // "pass" for any zone with altM set, so this is safe as-is until then.
-  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
+  // Terrain-derived altitude (3D-mode plan, Step 4) — mirrors
+  // fence-editor.html's feedSim() exactly: queryTerrainElevation() needs
+  // 3D Mode on AND terrain tiles already fetched for the current view;
+  // null falls through to Geofencer.altOk()'s existing "no altitude
+  // signal, always pass" default. Tagged altSource:"baro" since a DEM
+  // sample is deterministic ground truth, not a noisy sensor reading —
+  // and it's the SAME Terrarium source fence-editor.html's "use terrain
+  // height here" button reads altM from, so there's no datum mismatch
+  // between what an author set and what this sim checks it against.
+  let terrainAlt=null;
+  if(BUNDLE.threeDEnabled && map.getTerrain()){
+    try{ terrainAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
+  }
+  const fix={lat,lon,acc,t};
+  if(terrainAlt!=null){ fix.alt=terrainAlt; fix.altAcc=5; fix.altSource="baro"; }
+  const sm=GPSFilter.push(fix);
+  // p.alt uses the immediate terrain sample, not the EKF-smoothed sm.alt —
+  // same reasoning as feedSim(): avoids lag behind a fast simulated
+  // teleport/drag between stops at different elevations.
+  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:terrainAlt};
   const active=Geofencer.update(p,prevP,t);
   prevP=p; fixCount++;
   AmbientClip.update(p, t);
@@ -823,6 +872,7 @@ function loadBundle(b,srcLabel){
   AmbientClip.stop();
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);
   refreshZones(); fitToData();
+  updateTerrain(); // each loaded bundle carries its own threeDEnabled
   log("ev-sys","loaded "+(b.name||"bundle")+" — "+BUNDLE.zones.length+" zones ("+(srcLabel||"")+")");
 }
 
@@ -984,6 +1034,13 @@ function setBase(k){ map.setStyle(styleFor(k));
         paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.4}});
       refreshZones(); drawPath();
     }
+    // Terrain (3D Mode) is wiped by the same setStyle() that wiped
+    // everything else above — re-add + re-apply every basemap swap, not
+    // just guarded by the `if(!map.getSource("fences"))` block those share,
+    // since a raster-dem source has no equivalent "did this already happen"
+    // marker of its own to check against.
+    addTerrainSource();
+    updateTerrain();
   });
   ["btnSat","btnTopo","btnOSM"].forEach(id=>document.getElementById(id).classList.remove("on"));
   document.getElementById({sat:"btnSat",topo:"btnTopo",osm:"btnOSM"}[k]).classList.add("on");

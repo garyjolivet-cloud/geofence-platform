@@ -130,6 +130,7 @@
     <h1>Geofence Engine <span style="font-size:13px;color:var(--coral);font-family:'Barlow Condensed'">v18 · heading reliability</span> <a href="/" style="font-size:12px;font-family:'Barlow Condensed';font-weight:600;color:var(--ice);text-decoration:none;border:1px solid var(--rim);border-radius:7px;padding:3px 8px">⌂</a></h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill idle" title="Tap to start your walk">▶ Start</span>
+      <button id="tiltBtn" class="hamburger" aria-label="Tilt map to see terrain" title="Tilt map to see terrain" style="display:none">⛰</button>
       <button id="btnTools" class="hamburger" aria-label="Tools" title="Tools">🛠</button>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
       <button id="btnSettings" class="hamburger" aria-label="Settings" title="Settings">☰</button>
@@ -1540,6 +1541,8 @@ const MapView = {
     if(!this.map || !this.map.getSource(this.TERRAIN_SOURCE_ID)) return;
     const on=!!BUNDLE.threeDEnabled;
     this.map.setTerrain(on?{source:this.TERRAIN_SOURCE_ID,exaggeration:1}:null);
+    const btn=document.getElementById('tiltBtn');
+    if(btn) btn.style.display=on?'inline-block':'none';
     if(!on) this.map.easeTo({pitch:0});
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
@@ -1953,6 +1956,15 @@ document.getElementById('btnSettingsClose').onclick= ()=>Settings.close();
 document.getElementById('btnTools').onclick = ()=>{
   const d=document.getElementById('toolsDrawer');
   d.style.display = (d.style.display==='none') ? 'block' : 'none';
+};
+// Only visible when 3D Mode is on for this bundle (MapView.updateTerrain()
+// toggles display) — toggles pitch between flat and a tilted view so
+// terrain (once rendered) is actually visible; native two-finger-drag
+// (touch) / Ctrl+drag (desktop) pitch gestures work regardless of this
+// button, this is purely for discoverability.
+document.getElementById('tiltBtn').onclick = ()=>{
+  if(!MapView.map) return;
+  MapView.map.easeTo({pitch:MapView.map.getPitch()>10?0:60, duration:400});
 };
 document.getElementById('toolsDrawerClose').onclick = ()=>{
   document.getElementById('toolsDrawer').style.display='none';
