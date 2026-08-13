@@ -396,7 +396,18 @@ async function deleteProject(id,name){
   const token=await askToken(); if(!token)return;
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(id),{method:"DELETE",headers:{"authorization":"Bearer "+token}});
-    if(r.ok) load();
+    if(r.ok){
+      // If this was the picker's most-recently-created (never-published)
+      // project, its localStorage sidecar has no way to know it's gone now -
+      // top-nav.js's loadProjects() would otherwise keep resurrecting it in
+      // the Project pulldown on every other tool page forever (real bug,
+      // 2026-08-12).
+      if(window.TopNav && TopNav.getPendingProject){
+        const pending=TopNav.getPendingProject();
+        if(pending && pending.id===id) TopNav.clearPendingProject();
+      }
+      load();
+    }
     else{ const j=await r.json().catch(()=>({})); alert("Delete failed: "+(j.error||r.status)); }
   }catch(e){ alert("Failed: "+e.message); }
 }

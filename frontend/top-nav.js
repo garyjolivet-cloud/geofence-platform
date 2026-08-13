@@ -507,7 +507,26 @@
               if(!confirm('Delete project "'+(p.name||p.id)+'"? Removes walk links, assignments, bundle history. Cannot be undone.')) return;
               const token = askToken(); if(!token) return;
               const r = await fetch("/api/projects/"+encodeURIComponent(p.id),{method:"DELETE",headers:{authorization:"Bearer "+token}});
-              if(r.ok) openManagePanel(); else alert("Delete failed: "+r.status);
+              if(r.ok){
+                // Real bug, 2026-08-12: loadProjects() only re-fetches when
+                // `projects` is CURRENTLY EMPTY (its first-load guard) - once
+                // populated, every later call (including right after a
+                // delete) silently reused the stale array, so a deleted
+                // project kept showing here AND in the Project pulldown
+                // (which reads the exact same array) until something else
+                // happened to trigger a fresh fetch. Force one explicitly.
+                await loadProjects();
+                // If the deleted project was ever "pending" (created via the
+                // picker, never published), that sidecar has no way to know
+                // it's gone now - loadProjects()'s splice would otherwise
+                // keep resurrecting it forever, since it never finds a real
+                // match and never gets told to stop trying.
+                const pending = getPendingProject();
+                if(pending && pending.id===p.id) clearPendingProject();
+                if(project===p.id){ project=""; setProject(""); projInput.value=""; }
+                refreshToolHrefs();
+                openManagePanel();
+              } else alert("Delete failed: "+r.status);
             });
             pr.appendChild(del);
             list.appendChild(pr);
