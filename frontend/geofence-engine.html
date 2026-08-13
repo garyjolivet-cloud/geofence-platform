@@ -1491,6 +1491,7 @@ function cachedStopAudioFeatures(zoneId,centerLonLat,farM,clearM){
 
 const MapView = {
   map:null, centered:false,
+  TERRAIN_SOURCE_ID:'terrain-dem',
   init(){
     this.map=new maplibregl.Map({
       container:'map',
@@ -1501,7 +1502,7 @@ const MapView = {
         layers:[{id:'base',type:'raster',source:'base'}]},
       center:LonLat(BUNDLE.ref), zoom:16
     });
-    this.map.addControl(new maplibregl.NavigationControl());
+    this.map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
     this.map.on('load', ()=>{
       this.map.addSource('self',{type:'geojson',data:fc([])});
       this.map.addLayer({id:'self-dot',type:'circle',source:'self',
@@ -1516,7 +1517,30 @@ const MapView = {
         paint:{'fill-color':['get','col'],'fill-opacity':SPEAKER_OPACITY}});
       this.map.addLayer({id:'stop-fadeband',type:'fill',source:'stop-audio',filter:['==','kind','fadeband'],
         paint:{'fill-color':'#6fbfff','fill-opacity':['get','op']}});
+
+      // 3D Mode terrain (3D-mode plan, Step 3) — same free, no-auth
+      // Terrarium DEM source as fence-editor.html. This page has no
+      // basemap switcher at all (confirmed during scoping — nothing here
+      // ever calls setStyle()), so unlike geofence-sim.html there's no
+      // terrain-wipe risk to guard against once added.
+      this.map.addSource(this.TERRAIN_SOURCE_ID,{type:'raster-dem',
+        tiles:['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+        tileSize:256,encoding:'terrarium',maxzoom:15});
+      this.updateTerrain();
     });
+  },
+  // BUNDLE.threeDEnabled is denormalized into the published bundle by
+  // fence-editor.html's exportBundle() (3D-mode plan, architecture note B)
+  // so this player-only page never needs an extra /api/apps round trip.
+  // Missing/undefined (any bundle published before this field existed, or
+  // still loading) is treated as off, same as every other additive 3D-mode
+  // field's default. Re-run whenever BUNDLE is (re)assigned, not just once
+  // at map load, since a live bundle update can turn 3D Mode on/off.
+  updateTerrain(){
+    if(!this.map || !this.map.getSource(this.TERRAIN_SOURCE_ID)) return;
+    const on=!!BUNDLE.threeDEnabled;
+    this.map.setTerrain(on?{source:this.TERRAIN_SOURCE_ID,exaggeration:1}:null);
+    if(!on) this.map.easeTo({pitch:0});
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
   onFix(p, nowMs, pick){
@@ -2094,6 +2118,7 @@ EngineKokoro.tryLoad();
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
     if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
     if(!HUD.pos) MapView.recenter(b.ref);
+    MapView.updateTerrain();
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
       // minGain/curve dropped: the fade curve is now the fixed, shared
       // fadeGain()/FADE_DB_RANGE, not a per-project tunable.
@@ -2113,6 +2138,7 @@ EngineKokoro.tryLoad();
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
       if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
       if(!HUD.pos) MapView.recenter(b.ref);
+    MapView.updateTerrain();
       if(document.getElementById('simZones')) buildSimZones();
       HUD.log('ev-sys','offline — loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' from saved copy');
     }catch(_){ HUD.log('ev-warn','offline and saved copy unreadable — using built-in bundle'); } }

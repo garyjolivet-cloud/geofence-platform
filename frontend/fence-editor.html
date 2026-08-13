@@ -3834,6 +3834,12 @@ function exportBundle(){
               audioRetriggerDelayS:+document.getElementById("audioRetriggerDelayS").value,
               walkingPathIds:selectedWalkingPathIds.slice(),
               globalCodeObjects:globalCodeObjects.slice(),
+              // Denormalized from the app row at publish time (3D-mode plan,
+              // architecture note B) so player-only pages (geofence-engine.html)
+              // can decide whether to render terrain without an extra
+              // /api/apps round trip. _threeDOn tracks whichever app is
+              // currently selected in appSel — see updateAssetPaletteVisibility().
+              threeDEnabled:_threeDOn,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
