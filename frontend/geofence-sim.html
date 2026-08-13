@@ -282,6 +282,7 @@ const TUNING = {
   ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
   MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
   SHORT_VISIT_S: 12,
+  ALT_TOLERANCE_DEFAULT_M: 25, // used when a zone sets altM but not altToleranceM
   // Position/velocity smoothing moved to an Extended Kalman Filter
   // (2026-08-07, frontend/kalman-filter.js/GPSFilter) — see that file's own
   // header comment for the design. Mirrored across this file and
@@ -443,6 +444,16 @@ const Geofencer = {
   onEvent:null,             // callback(evt)
   key(z,l,i){ return z.id+":"+(l.kind)+":"+i; },
 
+  // Altitude gate (3D Mode) — mirrors geofence-engine.html's Geofencer.altOk()
+  // verbatim. zone.altM==null or p.alt==null both mean "any altitude" —
+  // today's unchanged behavior when 3D Mode is off or no altitude source
+  // is connected.
+  altOk(zone, p){
+    if(zone.altM==null || p.alt==null) return true;
+    const tol = zone.altToleranceM!=null ? zone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M;
+    return Math.abs(p.alt - zone.altM) <= tol;
+  },
+
   // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
   sd(p, prev, zone, layer, now){
     const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
@@ -484,7 +495,7 @@ const Geofencer = {
           if(prev){
             const c=Geo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],
                                    layer.geometry.from, layer.geometry.to, BUNDLE.ref);
-            if(c.crossed && st.phase!=="cooldown"){
+            if(c.crossed && st.phase!=="cooldown" && this.altOk(zone,p)){
               st.phase="cooldown"; setTimeout(()=>{st.phase="out";},4000);
               this._fire(zone,layer,"enter",{side:c.side});
             }
@@ -495,15 +506,18 @@ const Geofencer = {
         // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
         const d=this.sd(p,prev,zone,layer,now);
         if(d==null) return;
+        // Altitude gate folded into the same signed-distance state machine —
+        // see geofence-engine.html's Geofencer.update() for the reasoning.
+        const dEff = this.altOk(zone,p) ? d : Math.max(d, TUNING.EXIT_BUFFER_M+1);
         // accuracy gate (warn content is exempt — handled at fire time)
         const holding = p.acc>TUNING.ACCURACY_CAP_M;
 
-        if(d<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d});
+        if(dEff<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d:dEff});
 
         if(st.phase==="out"){
-          if(d<0 && !holding){ st.phase="pending"; st.since=now; }
+          if(dEff<0 && !holding){ st.phase="pending"; st.since=now; }
         } else if(st.phase==="pending"){
-          if(d>=0){ st.phase="out"; }                  // popped back out — was a single-fix blip
+          if(dEff>=0){ st.phase="out"; }                  // popped back out — was a single-fix blip
           else {                                        // 2nd consecutive inside fix confirms entry
             st.phase="in"; st.t0=now; st.move=0; st.delivered={};  // §4a: commit on movement, not a dwell clock
             this._fire(zone,layer,"enter",{});
@@ -517,7 +531,7 @@ const Geofencer = {
               st.delivered["dwell"+t.delayS]=1; this._deliver(zone,t,{});
             }
           });
-          if(d>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer
+          if(dEff>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer, or the altitude band was left
             const dur=(now-st.t0)/1000;
             const flick = st.move<TUNING.MOVE_MIN_M && dur<TUNING.SHORT_VISIT_S;
             this._fire(zone,layer,"exit",{dur,move:st.move,flick});
@@ -755,7 +769,11 @@ let prevP=null, fixCount=0;
 function feed(lat,lon,acc,t){
   window.__lastAcc=acc;
   const sm=GPSFilter.push({lat,lon,acc,t});
-  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+  // No altitude input wired into the desktop simulator yet (that's the
+  // separate "sim gets 3D/BLE preview" phase of the 3D-mode plan) — sm.alt
+  // stays null, and Geofencer.altOk() already treats a null p.alt as
+  // "pass" for any zone with altM set, so this is safe as-is until then.
+  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
   const active=Geofencer.update(p,prevP,t);
   prevP=p; fixCount++;
   AmbientClip.update(p, t);

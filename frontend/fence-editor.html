@@ -1360,7 +1360,14 @@ function makeZone(name,shape){
            // Empty by default — most stops have none. See
            // zoneToEngine/engineToZone/editorToSimBundle for the other 3
            // mirror locations this field must stay in sync with.
-           arObjects:[] };
+           arObjects:[],
+           // Optional altitude gate (3D Mode). null means "any altitude" —
+           // today's behavior, unchanged when 3D Mode is off. altToleranceM
+           // is the +/- band around altM a fix's altitude must fall within
+           // to count as "in" this zone, on top of the existing 2D shape
+           // test. See zoneToEngine/engineToZone/editorToSimBundle for the
+           // other 3 mirror locations this field must stay in sync with.
+           altM:null, altToleranceM:null };
   if(shape.type==="path"){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
@@ -3724,6 +3731,10 @@ function zoneToEngine(z){
   if(z.onPathId) zo.onPathId=z.onPathId;
   if(z.ttsVoice) zo.ttsVoice=z.ttsVoice;
   if(z.arObjects&&z.arObjects.length) zo.arObjects=z.arObjects;
+  // Altitude gate (3D Mode) — null/omitted means "any altitude", the
+  // existing behavior. Only exported when actually set.
+  if(z.altM!=null) zo.altM=z.altM;
+  if(z.altToleranceM!=null) zo.altToleranceM=z.altToleranceM;
   if(isPath){
     zo.path=s.coords.map(LL);
     zo.movementMode=z.movementMode||"walk";
@@ -3809,6 +3820,8 @@ function engineToZone(zo,legacyPathId){
   z.onPathId = zo.onPathId || (zo.onPath ? (legacyPathId||null) : null);
   z.ttsVoice=zo.ttsVoice||null;
   z.arObjects=Array.isArray(zo.arObjects)?zo.arObjects:[];
+  z.altM=zo.altM??null;
+  z.altToleranceM=zo.altToleranceM??null;
   if(isPath){
     z.movementMode=zo.movementMode||"walk";
     z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
@@ -4371,7 +4384,7 @@ function doXhrUpload(blob, key, mimeType, opts){
 // copy had already drifted, 160 vs 25 m/s, the moment this Test Mode's
 // speed slider was widened — exactly the class of bug the EKF's
 // self-scaling outlier gate eliminates structurally).
-const SIM_TUNING={EXIT_BUFFER_M:20,ENTER_DWELL_S:3,ACCURACY_CAP_M:40,MOVE_MIN_M:8,SHORT_VISIT_S:12};
+const SIM_TUNING={EXIT_BUFFER_M:20,ENTER_DWELL_S:3,ACCURACY_CAP_M:40,MOVE_MIN_M:8,SHORT_VISIT_S:12,ALT_TOLERANCE_DEFAULT_M:25};
 const SimGeo={
   R:6371000,
   hav(a,b){const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
@@ -4540,6 +4553,13 @@ function simStartGuidance(targetZone){
 }
 const SimFencer={state:{},onEvent:null,
   key(z,l,i){return z.id+":"+l.kind+":"+i;},
+  // Altitude gate (3D Mode) — mirrors geofence-engine.html's Geofencer.altOk()
+  // verbatim. zone.altM==null or p.alt==null both mean "any altitude".
+  altOk(zone,p){
+    if(zone.altM==null||p.alt==null)return true;
+    const tol=zone.altToleranceM!=null?zone.altToleranceM:SIM_TUNING.ALT_TOLERANCE_DEFAULT_M;
+    return Math.abs(p.alt-zone.altM)<=tol;
+  },
   sd(PT,zone,layer,now){
     // path (moving) zones fire triggers against their *current* live
     // position on the route, not the fixed start point.
@@ -4587,11 +4607,14 @@ const SimFencer={state:{},onEvent:null,
       const st=this.state[k]||(this.state[k]={phase:"out",delivered:{},t0:0});
       if(layer.geometry&&layer.geometry.type==="tripline"){
         if(prev){const c=SimGeo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],layer.geometry.from,layer.geometry.to,simBundle.ref);
-          if(c.crossed&&st.phase!=="cooldown"){st.phase="cooldown";setTimeout(()=>{st.phase="out";},4000);
+          if(c.crossed&&st.phase!=="cooldown"&&this.altOk(zone,p)){st.phase="cooldown";setTimeout(()=>{st.phase="out";},4000);
             this._fire(zone,layer,"enter",{side:c.side},"visitor");}} return;}
       const sd=this.sd([p.lat,p.lon],zone,layer,now);if(sd==null)return;
-      if(sd<0&&st.phase==="in")active.push({zone,layer,sd});
-      this._step(zone,layer,i,sd,now,"visitor","visitor");
+      // Altitude gate folded into the same signed-distance state machine —
+      // see geofence-engine.html's Geofencer.update() for the reasoning.
+      const sdEff=this.altOk(zone,p)?sd:Math.max(sd,SIM_TUNING.EXIT_BUFFER_M+1);
+      if(sdEff<0&&st.phase==="in")active.push({zone,layer,sd:sdEff});
+      this._step(zone,layer,i,sdEff,now,"visitor","visitor");
     });});
     return active;},
   _fire(zone,layer,kind,info,subj="visitor"){
@@ -4906,7 +4929,10 @@ function editorToSimBundle(){
       // Same class of field this comment warns about above — added here
       // deliberately alongside ttsVoice so Test Mode can render+animate the
       // stop's AR object(s) on trigger, not just log that one would appear.
-      arObjects:(z.arObjects&&z.arObjects.length)?z.arObjects:[]};
+      arObjects:(z.arObjects&&z.arObjects.length)?z.arObjects:[],
+      // Altitude gate (3D Mode) — same class of field again; Test Mode must
+      // see this or altitude-gated triggers would silently always fire.
+      altM:z.altM??null,altToleranceM:z.altToleranceM??null};
     if(s.type==="path"){
       out.path=s.coords.map(c=>[c[1],c[0]]);
       out.movementMode=z.movementMode||"walk";
@@ -4955,10 +4981,14 @@ function simZoneNearestDistM(z,raw){
 function feedSim(lat,lon,acc,t){
   acc=acc||5; t=t||Date.now();
   const sm=GPSFilter.push({lat,lon,acc,t});
-  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
   simLastSmoothed=sm;
-  // use raw (unsmoothed) position for zone detection so small zones aren't missed at speed
-  const raw={lat,lon,acc};
+  // use raw (unsmoothed) position for zone detection so small zones aren't missed at speed.
+  // No altitude input is simulated yet (no manual control, no Walking Path
+  // elevation replay) — sm.alt stays null, and SimFencer.altOk() already
+  // treats a null p.alt as "pass" for any zone with altM set, matching
+  // geofence-sim.html's identical current state.
+  const raw={lat,lon,acc,alt:sm.alt};
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;

@@ -268,6 +268,7 @@ const TUNING = {
   ACCURACY_CAP_M: 40,    // fixes worse than this don't drive decisions (except 'warn')
   MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
   SHORT_VISIT_S: 12,
+  ALT_TOLERANCE_DEFAULT_M: 25, // used when a zone sets altM but not altToleranceM
   // Position smoothing moved to an Extended Kalman Filter (2026-08-07,
   // frontend/kalman-filter.js/GPSFilter) — replaced the old speed-adaptive
   // EMA that lived here (SMOOTH_TAU_MAX_S/MIN_S/SMOOTH_SPEED_LO_MPS/HI_MPS/
@@ -512,6 +513,19 @@ const Geofencer = {
   onEvent:null,             // callback(evt)
   key(z,l,i){ return z.id+":"+(l.kind)+":"+i; },
 
+  // Altitude gate (3D Mode): zone.altM==null means "any altitude", today's
+  // unchanged behavior. A fix with no altitude signal (p.alt==null — no
+  // dongle/altitude-capable source connected) also passes unconditionally
+  // rather than permanently blocking the zone — altitude is a precision
+  // ADD when available, never a hard requirement that could brick a zone
+  // for a visitor without an altitude source. See kalman-filter.js's
+  // `alt`/`vAlt` output fields (null until any fix ever supplied one).
+  altOk(zone, p){
+    if(zone.altM==null || p.alt==null) return true;
+    const tol = zone.altToleranceM!=null ? zone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M;
+    return Math.abs(p.alt - zone.altM) <= tol;
+  },
+
   // signed distance for any layer geometry; null if not yet evaluable (tripline needs prev)
   sd(p, prev, zone, layer, now){
     const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
@@ -555,7 +569,7 @@ const Geofencer = {
           if(prev){
             const c=Geo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],
                                    layer.geometry.from, layer.geometry.to, BUNDLE.ref);
-            if(c.crossed && st.phase!=="cooldown"){
+            if(c.crossed && st.phase!=="cooldown" && this.altOk(zone,p)){
               st.phase="cooldown"; setTimeout(()=>{st.phase="out";},4000);
               this._fire(zone,layer,"enter",{side:c.side});
             }
@@ -566,15 +580,21 @@ const Geofencer = {
         // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
         const d=this.sd(p,prev,zone,layer,now);
         if(d==null) return;
+        // Altitude gate folded into the same signed-distance state machine
+        // rather than a parallel one: outside the altitude band is treated
+        // exactly like outside the 2D shape (forces "out"/triggers exit),
+        // so entry requires both, and drifting out of the altitude band
+        // while "in" exits the same way leaving the 2D shape would.
+        const dEff = this.altOk(zone,p) ? d : Math.max(d, TUNING.EXIT_BUFFER_M+1);
         // accuracy gate (warn content is exempt — handled at fire time)
         const holding = p.acc>TUNING.ACCURACY_CAP_M;
 
-        if(d<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d});
+        if(dEff<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d:dEff});
 
         if(st.phase==="out"){
-          if(d<0 && !holding){ st.phase="pending"; st.since=now; }
+          if(dEff<0 && !holding){ st.phase="pending"; st.since=now; }
         } else if(st.phase==="pending"){
-          if(d>=0){ st.phase="out"; }                  // popped back out — was a single-fix blip
+          if(dEff>=0){ st.phase="out"; }                  // popped back out — was a single-fix blip
           else {                                        // 2nd consecutive inside fix confirms entry
             st.phase="in"; st.t0=now; st.move=0; st.delivered={};  // §4a: commit on movement, not a dwell clock
             this._fire(zone,layer,"enter",{});
@@ -597,7 +617,7 @@ const Geofencer = {
           // approach ring) so a zone with both layers doesn't double-tick
           // per fix. tick() no-ops safely if this zone has no pipeline.
           if(layer.kind==="target") PipelineRuntime.tick(zone.id, null, p, { dwellSeconds:(now-st.t0)/1000 });
-          if(d>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer
+          if(dEff>TUNING.EXIT_BUFFER_M){           // clean exit past R+buffer, or the altitude band was left
             const dur=(now-st.t0)/1000;
             const flick = st.move<TUNING.MOVE_MIN_M && dur<TUNING.SHORT_VISIT_S;
             this._fire(zone,layer,"exit",{dur,move:st.move,flick});
@@ -1312,7 +1332,7 @@ const HUD = {
     lastSmoothed=sm;
     TravelHeading.update(sm.speed, sm.headingTravel);
     this.fixes++;
-    const p={lat:sm.lat,lon:sm.lon,acc:sm.acc};
+    const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
     const active=Geofencer.update(p,this.prev,fix.t);
     this.prev=p; this.pos=p;
     // Global functions (Code Objects dropped on the map, not a stop) run on
@@ -1952,8 +1972,15 @@ function startGPS(){
   if(watchId!==null) return;   // already watching — pill CTA + drawer's Start GPS button both call startGPS()
   HUD.log('ev-sys','GPS started — walk the stops');
   watchId=navigator.geolocation.watchPosition(
+    // coords.altitude/altitudeAccuracy are the phone-GPS altitude baseline
+    // this codebase targets today (real, but noisy — see kalman-filter.js's
+    // DEFAULT_GPS_ALT_ACC_M); a future BLE dongle (3D-mode plan item D)
+    // supplies fix.altSource="baro" instead, tighter and more stable.
     p=>HUD.onFix({lat:p.coords.latitude,lon:p.coords.longitude,
-                  acc:p.coords.accuracy||99,t:p.timestamp||Date.now()}),
+                  acc:p.coords.accuracy||99,t:p.timestamp||Date.now(),
+                  alt:p.coords.altitude!=null?p.coords.altitude:null,
+                  altAcc:p.coords.altitudeAccuracy!=null?p.coords.altitudeAccuracy:null,
+                  altSource:"gps"}),
     err=>HUD.log('ev-warn','GPS error: '+err.message),
     {enableHighAccuracy:true, maximumAge:0, timeout:15000});
 }

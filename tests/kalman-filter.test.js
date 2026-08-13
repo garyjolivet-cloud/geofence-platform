@@ -71,26 +71,27 @@ function walkFixes(startLat, startLon, headingDeg, speedMps, seconds, accM, jitt
 // (a) Jacobian correctness — permanent numerical-vs-analytical cross-check
 // ============================================================
 (function testJacobian() {
+  const DIM = 6; // [lat, lon, vn, ve, alt, valt] — see kalman-filter.js header
   function numericalF(X, dt, h) {
     h = h || 1e-6;
     const cols = [];
     const f0 = f(X, dt);
-    for (let j = 0; j < 4; j++) {
+    for (let j = 0; j < DIM; j++) {
       const Xp = X.slice(); Xp[j] += h;
       const f1 = f(Xp, dt);
       cols.push(f1.map((v, i) => (v - f0[i]) / h));
     }
-    const FT = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) FT[i][j] = cols[j][i];
+    const FT = Array.from({length: DIM}, () => new Array(DIM).fill(0));
+    for (let i = 0; i < DIM; i++) for (let j = 0; j < DIM; j++) FT[i][j] = cols[j][i];
     return FT;
   }
   [0, 51.3, 70].forEach(lat => {
-    const X = [lat, -117.0, 3.0, 1.5];
+    const X = [lat, -117.0, 3.0, 1.5, 1850, 0.3]; // includes a nonzero alt/v_alt to exercise that block too
     const A = jacobianF(X, 1.0);
     const N = numericalF(X, 1.0);
     let maxDiff = 0;
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) maxDiff = Math.max(maxDiff, Math.abs(A[i][j] - N[i][j]));
-    assert(maxDiff < 1e-6, "Jacobian matches finite-difference at lat=" + lat + " (max diff " + maxDiff.toExponential(3) + ")");
+    for (let i = 0; i < DIM; i++) for (let j = 0; j < DIM; j++) maxDiff = Math.max(maxDiff, Math.abs(A[i][j] - N[i][j]));
+    assert(maxDiff < 1e-6, "Jacobian (incl. alt/v_alt block) matches finite-difference at lat=" + lat + " (max diff " + maxDiff.toExponential(3) + ")");
   });
 })();
 
@@ -204,6 +205,142 @@ function walkFixes(startLat, startLon, headingDeg, speedMps, seconds, accM, jitt
     approx(out.speed, 1.4, 0.6, "speed converges at lat=" + lat);
     approxHeading(out.headingTravel, 90, 20, "heading converges at lat=" + lat);
   });
+})();
+
+// ============================================================
+// (h) No-altitude regression guard — the load-bearing check that the 3D-
+// mode EKF extension didn't change the horizontal-only (2D measurement)
+// path. Every fix here omits fix.alt, exactly like every real phone fix
+// before 3D Mode existed; alt/vAlt must stay null forever (never seeded),
+// and lat/lon/speed/heading convergence must match the same tolerances the
+// pre-3D-mode filter was validated against above (testSteadyWalk).
+// ============================================================
+(function testNoAltitudeRegression() {
+  GPSFilter.reset();
+  const trueLat = 51.3, trueLon = -117.0, heading = 90, speed = 1.4;
+  const fixes = walkFixes(trueLat, trueLon, heading, speed, 30, 8, 4);
+  let lastOut = null;
+  const filteredDevs = [], rawDevs = [];
+  fixes.forEach((fix, i) => {
+    lastOut = GPSFilter.push(fix);
+    assert(lastOut.alt === null, "alt stays null when no fix has ever supplied one (fix " + i + ")");
+    assert(lastOut.vAlt === null, "vAlt stays null when no fix has ever supplied one (fix " + i + ")");
+    const truePt = destPoint(trueLat, trueLon, heading, speed * i);
+    if (i > 5) {
+      filteredDevs.push(haversineM([lastOut.lat, lastOut.lon], truePt));
+      rawDevs.push(haversineM([fix.lat, fix.lon], truePt));
+    }
+  });
+  const rms = arr => Math.sqrt(arr.reduce((s, v) => s + v * v, 0) / arr.length);
+  assert(rms(filteredDevs) < rms(rawDevs), "horizontal-only path still smooths below raw jitter with the 6D state extension in place");
+  approx(lastOut.speed, speed, 0.5, "speed still converges to true walking speed with no altitude ever supplied");
+  approxHeading(lastOut.headingTravel, heading, 15, "headingTravel still converges with no altitude ever supplied");
+})();
+
+// ============================================================
+// (i) Altitude fusion / differential trust — a fix with fix.alt seeds and
+// corrects the alt state. The "baro is more accurate than phone GPS
+// altitude" claim only pays off when the TRUE altitude actually changes
+// (e.g. a real climb) and the filter has to decide how much to believe a
+// surprising new reading vs. its own constant-altitude prediction: tight
+// trust (fix.altSource="baro") should track that real change faster/
+// tighter than loose trust (fix.altSource="gps"), for identical input
+// jitter. (A flat, unchanging true altitude does NOT distinguish the two —
+// verified directly: with a static truth, loose trust looks "better" only
+// because it's ignoring genuinely uninformative jitter around a value its
+// own prediction already had right, which is the opposite of what "trust
+// the sensor" is supposed to demonstrate. Don't reintroduce that shape of
+// test here.)
+// ============================================================
+(function testAltitudeFusion() {
+  function climbTrackingErr(source, jitterM, altAcc) {
+    GPSFilter.reset();
+    let lat = 51.3, lon = -117.0, t = 1700000000000, out;
+    const errs = [];
+    for (let i = 0; i <= 29; i++) {
+      // Flat for 15 fixes (let the filter converge), then a real 1 m/s
+      // climb the constant-altitude process model can't predict on its own
+      // — only the measurement correction can track it.
+      const trueAlt = i <= 14 ? 1850 : 1850 + (i - 14) * 1.0;
+      const fix = { lat, lon, acc: 8, alt: trueAlt + jitter(i + 200, jitterM), altSource: source, t: t + i * 1000 };
+      if (altAcc != null) fix.altAcc = altAcc;
+      out = GPSFilter.push(fix);
+      if (i >= 20) errs.push(Math.abs(out.alt - trueAlt)); // steady-ramp region, past the initial correction transient
+      const next = destPoint(lat, lon, 90, 1.4);
+      lat = next[0]; lon = next[1];
+    }
+    return { out, rms: Math.sqrt(errs.reduce((s, v) => s + v * v, 0) / errs.length) };
+  }
+  const gps = climbTrackingErr("gps", 1.5);
+  const baro = climbTrackingErr("baro", 1.5);
+  assert(gps.out.alt !== null, "alt becomes non-null once a fix supplies one (gps-tagged)");
+  assert(baro.rms < gps.rms, "baro-tagged (tight R) tracks a real altitude change tighter than gps-tagged (loose R) for identical input jitter (baro=" + baro.rms.toFixed(2) + "m, gps=" + gps.rms.toFixed(2) + "m) — the differential-trust mechanism the 3D-mode plan requires");
+
+  // A fix.altAcc override should be honored over the altSource default: an
+  // explicit, very loose altAcc should track the same climb worse than the
+  // tight baro default, even with the source still tagged "baro".
+  const loose = climbTrackingErr("baro", 1.5, 40);
+  assert(loose.rms > baro.rms, "explicit fix.altAcc overrides the altSource default (loose altAcc=40 tracks worse than the tight baro default, " + loose.rms.toFixed(2) + "m vs " + baro.rms.toFixed(2) + "m)");
+})();
+
+// ============================================================
+// (j) Altitude seeded from the very first fix vs. arriving mid-sequence —
+// both paths must converge, not just the "seeded from fix 0" case (i)
+// already covers.
+// ============================================================
+(function testAltitudeArrivesLate() {
+  GPSFilter.reset();
+  let lat = 51.3, lon = -117.0, t = 1700000000000, out;
+  for (let i = 0; i <= 5; i++) {
+    out = GPSFilter.push({ lat, lon, acc: 8, t: t + i * 1000 }); // no altitude yet
+    const next = destPoint(lat, lon, 90, 1.4);
+    lat = next[0]; lon = next[1];
+  }
+  assert(out.alt === null, "alt still null before any fix has supplied one");
+  for (let i = 6; i <= 20; i++) {
+    out = GPSFilter.push({ lat, lon, acc: 8, alt: 1850 + jitter(i + 200, 6), altSource: "baro", t: t + i * 1000 });
+    const next = destPoint(lat, lon, 90, 1.4);
+    lat = next[0]; lon = next[1];
+  }
+  assert(out.alt !== null, "alt becomes non-null once altitude arrives mid-sequence");
+  approx(out.alt, 1850, 5, "altitude converges even when it only starts arriving partway through the walk");
+})();
+
+// ============================================================
+// (k) Altitude noise must never degrade the horizontal fix — the exact
+// coupling risk flagged in review: a single joint 3D NIS gate would let a
+// noisy/outlier altitude reading (phone GPS altitude is routinely worse
+// than its own claimed accuracy) inflate measurement noise for BOTH
+// blocks, silently degrading horizontal tracking on the live production
+// path (navigator.geolocation's coords.altitude now flows into every fix
+// there). Runs the identical walk 3 ways — no altitude, clean altitude,
+// and deliberately garbage/outlier altitude on every fix — and asserts
+// the horizontal (lat/lon/speed/heading) output is unaffected by which.
+// ============================================================
+(function testAltitudeDoesNotDegradeHorizontal() {
+  function walkWithAltVariant(altFn) {
+    GPSFilter.reset();
+    const trueLat = 51.3, trueLon = -117.0, heading = 90, speed = 1.4;
+    const fixes = walkFixes(trueLat, trueLon, heading, speed, 30, 8, 4);
+    let out;
+    fixes.forEach((fix, i) => {
+      const withAlt = altFn ? Object.assign({}, fix, altFn(i)) : fix;
+      out = GPSFilter.push(withAlt);
+    });
+    return out;
+  }
+  const noAlt = walkWithAltVariant(null);
+  const cleanAlt = walkWithAltVariant(i => ({ alt: 1850 + jitter(i + 300, 3), altSource: "baro" }));
+  // Wildly noisy AND miscalibrated (claims tight altAcc while jumping
+  // hundreds of metres) — the worst case for a shared/coupled NIS gate.
+  const outlierAlt = walkWithAltVariant(i => ({ alt: 1850 + (i % 2 === 0 ? 400 : -400), altSource: "baro", altAcc: 2 }));
+
+  approx(cleanAlt.lat, noAlt.lat, 1e-7, "clean altitude alongside doesn't shift the horizontal lat estimate");
+  approx(cleanAlt.lon, noAlt.lon, 1e-7, "clean altitude alongside doesn't shift the horizontal lon estimate");
+  approx(outlierAlt.lat, noAlt.lat, 1e-7, "wild altitude outliers don't shift the horizontal lat estimate (the decoupled-gate guarantee)");
+  approx(outlierAlt.lon, noAlt.lon, 1e-7, "wild altitude outliers don't shift the horizontal lon estimate (the decoupled-gate guarantee)");
+  approx(outlierAlt.speed, noAlt.speed, 1e-6, "wild altitude outliers don't shift the horizontal speed estimate");
+  approxHeading(outlierAlt.headingTravel, noAlt.headingTravel, 0.5, "wild altitude outliers don't shift the horizontal heading estimate");
 })();
 
 console.log("\n" + pass + " passed, " + fail + " failed");
