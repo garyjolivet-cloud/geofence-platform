@@ -373,7 +373,7 @@
 <div id="map"></div>
 <div class="base"><select id="baseSel" title="base map">
   <option value="sat">Satellite</option><option value="topo">Topo</option><option value="street">Street</option>
-</select></div>
+</select><button id="tiltBtn" title="Tilt to see terrain (3D Mode)" style="display:none;margin-left:4px">⛰ Tilt</button></div>
 <div class="status" id="status">click the map to read coordinates</div>
 
 <button id="mapKeyBtn" title="Map handle legend">⬤ Key</button>
@@ -644,6 +644,26 @@
       <div class="va-label">Hearing range — overrides this project's defaults for this stop</div>
       <label class="k">full volume within (m) — leave blank to use the project default</label>
       <input id="pRangeClear" type="number" min="0" placeholder="project default">
+    </div>
+
+    <!-- ── Altitude gate (3D Mode) — hidden entirely unless this project's
+         workspace has 3D Mode on (updateAssetPaletteVisibility() toggles
+         this the same way it gates the Asset Palette). Leave both blank
+         for "any altitude", today's behavior — a zone only gets an
+         altitude requirement if an author explicitly sets one here. ── -->
+    <div class="va-section" id="pAltSection" style="display:none">
+      <div class="va-label">Altitude gate (3D Mode) — leave blank for any altitude</div>
+      <div class="row" style="gap:6px">
+        <div style="flex:1">
+          <label class="k">altitude (m)</label>
+          <input id="pAltM" type="number" placeholder="any altitude">
+        </div>
+        <div style="flex:1">
+          <label class="k">tolerance (± m)</label>
+          <input id="pAltTol" type="number" min="0" placeholder="25 m default">
+        </div>
+      </div>
+      <div class="row"><button id="pAltUseTerrain" class="ghost" style="flex:1" type="button">⛰ use terrain height here</button></div>
     </div>
 
     <!-- ── Voices & Audio ── (also reused by path stops for their ambient clip) -->
@@ -944,8 +964,36 @@ function styleFor(k){ return {version:8,
   layers:[{id:"base",type:"raster",source:"base"}]}; }
 
 const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16});
-map.addControl(new maplibregl.NavigationControl());
+map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.doubleClickZoom.disable(); // dblclick on a stop opens the rename/copy/delete menu instead of zooming (map-wide trade-off, MapLibre has no per-layer dblclick-zoom toggle)
+
+/* ---- 3D Mode: terrain (Step 2 of the 3D-mode plan) ----
+   Free, no-auth Terrarium-encoded elevation tiles (verified live during
+   scoping — see 3d-plan.md) — MapLibre's raster-dem source type natively
+   understands encoding:"terrarium", no reprojection needed. Added once,
+   toggled on/off via setTerrain(null) — never removed/re-added, since
+   this file's own basemap switch only ever calls source.setTiles() (see
+   the comment on baseSel's onchange below), never map.setStyle(), so the
+   DEM source is never at risk of being silently wiped by a basemap swap
+   the way it would be in geofence-sim.html (a separate, later step). */
+const TERRAIN_SOURCE_ID="terrain-dem";
+map.on("load",()=>{
+  map.addSource(TERRAIN_SOURCE_ID,{type:"raster-dem",
+    tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+    tileSize:256,encoding:"terrarium",maxzoom:15});
+  updateTerrain();
+});
+let _threeDOn=false; // current app's three_d_enabled — kept in sync by updateAssetPaletteVisibility()
+function isThreeDEnabled(){ return _threeDOn; }
+function updateTerrain(){
+  if(!map.getSource(TERRAIN_SOURCE_ID)) return; // not loaded yet — updateTerrain() runs again from the load handler above
+  map.setTerrain(_threeDOn?{source:TERRAIN_SOURCE_ID,exaggeration:1}:null);
+  document.getElementById("tiltBtn").style.display=_threeDOn?"inline-block":"none";
+  if(!_threeDOn) map.easeTo({pitch:0});
+}
+document.getElementById("tiltBtn").onclick=()=>{
+  map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
+};
 
 let zones=[];               // rich stop objects (see makeZone)
 // Baseline for the leave-Edit publish prompt below — null means "never
@@ -2039,6 +2087,11 @@ function refreshProps(){
   }
   // Hearing-range override — every stop type now, not just path.
   document.getElementById("pRangeClear").value=z.spatialClearM??"";
+  // Altitude gate (3D Mode) — section itself only visible when this
+  // project's workspace has 3D Mode on (updateAssetPaletteVisibility()).
+  document.getElementById("pAltSection").style.display=_threeDOn?"block":"none";
+  document.getElementById("pAltM").value=z.altM??"";
+  document.getElementById("pAltTol").value=z.altToleranceM??"";
   document.getElementById("vaSummary").style.display="block";
   { const vPct=Math.round((z.volume??1)*100);
     document.getElementById("pVolume").value=vPct;
@@ -2298,6 +2351,20 @@ document.getElementById("pMoveMode").addEventListener("input",()=>{
 bindProp("pSpeed",z=>{ z.speedKmh=Math.max(0,+document.getElementById("pSpeed").value||0); });
 bindProp("pLoopMode",z=>{ z.loopMode=document.getElementById("pLoopMode").value; });
 bindProp("pRangeClear",z=>{ const v=document.getElementById("pRangeClear").value; z.spatialClearM=v===""?null:Math.max(0,+v||0); });
+bindProp("pAltM",z=>{ const v=document.getElementById("pAltM").value; z.altM=v===""?null:+v||0; });
+bindProp("pAltTol",z=>{ const v=document.getElementById("pAltTol").value; z.altToleranceM=v===""?null:Math.max(0,+v||0); });
+document.getElementById("pAltUseTerrain").onclick=()=>{
+  if(sel<0) return;
+  const z=zones[sel];
+  if(!map.getTerrain()){ document.getElementById("status").textContent="turn on 3D Mode's terrain first (tilt the map — ⛰ Tilt, top right)"; return; }
+  const c=zoneCenterLonLat(z);
+  const elevM=map.queryTerrainElevation(c);
+  if(elevM==null){ document.getElementById("status").textContent="terrain not loaded here yet — pan/zoom near this stop, then try again"; return; }
+  z.altM=Math.round(elevM);
+  document.getElementById("pAltM").value=z.altM;
+  autoSave();
+  document.getElementById("status").textContent="altitude set to "+z.altM+" m from terrain";
+};
 document.getElementById("pVolume").addEventListener("input",()=>{
   if(sel<0) return;
   const v=+document.getElementById("pVolume").value;
@@ -2399,13 +2466,16 @@ async function loadApps(sel){
     updateAssetPaletteVisibility();
   }catch(e){}
 }
-// Asset Palette (AR/3D objects) is gated by the single app-level
-// three_d_enabled flag — same flag that will turn on terrain across every
-// map surface. Re-checked whenever the app picker changes, since a project
-// can be re-homed to a different workspace without a page reload.
+// Asset Palette (AR/3D objects), map terrain, and each stop's altitude-gate
+// fields are all gated by the single app-level three_d_enabled flag.
+// Re-checked whenever the app picker changes, since a project can be
+// re-homed to a different workspace without a page reload.
 function updateAssetPaletteVisibility(){
   const app=_appsCache.find(a=>a.id===document.getElementById("appSel").value);
-  document.getElementById("assetPalette").classList.toggle("on", !!(app&&app.threeDEnabled));
+  _threeDOn=!!(app&&app.threeDEnabled);
+  document.getElementById("assetPalette").classList.toggle("on", _threeDOn);
+  updateTerrain();
+  if(sel>=0) document.getElementById("pAltSection").style.display=_threeDOn?"block":"none";
 }
 document.getElementById("appSel").onchange=updateAssetPaletteVisibility;
 // customer picker — which client (customer) this project is uploaded to
@@ -4980,15 +5050,29 @@ function simZoneNearestDistM(z,raw){
 
 function feedSim(lat,lon,acc,t){
   acc=acc||5; t=t||Date.now();
-  const sm=GPSFilter.push({lat,lon,acc,t});
+  // Terrain-derived altitude for Test Mode's altitude-gated trigger
+  // validation (3D-mode plan, Step 2 — "Test Mode validates terrain +
+  // altitude-gated triggers without hardware"). Best-effort:
+  // queryTerrainElevation() needs 3D Mode on AND terrain tiles already
+  // fetched for the current view — null falls through to SimFencer.altOk()'s
+  // existing "no altitude signal, always pass" default, same as before 3D
+  // Mode existed. Tagged altSource:"baro" (tight trust) since a DEM sample
+  // is deterministic ground truth for a given lat/lon, not a noisy sensor
+  // reading — there's no "GPS vs baro" distinction to simulate here.
+  let terrainAlt=null;
+  if(isThreeDEnabled()&&map.getTerrain()){
+    try{ terrainAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
+  }
+  const fix={lat,lon,acc,t};
+  if(terrainAlt!=null){ fix.alt=terrainAlt; fix.altAcc=5; fix.altSource="baro"; }
+  const sm=GPSFilter.push(fix);
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
   simLastSmoothed=sm;
-  // use raw (unsmoothed) position for zone detection so small zones aren't missed at speed.
-  // No altitude input is simulated yet (no manual control, no Walking Path
-  // elevation replay) — sm.alt stays null, and SimFencer.altOk() already
-  // treats a null p.alt as "pass" for any zone with altM set, matching
-  // geofence-sim.html's identical current state.
-  const raw={lat,lon,acc,alt:sm.alt};
+  // use raw (unsmoothed) position for zone detection so small zones aren't
+  // missed at speed — altitude uses the immediate terrain sample for the
+  // same reason (not the EKF-smoothed sm.alt, which would lag behind a
+  // fast simulated walk between stops at different elevations).
+  const raw={lat,lon,acc,alt:terrainAlt};
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;
