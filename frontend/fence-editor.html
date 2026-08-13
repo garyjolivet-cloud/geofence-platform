@@ -454,7 +454,14 @@
      the draft-restore banner (autoRestore()) — one explains there's nothing
      selected, the other offers to recover unsaved local work — rather than
      the restore banner being the only thing a bare visit ever shows. -->
-<div id="noProjectHint" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(6,10,16,.82);
+<!-- z-index:20 is deliberate, not arbitrary — #crossToolNav (the shared nav
+     bar, where the Project box you need to actually click lives) is
+     z-index:50. Real bug found live, 2026-08-12: this started at z-index:400,
+     sitting on top of the nav bar entirely and silently swallowing every
+     click on it, including the one input you need to get out of this
+     screen in the first place. Must stay below 50, above the floating
+     panels underneath it (.panel/#audioPalette/#assetPalette top out at 6). -->
+<div id="noProjectHint" style="display:none;position:fixed;inset:0;z-index:20;background:rgba(6,10,16,.82);
      align-items:center;justify-content:center;text-align:center;font-family:'Barlow Condensed'">
   <div style="max-width:340px;color:var(--ice,#c8dff2);font-size:15px;line-height:1.5">
     <div style="font-size:28px;margin-bottom:10px">🗺️</div>
