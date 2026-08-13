@@ -944,6 +944,10 @@ map.addControl(new maplibregl.NavigationControl());
 map.doubleClickZoom.disable(); // dblclick on a stop opens the rename/copy/delete menu instead of zooming (map-wide trade-off, MapLibre has no per-layer dblclick-zoom toggle)
 
 let zones=[];               // rich stop objects (see makeZone)
+// Baseline for the leave-Edit publish prompt below — null means "never
+// established a baseline yet" (nothing loaded, nothing published), so a
+// brand-new zero-zone session isn't treated as having unpublished changes.
+let _publishedSnapshot=null;
 let tool=null, draft=[];    // current tool + in-progress [lon,lat] points
 let sel=-1;                 // selected zone index (-1 = none)
 let coBulkMode=false;        // "Bulk assign" mode — shows checkboxes in #zlist
@@ -3927,6 +3931,7 @@ async function loadFromPlatform(id){
     _currentProjectId=id;
     document.getElementById("out").value=JSON.stringify(b,null,2);
     document.getElementById("importBtn").click();
+    _publishedSnapshot=JSON.stringify(zones); // baseline for the leave-Edit publish prompt — a freshly-loaded project isn't "dirty" just because it has zones
     document.getElementById("projCrumb").textContent=b.name||id;
     await Promise.all([_appsLoaded,_clientsLoaded]);
     let realAppId=b.appId||null;
@@ -4010,12 +4015,43 @@ async function publishToPlatform(){
         const pending=TopNav.getPendingProject();
         if(pending && pending.id===id) TopNav.clearPendingProject();
       }
+      // The zones.length guard above already means we can only reach here
+      // with at least one real stop — unlocks Audio Studio/Chatterbox/Code
+      // Library/Record, gated shut until this point per explicit feedback,
+      // 2026-08-12 ("only allow edit to be active... open up all code once
+      // a stop is created").
+      if(window.TopNav && TopNav.markHasStops) TopNav.markHasStops(id);
+      _publishedSnapshot=JSON.stringify(zones); // see the leave-Edit publish-prompt below
+      return true;
     }
     else if(r.status===401){ clearToken(); ps().textContent="unauthorized — token cleared, try again"; toast("Unauthorized — log in again and retry.","err"); }
     else { ps().textContent="publish failed: "+(j.error||("HTTP "+r.status)); toast("Publish failed: "+(j.error||("HTTP "+r.status)),"err"); }
   }catch(e){ ps().textContent="publish failed: "+e.message; toast("Publish failed: "+e.message,"err"); }
 }
 document.getElementById("publishBtn").onclick=publishToPlatform;
+// Leave-Edit publish prompt — real feedback, 2026-08-12: "publish should
+// happen automatically if you leave edit, maybe with a question — publish?"
+// Delegated on #crossToolNav itself (present in the static HTML — no need
+// to wait for TopNav.init() to finish populating its <a> children, since
+// this only looks at whatever's actually clicked). A gated link (no href —
+// see top-nav.js's needsStops gating) is left alone entirely; nothing here
+// needs to duplicate that logic.
+document.getElementById("crossToolNav").addEventListener("click", (e) => {
+  const a = e.target.closest("a");
+  if(!a || !a.hasAttribute("href")) return;
+  const dirty = zones.length>0 && JSON.stringify(zones)!==_publishedSnapshot;
+  if(!dirty) return;
+  e.preventDefault();
+  const href = a.getAttribute("href");
+  if(confirm("You have unpublished changes on this tour. Publish before leaving?")){
+    // Only navigate away if the publish actually succeeded — a validation
+    // error (bad geometry) or network failure should keep the user on the
+    // page so they can see the toast and fix it, not silently discard it.
+    publishToPlatform().then((ok)=>{ if(ok) location.href=href; });
+  } else {
+    location.href=href;
+  }
+}, true);
 // Delete Project / Delete App / Nuke were removed from the editor (2026-07-19)
 // — project deletion lives on the homepage project cards; app deletion and
 // nuke are master-only operations that don't belong in the day-to-day

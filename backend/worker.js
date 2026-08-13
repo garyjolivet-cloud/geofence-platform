@@ -1144,7 +1144,7 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
@@ -1677,12 +1677,12 @@ async function api(request, env, url) {
         // e.g. Field Recorder's own publish path mentioned above) would
         // silently flip an existing template project back to non-template
         // on its next publish.
-        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId), is_template=COALESCE(?,is_template) WHERE id=?")
-          .bind(bundle.name || null, ver, now, resolvedAppId, bundle.guideId || null, orgOverride, bundle.isTemplate != null ? (bundle.isTemplate ? 1 : 0) : null, pid).run();
+        await env.DB.prepare("UPDATE project SET name=COALESCE(?,name), bundleVersion=?, zoneCount=?, updatedAt=?, status='live', appId=COALESCE(?,appId), guide_id=COALESCE(?,guide_id), orgId=COALESCE(?,orgId), is_template=COALESCE(?,is_template) WHERE id=?")
+          .bind(bundle.name || null, ver, bundle.zones.length, now, resolvedAppId, bundle.guideId || null, orgOverride, bundle.isTemplate != null ? (bundle.isTemplate ? 1 : 0) : null, pid).run();
       } else {
         await env.DB.prepare(
-          "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-        ).bind(pid, finalOrgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
+          "INSERT INTO project (id,orgId,appId,name,slug,mode,status,bundleVersion,zoneCount,createdAt,updatedAt,guide_id,scheduled_date,is_template,tour_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ).bind(pid, finalOrgId, resolvedAppId, bundle.name || pid, bundle.project || pid, "walking-tour", "live", ver, bundle.zones.length, now, now, bundle.guideId||null, bundle.scheduledDate||null, bundle.isTemplate?1:0, bundle.tourType||null).run();
       }
       await env.DB.prepare(
         "INSERT INTO published_bundle (projectId,version,json,publishedAt) VALUES (?,?,?,?)"

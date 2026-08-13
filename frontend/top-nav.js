@@ -99,12 +99,18 @@
     return t;
   }
 
+  // needsStops: real feedback, 2026-08-12 — a brand-new project has nothing
+  // for these four to actually operate on (no stops to attach audio/code
+  // objects to, nothing to record against) until at least one real stop has
+  // been published. Edit itself, and the two workspace/company-level tools,
+  // don't need this — Edit is precisely how a stop gets created in the
+  // first place.
   const TOOLS = [
     { key:"edit",         label:"Edit",          href:"/editor" },
-    { key:"audio",        label:"Audio Studio",  href:"/studio" },
-    { key:"chatterbox",   label:"Chatterbox",    href:"/chatterbox" },
-    { key:"code-library", label:"Code Library",  href:"/code-library" },
-    { key:"record",       label:"Record",        href:"/record" },
+    { key:"audio",        label:"Audio Studio",  href:"/studio",       needsStops:true },
+    { key:"chatterbox",   label:"Chatterbox",    href:"/chatterbox",   needsStops:true },
+    { key:"code-library", label:"Code Library",  href:"/code-library", needsStops:true },
+    { key:"record",       label:"Record",        href:"/record",       needsStops:true },
     { key:"dashboard",    label:"Dashboard",     href:"/dashboard" },
     { key:"clients",      label:"Clients",       href:"/clients" }
   ];
@@ -139,6 +145,15 @@
     let company = (window.ClientPicker ? window.ClientPicker.resolve() : "") || opts.defaultCompany || "";
     let project = resolveProject();
     let projects = []; // this company's projects, refetched whenever company changes
+    // Defaults true — an existing/already-selected project (picked from the
+    // dropdown, or arrived at via a direct ?project= link) is assumed to
+    // already have stops; there's no cheap way to know otherwise without an
+    // extra fetch, and wrongly gating a real project's tools shut would be
+    // far more disruptive than the reverse. Only a project this session
+    // just eagerly created (startNewProject) is known to start empty, and
+    // only markHasStops() (called by fence-editor.html after a real
+    // publish) flips it true from there.
+    let projectHasStops = true;
 
     // ---- Company pulldown ----
     const companySlot = document.createElement("span");
@@ -237,13 +252,14 @@
       toolLinks[t.key] = a;
     });
     function refreshToolHrefs(){
-      const gated = !company || !project;
+      const baseGated = !company || !project;
       TOOLS.forEach(t => {
         const a = toolLinks[t.key];
+        const gated = baseGated || (t.needsStops && !projectHasStops);
         if(gated){
           a.removeAttribute("href");
           a.setAttribute("aria-disabled","true");
-          a.title = "Select a workspace and project first";
+          a.title = baseGated ? "Select a workspace and project first" : "Add at least one stop in Edit first";
           a.style.opacity = "0.4"; a.style.cursor = "not-allowed";
         } else {
           a.href = toolHref(t.href, project, company);
@@ -254,6 +270,19 @@
       });
     }
     refreshToolHrefs();
+    // markHasStops needs projectHasStops/refreshToolHrefs, both local to
+    // this init() closure (one shared nav bar per page load) — attached
+    // onto the shared window.TopNav object here rather than as a plain
+    // module-level export, since there's no per-page closure to reach at
+    // that outer scope. Called by fence-editor.html right after a real
+    // (non-empty) publish succeeds, to unlock the needsStops tools.
+    window.TopNav.markHasStops = function(id){
+      if(id !== project) return; // stale call from a page the user already navigated away from
+      projectHasStops = true;
+      const entry = projects.find(p => p.id === id);
+      if(entry) entry.hasStops = true;
+      refreshToolHrefs();
+    };
 
     // ---- Project pulldown behavior ----
     let menu = null, highlighted = -1;
@@ -282,6 +311,7 @@
     function projectLabel(p){ return p.name || p.id; }
     function selectProject(p){
       project = p.id; setProject(project);
+      projectHasStops = (p.zoneCount !== undefined) ? (p.zoneCount > 0) : (p.hasStops !== undefined ? p.hasStops : true);
       projInput.value = projectLabel(p);
       closeMenu();
       refreshToolHrefs();
@@ -397,9 +427,32 @@
       // harder to accidentally collide, not weaker.
       const id = "tour-"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
       const name = (presetName||"").trim() || ("New Tour "+Date.now().toString(36).slice(-4));
-      project = id;
+      // Real feedback, 2026-08-12: "creating" a project used to only set
+      // local/pending state — nothing actually existed until the user drew
+      // a stop and hit Publish, so it never showed up under the workspace
+      // right away, which read as broken rather than just "not saved yet".
+      // This now creates a REAL project immediately (a version-1 bundle
+      // with zero zones — worker.js's bundle PUT handler only checks that
+      // `zones` is an array, not that it's non-empty, so this is a
+      // legitimate, supported publish, not a hack). It's visible in the
+      // workspace's tour list and every project picker the instant this
+      // call returns.
+      const token = askToken(); if(!token) return;
+      try{
+        const r = await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle",{
+          method:"PUT", headers:{"content-type":"application/json", authorization:"Bearer "+token},
+          body: JSON.stringify({ createIfMissing:true, appId, orgId:company, name, zones:[] })
+        });
+        if(!r.ok){ const j=await r.json().catch(()=>({})); alert("Couldn't create project: "+(j.error||r.status)); return; }
+      }catch(e){ alert("Couldn't create project: "+e.message); return; }
+      project = id; setProject(id);
+      projectHasStops = false; // real feedback: only Edit unlocks until a stop exists — see refreshToolHrefs()
+      // Kept as a defensive fallback, not the primary mechanism anymore —
+      // now that creation is eager, a fresh loadProjects() fetch finds this
+      // project immediately on its own; the sidecar only still matters if
+      // that fetch has any latency/race on a page loaded a moment later.
       setPendingProject(id, name, appId, company);
-      projects.push({ id, name, appId, orgId: company, _pending: true });
+      projects.push({ id, name, appId, orgId: company, bundleVersion: 1, hasStops: false });
       projInput.value = name;
       closeMenu();
       refreshToolHrefs();
@@ -583,6 +636,24 @@
     await loadProjects();
     const initialProj = projects.find(p => p.id === project);
     projInput.value = initialProj ? projectLabel(initialProj) : "";
+    // A direct/reloaded page load (e.g. a bookmarked /studio?project=X)
+    // resolves `project` from the URL/localStorage without ever going
+    // through selectProject() — without this, projectHasStops stayed at its
+    // permissive `true` default (line ~156) and a project with zero
+    // published stops would show every needsStops tool as unlocked the
+    // instant you reloaded, even though picking it from the dropdown
+    // correctly gated it. A brand-new project with no D1 row at all (the
+    // pending sidecar's case) has no `initialProj` from the real fetch, so
+    // it correctly falls through to the sidecar-aware default below instead.
+    if(initialProj && !initialProj._pending){
+      projectHasStops = (initialProj.zoneCount !== undefined) ? (initialProj.zoneCount > 0)
+        : (initialProj.hasStops !== undefined ? initialProj.hasStops : true);
+    } else if(project){
+      // Either the sidecar-spliced pending entry (no zoneCount, not
+      // published yet) or no matching project row was found at all —
+      // neither can have a published stop.
+      projectHasStops = false;
+    }
     refreshToolHrefs();
   }
 
