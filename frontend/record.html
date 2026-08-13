@@ -109,6 +109,7 @@
 <div class="hdr">
   <h1>🎥 Record</h1>
   <span class="crumb" id="hdrCrumb"></span>
+  <button id="btnTilt" onclick="onTiltClick()" title="Tilt to see terrain (3D Mode)" style="display:none;background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⛰</button>
 </div>
 <div id="topNav"></div>
 
@@ -238,6 +239,31 @@ const S = {
   tab:"playback"
 };
 let map;
+// 3D Mode terrain (3D-mode plan, Step 5 — last of the 5 map surfaces).
+// threeDEnabled has no persistent "current bundle" object to live on here
+// (unlike the other 4 pages) — record.html only ever fetches the project
+// bundle on demand for the tripline-zone picker (loadTriplineZones()) — so
+// it's fetched separately, once per enterProject() call, into its own var.
+const TERRAIN_SOURCE_ID="terrain-dem";
+let threeDEnabled=false;
+function updateTerrain(){
+  if(!map || !map.getSource(TERRAIN_SOURCE_ID)) return;
+  map.setTerrain(threeDEnabled?{source:TERRAIN_SOURCE_ID,exaggeration:1}:null);
+  const btn=document.getElementById("btnTilt");
+  if(btn) btn.style.display=threeDEnabled?"inline-block":"none";
+  if(!threeDEnabled) map.easeTo({pitch:0});
+}
+function onTiltClick(){
+  if(!map) return;
+  map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
+}
+async function loadThreeDFlag(pid){
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/bundle");
+    threeDEnabled = r.ok ? !!(await r.json()).threeDEnabled : false;
+  }catch(e){ threeDEnabled=false; }
+  updateTerrain();
+}
 const TRACK_COLORS=["#ff6a3d","#38e0a6","#c8dff2","#ffc24d","#ff2f4e","#b96fff"];
 function colorFor(i){ return TRACK_COLORS[i%TRACK_COLORS.length]; }
 
@@ -409,7 +435,7 @@ function initMap(){
       layers:[{id:"base",type:"raster",source:"base"}]},
     center:[0,0], zoom:2
   });
-  map.addControl(new maplibregl.NavigationControl({showCompass:false}),"top-left");
+  map.addControl(new maplibregl.NavigationControl({showCompass:false,visualizePitch:true}),"top-left");
   map.on("load",()=>{
     map.addSource("heatmap-src",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
     map.addLayer({id:"heatmap-layer",type:"heatmap",source:"heatmap-src",layout:{visibility:"none"},
@@ -419,6 +445,12 @@ function initMap(){
         "heatmap-radius":18,
         "heatmap-opacity":0.75
       }});
+    // 3D Mode terrain — no basemap switcher on this page (confirmed, no
+    // setStyle() anywhere in this file), so no re-add-on-styledata concern.
+    map.addSource(TERRAIN_SOURCE_ID,{type:"raster-dem",
+      tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+      tileSize:256,encoding:"terrarium",maxzoom:15});
+    updateTerrain();
   });
 }
 function trackGeoJSON(pts){ return {type:"Feature",geometry:{type:"LineString",coordinates:pts.map(p=>[p.lon,p.lat])}}; }
@@ -840,6 +872,7 @@ function showNoProject(){
   document.getElementById("noProjectHint").style.display="block";
   document.getElementById("recordScreen").classList.remove("show");
   document.getElementById("hdrCrumb").textContent="";
+  threeDEnabled=false; updateTerrain();
 }
 function showRecordScreen(){
   document.getElementById("noProjectHint").style.display="none";
@@ -859,7 +892,7 @@ async function enterProject(id, proj){
       if(p) document.getElementById("hdrCrumb").textContent=p.name||p.id;
     }catch(e){}
   }
-  await Promise.all([loadFolders(), loadSessions(), loadTriplineZones()]);
+  await Promise.all([loadFolders(), loadSessions(), loadTriplineZones(), loadThreeDFlag(id)]);
 }
 
 initMap();
