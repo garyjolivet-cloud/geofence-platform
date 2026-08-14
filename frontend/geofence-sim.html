@@ -7,6 +7,7 @@
 <script src="role-gate.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <script src="/kalman-filter.js"></script>
+<script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -94,6 +95,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
         <button class="sm" id="btnTopo">Topo</button>
         <button class="sm" id="btnOSM">Streets</button>
         <button class="sm" id="btnTilt" style="display:none" title="Tilt to see terrain (3D Mode)">⛰ Tilt</button>
+        <button class="sm" id="btnBle" title="Connect a real BLE GPS/barometer dongle — its live fixes drive the avatar instead of Play/drag">📡 BLE preview</button>
       </div>
     </div>
 
@@ -827,28 +829,33 @@ function zoneNearestDistM(z,p,nowMs){
 /* =========================== ENGINE PIPELINE =========================== */
 /* mirrors HUD.onFix: smooth -> geofence -> needle pick */
 let prevP=null, fixCount=0;
-function feed(lat,lon,acc,t){
+function feed(lat,lon,acc,t,bleFix){
   window.__lastAcc=acc;
-  // Terrain-derived altitude (3D-mode plan, Step 4) — mirrors
-  // fence-editor.html's feedSim() exactly: queryTerrainElevation() needs
-  // 3D Mode on AND terrain tiles already fetched for the current view;
-  // null falls through to Geofencer.altOk()'s existing "no altitude
-  // signal, always pass" default. Tagged altSource:"baro" since a DEM
-  // sample is deterministic ground truth, not a noisy sensor reading —
+  // Altitude priority (3D-mode plan, item D rescoped 2026-08-14): a real
+  // connected BLE dongle's barometric reading (bleFix, from onBleFix()
+  // below) wins when present — that's the actual hardware-preview point of
+  // this integration. Otherwise mirrors fence-editor.html's feedSim()
+  // exactly: queryTerrainElevation() needs 3D Mode on AND terrain tiles
+  // already fetched for the current view; null falls through to
+  // Geofencer.altOk()'s existing "no altitude signal, always pass"
+  // default. Terrain-derived readings are tagged altSource:"baro" since a
+  // DEM sample is deterministic ground truth, not a noisy sensor reading —
   // and it's the SAME Terrarium source fence-editor.html's "use terrain
   // height here" button reads altM from, so there's no datum mismatch
   // between what an author set and what this sim checks it against.
-  let terrainAlt=null;
-  if(BUNDLE.threeDEnabled && map.getTerrain()){
-    try{ terrainAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
+  let effAlt=null;
+  if(bleFix && bleFix.altSource==='baro' && bleFix.alt!=null){
+    effAlt=bleFix.alt;
+  } else if(BUNDLE.threeDEnabled && map.getTerrain()){
+    try{ effAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
   }
   const fix={lat,lon,acc,t};
-  if(terrainAlt!=null){ fix.alt=terrainAlt; fix.altAcc=5; fix.altSource="baro"; }
+  if(effAlt!=null){ fix.alt=effAlt; fix.altAcc=(bleFix&&bleFix.altAcc!=null)?bleFix.altAcc:5; fix.altSource="baro"; }
   const sm=GPSFilter.push(fix);
-  // p.alt uses the immediate terrain sample, not the EKF-smoothed sm.alt —
-  // same reasoning as feedSim(): avoids lag behind a fast simulated
+  // p.alt uses the immediate sample, not the EKF-smoothed sm.alt — same
+  // reasoning as feedSim(): avoids lag behind a fast simulated
   // teleport/drag between stops at different elevations.
-  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:terrainAlt};
+  const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:effAlt};
   const active=Geofencer.update(p,prevP,t);
   prevP=p; fixCount++;
   AmbientClip.update(p, t);
@@ -869,6 +876,34 @@ function feed(lat,lon,acc,t){
 
 function placeAvatar(lat,lon){ avatar.setLngLat([lon,lat]); Audio.unlock();
   feed(lat,lon,(+jit.value)||5,Date.now()); }
+
+// BLE hardware preview (item D, 3D-mode plan, rescoped 2026-08-14) — lets
+// an author connect a real BLE GPS/barometer dongle at their desk and see
+// exactly what the hardware reports against their zones/terrain, instead
+// of only the simulated/dragged avatar. A connected dongle's live fixes
+// drive the avatar directly; Play is paused while connected so the two
+// position sources can't fight over feed().
+BleGPS.init({
+  onStatus(){}, onLog(cls,msg){ log(cls,msg); },
+  onFix(fix){
+    avatar.setLngLat([fix.lon,fix.lat]);
+    feed(fix.lat,fix.lon,fix.acc||5,fix.t,fix);
+  },
+  onConnected(name){
+    if(playing) pause();
+    document.getElementById("btnBle").classList.add("on");
+    document.getElementById("btnBle").textContent="📡 BLE connected";
+    log("ev-sys","BLE preview connected: "+name);
+  },
+  onDisconnected(){
+    document.getElementById("btnBle").classList.remove("on");
+    document.getElementById("btnBle").textContent="📡 BLE preview";
+  }
+});
+document.getElementById("btnBle").onclick=()=>{
+  if(BleGPS.active) BleGPS.disconnect();
+  else BleGPS.connect();
+};
 
 /* =============================== CONSOLE =============================== */
 function log(cls,msg){ const c=document.getElementById("console");

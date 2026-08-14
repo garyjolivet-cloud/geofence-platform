@@ -6,6 +6,7 @@
 <title>Field</title>
 <script src="role-gate.js"></script>
 <script src="/kalman-filter.js"></script>
+<script src="/ble-gps.js"></script>
 <script src="code-objects.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
@@ -197,6 +198,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     <span id="projName">Field</span>
     <button id="btnQr" onclick="showFieldQr()" title="QR code to open this on your phone" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">▦</button>
     <button id="btnTilt" onclick="onTiltClick()" title="Tilt to see terrain (3D Mode)" style="display:none;background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⛰</button>
+    <button id="btnBle" onclick="onBleClick()" title="Connect BLE barometer for accurate elevation" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">🛰</button>
     <button id="btnClear" onclick="clearCurrentSession()" title="Clear local data" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⚡</button>
     <button id="btnPub" disabled>✓ Pub</button>
   </div>
@@ -414,6 +416,57 @@ function updateTerrain(){
 function onTiltClick(){
   if(!map) return;
   map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
+}
+
+// BLE barometer (item D, 3D-mode plan, rescoped 2026-08-14) — the highest-
+// value consumer of ble-gps.js's altitude support: phone GPS altitude
+// stays the position source (lat/lon/acc/heading), a connected dongle only
+// *upgrades* the altitude tagged onto each recorded Walking Path point.
+// Not a full GPS-source swap like geofence-engine.html's Device/Bluetooth
+// radio — this page has one always-on phone GPS watch, so BLE here is
+// purely an optional altitude overlay, cached and merged into the next
+// phone fix rather than replacing it outright.
+let lastBleAlt=null;   // {alt,altAcc,altSource,t} — most recent BLE reading, or null
+const BLE_ALT_MAX_AGE_MS=3000;
+BleGPS.init({
+  // Surface errors (e.g. "Web Bluetooth not supported" — true on every
+  // iOS Safari, this app's most-used mobile browser per CLAUDE.md's audio-
+  // unlock notes) instead of a silent no-op — otherwise tapping the button
+  // on an unsupported browser flashes amber and reverts with no feedback.
+  onStatus(cls,msg){ if(cls==='error') setStatus(msg); }, onLog(){},
+  onFix(fix){
+    // Only a real barometric reading upgrades the recorded point — same
+    // trust rule as geofence-sim.html/fence-editor.html Test Mode; a plain
+    // GPS-derived LNS elevation field is no better than the phone's own
+    // altitude and shouldn't silently win just because a dongle is connected.
+    if(fix.alt==null || fix.altSource!=='baro') return;
+    lastBleAlt={alt:fix.alt, altAcc:fix.altAcc, altSource:fix.altSource, t:Date.now()};
+  },
+  onConnected(name){
+    const b=document.getElementById("btnBle");
+    if(b){ b.style.color="var(--go)"; b.title="BLE barometer connected: "+name+" — tap to disconnect"; }
+    setStatus("BLE barometer connected: "+name);
+  },
+  onDisconnected(){
+    lastBleAlt=null;
+    const b=document.getElementById("btnBle");
+    if(b){ b.style.color="var(--fog)"; b.title="Connect BLE barometer for accurate elevation"; }
+  }
+});
+function onBleClick(){
+  if(BleGPS.active){ BleGPS.disconnect(); return; }
+  const b=document.getElementById("btnBle");
+  if(b) b.style.color="var(--amber)";
+  BleGPS.connect().then(()=>{
+    if(!BleGPS.active && b) b.style.color="var(--fog)";   // connect attempt failed/cancelled
+  });
+}
+// Prefer a fresh BLE barometric reading over the phone's own altitude;
+// falls back to whatever the phone GPS fix itself provided (possibly null)
+// when no dongle is connected or its last reading is stale.
+function resolveAlt(phoneAlt){
+  if(lastBleAlt && (Date.now()-lastBleAlt.t)<=BLE_ALT_MAX_AGE_MS) return lastBleAlt.alt;
+  return phoneAlt;
 }
 
 /* ── helpers ────────────────────────────────────────── */
@@ -1473,10 +1526,12 @@ async function initPermissions(){
         if(headingBuffer.length > 10) headingBuffer.shift();
       }
       // altitude is null on many devices/browsers (no barometer, or a fix that
-      // hasn't resolved vertical position yet) — carried through as-is; the
-      // elevation profile below simply treats a path with no altitude data as
-      // "no elevation available" rather than guessing.
-      if(pathRecording){ pathPoints.push({lat,lon,acc,alt:(altitude!=null&&!isNaN(altitude))?altitude:null,t:pos.timestamp}); updatePathStatsUI(); }
+      // hasn't resolved vertical position yet); resolveAlt() upgrades this to
+      // a connected BLE dongle's real barometric reading when one's recent
+      // (item D, 3D-mode plan) — the elevation profile below still simply
+      // treats a path with no altitude data at all as "no elevation
+      // available" rather than guessing.
+      if(pathRecording){ pathPoints.push({lat,lon,acc,alt:resolveAlt((altitude!=null&&!isNaN(altitude))?altitude:null),t:pos.timestamp}); updatePathStatsUI(); }
       // RECORD capture runs off recordSessionId, independent of which footer
       // tab is currently visible (recordMode) — starting a session and then
       // switching to Persistent/Live/Path to do other work must not stop it.

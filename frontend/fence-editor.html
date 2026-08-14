@@ -364,6 +364,7 @@
 <script src="/pipeline-runtime.js"></script>
 <script src="/tour-state.js"></script>
 <script src="/kalman-filter.js"></script>
+<script src="/ble-gps.js"></script>
 <script src="/code-objects.js"></script>
 <script src="/audio-tree.js"></script>
 <script src="/asset-tree.js"></script>
@@ -564,6 +565,7 @@
       <button id="simWalk" class="ghost" style="flex:1">▶ Walk stops</button>
       <button id="simDirBtn" class="ghost" style="flex:0 0 auto;padding:8px 10px" title="Walk direction: forward">⏩</button>
       <button id="simPlay" class="ghost" style="flex:0 0 auto;padding:8px 10px">▶</button>
+      <button id="simBle" class="ghost" style="flex:0 0 auto;padding:8px 10px" title="Connect a real BLE GPS/barometer dongle — its live fixes drive the Test Mode avatar instead of Walk/Play/drag">📡</button>
     </div>
     <div style="margin:2px 0">
       <div class="spd-presets">
@@ -5054,31 +5056,36 @@ function simZoneNearestDistM(z,raw){
   return SimGeo.hav([raw.lat,raw.lon],z.center);
 }
 
-function feedSim(lat,lon,acc,t){
+function feedSim(lat,lon,acc,t,bleFix){
   acc=acc||5; t=t||Date.now();
-  // Terrain-derived altitude for Test Mode's altitude-gated trigger
-  // validation (3D-mode plan, Step 2 — "Test Mode validates terrain +
-  // altitude-gated triggers without hardware"). Best-effort:
-  // queryTerrainElevation() needs 3D Mode on AND terrain tiles already
-  // fetched for the current view — null falls through to SimFencer.altOk()'s
-  // existing "no altitude signal, always pass" default, same as before 3D
-  // Mode existed. Tagged altSource:"baro" (tight trust) since a DEM sample
-  // is deterministic ground truth for a given lat/lon, not a noisy sensor
-  // reading — there's no "GPS vs baro" distinction to simulate here.
-  let terrainAlt=null;
-  if(isThreeDEnabled()&&map.getTerrain()){
-    try{ terrainAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
+  // Altitude priority (3D-mode plan, Step 2, item D rescoped 2026-08-14):
+  // a real connected BLE dongle's barometric reading (bleFix, from
+  // BleGPS.init() below) wins when present, letting Test Mode validate
+  // altitude-gated triggers against real hardware. Otherwise falls back to
+  // a terrain-DEM lookup for the same validation without hardware — best-
+  // effort: queryTerrainElevation() needs 3D Mode on AND terrain tiles
+  // already fetched for the current view — null falls through to
+  // SimFencer.altOk()'s existing "no altitude signal, always pass"
+  // default, same as before 3D Mode existed. Terrain-derived readings are
+  // tagged altSource:"baro" (tight trust) since a DEM sample is
+  // deterministic ground truth for a given lat/lon, not a noisy sensor
+  // reading.
+  let effAlt=null;
+  if(bleFix && bleFix.altSource==='baro' && bleFix.alt!=null){
+    effAlt=bleFix.alt;
+  } else if(isThreeDEnabled()&&map.getTerrain()){
+    try{ effAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
   }
   const fix={lat,lon,acc,t};
-  if(terrainAlt!=null){ fix.alt=terrainAlt; fix.altAcc=5; fix.altSource="baro"; }
+  if(effAlt!=null){ fix.alt=effAlt; fix.altAcc=(bleFix&&bleFix.altAcc!=null)?bleFix.altAcc:5; fix.altSource="baro"; }
   const sm=GPSFilter.push(fix);
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
   simLastSmoothed=sm;
   // use raw (unsmoothed) position for zone detection so small zones aren't
-  // missed at speed — altitude uses the immediate terrain sample for the
-  // same reason (not the EKF-smoothed sm.alt, which would lag behind a
-  // fast simulated walk between stops at different elevations).
-  const raw={lat,lon,acc,alt:terrainAlt};
+  // missed at speed — altitude uses the immediate sample for the same
+  // reason (not the EKF-smoothed sm.alt, which would lag behind a fast
+  // simulated walk between stops at different elevations).
+  const raw={lat,lon,acc,alt:effAlt};
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;
@@ -5387,6 +5394,7 @@ function enterTestMode(){
 function exitTestMode(){
   simMode=false;
   simPause();
+  if(BleGPS.active) BleGPS.disconnect();   // else a connected dongle keeps streaming fixes into a torn-down session
   SimVoice.stop();
   SimAmbient.stop();
   if(simAmbientTimer){clearInterval(simAmbientTimer);simAmbientTimer=null;}
@@ -5467,6 +5475,33 @@ function simPlay(){
 function simPause(){simPlaying=false;if(simTimer){clearInterval(simTimer);simTimer=null;}
   document.getElementById("simPlay").textContent="▶";
   document.getElementById("simPlay").classList.remove("on");}
+
+// BLE hardware preview for Test Mode (item D, 3D-mode plan, rescoped
+// 2026-08-14) — lets an author connect a real BLE GPS/barometer dongle and
+// validate altitude-gated triggers against real hardware instead of only
+// the queryTerrainElevation() simulated feed. A connected dongle's live
+// fixes drive the Test Mode avatar directly; Walk/Play is paused while
+// connected so the two position sources can't fight over feedSim().
+BleGPS.init({
+  onStatus(){}, onLog(cls,msg){ simLogEv(cls==='ev-warn'?'sev-warn':'sev-sys', msg); },
+  onFix(fix){
+    if(!simMode) return;   // dongle can keep notifying after Test Mode is exited/torn down
+    if(simAvatar) simAvatar.setLngLat([fix.lon,fix.lat]);
+    feedSim(fix.lat,fix.lon,fix.acc||5,fix.t,fix);
+  },
+  onConnected(name){
+    if(simPlaying) simPause();
+    document.getElementById("simBle").classList.add("on");
+    simLogEv("sev-sys","BLE preview connected: "+name);
+  },
+  onDisconnected(){
+    document.getElementById("simBle").classList.remove("on");
+  }
+});
+document.getElementById("simBle").onclick=()=>{
+  if(BleGPS.active) BleGPS.disconnect();
+  else BleGPS.connect();
+};
 
 /* ---- UI wiring ---- */
 // visitorRadius oninput is wired above (with renderSources)
