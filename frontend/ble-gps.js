@@ -12,7 +12,8 @@
  * Supports two protocols, auto-detected on connect:
  *
  *   Protocol A · LNS (Location and Navigation Service, GATT 0x1819)
- *     Works with: dedicated BLE GPS receivers, some Garmin Edge units.
+ *     Works with: dedicated BLE GPS receivers that broadcast the standard
+ *     service with no custom pairing app needed.
  *     Characteristic 0x2A67 (Location and Speed) carries packed binary
  *     lat/lon and, when the Elevation flag (bit 3) is set, a signed 24-bit
  *     elevation field (metres × 0.01) right after Location and before
@@ -22,12 +23,10 @@
  *     custom protocol needed.
  *
  *   Protocol B · NUS (Nordic UART Service)
- *     Works with: Garmin Instinct 2 / Instinct Crossover / Instinct 2X
- *     Solar running the Connect IQ companion app (connect-iq/), or any DIY
- *     dongle broadcasting text lines over the same UUIDs. One line per
- *     second, CSV, frozen field order (adding fields is safe, old shorter
- *     lines must keep parsing unchanged — firmware and this parser have no
- *     shared schema otherwise):
+ *     Works with: any DIY dongle broadcasting text lines over the same
+ *     UUIDs. One line per second, CSV, frozen field order (adding fields
+ *     is safe, old shorter lines must keep parsing unchanged — firmware
+ *     and this parser have no shared schema otherwise):
  *       "lat,lon"                                e.g. 51.302757,-117.054644
  *       "lat,lon,acc_m"
  *       "lat,lon,acc_m,hdg_deg"
@@ -172,7 +171,7 @@
       }catch(e){ return null; }
     },
 
-    // ── Protocol B: NUS text (Connect IQ / UART) ──────────────────────
+    // ── Protocol B: NUS text (UART) ──────────────────────
     _parseNUS(dv){
       try{
         const line = new TextDecoder().decode(dv).trim();

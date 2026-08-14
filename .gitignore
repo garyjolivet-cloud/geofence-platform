@@ -4,8 +4,3 @@ Plaintext
 .env
 node_modules/
 dist/
-connect-iq/gen/
-connect-iq/external-mir/
-connect-iq/internal-mir/
-connect-iq/*.prg
-connect-iq/*.iq

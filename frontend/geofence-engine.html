@@ -257,21 +257,21 @@
         <input type="radio" name="gps-src" id="srcBle" value="ble">
         <span>
           <span class="src-row-lbl">Bluetooth GPS</span>
-          <span class="src-row-sub">Garmin watch or any BLE GPS receiver</span>
+          <span class="src-row-sub">Any BLE GPS receiver</span>
         </span>
       </label>
     </div>
 
     <div id="bleBox" class="ble-box" style="display:none">
-      <button id="btnBleConnect" class="ble-btn">Connect Garmin / BLE GPS</button>
+      <button id="btnBleConnect" class="ble-btn">Connect BLE GPS</button>
       <div id="bleStatus" class="ble-status off">Not connected</div>
       <div class="ble-note">
-        <b>Garmin Instinct 2 / Crossover / 2X Solar</b> — install the
-        <b>GPS Bridge</b> Connect IQ app on the watch, start it before connecting here.
-        The app streams GPS over Bluetooth UART (NUS) — no cable needed.<br><br>
-        <b>Other BLE GPS receivers</b> — devices that broadcast the standard
+        <b>BLE GPS receivers</b> — devices that broadcast the standard
         Location &amp; Navigation Service (LNS / GATT 0x1819) connect automatically
         with no extra app.<br><br>
+        <b>DIY / custom dongles</b> — devices broadcasting GPS over
+        Bluetooth UART (Nordic UART Service) also connect automatically,
+        auto-detected the same way.<br><br>
         Protocol is auto-detected on connect. Requires Chrome or Edge.<br><br>
         A dongle with a barometric altimeter (Elevation Source =
         Barometric, or the extra NUS altitude fields) improves accuracy
@@ -1918,7 +1918,7 @@ const Settings = {
   },
   bleBtnOn(on){
     const b=document.getElementById('btnBleConnect'); if(!b) return;
-    b.textContent = on ? 'Disconnect' : 'Connect Garmin / BLE GPS';
+    b.textContent = on ? 'Disconnect' : 'Connect BLE GPS';
     b.classList.toggle('on',on);
   }
 };

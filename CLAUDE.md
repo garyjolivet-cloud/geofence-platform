@@ -27,13 +27,6 @@ geofence-platform/
 │   ├── pipeline-runtime.js  ← Shared block registry + local DAG execution engine (window.PipelineRuntime), loaded by geofence-engine.html and fence-editor.html
 │   ├── share.html           ← Shareable project link page
 │   └── sw.js                ← Service worker (network-first offline, cache-first for audio)
-├── connect-iq/
-│   ├── manifest.xml         ← CIQ app manifest (targets Instinct 2/2S/2X/Crossover)
-│   └── source/
-│       ├── GpsBridgeApp.mc
-│       ├── GpsBridgeView.mc
-│       ├── GpsBleDelegate.mc
-│       └── GpsBridgeInputDelegate.mc
 ├── migrations/
 │   ├── 0001_schema.sql      ← Core schema (7 tables: app, project, published_bundle, api_key, audit_log, device, consent, event)
 │   ├── 0002_weather.sql     ← Weather tables (weather_cache, snow_history)
@@ -313,16 +306,16 @@ curl -X POST https://geofence-platform.gary-jolivet.workers.dev/api/keys \
 - `ORG_ID` — organisation slug (default: `chase-life`)
 - `ALLOWED_ORIGIN` — browser origin allowed on write endpoints
 
-## Bluetooth GPS (Garmin Instinct)
+## Bluetooth GPS
 
-The geofence engine supports two BLE GPS protocols, auto-detected on connect:
+`frontend/ble-gps.js` (`window.BleGPS`) is a shared module — matching the `kalman-filter.js`/`guidance-bot.js` callback-injection pattern — used by `geofence-engine.html`, `geofence-sim.html`, `fence-editor.html` (Test Mode), and `field-recorder.html`. Supports two BLE GPS protocols, auto-detected on connect:
 
 | Protocol | BLE Service | Who uses it |
 |----------|-------------|-------------|
-| LNS | GATT `0x1819` | Dedicated BLE GPS receivers, some Garmin Edge units |
-| NUS (UART) | `6e400001-...` | Garmin Instinct 2/Crossover/2X via Connect IQ app |
+| LNS | GATT `0x1819` | Dedicated BLE GPS receivers broadcasting the standard service, no pairing app needed |
+| NUS (UART) | `6e400001-...` | DIY/custom dongles broadcasting GPS as text lines over Bluetooth UART |
 
-**Connect IQ companion app** (`connect-iq/`): a Widget that broadcasts GPS over NUS. Sends one line per second over TX characteristic (`6e400003-b5a3-f393-e0a9-e50e24dcca9e`).
+NUS also carries optional altitude fields (`alt_m`, `alt_acc_m`) for a barometric-equipped dongle — see `frontend/kalman-filter.js`'s EKF altitude fusion.
 
 Only works in Chrome or Edge (Web Bluetooth API).
 
