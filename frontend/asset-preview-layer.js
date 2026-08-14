@@ -3,7 +3,7 @@
  *
  * Renders zone.arObjects[] as real three.js meshes positioned directly on
  * fence-editor.html's own MapLibre map, via a MapLibre "custom" layer
- * (type:"custom", onAdd(map,gl)/render(gl,matrix)) sharing the map's own
+ * (type:"custom", onAdd(map,gl)/render(gl,options)) sharing the map's own
  * WebGL context — this repo's first use of that technique. Contrast
  * ar-view.js (the visitor-facing AR camera view), which deliberately runs
  * three.js on its own SEPARATE overlay canvas instead of sharing MapLibre's
@@ -109,8 +109,27 @@ function groundRelativeAlt(lngLat, altM){
 // scale(s,-s,s), THEN rotateX(90°) — composed right-to-left as
 // T * S * R, i.e. the rotation is applied first to raw model space, then
 // the (handedness-flipped) scale, then the translation.
+//
+// PRECISION: mesh.matrix's translation only ever carries the SMALL delta
+// from this object's own absolute mercator position (anchor lat/lon
+// offset converted to mercator units — z=0, altitude is already fully
+// baked into absAlt/base.z, no separate offset needed). The FULL absolute
+// position (base, magnitude ~0.5 — mid mercator range) is stashed on the
+// entry (e.refBase) and folded into camera.projectionMatrix in render(),
+// via a CPU double-precision matrix multiply, once per mesh per frame —
+// NOT combined with local vertex data on the GPU. Putting the absolute
+// ~0.5 translation directly in mesh.matrix (the original version of this
+// function) causes real, confirmed-live visual corruption: float32's ULP
+// at 0.5 (~6e-8) is coarser than the per-vertex offsets a real-scale local
+// mesh produces once scaled down by the mercator-per-metre factor
+// (~1e-8), so the GPU's float32 modelViewMatrix*vertex multiply quantizes
+// every vertex onto a handful of grid points — "noisy polygons, no shape
+// at all", exactly what was reported live. Exactly one factor (refBase,
+// composed in camera.projectionMatrix) may ever carry the absolute
+// position; mesh.matrix's translation must stay near zero.
 const _mA=new THREE.Matrix4(), _mB=new THREE.Matrix4();
-function placeMesh(mesh, centerLatLon, anchor, objScale){
+function placeMesh(e, centerLatLon, anchor, objScale){
+  const mesh=e.mesh;
   const lngLat=[centerLatLon[1], centerLatLon[0]];
   const absAlt=groundRelativeAlt(lngLat, anchor.altM);
   if(absAlt==null) return false;
@@ -123,13 +142,14 @@ function placeMesh(mesh, centerLatLon, anchor, objScale){
   const scaleM=mUnit*(objScale||1);
   // Mercator-normalized space: +x east, +y SOUTH (standard web-tile
   // convention, opposite of geographic north-positive latitude) — so a
-  // north-positive latOffsetM subtracts from y.
-  const x=base.x+(anchor.lonOffsetM||0)*mUnit;
-  const y=base.y-(anchor.latOffsetM||0)*mUnit;
-  const z=base.z;
+  // north-positive latOffsetM subtracts from dy. Small deltas only (see
+  // PRECISION note above) — base's own absolute x/y/z go on e.refBase,
+  // not here.
+  const dx=(anchor.lonOffsetM||0)*mUnit;
+  const dy=-(anchor.latOffsetM||0)*mUnit;
   mesh.matrixAutoUpdate=false;
   mesh.matrix
-    .makeTranslation(x,y,z)
+    .makeTranslation(dx,dy,0)
     .multiply(_mA.makeScale(scaleM,-scaleM,scaleM))
     .multiply(_mB.makeRotationX(Math.PI/2));
   // matrixAutoUpdate=false means three.js's own updateMatrix() never runs
@@ -138,6 +158,7 @@ function placeMesh(mesh, centerLatLon, anchor, objScale){
   // using a stale matrixWorld (only ever computed once, on the frame this
   // mesh was first added) and the mesh never visibly moves again.
   mesh.matrixWorldNeedsUpdate=true;
+  e.refBase=base;
   return true;
 }
 
@@ -198,7 +219,7 @@ function setObjects(list){
   list.forEach(async o=>{
     const e=await ensureMeshLoaded(o.id, o.url);
     if(!e || !e.mesh) return;   // still loading, or failed — next call will retry from the still-pending cache entry
-    placeMesh(e.mesh, o.center, o.anchor||{}, o.scale);
+    placeMesh(e, o.center, o.anchor||{}, o.scale);
     applyAnimationClip(e, o.animationClip);
   });
   ensureAnimLoop();
@@ -209,7 +230,7 @@ function onAdd(mapInstance, gl){
   scene=new THREE.Scene();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.2));
   const dl=new THREE.DirectionalLight(0xffffff, 0.9); dl.position.set(1,2,1); scene.add(dl);
-  camera=new THREE.Camera();   // projectionMatrix overwritten every frame from MapLibre's own matrix below
+  camera=new THREE.Camera();   // projectionMatrix rebuilt per-mesh every frame in render() below
   renderer=new THREE.WebGLRenderer({canvas:mapInstance.getCanvas(), context:gl, antialias:true});
   renderer.autoClear=false;
   clock=new THREE.Clock();
@@ -224,14 +245,37 @@ function onAdd(mapInstance, gl){
 // range MercatorCoordinate.fromLngLat() already produces — i.e. directly
 // compatible with placeMesh()'s coordinates above, no further conversion
 // needed.
+//
+// Renders one mesh at a time (toggling .visible, lights stay shared in
+// `scene`) because each mesh needs its OWN camera.projectionMatrix — the
+// raw mainMatrix combined, in CPU double precision, with THAT mesh's own
+// absolute mercator reference point (e.refBase). See placeMesh()'s
+// PRECISION comment for why: combining mainMatrix with an absolute
+// ~0.5-magnitude translation and local vertex data all in one GPU float32
+// multiply loses enough precision to visibly corrupt the geometry.
+// Composing main*T(refBase) on the CPU first, then feeding the GPU only a
+// small delta-from-refBase translation (already baked into mesh.matrix),
+// keeps every GPU-side value in a precision-safe range.
+const _mMain=new THREE.Matrix4(), _mRefT=new THREE.Matrix4();
 function render(gl, options){
-  camera.projectionMatrix=new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix);
+  _mMain.fromArray(options.defaultProjectionData.mainMatrix);
   const dt=clock.getDelta();
   entries.forEach(e=>{ if(e.mixer) e.mixer.update(dt); });
+  const withMesh=[...entries.values()].filter(e=>e.mesh && e.refBase);
   // three.js and MapLibre both cache GL state on the shared context and
-  // will corrupt each other's rendering without this reset before/after.
+  // will corrupt each other's rendering without this reset before/after —
+  // once per render() call (not per mesh); three.js keeps its own state
+  // consistent across its own consecutive render() calls.
   renderer.resetState();
-  renderer.render(scene, camera);
+  withMesh.forEach(e=>{ e.mesh.visible=false; });
+  withMesh.forEach(e=>{
+    e.mesh.visible=true;
+    camera.projectionMatrix.copy(_mMain).multiply(_mRefT.makeTranslation(e.refBase.x,e.refBase.y,e.refBase.z));
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+    renderer.render(scene, camera);
+    e.mesh.visible=false;
+  });
+  withMesh.forEach(e=>{ e.mesh.visible=true; });
   renderer.resetState();
 }
 
