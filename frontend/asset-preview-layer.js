@@ -56,16 +56,27 @@ let map=null, scene=null, camera=null, renderer=null, clock=null;
 const entries = new Map();   // id -> {url, mesh, mixer, gltfAnimations, playingClip, loading}
 let animRafId=null;
 
-// Animation only needs continuous repaints while something is actually
-// playing — MapLibre only calls a custom layer's render() when something
-// triggers a repaint (pan/zoom/interaction) otherwise, so an idle editor
-// with a static (or zero) preview burns nothing extra.
+// Animation needs continuous repaints while something is actually playing
+// — MapLibre only calls a custom layer's render() when something triggers
+// a repaint (pan/zoom/interaction) otherwise, so an idle editor with a
+// static preview and no pending placement burns nothing extra.
+//
+// Also covers a placement STILL waiting on terrain data (e.mesh set,
+// e.refBase not — see placeMesh()'s deferred-placement path): confirmed
+// live that DEM-tile-load does NOT reliably call map.triggerRepaint() on
+// its own, so a mesh that failed its first placement attempt (terrain on,
+// DEM not loaded yet at that point — the real, common case on a fresh
+// page load) could sit forever with nothing ever calling render() again to
+// retry it. This loop self-drives repaints until every pending entry has
+// actually been placed, then stops — same battery/idle-cost hygiene as
+// the animation case, just gated on a different condition.
 function ensureAnimLoop(){
   const anyAnimated = [...entries.values()].some(e=>e.mixer);
-  if(anyAnimated && animRafId==null){
+  const anyPending = [...entries.values()].some(e=>e.mesh && !e.refBase);
+  if((anyAnimated||anyPending) && animRafId==null){
     const tick=()=>{ if(map) map.triggerRepaint(); animRafId=requestAnimationFrame(tick); };
     animRafId=requestAnimationFrame(tick);
-  } else if(!anyAnimated && animRafId!=null){
+  } else if(!anyAnimated && !anyPending && animRafId!=null){
     cancelAnimationFrame(animRafId); animRafId=null;
   }
 }
@@ -85,49 +96,34 @@ function groundRelativeAlt(lngLat, altM){
   return g==null ? null : g+(altM||0);
 }
 
-// Positions + scales a mesh directly in MapLibre's Mercator-normalized
-// coordinate space (not the "bake one static object's transform into the
-// shared camera" trick from MapLibre's own single-model example — that
-// doesn't generalize to multiple independently-positioned objects in one
-// layer). Each mesh carries its own tiny per-location scale
-// (meterInMercatorCoordinateUnits()) and lat/lon offsets are applied as a
-// direct planar approximation scaled by that same factor — consistent with
-// how this codebase's own destPoint()/haversineM() 2D handle math already
-// treats small offsets as locally planar, just extended to 3D here.
-// Returns false if positioning couldn't be computed this tick (terrain not
-// loaded yet) — mesh keeps its last position rather than jumping to (0,0,0).
+// Positions + scales a mesh in the shared `scene`'s own local-metres frame
+// (east, up, north) — NOT hand-rolled mercator-space matrix math. Earlier
+// versions of this function built mesh.matrix by hand (translate * scale
+// * rotateX, claiming to match "the canonical MapLibre/Mapbox three.js
+// example") — that claim was never actually checked against the real
+// example source, and turned out to be wrong: the real official terrain
+// example (fetched and verified directly, maplibre.org's own
+// "adding-3d-models-using-threejs-on-terrain" page) applies the Y-up
+// (three.js/glTF) -> Z-up (mercator) conversion ONCE to the whole `scene`
+// (scene.rotateX(Math.PI/2) + scene.scale.multiply(1,1,-1) — see onAdd()),
+// with each individual model just using plain .position/.scale like any
+// normal three.js object. Our old per-mesh hand-rolled composition did a
+// SINGLE sign flip (Y) in a different order than the official's net-EVEN
+// (two-flip) pipeline — an odd total number of negative-determinant
+// transforms inverts every triangle's winding order, and three.js's
+// default backface culling (GLTFLoader's default FrontSide material)
+// then silently culls 100% of the model's triangles from every viewing
+// angle. (three.js auto-flips gl.frontFace when it detects a negative
+// determinant in an object's OWN matrixWorld — but a reflection baked
+// into camera.projectionMatrix instead, as ours was, is invisible to
+// that check, so nothing compensates for it.) Confirmed live as the
+// actual cause of a real "renders nothing at all" report, in both edit
+// and Test Mode, terrain on either way (winding is terrain-independent)
+// — not a positioning/precision bug (already separately fixed by then).
 //
-// Mercator-normalized space (x east, y south, z up) is LEFT-handed;
-// three.js is right-handed — a naive uniform-positive mesh.scale renders
-// every model mirrored. The composition order three.js actually applies is
-// T·R·S (translate, then rotate, then scale, each in the PARENT's frame at
-// matrix-build time) — negating y on mesh.scale alone doesn't correctly
-// cancel the handedness once combined with the Y-up->Z-up rotation below,
-// since scale and rotation don't commute. Sidestepping that trap entirely
-// by building the model matrix by hand, in the exact order the canonical
-// MapLibre/Mapbox three.js custom-layer example uses: translate, THEN
-// scale(s,-s,s), THEN rotateX(90°) — composed right-to-left as
-// T * S * R, i.e. the rotation is applied first to raw model space, then
-// the (handedness-flipped) scale, then the translation.
-//
-// PRECISION: mesh.matrix's translation only ever carries the SMALL delta
-// from this object's own absolute mercator position (anchor lat/lon
-// offset converted to mercator units — z=0, altitude is already fully
-// baked into absAlt/base.z, no separate offset needed). The FULL absolute
-// position (base, magnitude ~0.5 — mid mercator range) is stashed on the
-// entry (e.refBase) and folded into camera.projectionMatrix in render(),
-// via a CPU double-precision matrix multiply, once per mesh per frame —
-// NOT combined with local vertex data on the GPU. Putting the absolute
-// ~0.5 translation directly in mesh.matrix (the original version of this
-// function) causes real, confirmed-live visual corruption: float32's ULP
-// at 0.5 (~6e-8) is coarser than the per-vertex offsets a real-scale local
-// mesh produces once scaled down by the mercator-per-metre factor
-// (~1e-8), so the GPU's float32 modelViewMatrix*vertex multiply quantizes
-// every vertex onto a handful of grid points — "noisy polygons, no shape
-// at all", exactly what was reported live. Exactly one factor (refBase,
-// composed in camera.projectionMatrix) may ever carry the absolute
-// position; mesh.matrix's translation must stay near zero.
-const _mA=new THREE.Matrix4(), _mB=new THREE.Matrix4();
+// Returns false if positioning couldn't be computed this tick (terrain on
+// but DEM tiles not loaded yet) — caller (render()'s retry pre-pass)
+// re-attempts on a later frame rather than placing at a wrong position.
 function placeMesh(e, centerLatLon, anchor, objScale){
   const mesh=e.mesh;
   const lngLat=[centerLatLon[1], centerLatLon[0]];
@@ -141,32 +137,24 @@ function placeMesh(e, centerLatLon, anchor, objScale){
     console.debug('asset-preview-layer: placement deferred, terrain elevation not ready yet', e.url);
     return false;
   }
-  const base=maplibregl.MercatorCoordinate.fromLngLat(lngLat, absAlt);
-  // mUnit converts real metres -> mercator units at this point, independent
-  // of the object's own scale factor — used for the anchor's lat/lon
-  // offsets. scaleM (mUnit * objScale) is only for the mesh's own size; if
-  // both used scaleM, a scale-2 object's position offsets would double too.
-  const mUnit=base.meterInMercatorCoordinateUnits();
-  const scaleM=mUnit*(objScale||1);
-  // Mercator-normalized space: +x east, +y SOUTH (standard web-tile
-  // convention, opposite of geographic north-positive latitude) — so a
-  // north-positive latOffsetM subtracts from dy. Small deltas only (see
-  // PRECISION note above) — base's own absolute x/y/z go on e.refBase,
-  // not here.
-  const dx=(anchor.lonOffsetM||0)*mUnit;
-  const dy=-(anchor.latOffsetM||0)*mUnit;
-  mesh.matrixAutoUpdate=false;
-  mesh.matrix
-    .makeTranslation(dx,dy,0)
-    .multiply(_mA.makeScale(scaleM,-scaleM,scaleM))
-    .multiply(_mB.makeRotationX(Math.PI/2));
-  // matrixAutoUpdate=false means three.js's own updateMatrix() never runs
-  // (that's the one place matrixWorldNeedsUpdate normally gets set) — flag
-  // it manually or the scene-graph traversal in render() silently keeps
-  // using a stale matrixWorld (only ever computed once, on the frame this
-  // mesh was first added) and the mesh never visibly moves again.
-  mesh.matrixWorldNeedsUpdate=true;
-  e.refBase=base;
+  // e.refBase (the object's full absolute mercator position, magnitude
+  // ~0.5 — mid mercator range) is folded into camera.projectionMatrix in
+  // render(), via a CPU double-precision matrix multiply, once per mesh
+  // per frame — NOT combined with local vertex data on the GPU. See
+  // render()'s own comment for why: putting an absolute ~0.5-magnitude
+  // translation directly into a matrix that also holds real-scale local
+  // vertex data causes a confirmed-live float32 precision collapse
+  // ("noisy polygons, no shape at all").
+  e.refBase=maplibregl.MercatorCoordinate.fromLngLat(lngLat, absAlt);
+  // Everything below is in real METRES, relative to e.refBase — same
+  // units/frame the official example's own model.position.set(east, up,
+  // north) uses. "up" stays 0: unlike the official example (one shared
+  // scene origin, every model's altitude expressed as a delta from it),
+  // our per-mesh refBase already carries this object's own FULL absolute
+  // altitude, so there's no separate altitude delta left to apply here.
+  mesh.position.set(anchor.lonOffsetM||0, 0, anchor.latOffsetM||0);
+  mesh.scale.setScalar(objScale||1);
+  console.debug('asset-preview-layer: placed', e.url, 'absAlt', absAlt);
   return true;
 }
 
@@ -235,6 +223,16 @@ function setObjects(list){
     e.want={center:o.center, anchor:o.anchor||{}, scale:o.scale};
     placeMesh(e, o.center, o.anchor||{}, o.scale);
     applyAnimationClip(e, o.animationClip);
+    // Also re-evaluate HERE, not just after the forEach below: this whole
+    // callback is async (awaits ensureMeshLoaded), so the synchronous
+    // ensureAnimLoop() call after the forEach runs BEFORE any mesh has
+    // actually finished loading — if placeMesh() just failed above (DEM
+    // not ready yet) and nothing else ever calls ensureAnimLoop() again,
+    // the self-repaint loop never starts at all, and render()'s own retry
+    // block (which depends on that loop for its repaints) never runs
+    // either — a deadlock, confirmed live as the reason the first version
+    // of this retry fix still showed nothing.
+    ensureAnimLoop();
   });
   ensureAnimLoop();
   map.triggerRepaint();
@@ -242,6 +240,13 @@ function setObjects(list){
 
 function onAdd(mapInstance, gl){
   scene=new THREE.Scene();
+  // Y-up (three.js/glTF convention) -> mercator's local X-east/Y-north/
+  // Z-up metres frame, applied ONCE to the whole scene — copied exactly
+  // from MapLibre's own official terrain+three.js example (see
+  // placeMesh()'s comment for why this specific technique, not a
+  // per-mesh hand-rolled matrix, is required).
+  scene.rotateX(Math.PI/2);
+  scene.scale.multiply(new THREE.Vector3(1,1,-1));
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.2));
   const dl=new THREE.DirectionalLight(0xffffff, 0.9); dl.position.set(1,2,1); scene.add(dl);
   camera=new THREE.Camera();   // projectionMatrix rebuilt per-mesh every frame in render() below
@@ -263,14 +268,15 @@ function onAdd(mapInstance, gl){
 // Renders one mesh at a time (toggling .visible, lights stay shared in
 // `scene`) because each mesh needs its OWN camera.projectionMatrix — the
 // raw mainMatrix combined, in CPU double precision, with THAT mesh's own
-// absolute mercator reference point (e.refBase). See placeMesh()'s
-// PRECISION comment for why: combining mainMatrix with an absolute
-// ~0.5-magnitude translation and local vertex data all in one GPU float32
-// multiply loses enough precision to visibly corrupt the geometry.
-// Composing main*T(refBase) on the CPU first, then feeding the GPU only a
-// small delta-from-refBase translation (already baked into mesh.matrix),
-// keeps every GPU-side value in a precision-safe range.
-const _mMain=new THREE.Matrix4(), _mRefT=new THREE.Matrix4();
+// absolute mercator reference point (e.refBase) AND the real-metres ->
+// mercator-units scale factor at that point (mirroring the official
+// example's own render()-time "l" matrix — see placeMesh()'s comment).
+// Doing this combine in double precision on the CPU, once per mesh per
+// frame, rather than feeding an absolute ~0.5-magnitude translation into
+// a matrix that also holds real-scale local vertex data, avoids a
+// confirmed-live float32 precision collapse ("noisy polygons, no shape
+// at all").
+const _mMain=new THREE.Matrix4(), _mL=new THREE.Matrix4(), _vScale=new THREE.Vector3();
 function render(gl, options){
   _mMain.fromArray(options.defaultProjectionData.mainMatrix);
   const dt=clock.getDelta();
@@ -281,11 +287,13 @@ function render(gl, options){
   // never gets set, and without this retry the withMesh filter below
   // excludes it permanently, confirmed live). Cheap once placed (no-op —
   // e.refBase is already set, this block only fires for the still-unplaced
-  // case); MapLibre repaints as DEM tiles land, so this fires again on
-  // exactly the frame the data actually becomes available.
+  // case); driven by ensureAnimLoop()'s self-repaint loop (see its own
+  // comment — DEM-tile-load does not reliably trigger a repaint on its
+  // own, confirmed live), not by hoping something else calls render().
   entries.forEach(e=>{
     if(e.mesh && !e.refBase && e.want) placeMesh(e, e.want.center, e.want.anchor, e.want.scale);
   });
+  ensureAnimLoop();   // re-evaluate: stop the self-repaint loop once every pending entry above just got placed
   const withMesh=[...entries.values()].filter(e=>e.mesh && e.refBase);
   // three.js and MapLibre both cache GL state on the shared context and
   // will corrupt each other's rendering without this reset before/after —
@@ -295,7 +303,9 @@ function render(gl, options){
   withMesh.forEach(e=>{ e.mesh.visible=false; });
   withMesh.forEach(e=>{
     e.mesh.visible=true;
-    camera.projectionMatrix.copy(_mMain).multiply(_mRefT.makeTranslation(e.refBase.x,e.refBase.y,e.refBase.z));
+    const mUnit=e.refBase.meterInMercatorCoordinateUnits();
+    _mL.makeTranslation(e.refBase.x,e.refBase.y,e.refBase.z).scale(_vScale.set(mUnit,-mUnit,mUnit));
+    camera.projectionMatrix.copy(_mMain).multiply(_mL);
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
     renderer.render(scene, camera);
     e.mesh.visible=false;
