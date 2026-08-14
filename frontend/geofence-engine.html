@@ -8,6 +8,18 @@
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<!-- AR view (3D-mode plan, Phase 2) — the first ES module in this repo.
+     three.js ships ESM-only, so this needs an importmap; ar-view.js exposes
+     window.ARView, only ever read lazily from inside event handlers below
+     (never at top-level classic-script parse time), same extraction shape
+     already used for BleGPS (frontend/ble-gps.js). -->
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+}}
+</script>
+<script type="module" src="/ar-view.js"></script>
 <style>
   :root{
     --night:#0a1018; --slate:#141d2b; --slate-2:#1b2738; --rim:#26344a;
@@ -132,6 +144,7 @@
     <div style="display:flex;gap:8px;align-items:center">
       <span id="pill" class="pill idle" title="Tap to start your walk">▶ Start</span>
       <button id="tiltBtn" class="hamburger" aria-label="Tilt map to see terrain" title="Tilt map to see terrain" style="display:none">⛰</button>
+      <button id="arBtn" class="hamburger" aria-label="View in AR" title="View in AR" style="display:none">🕶</button>
       <button id="btnTools" class="hamburger" aria-label="Tools" title="Tools">🛠</button>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
       <button id="btnSettings" class="hamburger" aria-label="Settings" title="Settings">☰</button>
@@ -203,6 +216,22 @@
     </div>
     <div class="hint" id="srcHint">bundle: built-in sample · open over https on your phone for GPS</div>
   </div>
+</div>
+
+<!-- AR view overlay (3D-mode plan, Phase 2) — same fixed-overlay/display:none
+     toggle pattern as #settingsPanel/#consentOverlay below. z-index sits
+     above the map (0) and HUD (10), below #settingsPanel/#consentOverlay
+     (9998/9999) so Settings stays reachable as an interrupt if ever needed,
+     though the normal flow is: close AR via #arCloseBtn first. -->
+<div id="arView" style="display:none;position:fixed;inset:0;z-index:9000;background:#000">
+  <video id="arVideo" playsinline muted autoplay
+         style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+  <canvas id="arCanvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+  <button id="arCloseBtn" aria-label="Close AR view"
+          style="position:absolute;top:16px;right:16px;z-index:1;width:40px;height:40px;border-radius:50%;
+                 background:rgba(6,10,16,.7);color:var(--snow);border:1px solid var(--rim);font-size:18px">✕</button>
+  <div id="arLabel" style="position:absolute;bottom:24px;left:0;right:0;text-align:center;
+       font-family:'Barlow Condensed';color:var(--snow);text-shadow:0 1px 3px #000;pointer-events:none"></div>
 </div>
 
 <!-- Settings panel (slide up from bottom) -->
@@ -1363,6 +1392,9 @@ function applyTerrainAltFallback(fix){
 // Geofencer.update(), so Geofencer.onEvent (fired synchronously from inside
 // that update() call) can read it for pipeline data.position blocks.
 let lastSmoothed=null;
+// Currently-active AR-bearing zone (3D-mode plan, Phase 2), kept in sync by
+// HUD.onFix() every tick — what #arBtn's click handler actually opens.
+let _arZone=null;
 const HUD = {
   pos:null, prev:null, fixes:0,
   el(id){ return document.getElementById(id); },
@@ -1393,6 +1425,25 @@ const HUD = {
         const zc=z.path?centerNow(z,fix.t):z.center;
         const d=zoneNearestDistM(z,p,fix.t); if(d<best){best=d;pick={zone:z,d,center:zc};} });
     }
+
+    // AR view (3D-mode plan, Phase 2) — button visibility driven off the
+    // CONTINUOUS active array, not a hand-tracked enter/exit flag, matching
+    // this function's own established philosophy elsewhere ("drive off
+    // whichever zone is ACTUALLY playing... not off pick" a few lines
+    // below) — self-heals across reloads/flicker-suppression rather than
+    // getting stuck from a missed edge. _arZone (module-scoped) is what
+    // #arBtn's click handler actually opens.
+    // .some(o=>o.url), not just .length — a zone can carry arObjects[]
+    // entries with no resolved .url at all if the project was published
+    // before this feature existed (resolveArObjectUrls() didn't run yet).
+    // Without this check the button would show for a stale bundle and open
+    // onto an empty camera view with nothing rendered — same republish-lag
+    // confusion this repo has already hit twice for threeDEnabled.
+    const arActive=active.find(a=>a.zone.arObjects&&a.zone.arObjects.some(o=>o.url)&&a.d<0);
+    _arZone = arActive ? arActive.zone : null;
+    const arBtn=document.getElementById('arBtn');
+    if(arBtn && typeof ARView!=='undefined') arBtn.style.display = (_arZone && !ARView.isOpen()) ? 'inline-block' : 'none';
+    if(typeof ARView!=='undefined' && ARView.isOpen()) ARView.onFix([p.lat,p.lon]);
 
     // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it).
     // Path stops participate too now (using their current live position) so a
@@ -1616,6 +1667,11 @@ const MapView = {
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
   onFix(p, nowMs, pick){
+    // AR view (3D-mode plan, Phase 2) is open — stop MapLibre's per-tick
+    // GeoJSON setData() work, not just its hidden canvas, so two live WebGL
+    // contexts (MapLibre + ar-view.js's three.js) aren't both doing real
+    // work on mobile Safari at once.
+    if(typeof ARView!=='undefined' && ARView.isOpen()) return;
     if(!this.map || !this.map.isStyleLoaded()) return;
     this.map.getSource('self')?.setData({type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]}});
     if(!this.centered){ this.map.jumpTo({center:[p.lon,p.lat], zoom:17}); this.centered=true; }
@@ -1778,7 +1834,12 @@ function pipelineCallbacks(zoneCtx){
 /* Geofencer -> HUD log wiring */
 Geofencer.onEvent=async(e)=>{
   if(e.kind==='enter'){ HUD.log('ev-enter','ENTER  '+e.zone.name+(e.info.side?' ('+e.info.side+')':''));
-       Analytics.enterT[e.zone.id]=Date.now(); Analytics.spatial('ENTER', e.zone); }
+       Analytics.enterT[e.zone.id]=Date.now(); Analytics.spatial('ENTER', e.zone);
+       // AR view (3D-mode plan, Phase 2) — a one-time attention cue on
+       // genuine zone entry, distinct from #arBtn's continuous visibility
+       // (driven off the active array in HUD.onFix, see above). Reuses the
+       // existing arrival chime rather than adding a new sound.
+       if(e.zone.arObjects&&e.zone.arObjects.some(o=>o.url)){ Audio.ding(); HUD.log('ev-sys','AR content available at '+e.zone.name); } }
   else if(e.kind==='exit'){ HUD.log('ev-exit','EXIT   '+e.zone.name+'  '+e.info.dur.toFixed(0)+'s, moved '+e.info.move.toFixed(0)+'m');
        if(e.info.flick) HUD.log('ev-flick','       ^ flicker (barely moved) — ignore');
        Analytics.spatial('EXIT', e.zone); }
@@ -1877,6 +1938,43 @@ document.getElementById('btnTools').onclick = ()=>{
 document.getElementById('tiltBtn').onclick = ()=>{
   if(!MapView.map) return;
   MapView.map.easeTo({pitch:MapView.map.getPitch()>10?0:60, duration:400});
+};
+// AR view (3D-mode plan, Phase 2). Same gesture-required-for-sensor-access
+// convention as Audio.unlock()-on-tap and the BLE Connect button above —
+// Geofencer.onEvent's 'enter' never itself starts the camera, only reveals
+// this button. requestOrientationPermission() is called as the very first
+// async step, right after the synchronous Audio.unlock(), so it stays
+// inside iOS's transient-activation window (no await before it).
+// closeArView() is the single source of truth for restoring the map —
+// passed to ARView.open() as onClosed so it fires on every close path
+// (button, open()-failure, and the module's own phone-lock auto-close),
+// not just the explicit close-button click.
+function closeArView(){
+  document.getElementById('arView').style.display='none';
+  document.getElementById('map').style.display='';
+}
+document.getElementById('arBtn').onclick = async ()=>{
+  if(!_arZone || typeof ARView==='undefined') return;
+  Audio.unlock(); Audio.unlocked=true;
+  const oriOk = await ARView.requestOrientationPermission();
+  const zoneCenter = _arZone.path ? centerNow(_arZone, Date.now()) : _arZone.center;
+  document.getElementById('map').style.display='none';
+  document.getElementById('arView').style.display='block';
+  try{
+    await ARView.open({
+      videoEl: document.getElementById('arVideo'),
+      canvas: document.getElementById('arCanvas'),
+      zoneCenter, arObjects: _arZone.arObjects, visitorLatLon: [HUD.pos.lat, HUD.pos.lon],
+      onClosed: closeArView
+    });
+    document.getElementById('arLabel').textContent = oriOk ? '' : 'Motion access denied — object position may be off';
+  }catch(err){
+    HUD.log('ev-warn','AR unavailable: '+(err&&err.message||err));
+    closeArView();   // open() already fires onClosed internally on failure — harmless redundant call, cheap insurance
+  }
+};
+document.getElementById('arCloseBtn').onclick = ()=>{
+  if(typeof ARView!=='undefined') ARView.close();   // fires closeArView() via the onClosed callback given to open()
 };
 document.getElementById('toolsDrawerClose').onclick = ()=>{
   document.getElementById('toolsDrawer').style.display='none';

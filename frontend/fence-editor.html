@@ -3826,10 +3826,52 @@ function zoneToEngine(z){
   return zo;
 }
 function projName(){ return (document.getElementById("projCrumb").textContent||"").trim(); }
-function exportBundle(){
+// Resolves every zone.arObjects[].src.assetId to a fetchable /api/models/<r2Key>
+// URL (src.url passes through unchanged for url-kind assets) by fetching this
+// project's asset tree ONCE and stamping the resolved URL onto a *new* copy of
+// each arObjects[] entry as `.url`. Denormalized into the published bundle at
+// export time — same reasoning as threeDEnabled/terrainAltitudeEnabled above:
+// geofence-engine.html is a public, unauthenticated player page (its bundle
+// fetch carries no auth header) and GET /api/assets/tree requires a scoped
+// token (scopeOk "audio"/"publish"), so the engine genuinely cannot resolve
+// an assetId itself — this isn't optional, it's a 401 wall. Builds *new*
+// objects via .map(o=>({...o})) rather than mutating in place, so this never
+// writes back into the live `zones` array or the localStorage autosave draft
+// — only the exported snapshot.
+async function resolveArObjectUrls(zonesOut){
+  if(!zonesOut.some(z=>z.arObjects&&z.arObjects.length)) return;
+  const pid=_currentProjectId||slug(projName())||null;
+  if(!pid) return; // no project id yet (pre-first-publish) — nothing to resolve against
+  const byId={};
+  try{
+    const orgId=document.getElementById("clientSel").value||"";
+    const qs="project="+encodeURIComponent(pid)+(orgId?"&org="+encodeURIComponent(orgId):"");
+    const r=await fetch("/api/assets/tree?"+qs,{headers:{authorization:"Bearer "+getToken()}});
+    if(r.ok){
+      const j=await r.json();
+      [...(j.project&&j.project.objects||[]), ...(j.library&&j.library.objects||[])]
+        .forEach(o=>{ byId[o.id]=o.url; });
+    }
+  }catch(e){}   // offline/failed fetch — fall through, leaving entries unresolved below
+  zonesOut.forEach(z=>{
+    if(!z.arObjects||!z.arObjects.length) return;
+    z.arObjects=z.arObjects.map(o=>{
+      const copy={...o};
+      if(o.src&&o.src.url) copy.url=o.src.url;                              // url-kind: already fetchable
+      else if(o.src&&o.src.assetId&&byId[o.src.assetId]) copy.url=byId[o.src.assetId];
+      // else: left with no .url (asset deleted from palette, or tree fetch
+      // failed) — geofence-engine.html must defensively skip any arObjects[i]
+      // with no .url rather than throw.
+      return copy;
+    });
+  });
+}
+async function exportBundle(){
   let ref=REF.slice();
   if(zones.length){ const cs=zones.map(zoneCenterLonLat);
     ref=[cs.reduce((s,c)=>s+c[0],0)/cs.length, cs.reduce((s,c)=>s+c[1],0)/cs.length]; }
+  const zonesOut=zones.map(zoneToEngine);
+  await resolveArObjectUrls(zonesOut);
   const out={ project:_currentProjectId||slug(projName())||"project",
               name:projName()||"New Tour",
               ref:[+ref[1].toFixed(6),+ref[0].toFixed(6)],
@@ -3857,12 +3899,12 @@ function exportBundle(){
               // default even when threeDEnabled is on; see _terrainAltOn's
               // own comment for why this isn't folded into threeDEnabled.
               terrainAltitudeEnabled:_terrainAltOn,
-              zones:zones.map(zoneToEngine) };
+              zones:zonesOut };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
 }
 document.getElementById("exportBtn").onclick=exportBundle;
-document.getElementById("copyBtn").onclick=()=>{ exportBundle();
+document.getElementById("copyBtn").onclick=async ()=>{ await exportBundle();
   try{ navigator.clipboard.writeText(document.getElementById("out").value); }catch(e){}
   document.getElementById("status").textContent="bundle copied to clipboard"; };
 
@@ -4080,7 +4122,7 @@ function validateZoneGeometry(zs){
   return problems;
 }
 async function publishToPlatform(){
-  const b=exportBundle(); const id=b.project;
+  const b=await exportBundle(); const id=b.project;
   if(!b.zones.length){ ps().textContent="no stops to publish — draw at least one"; toast("No stops to publish — draw at least one on the map first.","warn"); return; }
   const geomProblems=validateZoneGeometry(zones);
   if(geomProblems.length){ ps().textContent="publish blocked — fix stop geometry first";
