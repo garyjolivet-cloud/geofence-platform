@@ -1016,6 +1016,22 @@ function updateTerrain(){
   map.setTerrain(_threeDOn?{source:TERRAIN_SOURCE_ID,exaggeration:1}:null);
   document.getElementById("tiltBtn").style.display=_threeDOn?"inline-block":"none";
   if(!_threeDOn) map.easeTo({pitch:0});
+  // Vertical-extent volume needs terrain to compute ground-relative
+  // base/height (see renderSourcesInner()'s vextBase/vextTop comment) —
+  // swap to the flat 2D ring when terrain is off, real 3D volume when on.
+  // Immediate renderSources() right after setTerrain() runs before DEM
+  // tiles at any zone's location have actually loaded — queryTerrainElevation
+  // returns null, every feature skips its extrusion props, vext-vol renders
+  // nothing (and vext-ring is hidden whenever 3D is on) until the next
+  // unrelated re-render (drag, prop edit). Re-render once more when the map
+  // settles so a static just-loaded view doesn't sit with only the label
+  // showing indefinitely.
+  if(map.getLayer("vext-vol")){
+    map.setLayoutProperty("vext-vol","visibility",_threeDOn?"visible":"none");
+    map.setLayoutProperty("vext-ring","visibility",_threeDOn?"none":"visible");
+    renderSources();
+    if(_threeDOn) map.once("idle",renderSources);
+  }
 }
 document.getElementById("tiltBtn").onclick=()=>{
   map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
@@ -1536,7 +1552,29 @@ function renderSourcesInner(){
     // stop's own real radius, not a cosmetic offset like the audio rings.
     if(s.type==="circle" && z.altM!=null){
       const tolTxt=z.altToleranceM!=null?z.altToleranceM:SIM_TUNING.ALT_TOLERANCE_DEFAULT_M;
-      feats.push({type:"Feature",properties:{kind:"vext",label:"±"+tolTxt+"m @ "+z.altM+"m"},
+      const vextProps={kind:"vext",label:"±"+tolTxt+"m @ "+z.altM+"m"};
+      // Real 3D volume (fill-extrusion) only when terrain is active — base/
+      // height are meters ABOVE THE GROUND SURFACE, not absolute altitude,
+      // so altM (authored from real ground elevation via "use terrain
+      // height here") must have the ground elevation under it subtracted
+      // back out here, or the cylinder renders floating ~1km in the sky
+      // (caught in review before this was ever wired up). Guards: skip the
+      // extrusion props entirely (vext-ring/label still render via the
+      // base feature below) when terrain isn't on, when queryTerrainElevation
+      // hasn't loaded data at this point yet (returns null), or when the
+      // whole altitude band is below ground (vextTop<=0 — a degenerate/
+      // misconfigured case, not worth rendering as an inverted volume).
+      if(_threeDOn && map.getTerrain()){
+        const groundElev=map.queryTerrainElevation(c);
+        if(groundElev!=null){
+          const vextTop=(z.altM+tolTxt)-groundElev;
+          if(vextTop>0){
+            vextProps.vextBase=Math.max(0,(z.altM-tolTxt)-groundElev);
+            vextProps.vextTop=vextTop;
+          }
+        }
+      }
+      feats.push({type:"Feature",properties:vextProps,
         geometry:{type:"Polygon",coordinates:[circleRing(c,s.radiusM,48)]}});
     }
     // hearing-range rings (audio fade / full volume) — every stop now, not
@@ -1738,10 +1776,23 @@ map.on("load",()=>{
   // Vertical-extent "shadow ring" — a plan-view indicator for a circle
   // stop's real cylinder trigger volume (item A, 2026-08-14). Same cheap
   // pattern as every other non-primary-geometry ring here (a plain
-  // circleRing annulus outline, not real fill-extrusion/volumetric
-  // rendering — this repo has no use of that layer type anywhere).
+  // circleRing outline) — shown when terrain/3D Mode is OFF, or when the
+  // ground-relative extrusion math below couldn't be computed this render
+  // (see renderSourcesInner()'s vextBase/vextTop comment).
   map.addLayer({id:"vext-ring",type:"line",source:"fences",filter:["==","kind","vext"],
      paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
+  // Real 3D volume — this repo's first use of fill-extrusion anywhere.
+  // Only meaningful with terrain on (base/height are meters above the
+  // ground surface, not absolute altitude); visibility toggled alongside
+  // vext-ring in updateTerrain(). Filtered on "has vextTop" (not just
+  // kind=="vext") so a feature whose ground-relative math was skipped this
+  // render (terrain not loaded yet, or a degenerate below-ground band)
+  // doesn't try to extrude with missing values.
+  map.addLayer({id:"vext-vol",type:"fill-extrusion",source:"fences",
+     filter:["all",["==",["get","kind"],"vext"],["has","vextTop"]],
+     layout:{visibility:"none"},
+     paint:{"fill-extrusion-color":"#ffc24d","fill-extrusion-opacity":0.28,
+       "fill-extrusion-base":["get","vextBase"],"fill-extrusion-height":["get","vextTop"]}});
   map.addLayer({id:"vext-lbl",type:"symbol",source:"fences",filter:["==","kind","vext"],
      layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,-1.4],"text-font":["Open Sans Regular"]},
      paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.2}});

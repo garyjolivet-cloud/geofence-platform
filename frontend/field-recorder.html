@@ -412,6 +412,14 @@ function updateTerrain(){
   const btn=document.getElementById("btnTilt");
   if(btn) btn.style.display=threeDEnabled?"inline-block":"none";
   if(!threeDEnabled) map.easeTo({pitch:0});
+  // Vertical-extent volume needs terrain for ground-relative base/height
+  // (see refreshPublishedZones()'s vextBase/vextTop comment) — swap to the
+  // flat 2D ring when terrain's off, real 3D volume when on.
+  if(map.getLayer("vext-vol")){
+    map.setLayoutProperty("vext-vol","visibility",threeDEnabled?"visible":"none");
+    map.setLayoutProperty("vext-ring","visibility",threeDEnabled?"none":"visible");
+    refreshPublishedZones();
+  }
 }
 function onTiltClick(){
   if(!map) return;
@@ -784,14 +792,35 @@ function initMap(){
     // anyone live in this project, guide or admin, can see the real stops on the map
     // even if this browser has never locally recorded anything for this project
     map.addSource("published-zones",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    // "vext" (vertical-extent) features share this source (item A,
+    // 2026-08-14) — both layers below must exclude kind=="vext" or a vext
+    // Polygon feature gets an extra flat blue fill/dashed outline
+    // underneath its own dedicated vext-vol/vext-ring rendering, same
+    // double-render bug already found and fixed in geofence-sim.html.
     map.addLayer({id:"published-fill",type:"fill",source:"published-zones",
-      filter:["==",["geometry-type"],"Polygon"],
+      filter:["all",["==",["geometry-type"],"Polygon"],["!=",["get","kind"],"vext"]],
       paint:{"fill-color":"#8fb6d4","fill-opacity":.30}});
     map.addLayer({id:"published-line",type:"line",source:"published-zones",
+      filter:["!=",["get","kind"],"vext"],
       paint:{"line-color":"#8fb6d4","line-width":3,"line-dasharray":[2,2]}});
     map.addLayer({id:"published-lbl",type:"symbol",source:"published-zones",
+      filter:["!=",["get","kind"],"vext"],
       layout:{"text-field":["get","name"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-0.6]},
       paint:{"text-color":"#8fb6d4","text-halo-color":"#0a1018","text-halo-width":1.5}});
+    // Vertical-extent shadow ring/volume (item A, 2026-08-14) — read-only
+    // reference layer, mirrors fence-editor.html/geofence-sim.html's own
+    // vext-ring/vext-vol/vext-lbl treatment. Visibility toggled alongside
+    // terrain in updateTerrain().
+    map.addLayer({id:"vext-ring",type:"line",source:"published-zones",filter:["==",["get","kind"],"vext"],
+      paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
+    map.addLayer({id:"vext-vol",type:"fill-extrusion",source:"published-zones",
+      filter:["all",["==",["get","kind"],"vext"],["has","vextTop"]],
+      layout:{visibility:"none"},
+      paint:{"fill-extrusion-color":"#ffc24d","fill-extrusion-opacity":0.28,
+        "fill-extrusion-base":["get","vextBase"],"fill-extrusion-height":["get","vextTop"]}});
+    map.addLayer({id:"vext-lbl",type:"symbol",source:"published-zones",filter:["==",["get","kind"],"vext"],
+      layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,-1.4],"text-font":["Open Sans Regular"]},
+      paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.2}});
 
     // blue ring + grey speaker-cone marker, additive on top of published-fill
     // but under published-line so that dashed outline stays crisp
@@ -880,14 +909,35 @@ function refreshPublishedZones(){
     const tgt=(z.layers||[]).find(l=>l.kind==="target");
     if(!tgt) return;
     const coSuffix = (z.codeObjects && z.codeObjects.length) ? " 🧩"+(z.codeObjects.length>1?"×"+z.codeObjects.length:"") : "";
-    // Vertical-extent note (item A, 2026-08-14) — this is a read-only
-    // reference layer, not an editing surface, so a text suffix on the
-    // existing name label is enough; no new ring/layer needed.
-    const vextSuffix = z.altM!=null ? " (±"+(z.altToleranceM??25)+"m @ "+z.altM+"m)" : "";
-    const labelName = z.name+coSuffix+vextSuffix;
+    const labelName = z.name+coSuffix;
     if(tgt.radiusM!=null){
       feats.push({type:"Feature",properties:{name:labelName},
         geometry:{type:"Polygon",coordinates:[circleRing(z.center[0],z.center[1],tgt.radiusM)]}});
+      // Vertical-extent shadow ring/volume (item A, 2026-08-14) — real
+      // shape now, not just a text suffix (superseded — see vext-ring/
+      // vext-vol/vext-lbl layers registered in map.on("load",...)).
+      if(z.altM!=null){
+        const tol=z.altToleranceM!=null?z.altToleranceM:25;
+        const vextProps={kind:"vext",label:"±"+tol+"m @ "+z.altM+"m"};
+        // Real 3D volume only when terrain is active — base/height are
+        // meters ABOVE THE GROUND SURFACE, not absolute altitude, so
+        // altM needs the ground elevation under it subtracted back out
+        // here, same fix as fence-editor.html/geofence-sim.html. Falls
+        // back to the flat vext-ring when terrain's off, not loaded yet,
+        // or the whole band is below ground (vextTop<=0, degenerate).
+        if(threeDEnabled && map.getTerrain()){
+          const groundElev=map.queryTerrainElevation([z.center[1],z.center[0]]);
+          if(groundElev!=null){
+            const vextTop=(z.altM+tol)-groundElev;
+            if(vextTop>0){
+              vextProps.vextBase=Math.max(0,(z.altM-tol)-groundElev);
+              vextProps.vextTop=vextTop;
+            }
+          }
+        }
+        feats.push({type:"Feature",properties:vextProps,
+          geometry:{type:"Polygon",coordinates:[circleRing(z.center[0],z.center[1],tgt.radiusM)]}});
+      }
     } else if(tgt.geometry && tgt.geometry.type==="polygon"){
       feats.push({type:"Feature",properties:{name:labelName},
         geometry:{type:"Polygon",coordinates:[tgt.geometry.coords.map(c=>[c[1],c[0]])]}});

@@ -1560,7 +1560,12 @@ const HUD = {
     _arZone = arActive ? arActive.zone : null;
     const arBtn=document.getElementById('arBtn');
     if(arBtn && typeof ARView!=='undefined') arBtn.style.display = (_arZone && !ARView.isOpen()) ? 'inline-block' : 'none';
-    if(typeof ARView!=='undefined' && ARView.isOpen()) ARView.onFix([p.lat,p.lon]);
+    // p.alt passed through so ARView can track the visitor's real altitude
+    // and keep a vertical-extent cylinder's height correct as it changes —
+    // the whole point of that feature (paraglider/drone, altitude always
+    // moving) — see ARView.onFix()'s own comment on the eye-level fallback
+    // when no trustworthy altitude is available yet.
+    if(typeof ARView!=='undefined' && ARView.isOpen()) ARView.onFix([p.lat,p.lon], p.alt);
 
     // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it).
     // Path stops participate too now (using their current live position) so a
@@ -1702,6 +1707,36 @@ function cachedStopAudioFeatures(zoneId,centerLonLat,farM,clearM){
   _stopAudioCache.set(zoneId,{key,feats});
   return feats;
 }
+// Vertical-extent shadow ring/volume (item A, 2026-08-14) — first time this
+// page renders any zone-shape geometry at all to visitors (previously only
+// the audio-fade cone/band above). Same ground-relative fill-extrusion fix
+// as fence-editor.html/geofence-sim.html/field-recorder.html: base/height
+// are meters ABOVE THE GROUND SURFACE, not absolute altitude, so altM needs
+// the ground elevation under it subtracted back out — only computable while
+// terrain is active. Falls back to just the flat ring/label (no volume
+// feature) when terrain's off, not loaded at this point yet, or the whole
+// band is below ground (degenerate). Cached per zone (same jank-avoidance
+// rationale as cachedStopAudioFeatures — MapView.onFix() runs every tick).
+const _vextCache=new Map();
+function cachedVextFeatures(zoneId,centerLonLat,radiusM,altM,tol){
+  const label='±'+tol+'m @ '+altM+'m';
+  let vextBase=null, vextTop=null;
+  if(BUNDLE.threeDEnabled && MapView.map.getTerrain()){
+    const groundElev=MapView.map.queryTerrainElevation(centerLonLat);
+    if(groundElev!=null){
+      const top=(altM+tol)-groundElev;
+      if(top>0){ vextBase=Math.max(0,(altM-tol)-groundElev); vextTop=top; }
+    }
+  }
+  const key=centerLonLat[0]+','+centerLonLat[1]+','+radiusM+','+altM+','+tol+','+vextBase+','+vextTop;
+  const hit=_vextCache.get(zoneId);
+  if(hit&&hit.key===key) return hit.feats;
+  const props=vextTop!=null?{kind:'vext',label,vextBase,vextTop}:{kind:'vext',label};
+  const feats=[{type:'Feature',properties:props,
+    geometry:{type:'Polygon',coordinates:[circleRing(centerLonLat,radiusM,48)]}}];
+  _vextCache.set(zoneId,{key,feats});
+  return feats;
+}
 
 const MapView = {
   map:null, centered:false,
@@ -1731,6 +1766,24 @@ const MapView = {
         paint:{'fill-color':['get','col'],'fill-opacity':SPEAKER_OPACITY}});
       this.map.addLayer({id:'stop-fadeband',type:'fill',source:'stop-audio',filter:['==','kind','fadeband'],
         paint:{'fill-color':'#6fbfff','fill-opacity':['get','op']}});
+
+      // Vertical-extent shadow ring/volume (item A, 2026-08-14) — own
+      // dedicated source (not shared with stop-audio, so no kind-exclusion
+      // filter trap to worry about). Visibility toggled alongside terrain
+      // in updateTerrain(); vext-vol filtered on "has vextTop" so a feature
+      // whose ground-relative math was skipped this tick doesn't try to
+      // extrude with missing values.
+      this.map.addSource('zone-vext',{type:'geojson',data:fc([])});
+      this.map.addLayer({id:'vext-ring',type:'line',source:'zone-vext',filter:['==',['get','kind'],'vext'],
+        paint:{'line-color':'#ffc24d','line-width':1.4,'line-dasharray':[3,2],'line-opacity':0.8}});
+      this.map.addLayer({id:'vext-vol',type:'fill-extrusion',source:'zone-vext',
+        filter:['all',['==',['get','kind'],'vext'],['has','vextTop']],
+        layout:{visibility:'none'},
+        paint:{'fill-extrusion-color':'#ffc24d','fill-extrusion-opacity':0.28,
+          'fill-extrusion-base':['get','vextBase'],'fill-extrusion-height':['get','vextTop']}});
+      this.map.addLayer({id:'vext-lbl',type:'symbol',source:'zone-vext',filter:['==',['get','kind'],'vext'],
+        layout:{'text-field':['get','label'],'text-size':10,'text-offset':[0,-1.4],'text-font':['Open Sans Regular']},
+        paint:{'text-color':'#ffc24d','text-halo-color':'#0a1018','text-halo-width':1.2}});
 
       // Walking Path line(s) — net-new (3D-mode plan item A's 3rd bullet):
       // WALKING_PATHS was already loaded for progress-tracking math
@@ -1781,6 +1834,16 @@ const MapView = {
     const btn=document.getElementById('tiltBtn');
     if(btn) btn.style.display=on?'inline-block':'none';
     if(!on) this.map.easeTo({pitch:0});
+    // Vertical-extent volume needs terrain for ground-relative base/height
+    // (see cachedVextFeatures()'s comment) — swap to the flat 2D ring when
+    // terrain's off, real 3D volume when on. Clears the cache so the next
+    // onFix() tick recomputes rather than serving stale (possibly
+    // off-by-terrain-state) cached geometry.
+    if(this.map.getLayer('vext-vol')){
+      this.map.setLayoutProperty('vext-vol','visibility',on?'visible':'none');
+      this.map.setLayoutProperty('vext-ring','visibility',on?'none':'visible');
+      _vextCache.clear();
+    }
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
   onFix(p, nowMs, pick){
@@ -1796,13 +1859,24 @@ const MapView = {
     // Every stop's marker shows regardless of distance from the visitor —
     // no stopVisibilityRadiusM proximity gate.
     const audioFeats=[];
+    const vextFeats=[];
     (BUNDLE.zones||[]).forEach(z=>{
       if(!z.center) return;
       const zc=z.path?centerNow(z, nowMs):z.center;
       const {farM,clearM}=zoneAudioFadeRadii(z);
       audioFeats.push(...cachedStopAudioFeatures(z.id, LonLat(zc), farM, clearM));
+      // Real cylinder trigger volume — same target-layer lookup Field
+      // Recorder's refreshPublishedZones() uses, circle-only (v1 scope).
+      if(z.altM!=null){
+        const tgt=(z.layers||[]).find(l=>l.kind==='target');
+        if(tgt && tgt.radiusM!=null){
+          const tol=z.altToleranceM!=null?z.altToleranceM:TUNING.ALT_TOLERANCE_DEFAULT_M;
+          vextFeats.push(...cachedVextFeatures(z.id, LonLat(zc), tgt.radiusM, z.altM, tol));
+        }
+      }
     });
     this.map.getSource('stop-audio')?.setData(fc(audioFeats));
+    this.map.getSource('zone-vext')?.setData(fc(vextFeats));
   }
 };
 MapView.init();
@@ -2078,11 +2152,19 @@ document.getElementById('arBtn').onclick = async ()=>{
   document.getElementById('map').style.display='none';
   document.getElementById('arView').style.display='block';
   try{
+    // Vertical-extent cylinder (item A, 2026-08-14) — only the "target"
+    // layer's radius counts (same lookup MapView's cachedVextFeatures()
+    // and field-recorder.html's refreshPublishedZones() use), circle-only,
+    // v1 scope. null radius/altM means ARView just won't build the mesh.
+    const arTgt = (_arZone.layers||[]).find(l=>l.kind==='target'&&l.radiusM!=null);
     await ARView.open({
       videoEl: document.getElementById('arVideo'),
       canvas: document.getElementById('arCanvas'),
       label: document.getElementById('arLabel'),
       zoneCenter, arObjects: _arZone.arObjects, visitorLatLon: [HUD.pos.lat, HUD.pos.lon],
+      zoneRadiusM: arTgt ? arTgt.radiusM : null,
+      zoneAltM: _arZone.altM ?? null,
+      zoneAltToleranceM: _arZone.altToleranceM!=null ? _arZone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M,
       onClosed: closeArView
     });
     if(!oriOk) HUD.log('ev-warn','AR: motion access denied — object position will be off (label now shows live debug readout instead)');

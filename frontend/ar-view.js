@@ -25,19 +25,29 @@
  *
  * Host contract:
  *   ARView.open({videoEl, canvas, label, zoneCenter:[lat,lon], arObjects:[...],
- *                visitorLatLon:[lat,lon], onClosed})
+ *                visitorLatLon:[lat,lon], zoneRadiusM, zoneAltM, zoneAltToleranceM,
+ *                onClosed})
  *     label (optional) is a DOM element this module writes a permanent
  *     live debug readout into every frame — heading/source/beta/gamma and
  *     the bearing to the nearest active object — for diagnosing on-device
  *     compass issues that can't be reproduced off-device. Same pattern as
  *     field-recorder.html's own debug readout.
+ *     zoneRadiusM/zoneAltM/zoneAltToleranceM (all optional — item A,
+ *     2026-08-14): when the open zone is a real cylinder trigger volume
+ *     (circle shape + vertical extent, same isCylinder condition the
+ *     trigger engine uses), renders it as a translucent cylinder mesh
+ *     alongside any placed arObjects. See onFix()'s own comment for how
+ *     its vertical position is kept correct as the visitor's altitude
+ *     changes.
  *     onClosed is called exactly once whenever this session ends, from
  *     EVERY close path — an explicit close() call, an open() failure, or
  *     this module's own visibilitychange auto-close on phone lock/app
  *     switch. The host's DOM restoration (hide the AR overlay, show the
  *     map back) belongs in onClosed, not duplicated in a close-button
  *     handler — otherwise an auto-close strands the overlay on screen.
- *   ARView.onFix(visitorLatLon)   — call once per GPS tick while open
+ *   ARView.onFix(visitorLatLon, visitorAltM)   — call once per GPS tick
+ *     while open. visitorAltM (optional) keeps a vertical-extent cylinder's
+ *     height tracking the visitor's real altitude — see onFix()'s comment.
  *   ARView.close()
  *   ARView.isOpen()
  *   ARView.requestOrientationPermission()  — iOS gate; call as the FIRST
@@ -241,6 +251,16 @@ function bearingTo(a, b){
   return (Math.atan2(y,x)*180/Math.PI+360)%360;
 }
 
+// Vertical-extent cylinder (item A, 2026-08-14) — this module's first
+// primitive mesh; every other object here is a loaded/cloned GLB. Open-
+// ended (no top/bottom caps) so the translucent side wall reads as a
+// volume boundary, not a solid drum.
+function buildVextMesh(radiusM, toleranceM){
+  const geo=new THREE.CylinderGeometry(radiusM, radiusM, 2*toleranceM, 32, 1, true);
+  const mat=new THREE.MeshStandardMaterial({color:0xffc24d, transparent:true, opacity:0.25, side:THREE.DoubleSide});
+  return new THREE.Mesh(geo, mat);
+}
+
 async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
   for(const obj of arObjects){
     if(!obj.url) continue;   // unresolved (asset deleted from palette, or publish-time fetch failed) — skip, don't throw
@@ -304,7 +324,8 @@ function render(){
 
 /* ---- public API ---- */
 let _onClosed=null;   // caller's DOM-restoration hook — see close()'s own comment
-async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, visitorLatLon, onClosed}){
+async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, visitorLatLon,
+                      zoneRadiusM, zoneAltM, zoneAltToleranceM, onClosed}){
   if(rafId!=null) return;   // already open
   videoEl=videoElArg; labelEl=label||null;
   _onClosed=onClosed||null;
@@ -317,6 +338,17 @@ async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, v
     AROrient.start();
     window.addEventListener('resize', onResize);
     await loadArObjects(zoneCenter, arObjects||[], visitorLatLon);
+    // Vertical-extent cylinder — pushed AFTER arObjects so active[0] (what
+    // updateDebugLabel() reads for bearing-to-object) still prefers a real
+    // placed model when one exists, same as before this was added.
+    if(zoneCenter && zoneRadiusM!=null && zoneAltM!=null){
+      const tol=zoneAltToleranceM!=null?zoneAltToleranceM:25;
+      const mesh=buildVextMesh(zoneRadiusM, tol);
+      scene.add(mesh);
+      const anchor={latOffsetM:0, lonOffsetM:0, altM:0};
+      if(visitorLatLon) placeMesh(mesh, zoneCenter, visitorLatLon, anchor);
+      active.push({mesh, zoneCenter, anchor, isVext:true, vextAltM:zoneAltM});
+    }
     rafId=requestAnimationFrame(render);
   }catch(e){
     close();   // clean up any partial state (camera/scene/listeners) before surfacing the error
@@ -324,10 +356,23 @@ async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, v
   }
 }
 
-function onFix(visitorLatLon){
+// visitorAltM (optional): recomputes the vertical-extent cylinder's height
+// from the visitor's LIVE altitude every fix — not just once at open() —
+// because the target user here is a paraglider/drone operator whose
+// altitude is constantly changing, the whole point of this feature. Falls
+// back to eye-level (anchor.altM=0) when no trustworthy altitude is
+// available yet — still shows the cylinder's correct SIZE (radius +
+// tolerance thickness), just not true absolute height until one is.
+// Ordinary placed arObjects are untouched — their anchor.altM is an
+// author-configured relative nudge, not vertical-extent tracking.
+function onFix(visitorLatLon, visitorAltM){
   if(rafId==null) return;
   lastVisitorLatLon=visitorLatLon;
-  active.forEach(a=>{ if(a.zoneCenter) placeMesh(a.mesh, a.zoneCenter, visitorLatLon, a.anchor); });
+  active.forEach(a=>{
+    if(!a.zoneCenter) return;
+    if(a.isVext) a.anchor.altM = (visitorAltM!=null) ? (a.vextAltM-visitorAltM) : 0;
+    placeMesh(a.mesh, a.zoneCenter, visitorLatLon, a.anchor);
+  });
 }
 
 // Explicit, enumerated teardown — every one of these matters. Skipping any

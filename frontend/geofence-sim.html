@@ -743,6 +743,22 @@ function updateTerrain(){
   const btn=document.getElementById("btnTilt");
   if(btn) btn.style.display=on?"inline-block":"none";
   if(!on) map.easeTo({pitch:0});
+  // Vertical-extent volume needs terrain for ground-relative base/height
+  // (see zonesGeoJSON()'s vextBase/vextTop comment) — swap to the flat 2D
+  // ring when terrain's off, real 3D volume when on. Immediate refreshZones()
+  // right after setTerrain() runs before DEM tiles at any zone's location
+  // have actually loaded — queryTerrainElevation returns null, every
+  // feature skips its extrusion props, vext-vol renders nothing (and
+  // vext-ring is hidden whenever 3D is on) until the next unrelated
+  // refresh (drag, prop edit, Play tick). Re-render once more when the
+  // map settles so a static just-loaded view doesn't sit with only the
+  // label showing indefinitely.
+  if(map.getLayer("vext-vol")){
+    map.setLayoutProperty("vext-vol","visibility",on?"visible":"none");
+    map.setLayoutProperty("vext-ring","visibility",on?"none":"visible");
+    refreshZones();
+    if(on) map.once("idle",refreshZones);
+  }
 }
 document.getElementById("btnTilt").onclick=()=>{
   map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
@@ -774,6 +790,15 @@ map.on("load",()=>{
   // renders as a gray fill/solid outline underneath this dashed ring.
   map.addLayer({id:"vext-ring",type:"line",source:"fences",filter:["==","kind","vext"],
     paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
+  // Real 3D volume — visibility toggled alongside vext-ring in
+  // updateTerrain() (terrain on -> volume, terrain off -> flat ring).
+  // Filtered on "has vextTop" so a feature whose ground-relative math was
+  // skipped this refresh doesn't try to extrude with missing values.
+  map.addLayer({id:"vext-vol",type:"fill-extrusion",source:"fences",
+    filter:["all",["==",["get","kind"],"vext"],["has","vextTop"]],
+    layout:{visibility:"none"},
+    paint:{"fill-extrusion-color":"#ffc24d","fill-extrusion-opacity":0.28,
+      "fill-extrusion-base":["get","vextBase"],"fill-extrusion-height":["get","vextTop"]}});
   map.addLayer({id:"vext-lbl",type:"symbol",source:"fences",filter:["==","kind","vext"],
     layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,-1.4],"text-font":["Open Sans Regular"]},
     paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.2}});
@@ -863,12 +888,30 @@ function zonesGeoJSON(){
       const state=phaseOf(z,L,i), props={zone:z.id,kind:L.kind,state};
       if(L.radiusM!=null && z.center){
         feats.push({type:"Feature",properties:props,geometry:{type:"Polygon",coordinates:circleRing(z.center,L.radiusM)}});
-        // Vertical-extent shadow ring + label (item A, 2026-08-14) — same
-        // cheap plan-view indicator as fence-editor.html's own #vext-ring,
-        // for a circle target layer that's a real cylinder trigger volume.
+        // Vertical-extent shadow ring/volume (item A, 2026-08-14) — for a
+        // circle target layer that's a real cylinder trigger volume.
         if(L.kind==="target" && z.altM!=null){
           const tol=z.altToleranceM!=null?z.altToleranceM:TUNING.ALT_TOLERANCE_DEFAULT_M;
-          feats.push({type:"Feature",properties:{kind:"vext",label:"±"+tol+"m @ "+z.altM+"m"},
+          const vextProps={kind:"vext",label:"±"+tol+"m @ "+z.altM+"m"};
+          // Real 3D volume only when terrain is active — base/height are
+          // meters ABOVE THE GROUND SURFACE, not absolute altitude, so
+          // altM (authored from real ground elevation) needs the ground
+          // elevation under it subtracted back out here, same fix as
+          // fence-editor.html's renderSourcesInner(). Falls back to the
+          // flat vext-ring (visibility-toggled in updateTerrain()) when
+          // terrain's off, not loaded at this point yet, or the whole band
+          // is below ground (vextTop<=0, degenerate).
+          if(BUNDLE.threeDEnabled && map.getTerrain()){
+            const groundElev=map.queryTerrainElevation([z.center[1],z.center[0]]);
+            if(groundElev!=null){
+              const vextTop=(z.altM+tol)-groundElev;
+              if(vextTop>0){
+                vextProps.vextBase=Math.max(0,(z.altM-tol)-groundElev);
+                vextProps.vextTop=vextTop;
+              }
+            }
+          }
+          feats.push({type:"Feature",properties:vextProps,
             geometry:{type:"Polygon",coordinates:circleRing(z.center,L.radiusM)}});
         }
       } else if(L.geometry){
@@ -1178,6 +1221,11 @@ function setBase(k){ map.setStyle(styleFor(k));
         paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
       map.addLayer({id:"vext-ring",type:"line",source:"fences",filter:["==","kind","vext"],
         paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
+      map.addLayer({id:"vext-vol",type:"fill-extrusion",source:"fences",
+        filter:["all",["==",["get","kind"],"vext"],["has","vextTop"]],
+        layout:{visibility:"none"},
+        paint:{"fill-extrusion-color":"#ffc24d","fill-extrusion-opacity":0.28,
+          "fill-extrusion-base":["get","vextBase"],"fill-extrusion-height":["get","vextTop"]}});
       map.addLayer({id:"vext-lbl",type:"symbol",source:"fences",filter:["==","kind","vext"],
         layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,-1.4],"text-font":["Open Sans Regular"]},
         paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.2}});
