@@ -29,15 +29,20 @@
  * The measurement update runs as up to TWO INDEPENDENT corrections per push()
  * (see push() below): horizontal (lat/lon) always, exactly reproducing the
  * original 4D filter's math and gated by its own NIS threshold; altitude,
- * only when `fix.alt` is present (phone `coords.altitude`, or a future BLE
- * dongle — item D of the 3D-mode plan), gated by its OWN separate NIS
- * threshold. Deliberately not one joint 3D update — a noisy/outlier
- * altitude reading must never inflate the horizontal measurement noise (or
- * vice versa); see push()'s update section for the full reasoning.
- * `fix.altAcc` (metres) and `fix.altSource` ("gps"|"baro") let a caller
- * signal how much to trust that particular altitude reading — barometric
- * altitude is far more stable than phone-GPS altitude, and this is the
- * mechanism that lets that trust difference actually change the fused
+ * only when `fix.alt` is present (phone `coords.altitude`, a terrain-DEM
+ * lookup, or a real BLE barometer dongle — item D of the 3D-mode plan),
+ * gated by its OWN separate NIS threshold. Deliberately not one joint 3D
+ * update — a noisy/outlier altitude reading must never inflate the
+ * horizontal measurement noise (or vice versa); see push()'s update
+ * section for the full reasoning.
+ * `fix.altAcc` (metres) and `fix.altSource` ("gps"|"terrain"|"baro") let a
+ * caller signal how much to trust that particular altitude reading —
+ * whenever `fix.altAcc` is provided explicitly (as both the terrain-DEM
+ * fallback and a real dongle's readings do), it's used directly and
+ * `altSource` only matters for the `fix.altAcc==null` default below.
+ * Barometric altitude is far more stable than phone-GPS altitude, and
+ * "gps" vs "baro" trust tiers are the mechanism that lets that trust
+ * difference actually change the fused
  * output, not just the data model. NOTE: barometric altitude drifts with
  * pressure and is
  * relative, not absolute — anchoring a raw baro reading to GNSS altitude on

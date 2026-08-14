@@ -242,7 +242,11 @@
         <b>Other BLE GPS receivers</b> — devices that broadcast the standard
         Location &amp; Navigation Service (LNS / GATT 0x1819) connect automatically
         with no extra app.<br><br>
-        Protocol is auto-detected on connect. Requires Chrome or Edge.
+        Protocol is auto-detected on connect. Requires Chrome or Edge.<br><br>
+        A dongle with a barometric altimeter (Elevation Source =
+        Barometric, or the extra NUS altitude fields) improves accuracy
+        for altitude-gated stops — otherwise altitude is estimated from
+        terrain elevation at your GPS position when 3D Mode is on.
       </div>
     </div>
   </div>
@@ -1321,6 +1325,28 @@ function zoneNearestDistM(z,p,nowMs){
   return Geo.hav([p.lat,p.lon],zc);
 }
 /* ============================== HUD ============================== */
+// Default, hardware-free altitude source (3D-mode plan item D, rescoped
+// 2026-08-13). A real barometric reading (fix.altSource==="baro", from a
+// connected BLE dongle via BleGPS below) always wins — it's a live
+// physical measurement. Failing that, look up ground elevation at the
+// fix's own already-accurate horizontal position from the same terrain
+// DEM Test Mode/the editor already use for authoring — valid because
+// visitors are on marked ground trails, never a lift or an indoor upper
+// floor, and it means production uses the exact same altitude reference
+// as authoring instead of two disagreeing ones (raw phone coords.altitude
+// is WGS84-ellipsoid; the DEM is orthometric — see decision-ar-3d-mode-
+// planned.md's datum-offset caveat). Falls back to whatever the source
+// itself provided (raw phone altitude, or nothing) when 3D Mode/terrain
+// isn't loaded.
+const TERRAIN_ALT_ACC_M = 8;
+function applyTerrainAltFallback(fix){
+  if(fix.altSource==='baro') return;
+  if(!BUNDLE.threeDEnabled || !MapView.map || !MapView.map.getTerrain()) return;
+  try{
+    const e=MapView.map.queryTerrainElevation([fix.lon,fix.lat]);
+    if(e!=null){ fix.alt=e; fix.altAcc=TERRAIN_ALT_ACC_M; fix.altSource='terrain'; }
+  }catch(err){}
+}
 // Smoothed position for the current tick — set by HUD.onFix() before it calls
 // Geofencer.update(), so Geofencer.onEvent (fired synchronously from inside
 // that update() call) can read it for pipeline data.position blocks.
@@ -1333,8 +1359,9 @@ const HUD = {
                 d.textContent=t+'  '+msg; l.prepend(d); },
   posConf(acc,R){ if(R==null) return 2; return acc*1.0<R?3 : acc<R+15?2 : 1; },
 
-  onFix(fix){               // fix = {lat,lon,acc,t[,heading]}
+  onFix(fix){               // fix = {lat,lon,acc,t[,heading][,alt,altAcc,altSource]}
     window.__lastAcc=fix.acc;
+    applyTerrainAltFallback(fix);
     const sm=GPSFilter.push(fix);
     lastSmoothed=sm;
     TravelHeading.update(sm.speed, sm.headingTravel);
@@ -1900,20 +1927,41 @@ const BleGPS = {
       const hasSpeed = !!(flags&0x01);
       const hasDist  = !!(flags&0x02);
       const hasLoc   = !!(flags&0x04);
+      const hasElev  = !!(flags&0x08);
+      const elevSrc  = (flags>>10)&0x3;   // 0=Position System,1=Barometric,2=Database,3=Other (0x2A67 spec)
       if(!hasLoc) return null;
       let o=2;
       if(hasSpeed) o+=2;   // uint16 × 0.01 m/s
       if(hasDist)  o+=3;   // uint24
       if(dv.byteLength<o+8) return null;
       const lat = dv.getInt32(o,true)*1e-7; o+=4;
-      const lon = dv.getInt32(o,true)*1e-7;
+      const lon = dv.getInt32(o,true)*1e-7; o+=4;
       if(lat<-90||lat>90||lon<-180||lon>180) return null;
-      return {lat,lon,acc:5,t:Date.now()};
+      const fix={lat,lon,acc:5,t:Date.now()};
+      // Elevation (item D, 3D-mode plan): signed 24-bit, metres × 0.01,
+      // right after Location and before Heading. elevSrc===1 (Barometric)
+      // is the whole point of the dongle — tag "baro" for the EKF's tight
+      // trust tier; other sources (GPS/database/other) are no better than
+      // the phone's own altitude, tagged "gps" so they get the loose tier
+      // instead of falsely inheriting barometric trust.
+      if(hasElev && dv.byteLength>=o+3){
+        const b0=dv.getUint8(o), b1=dv.getUint8(o+1), b2=dv.getUint8(o+2);
+        let raw = b0 | (b1<<8) | (b2<<16);
+        if(raw & 0x800000) raw -= 0x1000000;
+        fix.alt = raw*0.01;
+        fix.altSource = elevSrc===1 ? 'baro' : 'gps';
+      }
+      return fix;
     }catch(e){ return null; }
   },
 
   // ── Protocol B: NUS text (Connect IQ / UART) ──────────────────────
-  // Accepts: "lat,lon"  |  "lat,lon,acc"  |  "lat,lon,acc,hdg_deg"  |  $GPRMC  |  $GPGGA
+  // Accepts: "lat,lon" | "lat,lon,acc" | "lat,lon,acc,hdg_deg" |
+  // "lat,lon,acc,hdg_deg,alt_m" | "lat,lon,acc,hdg_deg,alt_m,alt_acc_m" |
+  // $GPRMC | $GPGGA. The two trailing altitude fields are item D (3D-mode
+  // plan) — a DIY barometer dongle's firmware appends them; the existing
+  // 2-4 field lines from the Garmin Connect IQ companion app parse exactly
+  // as before (this is purely additive, frozen field order).
   _parseNUS(dv){
     try{
       const line = new TextDecoder().decode(dv).trim();
@@ -1929,6 +1977,13 @@ const BleGPS = {
       if(!isFinite(lat)||!isFinite(lon)||lat<-90||lat>90||lon<-180||lon>180) return null;
       const fix={lat,lon,acc:isFinite(acc)?acc:5,t:Date.now()};
       if(hdg!==null && isFinite(hdg) && hdg>=0 && hdg<360) fix.heading=hdg;
+      if(p.length>=5){
+        const alt=parseFloat(p[4]);
+        if(isFinite(alt)){
+          fix.alt=alt; fix.altSource='baro';
+          if(p.length>=6){ const aAcc=parseFloat(p[5]); if(isFinite(aAcc)) fix.altAcc=aAcc; }
+        }
+      }
       return fix;
     }catch(e){ return null; }
   },
@@ -2038,10 +2093,11 @@ function startGPS(){
   if(watchId!==null) return;   // already watching — pill CTA + drawer's Start GPS button both call startGPS()
   HUD.log('ev-sys','GPS started — walk the stops');
   watchId=navigator.geolocation.watchPosition(
-    // coords.altitude/altitudeAccuracy are the phone-GPS altitude baseline
-    // this codebase targets today (real, but noisy — see kalman-filter.js's
-    // DEFAULT_GPS_ALT_ACC_M); a future BLE dongle (3D-mode plan item D)
-    // supplies fix.altSource="baro" instead, tighter and more stable.
+    // coords.altitude/altitudeAccuracy are raw phone-GPS altitude (noisy —
+    // see kalman-filter.js's DEFAULT_GPS_ALT_ACC_M) — kept here only as the
+    // last-resort fallback; HUD.onFix()'s applyTerrainAltFallback() upgrades
+    // this to a DEM lookup whenever 3D Mode/terrain is loaded, or to a real
+    // BLE dongle's barometric reading when one's connected (item D).
     p=>HUD.onFix({lat:p.coords.latitude,lon:p.coords.longitude,
                   acc:p.coords.accuracy||99,t:p.timestamp||Date.now(),
                   alt:p.coords.altitude!=null?p.coords.altitude:null,
