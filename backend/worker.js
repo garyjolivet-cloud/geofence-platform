@@ -989,7 +989,7 @@ async function api(request, env, url) {
     if (!A) return json({ apps: [] }, 200, AC);
     const scopedOrg = A.master ? (url.searchParams.get("org") || null) : A.appId;
     const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt,a.three_d_enabled AS threeDEnabled, " +
-      "a.terrain_altitude_enabled AS terrainAltitudeEnabled, " +
+      "a.terrain_altitude_enabled AS terrainAltitudeEnabled, a.visitors_fly AS visitorsFly, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
@@ -1040,10 +1040,15 @@ async function api(request, env, url) {
     // needs its own explicit opt-in even for a workspace that already has
     // 3D Mode on.
     const terrainAlt = b.terrainAltitudeEnabled === undefined ? null : (b.terrainAltitudeEnabled ? 1 : 0);
-    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), updatedAt=? WHERE id=?")
-      .bind(name, b.description ?? null, threeD, terrainAlt, now, aid).run();
+    // visitorsFly (item A, paraglider/drone stops, 2026-08-14) — a third,
+    // separate flag: stops applyTerrainAltFallback() from clobbering a
+    // flying visitor's real GPS altitude with ground elevation. Same
+    // "own explicit opt-in" reasoning as terrainAltitudeEnabled above.
+    const visitorsFly = b.visitorsFly === undefined ? null : (b.visitorsFly ? 1 : 0);
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, now, aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
-    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt }, 200, AC);
+    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly }, 200, AC);
   }
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---

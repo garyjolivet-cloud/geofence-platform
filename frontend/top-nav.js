@@ -638,6 +638,20 @@
           const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,terrainAltitudeEnabled:next})});
           if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
         });
+        // Third, separate toggle (item A, paraglider/drone stops,
+        // 2026-08-14): stops the terrain-altitude default above from
+        // clobbering a flying visitor's real GPS altitude with ground
+        // elevation — a workspace hosting a walking tour should NOT turn
+        // this on, it's specifically for airborne visitors. Shown
+        // alongside Terrain Altitude (same 3D-Mode-on gate) since it only
+        // matters in relation to that flag.
+        if(app.threeDEnabled) mkBtn(app.visitorsFly ? "Flying Visitors: On" : "Flying Visitors: Off", async () => {
+          const next = !app.visitorsFly;
+          if(!confirm((next?"Turn ON":"Turn OFF")+' "visitors fly" for "'+(app.name||app.id)+'"? When on, a flying visitor\'s real GPS altitude always wins over the terrain-elevation default, once each project is republished.')) return;
+          const token = askToken(); if(!token) return;
+          const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,visitorsFly:next})});
+          if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
+        });
         if(apps.length > 1) mkBtn("Merge into…", async () => {
           const others = apps.filter(a => a.id!==app.id);
           const names = others.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");

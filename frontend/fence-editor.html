@@ -648,13 +648,20 @@
       <input id="pRangeClear" type="number" min="0" placeholder="project default">
     </div>
 
-    <!-- ── Altitude gate (3D Mode) — hidden entirely unless this project's
-         workspace has 3D Mode on (updateAssetPaletteVisibility() toggles
-         this the same way it gates the Asset Palette). Leave both blank
-         for "any altitude", today's behavior — a zone only gets an
-         altitude requirement if an author explicitly sets one here. ── -->
+    <!-- ── Vertical extent (3D Mode) — hidden unless this project's
+         workspace has 3D Mode on AND the selected stop is a circle
+         (updateAssetPaletteVisibility()/refreshProps() toggle this).
+         Leave both blank for "any altitude", today's behavior — a stop
+         only gets a vertical extent if an author explicitly sets one
+         here. altM/altToleranceM are the same two fields as before
+         (item A, 2026-08-14 — reparameterized as a real capped-cylinder
+         signed distance in the trigger engine, not a new data model; see
+         Geofencer.sd() in geofence-engine.html) — a circle stop with
+         these set is now a genuine 3D cylinder trigger volume, usable for
+         fast-moving visitors (paraglider/drone) via segment-crossing
+         detection, not just a slow independent altitude AND-gate. ── -->
     <div class="va-section" id="pAltSection" style="display:none">
-      <div class="va-label">Altitude gate (3D Mode) — leave blank for any altitude</div>
+      <div class="va-label">Vertical extent (cylinder) — leave blank for any altitude</div>
       <div class="row" style="gap:6px">
         <div style="flex:1">
           <label class="k">altitude (m)</label>
@@ -994,6 +1001,15 @@ let _threeDOn=false; // current app's three_d_enabled — kept in sync by update
 // change), so an author can validate an altitude gate with terrain data
 // even before turning this flag on for real visitors.
 let _terrainAltOn=false;
+// Third, separate flag (item A, paraglider/drone stops, 2026-08-14):
+// whether the production player should let a flying visitor's real GPS
+// altitude override the terrain-elevation default above. Also doesn't
+// affect Test Mode's own terrain sampling directly — Test Mode isn't
+// altitude-source-aware of "flying" at all yet (an author testing a
+// flying-visitor project should just set altM/altToleranceM directly
+// rather than relying on "use terrain height here", which samples ground
+// elevation and is hidden in the property panel when this is on).
+let _visitorsFlyOn=false;
 function isThreeDEnabled(){ return _threeDOn; }
 function updateTerrain(){
   if(!map.getSource(TERRAIN_SOURCE_ID)) return; // not loaded yet — updateTerrain() runs again from the load handler above
@@ -1513,6 +1529,16 @@ function renderSourcesInner(){
     // point along the route they currently occupy at runtime)
     if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
       geometry:{type:"Polygon",coordinates:[ringFn(z.audioM)]}});
+    // Vertical-extent shadow ring + label (item A, 2026-08-14) — circle
+    // stops only, v1's cylinder trigger-volume scope (see #pAltSection's
+    // own comment). ringFn here is always the plain circleRing for a
+    // circle zone (see the ringFn selection above), so this is just the
+    // stop's own real radius, not a cosmetic offset like the audio rings.
+    if(s.type==="circle" && z.altM!=null){
+      const tolTxt=z.altToleranceM!=null?z.altToleranceM:SIM_TUNING.ALT_TOLERANCE_DEFAULT_M;
+      feats.push({type:"Feature",properties:{kind:"vext",label:"±"+tolTxt+"m @ "+z.altM+"m"},
+        geometry:{type:"Polygon",coordinates:[circleRing(c,s.radiusM,48)]}});
+    }
     // hearing-range rings (audio fade / full volume) — every stop now, not
     // just path stops. Falls back from this stop's own audio-fade ring to
     // the project defaults — exactly like actual playback (zoneFadeGeom
@@ -1709,6 +1735,16 @@ map.on("load",()=>{
   // audio fade-in ring (blue-grey dotted)
   map.addLayer({id:"audio-ring",type:"line",source:"fences",filter:["==","kind","audio"],
      paint:{"line-color":"#6fbfff","line-width":1.2,"line-dasharray":[1,3],"line-opacity":0.65}});
+  // Vertical-extent "shadow ring" — a plan-view indicator for a circle
+  // stop's real cylinder trigger volume (item A, 2026-08-14). Same cheap
+  // pattern as every other non-primary-geometry ring here (a plain
+  // circleRing annulus outline, not real fill-extrusion/volumetric
+  // rendering — this repo has no use of that layer type anywhere).
+  map.addLayer({id:"vext-ring",type:"line",source:"fences",filter:["==","kind","vext"],
+     paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
+  map.addLayer({id:"vext-lbl",type:"symbol",source:"fences",filter:["==","kind","vext"],
+     layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,-1.4],"text-font":["Open Sans Regular"]},
+     paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.2}});
   // fade gradient band (clear at trigger ring → solid at full-volume ring).
   // Added here, before the ring outline layers below, so those stay crisp
   // on top of the translucent fill.
@@ -2097,11 +2133,18 @@ function refreshProps(){
   }
   // Hearing-range override — every stop type now, not just path.
   document.getElementById("pRangeClear").value=z.spatialClearM??"";
-  // Altitude gate (3D Mode) — section itself only visible when this
-  // project's workspace has 3D Mode on (updateAssetPaletteVisibility()).
-  document.getElementById("pAltSection").style.display=_threeDOn?"block":"none";
+  // Vertical extent (3D Mode) — only visible when this project's
+  // workspace has 3D Mode on AND the selected stop is a circle (item A,
+  // 2026-08-14): v1's cylinder trigger-volume math only applies to
+  // circles — showing this on a polygon/tripline/path stop would be
+  // misleading even though the old independent altOk() AND-gate still
+  // technically works for those shapes under the hood.
+  document.getElementById("pAltSection").style.display=(_threeDOn && z.shape.type==="circle")?"block":"none";
   document.getElementById("pAltM").value=z.altM??"";
   document.getElementById("pAltTol").value=z.altToleranceM??"";
+  // "use terrain height here" samples GROUND elevation — meaningless (and
+  // actively misleading) for a flying-visitor project's stop.
+  document.getElementById("pAltUseTerrain").style.display=_visitorsFlyOn?"none":"";
   document.getElementById("vaSummary").style.display="block";
   { const vPct=Math.round((z.volume??1)*100);
     document.getElementById("pVolume").value=vPct;
@@ -2484,9 +2527,13 @@ function updateAssetPaletteVisibility(){
   const app=_appsCache.find(a=>a.id===document.getElementById("appSel").value);
   _threeDOn=!!(app&&app.threeDEnabled);
   _terrainAltOn=!!(app&&app.terrainAltitudeEnabled);
+  _visitorsFlyOn=!!(app&&app.visitorsFly);
   document.getElementById("assetPalette").classList.toggle("on", _threeDOn);
   updateTerrain();
-  if(sel>=0) document.getElementById("pAltSection").style.display=_threeDOn?"block":"none";
+  if(sel>=0){
+    document.getElementById("pAltSection").style.display=(_threeDOn && zones[sel].shape.type==="circle")?"block":"none";
+    document.getElementById("pAltUseTerrain").style.display=_visitorsFlyOn?"none":"";
+  }
 }
 document.getElementById("appSel").onchange=updateAssetPaletteVisibility;
 // customer picker — which client (customer) this project is uploaded to
@@ -3899,6 +3946,11 @@ async function exportBundle(){
               // default even when threeDEnabled is on; see _terrainAltOn's
               // own comment for why this isn't folded into threeDEnabled.
               terrainAltitudeEnabled:_terrainAltOn,
+              // Third denormalized flag (item A, paraglider/drone stops,
+              // 2026-08-14) — whether a flying visitor's real GPS altitude
+              // should win over the terrain-elevation default above. See
+              // _visitorsFlyOn's own comment.
+              visitorsFly:_visitorsFlyOn,
               zones:zonesOut };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -4539,7 +4591,27 @@ const SimGeo={
   lineCross(prev,cur,from,to,ref){const A=this.toXY(prev,ref),B=this.toXY(cur,ref),C=this.toXY(from,ref),D=this.toXY(to,ref);
     const ccw=(p,q,r)=>(r.y-p.y)*(q.x-p.x)-(q.y-p.y)*(r.x-p.x);
     const d1=ccw(C,D,A),d2=ccw(C,D,B),d3=ccw(A,B,C),d4=ccw(A,B,D);
-    return{crossed:((d1>0)!==(d2>0))&&((d3>0)!==(d4>0)),side:d2<0?"L":"R"};}
+    return{crossed:((d1>0)!==(d2>0))&&((d3>0)!==(d4>0)),side:d2<0?"L":"R"};},
+  // 3D segment-vs-cylinder crossing test — see geofence-engine.html's
+  // Geo.segCylinderCross for the full reasoning, mirrored verbatim here.
+  segCylinderCross(prevLL,curLL,prevAlt,curAlt,center,R,bottom,top){
+    if(prevAlt==null||curAlt==null)return{crossed:false};
+    const A=this.toXY(prevLL,center),B=this.toXY(curLL,center);
+    const dx=B.x-A.x,dy=B.y-A.y;
+    const a=dx*dx+dy*dy,b=2*(A.x*dx+A.y*dy),c=A.x*A.x+A.y*A.y-R*R;
+    let hLo,hHi;
+    if(a<1e-9){ if(c>0)return{crossed:false}; hLo=0;hHi=1; }
+    else{ const disc=b*b-4*a*c; if(disc<0)return{crossed:false};
+      const sq=Math.sqrt(disc); hLo=Math.max(0,(-b-sq)/(2*a)); hHi=Math.min(1,(-b+sq)/(2*a));
+      if(hLo>hHi)return{crossed:false}; }
+    let vLo,vHi;
+    if(Math.abs(curAlt-prevAlt)<1e-6){ if(prevAlt<bottom||prevAlt>top)return{crossed:false}; vLo=0;vHi=1; }
+    else{ const t1=(bottom-prevAlt)/(curAlt-prevAlt),t2=(top-prevAlt)/(curAlt-prevAlt);
+      vLo=Math.max(0,Math.min(t1,t2)); vHi=Math.min(1,Math.max(t1,t2));
+      if(vLo>vHi)return{crossed:false}; }
+    const tEnter=Math.max(hLo,vLo),tExit=Math.min(hHi,vHi);
+    return tEnter<=tExit?{crossed:true,tEnter,tExit}:{crossed:false};
+  }
 };
 // Nearest-point-on-polyline detail — verbatim mirror of geofence-engine.html's
 // nearestOnPath() (same logic/conventions, inlined to match SimGeo's own
@@ -4699,7 +4771,15 @@ const SimFencer={state:{},onEvent:null,
     // path (moving) zones fire triggers against their *current* live
     // position on the route, not the fixed start point.
     const zc=zone.path?simAmbientCenterNow(zone,now||Date.now()):zone.center;
-    if(layer.radiusM!=null)return SimGeo.sdCircle(PT,zc,layer.radiusM);
+    if(layer.radiusM!=null){
+      const dr=SimGeo.sdCircle(PT,zc,layer.radiusM);
+      // Circle w/ a vertical extent set: a real capped-cylinder signed
+      // distance — see geofence-engine.html's Geofencer.sd() for the
+      // full reasoning, mirrored verbatim here. PT here is [lat,lon]
+      // only (no altitude), so the caller (update()) passes p.alt in
+      // separately — see the isCylinder/dz block there instead of here.
+      return dr;
+    }
     const g=layer.geometry;if(!g)return null;
     if(g.type==="polygon")return SimGeo.sdPolygon(PT,g.coords,simBundle.ref);
     return null;},
@@ -4744,10 +4824,39 @@ const SimFencer={state:{},onEvent:null,
         if(prev){const c=SimGeo.lineCross([prev.lat,prev.lon],[p.lat,p.lon],layer.geometry.from,layer.geometry.to,simBundle.ref);
           if(c.crossed&&st.phase!=="cooldown"&&this.altOk(zone,p)){st.phase="cooldown";setTimeout(()=>{st.phase="out";},4000);
             this._fire(zone,layer,"enter",{side:c.side},"visitor");}} return;}
-      const sd=this.sd([p.lat,p.lon],zone,layer,now);if(sd==null)return;
+      let sd=this.sd([p.lat,p.lon],zone,layer,now);if(sd==null)return;
+      // A circle layer with a vertical extent set: fold altitude directly
+      // into a real capped-cylinder signed distance (same SDF combination
+      // as geofence-engine.html's Geofencer.sd()) rather than the
+      // independent altOk() AND-gate — sd() above only has [lat,lon], not
+      // altitude, so the combination happens here instead, using p.alt.
+      const isCylinder=layer.radiusM!=null&&zone.altM!=null;
+      if(isCylinder){
+        const tol=zone.altToleranceM!=null?zone.altToleranceM:SIM_TUNING.ALT_TOLERANCE_DEFAULT_M;
+        const dz=p.alt==null?-Infinity:Math.abs(p.alt-zone.altM)-tol;
+        sd=Math.min(Math.max(sd,dz),0)+Math.hypot(Math.max(sd,0),Math.max(dz,0));
+      }
       // Altitude gate folded into the same signed-distance state machine —
       // see geofence-engine.html's Geofencer.update() for the reasoning.
-      const sdEff=this.altOk(zone,p)?sd:Math.max(sd,SIM_TUNING.EXIT_BUFFER_M+1);
+      const sdEff=isCylinder||this.altOk(zone,p)?sd:Math.max(sd,SIM_TUNING.EXIT_BUFFER_M+1);
+      // Segment-crossing ("ray trace") for fast movers — see
+      // geofence-engine.html's Geofencer.update() for the full reasoning.
+      // Pre-sets phase "in" and relies on _step()'s own existing
+      // in-phase exit check (below) to immediately close out a flyby
+      // (sdEff still >EXIT_BUFFER_M) or correctly stay "in" for a
+      // sustained visit — no separate flyby-exit logic needed here.
+      // "pending"-phase rescue (fast movers only, see geofence-engine.html's
+      // Geofencer.update() for the full reasoning) — a single-fix-inside
+      // fast pass would otherwise be silently eaten by _step()'s own
+      // pending->out "single-fix blip" debounce on the very next tick.
+      const fastEnoughToRescue=prev&&SimGeo.hav([prev.lat,prev.lon],[p.lat,p.lon])>SIM_TUNING.EXIT_BUFFER_M;
+      if(isCylinder&&(st.phase==="out"||(st.phase==="pending"&&fastEnoughToRescue))&&sdEff>=0&&prev&&prev.alt!=null&&p.alt!=null){
+        const zc=zone.path?simAmbientCenterNow(zone,now):zone.center;
+        const tol=zone.altToleranceM!=null?zone.altToleranceM:SIM_TUNING.ALT_TOLERANCE_DEFAULT_M;
+        const bottom=zone.altM-tol, top=zone.altM+tol;
+        const cross=SimGeo.segCylinderCross([prev.lat,prev.lon],[p.lat,p.lon],prev.alt,p.alt,zc,layer.radiusM,bottom,top);
+        if(cross.crossed){ st.phase="in"; st.t0=now; st.delivered={}; this._fire(zone,layer,"enter",{},"visitor"); }
+      }
       if(sdEff<0&&st.phase==="in")active.push({zone,layer,sd:sdEff});
       this._step(zone,layer,i,sdEff,now,"visitor","visitor");
     });});
@@ -5130,7 +5239,12 @@ function feedSim(lat,lon,acc,t,bleFix){
   let effAlt=null;
   if(bleFix && bleFix.altSource==='baro' && bleFix.alt!=null){
     effAlt=bleFix.alt;
-  } else if(isThreeDEnabled()&&map.getTerrain()){
+  // Flying-visitor projects (item A, 2026-08-14): ground-elevation
+  // sampling is meaningless (and actively misleading) for a paraglider/
+  // drone stop — skip it, leaving effAlt null, rather than handing an
+  // author a fake ground-level reading while testing a cylinder trigger
+  // set hundreds of meters up.
+  } else if(!_visitorsFlyOn && isThreeDEnabled()&&map.getTerrain()){
     try{ effAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
   }
   const fix={lat,lon,acc,t};

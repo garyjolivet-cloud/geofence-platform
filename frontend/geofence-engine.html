@@ -405,7 +405,48 @@ const Geo = {
             const ccw=(p,q,r)=>(r.y-p.y)*(q.x-p.x)-(q.y-p.y)*(r.x-p.x);
             const d1=ccw(C,D,A), d2=ccw(C,D,B), d3=ccw(A,B,C), d4=ccw(A,B,D);
             const crossed = ((d1>0)!==(d2>0)) && ((d3>0)!==(d4>0));
-            return { crossed, side: d2<0 ? "L":"R" }; }
+            return { crossed, side: d2<0 ? "L":"R" }; },
+  // Does the 3D segment prevLL->curLL (each [lat,lon], plus altitude) cross
+  // a vertically-extended circle (cylinder), radius R centered at `center`
+  // [lat,lon], between altitudes bottom/top? For fast movers (paraglider,
+  // drone) that can skip straight through a small cylinder between two 1Hz
+  // GPS ticks without either endpoint landing inside it — a real
+  // "ray trace" against the segment, not just point containment. Returns
+  // {crossed:false} immediately if either endpoint's altitude is unknown —
+  // never blocks on missing data, same "no data = always pass" philosophy
+  // as altOk(). Horizontal part is the standard segment-vs-circle
+  // quadratic; vertical part is linear interpolation between the two
+  // altitudes (matching how every other primitive here already treats a
+  // GPS tick as a straight hop, e.g. lineCross/segDist — no velocity-based
+  // curve fitting). Crossed iff the two parameter ranges overlap.
+  segCylinderCross(prevLL, curLL, prevAlt, curAlt, center, R, bottom, top){
+    if(prevAlt==null || curAlt==null) return {crossed:false};
+    const A=this.toXY(prevLL,center), B=this.toXY(curLL,center);
+    const dx=B.x-A.x, dy=B.y-A.y;
+    const a=dx*dx+dy*dy, b=2*(A.x*dx+A.y*dy), c=A.x*A.x+A.y*A.y-R*R;
+    let hLo, hHi;
+    if(a<1e-9){                          // segment is (near-)stationary horizontally
+      if(c>0) return {crossed:false};    // sitting outside the circle the whole time
+      hLo=0; hHi=1;
+    } else {
+      const disc=b*b-4*a*c;
+      if(disc<0) return {crossed:false}; // line never reaches the circle at all
+      const sq=Math.sqrt(disc);
+      hLo=Math.max(0,(-b-sq)/(2*a)); hHi=Math.min(1,(-b+sq)/(2*a));
+      if(hLo>hHi) return {crossed:false};
+    }
+    let vLo, vHi;
+    if(Math.abs(curAlt-prevAlt)<1e-6){
+      if(prevAlt<bottom || prevAlt>top) return {crossed:false};
+      vLo=0; vHi=1;
+    } else {
+      const t1=(bottom-prevAlt)/(curAlt-prevAlt), t2=(top-prevAlt)/(curAlt-prevAlt);
+      vLo=Math.max(0,Math.min(t1,t2)); vHi=Math.min(1,Math.max(t1,t2));
+      if(vLo>vHi) return {crossed:false};
+    }
+    const tEnter=Math.max(hLo,vLo), tExit=Math.min(hHi,vHi);
+    return tEnter<=tExit ? {crossed:true, tEnter, tExit} : {crossed:false};
+  }
 };
 
 // Nearest-point-on-polyline detail (segment index + interpolation t, not
@@ -574,7 +615,23 @@ const Geofencer = {
     // path (moving) zones fire triggers against their *current* live
     // position on the route, not the fixed start point.
     const zc=zone.path ? centerNow(zone, now) : zone.center;
-    if(layer.radiusM!=null) return Geo.sdCircle(PT, zc, layer.radiusM);
+    if(layer.radiusM!=null){
+      const dr=Geo.sdCircle(PT, zc, layer.radiusM);
+      // Circle w/ a vertical extent set: a real capped-cylinder signed
+      // distance (paraglider/drone stops item), not the independent
+      // altOk() AND-gate every other shape still uses. dz mirrors altOk()'s
+      // own comparison, just expressed as a signed distance instead of a
+      // boolean so it can combine with dr geometrically. Standard SDF
+      // combination for the intersection of two half-space-style regions
+      // (radial disk ∩ altitude slab) — d<0 now genuinely means "inside
+      // the cylinder," not "inside the circle and separately in-band."
+      if(zone.altM!=null){
+        const tol = zone.altToleranceM!=null ? zone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M;
+        const dz = p.alt==null ? -Infinity : Math.abs(p.alt-zone.altM)-tol;
+        return Math.min(Math.max(dr,dz),0) + Math.hypot(Math.max(dr,0),Math.max(dz,0));
+      }
+      return dr;
+    }
     const g=layer.geometry;
     if(g && g.type==="polygon") return Geo.sdPolygon(PT, g.coords, BUNDLE.ref);
     if(g && g.type==="corridor") {
@@ -622,14 +679,65 @@ const Geofencer = {
         // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
         const d=this.sd(p,prev,zone,layer,now);
         if(d==null) return;
+        // A circle layer with a vertical extent set already has altitude
+        // baked directly into `d` (the capped-cylinder SDF combination in
+        // sd() above) — running the independent altOk() clamp on top of
+        // that would be redundant, not wrong, but the polygon/corridor
+        // path below still needs it (v1 doesn't give those a real vertical
+        // extent, they keep the plain AND-gate).
+        const isCylinder = layer.radiusM!=null && zone.altM!=null;
         // Altitude gate folded into the same signed-distance state machine
         // rather than a parallel one: outside the altitude band is treated
         // exactly like outside the 2D shape (forces "out"/triggers exit),
         // so entry requires both, and drifting out of the altitude band
         // while "in" exits the same way leaving the 2D shape would.
-        const dEff = this.altOk(zone,p) ? d : Math.max(d, TUNING.EXIT_BUFFER_M+1);
+        const dEff = isCylinder || this.altOk(zone,p) ? d : Math.max(d, TUNING.EXIT_BUFFER_M+1);
         // accuracy gate (warn content is exempt — handled at fire time)
         const holding = p.acc>TUNING.ACCURACY_CAP_M;
+
+        // Segment-crossing ("ray trace") for fast movers — paraglider/drone
+        // stops item: a visitor moving fast enough can skip straight
+        // through a small cylinder between two 1Hz ticks without either
+        // fix landing inside it. Only meaningful for circle+altM ("real"
+        // cylinder) layers, with altitude on both ends. Also rescues the
+        // "pending" phase: a fast mover whose single fix happens to land
+        // inside (dEff<0) still goes through the normal 2-fix debounce
+        // below and, if the very next fix is already back outside, that
+        // debounce reads it as a discarded single-fix blip — silently
+        // eating a real fast-mover pass with zero events. Gated to fixes
+        // that moved fast enough (> EXIT_BUFFER_M since prev) so an
+        // ordinary slow walker's GPS jitter at the cylinder's edge still
+        // goes through the normal (intentional) debounce untouched.
+        const fastEnoughToRescue = prev && Geo.hav([prev.lat,prev.lon],[p.lat,p.lon]) > TUNING.EXIT_BUFFER_M;
+        if(isCylinder && (st.phase==="out" || (st.phase==="pending" && fastEnoughToRescue)) && dEff>=0 && prev && prev.alt!=null && p.alt!=null){
+          const zc=zone.path?centerNow(zone,now):zone.center;
+          const tol = zone.altToleranceM!=null ? zone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M;
+          const bottom=zone.altM-tol, top=zone.altM+tol;
+          const cross=Geo.segCylinderCross([prev.lat,prev.lon],[p.lat,p.lon],prev.alt,p.alt,zc,layer.radiusM,bottom,top);
+          if(cross.crossed && !holding){
+            // A detected crossing is real evidence from two actual fixes —
+            // stronger than the 2-consecutive-fix "pending" debounce below
+            // was ever meant to filter (that debounce exists for point-
+            // sample jitter, not applicable here) — skip straight to "in".
+            st.phase="in"; st.t0=now; st.move=0; st.delivered={};   // st.t0 matches the normal pending->in transition's own dwell-clock field
+            this._fire(zone,layer,"enter",{});
+            if(dEff>TUNING.EXIT_BUFFER_M){
+              // Already back outside by the current fix — a genuine flyby,
+              // not a sustained visit. Close it out immediately (dur~0)
+              // rather than leaving phase "in" waiting for a future exit
+              // fix a fast flyby may never produce. Return here (skipping
+              // the active-list push and phase-handling below) since phase
+              // is back to "out" and there's nothing left to process this
+              // tick — but the sustained (non-flyby) case deliberately does
+              // NOT return: it falls through to the normal push/dwell/exit
+              // handling below (now correctly seeing st.phase==="in"), so
+              // it isn't missing from the needle/pick UI for one whole tick.
+              this._fire(zone,layer,"exit",{dur:0,move:0,flick:true});
+              st.phase="out";
+              return;
+            }
+          }
+        }
 
         if(dEff<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d:dEff});
 
@@ -1382,6 +1490,15 @@ function zoneNearestDistM(z,p,nowMs){
 const TERRAIN_ALT_ACC_M = 8;
 function applyTerrainAltFallback(fix){
   if(fix.altSource==='baro') return;
+  // Flying visitors (item A, paraglider/drone stops, 2026-08-14): a real
+  // device GPS altitude must never be silently clamped to "ground
+  // elevation at your horizontal position" — that's exactly backwards for
+  // anyone airborne. baro already wins above; this extends the same
+  // priority to raw GPS altitude specifically when the workspace has
+  // opted in via the Flying Visitors toggle. A project NOT marked
+  // visitorsFly keeps today's behavior unchanged (terrain still wins over
+  // raw phone GPS, correct for ground-walking tours).
+  if(BUNDLE.visitorsFly && fix.altSource==='gps' && fix.alt!=null) return;
   if(!BUNDLE.threeDEnabled || !BUNDLE.terrainAltitudeEnabled || !MapView.map || !MapView.map.getTerrain()) return;
   try{
     const e=MapView.map.queryTerrainElevation([fix.lon,fix.lat]);

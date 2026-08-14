@@ -880,7 +880,11 @@ function refreshPublishedZones(){
     const tgt=(z.layers||[]).find(l=>l.kind==="target");
     if(!tgt) return;
     const coSuffix = (z.codeObjects && z.codeObjects.length) ? " 🧩"+(z.codeObjects.length>1?"×"+z.codeObjects.length:"") : "";
-    const labelName = z.name+coSuffix;
+    // Vertical-extent note (item A, 2026-08-14) — this is a read-only
+    // reference layer, not an editing surface, so a text suffix on the
+    // existing name label is enough; no new ring/layer needed.
+    const vextSuffix = z.altM!=null ? " (±"+(z.altToleranceM??25)+"m @ "+z.altM+"m)" : "";
+    const labelName = z.name+coSuffix+vextSuffix;
     if(tgt.radiusM!=null){
       feats.push({type:"Feature",properties:{name:labelName},
         geometry:{type:"Polygon",coordinates:[circleRing(z.center[0],z.center[1],tgt.radiusM)]}});

@@ -350,7 +350,48 @@ const Geo = {
             const ccw=(p,q,r)=>(r.y-p.y)*(q.x-p.x)-(q.y-p.y)*(r.x-p.x);
             const d1=ccw(C,D,A), d2=ccw(C,D,B), d3=ccw(A,B,C), d4=ccw(A,B,D);
             const crossed = ((d1>0)!==(d2>0)) && ((d3>0)!==(d4>0));
-            return { crossed, side: d2<0 ? "L":"R" }; }
+            return { crossed, side: d2<0 ? "L":"R" }; },
+  // Does the 3D segment prevLL->curLL (each [lat,lon], plus altitude) cross
+  // a vertically-extended circle (cylinder), radius R centered at `center`
+  // [lat,lon], between altitudes bottom/top? For fast movers (paraglider,
+  // drone) that can skip straight through a small cylinder between two 1Hz
+  // GPS ticks without either endpoint landing inside it — a real
+  // "ray trace" against the segment, not just point containment. Returns
+  // {crossed:false} immediately if either endpoint's altitude is unknown —
+  // never blocks on missing data, same "no data = always pass" philosophy
+  // as altOk(). Horizontal part is the standard segment-vs-circle
+  // quadratic; vertical part is linear interpolation between the two
+  // altitudes (matching how every other primitive here already treats a
+  // GPS tick as a straight hop, e.g. lineCross/segDist — no velocity-based
+  // curve fitting). Crossed iff the two parameter ranges overlap.
+  segCylinderCross(prevLL, curLL, prevAlt, curAlt, center, R, bottom, top){
+    if(prevAlt==null || curAlt==null) return {crossed:false};
+    const A=this.toXY(prevLL,center), B=this.toXY(curLL,center);
+    const dx=B.x-A.x, dy=B.y-A.y;
+    const a=dx*dx+dy*dy, b=2*(A.x*dx+A.y*dy), c=A.x*A.x+A.y*A.y-R*R;
+    let hLo, hHi;
+    if(a<1e-9){
+      if(c>0) return {crossed:false};
+      hLo=0; hHi=1;
+    } else {
+      const disc=b*b-4*a*c;
+      if(disc<0) return {crossed:false};
+      const sq=Math.sqrt(disc);
+      hLo=Math.max(0,(-b-sq)/(2*a)); hHi=Math.min(1,(-b+sq)/(2*a));
+      if(hLo>hHi) return {crossed:false};
+    }
+    let vLo, vHi;
+    if(Math.abs(curAlt-prevAlt)<1e-6){
+      if(prevAlt<bottom || prevAlt>top) return {crossed:false};
+      vLo=0; vHi=1;
+    } else {
+      const t1=(bottom-prevAlt)/(curAlt-prevAlt), t2=(top-prevAlt)/(curAlt-prevAlt);
+      vLo=Math.max(0,Math.min(t1,t2)); vHi=Math.min(1,Math.max(t1,t2));
+      if(vLo>vHi) return {crossed:false};
+    }
+    const tEnter=Math.max(hLo,vLo), tExit=Math.min(hHi,vHi);
+    return tEnter<=tExit ? {crossed:true, tEnter, tExit} : {crossed:false};
+  }
 };
 
 // Nearest-point-on-polyline detail — verbatim mirror of geofence-engine.html's
@@ -479,7 +520,18 @@ const Geofencer = {
   sd(p, prev, zone, layer, now){
     const PT=[p.lat,p.lon];                 // Geo.* expect [lat,lon] arrays, not the {lat,lon} fix object
     const zc=zone.path ? ambientCenterNow(zone, now) : zone.center;
-    if(layer.radiusM!=null) return Geo.sdCircle(PT, zc, layer.radiusM);
+    if(layer.radiusM!=null){
+      const dr=Geo.sdCircle(PT, zc, layer.radiusM);
+      // Circle w/ a vertical extent set: a real capped-cylinder signed
+      // distance — see geofence-engine.html's Geofencer.sd() for the
+      // full reasoning, mirrored verbatim here.
+      if(zone.altM!=null){
+        const tol = zone.altToleranceM!=null ? zone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M;
+        const dz = p.alt==null ? -Infinity : Math.abs(p.alt-zone.altM)-tol;
+        return Math.min(Math.max(dr,dz),0) + Math.hypot(Math.max(dr,0),Math.max(dz,0));
+      }
+      return dr;
+    }
     const g=layer.geometry;
     if(g && g.type==="polygon") return Geo.sdPolygon(PT, g.coords, BUNDLE.ref);
     if(g && g.type==="corridor") {
@@ -527,11 +579,37 @@ const Geofencer = {
         // --- CIRCLE / POLYGON / CORRIDOR: signed-distance state machine ---
         const d=this.sd(p,prev,zone,layer,now);
         if(d==null) return;
+        // A circle layer with a vertical extent set already has altitude
+        // baked into `d` (see sd() above) — the independent altOk() clamp
+        // stays for polygon/corridor, which v1 doesn't give a real extent.
+        const isCylinder = layer.radiusM!=null && zone.altM!=null;
         // Altitude gate folded into the same signed-distance state machine —
         // see geofence-engine.html's Geofencer.update() for the reasoning.
-        const dEff = this.altOk(zone,p) ? d : Math.max(d, TUNING.EXIT_BUFFER_M+1);
+        const dEff = isCylinder || this.altOk(zone,p) ? d : Math.max(d, TUNING.EXIT_BUFFER_M+1);
         // accuracy gate (warn content is exempt — handled at fire time)
         const holding = p.acc>TUNING.ACCURACY_CAP_M;
+
+        // Segment-crossing ("ray trace") for fast movers — see
+        // geofence-engine.html's Geofencer.update() for the full reasoning,
+        // mirrored verbatim here (incl. the "pending"-phase rescue, gated
+        // to fast movement, that keeps a single-fix-inside fast pass from
+        // being silently eaten by the normal jitter debounce below).
+        const fastEnoughToRescue = prev && Geo.hav([prev.lat,prev.lon],[p.lat,p.lon]) > TUNING.EXIT_BUFFER_M;
+        if(isCylinder && (st.phase==="out" || (st.phase==="pending" && fastEnoughToRescue)) && dEff>=0 && prev && prev.alt!=null && p.alt!=null){
+          const zc=zone.path?ambientCenterNow(zone,now):zone.center;
+          const tol = zone.altToleranceM!=null ? zone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M;
+          const bottom=zone.altM-tol, top=zone.altM+tol;
+          const cross=Geo.segCylinderCross([prev.lat,prev.lon],[p.lat,p.lon],prev.alt,p.alt,zc,layer.radiusM,bottom,top);
+          if(cross.crossed && !holding){
+            st.phase="in"; st.t0=now; st.move=0; st.delivered={};
+            this._fire(zone,layer,"enter",{});
+            if(dEff>TUNING.EXIT_BUFFER_M){
+              this._fire(zone,layer,"exit",{dur:0,move:0,flick:true});
+              st.phase="out";
+              return;
+            }
+          }
+        }
 
         if(dEff<0 && (st.phase==="in" || st.phase==="pending")) active.push({zone,layer,d:dEff});
 
@@ -677,18 +755,28 @@ let drawMode=false;
 map.on("load",()=>{
   map.addSource("fences",{type:"geojson",data:fc([])});
   map.addLayer({id:"fence-fill",type:"fill",source:"fences",
-    filter:["==",["geometry-type"],"Polygon"],
+    filter:["all",["==",["geometry-type"],"Polygon"],["!=",["get","kind"],"vext"]],
     paint:{"fill-color":phaseColor(),
       "fill-opacity":["case",["==",["get","state"],"in"],0.28,
                       ["==",["get","kind"],"target"],0.14, 0.05]}});
   map.addLayer({id:"fence-out",type:"line",source:"fences",
-    filter:["==",["geometry-type"],"Polygon"],
+    filter:["all",["==",["geometry-type"],"Polygon"],["!=",["get","kind"],"vext"]],
     paint:{"line-color":phaseColor(),
       "line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
       "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
   map.addLayer({id:"fence-line",type:"line",source:"fences",
     filter:["==",["geometry-type"],"LineString"],
     paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+  // Vertical-extent shadow ring + label (item A, 2026-08-14) — see
+  // zonesGeoJSON()'s own comment on the "vext" feature it pushes. The
+  // "vext" feature is itself a Polygon (a circleRing), so fence-fill/
+  // fence-out above must explicitly exclude kind=="vext" or it also
+  // renders as a gray fill/solid outline underneath this dashed ring.
+  map.addLayer({id:"vext-ring",type:"line",source:"fences",filter:["==","kind","vext"],
+    paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
+  map.addLayer({id:"vext-lbl",type:"symbol",source:"fences",filter:["==","kind","vext"],
+    layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,-1.4],"text-font":["Open Sans Regular"]},
+    paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.2}});
 
   map.addSource("path",{type:"geojson",data:fc([])});
   map.addLayer({id:"path-line",type:"line",source:"path",
@@ -775,6 +863,14 @@ function zonesGeoJSON(){
       const state=phaseOf(z,L,i), props={zone:z.id,kind:L.kind,state};
       if(L.radiusM!=null && z.center){
         feats.push({type:"Feature",properties:props,geometry:{type:"Polygon",coordinates:circleRing(z.center,L.radiusM)}});
+        // Vertical-extent shadow ring + label (item A, 2026-08-14) — same
+        // cheap plan-view indicator as fence-editor.html's own #vext-ring,
+        // for a circle target layer that's a real cylinder trigger volume.
+        if(L.kind==="target" && z.altM!=null){
+          const tol=z.altToleranceM!=null?z.altToleranceM:TUNING.ALT_TOLERANCE_DEFAULT_M;
+          feats.push({type:"Feature",properties:{kind:"vext",label:"±"+tol+"m @ "+z.altM+"m"},
+            geometry:{type:"Polygon",coordinates:circleRing(z.center,L.radiusM)}});
+        }
       } else if(L.geometry){
         const g=L.geometry;
         if(g.type==="polygon"){ const ring=g.coords.map(c=>[c[1],c[0]]); ring.push(ring[0]);
@@ -846,7 +942,9 @@ function feed(lat,lon,acc,t,bleFix){
   let effAlt=null;
   if(bleFix && bleFix.altSource==='baro' && bleFix.alt!=null){
     effAlt=bleFix.alt;
-  } else if(BUNDLE.threeDEnabled && map.getTerrain()){
+  // Flying-visitor projects (item A, 2026-08-14) — see fence-editor.html's
+  // Test Mode feed()'s identical guard for the full reasoning.
+  } else if(!BUNDLE.visitorsFly && BUNDLE.threeDEnabled && map.getTerrain()){
     try{ effAlt=map.queryTerrainElevation([lon,lat]); }catch(e){}
   }
   const fix={lat,lon,acc,t};
@@ -1071,13 +1169,18 @@ document.getElementById("btnOSM").onclick=()=>setBase("osm");
 function setBase(k){ map.setStyle(styleFor(k));
   map.once("styledata",()=>{ // re-add our layers after basemap swap
     if(!map.getSource("fences")){ map.addSource("fences",{type:"geojson",data:zonesGeoJSON()});
-      map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["==",["geometry-type"],"Polygon"],
+      map.addLayer({id:"fence-fill",type:"fill",source:"fences",filter:["all",["==",["geometry-type"],"Polygon"],["!=",["get","kind"],"vext"]],
         paint:{"fill-color":phaseColor(),"fill-opacity":["case",["==",["get","state"],"in"],0.28,["==",["get","kind"],"target"],0.14,0.05]}});
-      map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["==",["geometry-type"],"Polygon"],
+      map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["all",["==",["geometry-type"],"Polygon"],["!=",["get","kind"],"vext"]],
         paint:{"line-color":phaseColor(),"line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
           "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
       map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==",["geometry-type"],"LineString"],
         paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+      map.addLayer({id:"vext-ring",type:"line",source:"fences",filter:["==","kind","vext"],
+        paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
+      map.addLayer({id:"vext-lbl",type:"symbol",source:"fences",filter:["==","kind","vext"],
+        layout:{"text-field":["get","label"],"text-size":10,"text-offset":[0,-1.4],"text-font":["Open Sans Regular"]},
+        paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.2}});
       map.addSource("path",{type:"geojson",data:fc([])});
       map.addLayer({id:"path-line",type:"line",source:"path",filter:["==",["geometry-type"],"LineString"],
         paint:{"line-color":"#8fb6d4","line-width":2,"line-dasharray":[1.5,1.5]}});
