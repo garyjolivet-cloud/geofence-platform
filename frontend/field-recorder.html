@@ -855,6 +855,14 @@ function initMap(){
       paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.5}});
     refreshMap();
     refreshPublishedZones();
+    // updateTerrain() at the top of this handler ran before vext-vol/
+    // vext-ring existed (they're registered further down in this same
+    // handler) — re-run now that they do, so a project whose bundle
+    // finished loading (threeDEnabled set) before map "load" fired gets
+    // correct initial vext-vol/vext-ring visibility instead of both
+    // sitting at their creation-time defaults (ring visible, volume
+    // hidden) until some unrelated later refresh.
+    updateTerrain();
     // Safety net independent of GPS (which may be slow, denied, or indoors):
     // isStyleLoaded() can still be false right at 'load' on a slow connection
     // (base map tiles still fetching), so the very first attempt above can

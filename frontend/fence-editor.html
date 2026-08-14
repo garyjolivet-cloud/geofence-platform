@@ -1834,6 +1834,15 @@ map.on("load",()=>{
      paint:{"text-color":"#b96fff","text-halo-color":"#0a1018","text-halo-width":1.2,"text-opacity":0.8}});
   render();
   if(!_pid) autoRestore(); // skip if loading a real project — can coexist with the no-project hint otherwise
+  // The terrain-source load handler's own updateTerrain() call (line ~993)
+  // ran before vext-vol/vext-ring existed (they're registered in THIS
+  // handler, further down) — same for updateAssetPaletteVisibility()'s
+  // calls if the app list/project resolved before map "load" fired.
+  // Re-run now that both the map and the layers definitely exist, so a
+  // project that's already 3D-enabled doesn't sit showing only the flat
+  // ring (vext-vol's creation-time default is hidden) until some
+  // unrelated later toggle.
+  updateTerrain();
 });
 
 /* ---- map clicks + zone select/drag ---- */
