@@ -10,6 +10,19 @@
 <script>RoleGate.require(['admin']);</script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<!-- Live 3D AR-object preview (this repo's second ES module, after
+     ar-view.js) — three.js ships ESM-only, so this needs an importmap;
+     asset-preview-layer.js exposes window.AssetPreviewLayer, only ever
+     read lazily (never at top-level classic-script parse time except the
+     one guarded install() call right after map construction — see that
+     file's own module/map-load race handshake comment). -->
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+}}
+</script>
+<script type="module" src="/asset-preview-layer.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
@@ -745,6 +758,34 @@
       <label class="k" style="margin-top:6px">🧩 Code Objects</label>
       <div id="pCodeObjectsChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       <hr>
+      <!-- AR Objects: attach via the floating 🧱 palette (click +, drag onto
+           this stop's row, or drag onto the stop on the map). Click a chip
+           to edit its position/animation — the live 3D preview (same map,
+           terrain-aware) updates as you type. -->
+      <label class="k">🧱 AR Objects</label>
+      <div id="pArChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      <div id="pArEdit" style="display:none;margin-top:6px;padding:8px;background:rgba(255,255,255,.03);border:1px solid var(--rim);border-radius:8px">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">height</label>
+          <input id="pArAltM" type="number" step="0.5" style="flex:1">
+          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">north</label>
+          <input id="pArLatOffM" type="number" step="0.5" style="flex:1">
+          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">east</label>
+          <input id="pArLonOffM" type="number" step="0.5" style="flex:1">
+          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">animation</label>
+          <select id="pArClip" style="flex:1"><option value="">— default (first clip) —</option></select>
+        </div>
+      </div>
+      <hr>
       <label class="k">bearing of interest — visitor faces this direction on arrival</label>
       <div style="display:flex;gap:6px;align-items:center">
         <input id="pBearing" type="number" min="0" max="359" placeholder="none" style="flex:1">
@@ -898,7 +939,7 @@
   <div id="assetPaletteBody">
     <div id="asNoOrg" class="hint" style="display:none">assign this tour to a customer above (Customer dropdown) to see its shared Library here too</div>
     <div id="asTreeHost"></div>
-    <div class="hint">select a stop, then click + on an object to attach it (plays its animation once when that stop's trigger fires)</div>
+    <div class="hint">drag onto a stop on the map or in the list to attach it, or select a stop and click + on a card (plays its animation once when that stop's trigger fires)</div>
   </div>
 </div>
 <input type="file" id="asUploadInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" style="display:none">
@@ -975,6 +1016,14 @@ function styleFor(k){ return {version:8,
 const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16});
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.doubleClickZoom.disable(); // dblclick on a stop opens the rename/copy/delete menu instead of zooming (map-wide trade-off, MapLibre has no per-layer dblclick-zoom toggle)
+// AR-object live 3D preview module/map-load race handshake — stash the map
+// reference unconditionally (independent of whether asset-preview-layer.js,
+// a deferred CDN-loaded ES module, has finished loading yet) and call
+// install() now in case it already has; that module's own top-level code
+// checks window._fenceEditorMap for the reverse ordering. See that file's
+// header comment for the full reasoning.
+window._fenceEditorMap=map;
+window.AssetPreviewLayer?.install(map);
 
 /* ---- 3D Mode: terrain (Step 2 of the 3D-mode plan) ----
    Free, no-auth Terrarium-encoded elevation tiles (verified live during
@@ -1478,7 +1527,7 @@ function fc(features){ return {type:"FeatureCollection",features}; }
 // directly in the status line instead of silently doing nothing, so a
 // report can include the real error text instead of another guess.
 function renderSources(){
-  try{ renderSourcesInner(); }
+  try{ renderSourcesInner(); refreshArPreview(); }
   catch(e){
     console.error("renderSources failed:",e);
     const st=document.getElementById("status");
@@ -2220,6 +2269,7 @@ function refreshProps(){
   document.getElementById("dwellRow").style.display=(!isTrip && z.fires==="dwell")?"flex":"none";
   document.getElementById("pDwell").value=z.dwellS;
   updateCodeObjectsSummary(z);
+  updateArSummary(z);
   document.getElementById("pBearing").value = z.bearingDeg ?? 90;
   updateVaSummary(z);
   // Auto-expand Advanced when the zone already has Code Objects attached —
@@ -2329,10 +2379,22 @@ function renderGlobalCodeObjectsChips(){
   function setupMapDrop(){
     const canvas=map.getCanvas();
     canvas.addEventListener("dragover",e=>{
-      if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid"))e.preventDefault();
+      if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")||e.dataTransfer.types.includes("application/x-asset-object-json"))e.preventDefault();
     });
     canvas.addEventListener("drop",e=>{
       e.preventDefault();
+      // Drag a 3D asset from the AR Objects palette directly onto a stop on
+      // the map — same MIME type asset-tree.js's drag source already sets,
+      // same pattern the stop-list-row drop target already handles
+      // (_makeZoneRowDroppable below); this was the one missing attach path.
+      const assetJson=e.dataTransfer.getData("application/x-asset-object-json");
+      if(assetJson){
+        const rect=canvas.getBoundingClientRect();
+        const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
+        const best=_nearestZone(pt);
+        if(best!=null) attachArObjectToZone(best,JSON.parse(assetJson));
+        return;
+      }
       const codeObjectId=e.dataTransfer.getData("codeobjectid");
       if(codeObjectId){
         const rect=canvas.getBoundingClientRect();
@@ -2404,18 +2466,124 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
 // Adds one arObjects entry to a stop — the single place both the AR
 // palette's "+" button and the stop-list drop target funnel through, so
 // the default anchor/scale/autoSave behavior can't drift between the two.
+// AR Objects chip summary + position/animation editing — mirrors
+// updateCodeObjectsSummary()'s chip pattern. _arEditingObjId tracks which
+// attached object's edit panel is currently open (at most one at a time,
+// same "click a chip to expand it" idiom used nowhere else yet in this
+// file but consistent with the rest of the property panel being a single
+// column of controls for the one selected stop).
+let _arEditingObjId=null;
+function updateArSummary(zone){
+  const chipsEl=document.getElementById("pArChips"); if(!chipsEl) return;
+  const list=zone.arObjects||[];
+  if(!list.length){
+    chipsEl.innerHTML='<span class="hint">none attached — drag from the 🧱 palette, or select this stop and click + on a card</span>';
+    document.getElementById("pArEdit").style.display="none";
+    _arEditingObjId=null;
+    return;
+  }
+  chipsEl.innerHTML=list.map(o=>{
+    const on=o.id===_arEditingObjId;
+    return '<span class="chk" data-oid="'+escHtml(o.id)+'" style="background:rgba(255,106,61,'+(on?".22":".1")+');border:1px solid var(--rim);border-radius:8px;padding:3px 6px;font-size:12px;display:inline-flex;align-items:center;gap:5px;cursor:pointer">'
+      +escHtml(o.name||"object")+'<button data-oid="'+escHtml(o.id)+'" style="background:none;border:none;color:var(--fog);cursor:pointer;font-size:12px;padding:0">✕</button></span>';
+  }).join("");
+  chipsEl.querySelectorAll("span.chk").forEach(chip=>{
+    chip.onclick=e=>{
+      if(e.target.tagName==="BUTTON") return;   // ✕ has its own handler below
+      _arEditingObjId=(_arEditingObjId===chip.dataset.oid)?null:chip.dataset.oid;
+      updateArSummary(zone);
+    };
+  });
+  chipsEl.querySelectorAll("button[data-oid]").forEach(btn=>{
+    btn.onclick=e=>{ e.stopPropagation(); detachArObject(sel, btn.dataset.oid); };
+  });
+  if(_arEditingObjId && list.some(o=>o.id===_arEditingObjId)) openArEditPanel(zone,_arEditingObjId);
+  else document.getElementById("pArEdit").style.display="none";
+}
+function detachArObject(zoneIdx,objId){
+  if(zoneIdx<0||!zones[zoneIdx]) return;
+  const z=zones[zoneIdx];
+  z.arObjects=(z.arObjects||[]).filter(o=>o.id!==objId);
+  if(_arEditingObjId===objId) _arEditingObjId=null;
+  updateArSummary(z);
+  render();   // renderSources() -> refreshArPreview() removes the mesh; render() also calls autoSave()
+}
+// Loaded once per url and cached — GLTF animation clip NAMES aren't known
+// until the model's own GLTF has actually been fetched. Reuses
+// AssetPreviewLayer's own model cache via listClipNames() (no duplicate
+// fetch — whichever of the live preview mesh or this picker asks first
+// primes the shared cache for the other).
+const _arClipNameCache=new Map();   // url -> [name,...]
+function openArEditPanel(zone,objId){
+  const o=(zone.arObjects||[]).find(x=>x.id===objId);
+  const panel=document.getElementById("pArEdit");
+  if(!o){ panel.style.display="none"; return; }
+  panel.style.display="block";
+  o.anchor=o.anchor||{latOffsetM:0,lonOffsetM:0,altM:0};
+  document.getElementById("pArAltM").value=o.anchor.altM||0;
+  document.getElementById("pArLatOffM").value=o.anchor.latOffsetM||0;
+  document.getElementById("pArLonOffM").value=o.anchor.lonOffsetM||0;
+  populateArClipOptions(_arResolvedUrl(o),o.animationClip);
+}
+async function populateArClipOptions(url,currentClip){
+  const selectEl=document.getElementById("pArClip");
+  const known=url?_arClipNameCache.get(url):null;
+  const names=known||(currentClip?[currentClip]:[]);
+  selectEl.innerHTML='<option value="">— default (first clip) —</option>'+
+    names.map(n=>'<option value="'+escHtml(n)+'"'+(n===currentClip?" selected":"")+'>'+escHtml(n)+'</option>').join("");
+  if(known || !url || typeof window.AssetPreviewLayer==="undefined") return;
+  try{
+    const clips=await window.AssetPreviewLayer.listClipNames(url);
+    _arClipNameCache.set(url,clips);
+    // Only repopulate if this is still the object being edited AND it still
+    // resolves to the same url (the user may have clicked a different chip,
+    // or the object may have been swapped, while the fetch was in flight).
+    if(sel>=0 && zones[sel] && _arEditingObjId){
+      const stillOpen=(zones[sel].arObjects||[]).find(x=>x.id===_arEditingObjId);
+      if(stillOpen && _arResolvedUrl(stillOpen)===url) populateArClipOptions(url,stillOpen.animationClip);
+    }
+  }catch(e){}
+}
+function _arApplyEdit(){
+  if(sel<0||!zones[sel]||!_arEditingObjId) return;
+  const o=(zones[sel].arObjects||[]).find(x=>x.id===_arEditingObjId);
+  if(!o) return;
+  o.anchor=o.anchor||{};
+  o.anchor.altM=parseFloat(document.getElementById("pArAltM").value)||0;
+  o.anchor.latOffsetM=parseFloat(document.getElementById("pArLatOffM").value)||0;
+  o.anchor.lonOffsetM=parseFloat(document.getElementById("pArLonOffM").value)||0;
+  o.animationClip=document.getElementById("pArClip").value||null;
+  render();
+}
+document.getElementById("pArAltM").onchange=_arApplyEdit;
+document.getElementById("pArLatOffM").onchange=_arApplyEdit;
+document.getElementById("pArLonOffM").onchange=_arApplyEdit;
+document.getElementById("pArClip").onchange=_arApplyEdit;
+
 function attachArObjectToZone(zoneIdx,asset){
   if(zoneIdx<0||!zones[zoneIdx])return;
   const z=zones[zoneIdx];
   z.arObjects=z.arObjects||[];
-  z.arObjects.push({
+  const newObj={
     id:crypto.randomUUID(), name:asset.name,
     src: asset.kind==="url" ? {url:asset.url} : {assetId:asset.id},
     anchor:{latOffsetM:0,lonOffsetM:0,altM:0}, rotationDeg:{x:0,y:0,z:0}, scale:1,
     animationClip:null, occlusion:true
-  });
+  };
+  z.arObjects.push(newObj);
+  // A prior attach of this same assetId may have cached a "tried and
+  // failed" null sentinel (see ensureArUrlsResolved). Clear it so this
+  // fresh attach gets its own resolution attempt instead of inheriting
+  // a stale failure.
+  const newKey=_arObjKey(newObj); if(newKey) _arUrlCache.delete(newKey);
   const st=document.getElementById("status"); if(st) st.textContent=asset.name+" attached to "+z.name;
-  render();
+  // Same pattern the audio-drop-on-map handler already uses: refresh the
+  // property panel's own chip summary immediately if this zone is already
+  // selected (render() alone doesn't re-run refreshProps()); otherwise
+  // select+fly to it so the newly-attached object's height/animation
+  // controls are immediately reachable without a second click.
+  if(sel===zoneIdx){ updateArSummary(z); render(); }
+  else { selectZone(zoneIdx); map.flyTo({center:zoneCenterLonLat(z),zoom:17}); }
   autoSave();
 }
 let _paPlaying=null;
@@ -3972,6 +4140,73 @@ async function resolveArObjectUrls(zonesOut){
       return copy;
     });
   });
+}
+// Live 3D preview (AssetPreviewLayer) URL cache — position updates run on
+// every renderSources() call (drag-frame frequency), but URL resolution is
+// a network fetch (reuses resolveArObjectUrls() above, the exact same
+// resolution publish already does — not reimplemented), so it's cached and
+// only re-fetched when a genuinely new src.url/assetId shows up, not on
+// every render.
+const _arUrlCache=new Map();   // 'url:'+url or 'asset:'+assetId -> resolved fetchable url
+let _arUrlResolvePending=false;
+function _arObjKey(o){ return o.src&&o.src.url ? "url:"+o.src.url : (o.src&&o.src.assetId ? "asset:"+o.src.assetId : null); }
+// url-kind objects carry their own fetchable url directly (no resolution,
+// no cache entry needed); only assetId-kind objects go through
+// _arUrlCache (populated by ensureArUrlsResolved()'s asset-tree fetch).
+function _arResolvedUrl(o){ return (o.src&&o.src.url) ? o.src.url : (_arObjKey(o) ? _arUrlCache.get(_arObjKey(o)) : null); }
+async function ensureArUrlsResolved(){
+  if(_arUrlResolvePending) return;
+  const missing=[];
+  zones.forEach(z=>(z.arObjects||[]).forEach(o=>{
+    if(o.src&&o.src.url) return;   // url-kind — never needs the asset-tree fetch, refreshArPreview() uses it directly
+    const key=_arObjKey(o);
+    if(key && !_arUrlCache.has(key)) missing.push(o);
+  }));
+  if(!missing.length) return;
+  _arUrlResolvePending=true;
+  try{
+    const clone=[{arObjects:missing.map(o=>({...o}))}];
+    await resolveArObjectUrls(clone);
+    clone[0].arObjects.forEach((resolved,i)=>{
+      const key=_arObjKey(missing[i]);
+      // Cache a null sentinel even on failure (asset deleted from library,
+      // offline) — leaving the key unset would make refreshArPreview() keep
+      // seeing it as "missing" forever, re-triggering this fetch (and a full
+      // renderSources() rebuild) on every render pass, an infinite loop.
+      // attachArObjectToZone() clears the key on a fresh attach so a retry
+      // still happens once new data might actually resolve it.
+      if(key) _arUrlCache.set(key, resolved.url||null);
+    });
+  }catch(e){}
+  _arUrlResolvePending=false;
+  renderSources();   // URLs are cached now — re-render so the preview actually picks them up
+}
+// Builds AssetPreviewLayer's desired-state list from the live zones array
+// and pushes it — safe to call every render pass (see that module's own
+// identity-stable setObjects() contract). Path-zone centers use the same
+// static zoneCenterLonLat() every other non-live-sim rendering call in
+// this file uses (not the Test-Mode-only live-tracking variant
+// renderSourcesInner() optionally applies) — adequate for an authoring
+// preview, not a live-simulation view.
+function refreshArPreview(){
+  if(!window.AssetPreviewLayer) return;
+  const list=[];
+  let anyMissing=false;
+  zones.forEach(z=>{
+    if(!z.arObjects||!z.arObjects.length) return;
+    const c=zoneCenterLonLat(z);   // [lon,lat]
+    z.arObjects.forEach(o=>{
+      const url=_arResolvedUrl(o);
+      const key=_arObjKey(o);
+      // Missing = never attempted (no cache entry at all), not merely
+      // falsy — a cached null sentinel means resolution was already tried
+      // and failed, so don't re-trigger ensureArUrlsResolved() every pass.
+      if(!url){ if(key && !_arUrlCache.has(key)) anyMissing=true; return; }
+      list.push({id:o.id, url, center:[c[1],c[0]], anchor:o.anchor||{}, scale:o.scale, animationClip:o.animationClip});
+    });
+  });
+  if(anyMissing) ensureArUrlsResolved();
+  window.AssetPreviewLayer.setObjects(list);
 }
 async function exportBundle(){
   let ref=REF.slice();
