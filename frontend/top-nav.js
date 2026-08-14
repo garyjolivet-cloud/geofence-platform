@@ -622,6 +622,22 @@
           const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,threeDEnabled:next})});
           if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
         });
+        // Separate, off-by-default toggle (item D, rescoped 2026-08-14):
+        // whether the production player defaults an altitude-gated stop's
+        // trigger to terrain-DEM elevation instead of raw phone GPS
+        // altitude. Deliberately NOT folded into 3D Mode above — that
+        // toggle only ever affected rendering/UI before this; changing it
+        // must never silently change a live tour's trigger behavior too.
+        // Only shown once 3D Mode is on (terrain-gated altitude makes no
+        // sense without terrain), and only takes effect on a project once
+        // republished (denormalized into the bundle, same as 3D Mode).
+        if(app.threeDEnabled) mkBtn(app.terrainAltitudeEnabled ? "Terrain Altitude: On" : "Terrain Altitude: Off", async () => {
+          const next = !app.terrainAltitudeEnabled;
+          if(!confirm((next?"Turn ON":"Turn OFF")+' terrain elevation as the default altitude source for "'+(app.name||app.id)+'"? Changes trigger behavior for every altitude-gated stop in this workspace, once each project is republished.')) return;
+          const token = askToken(); if(!token) return;
+          const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,terrainAltitudeEnabled:next})});
+          if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
+        });
         if(apps.length > 1) mkBtn("Merge into…", async () => {
           const others = apps.filter(a => a.id!==app.id);
           const names = others.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");

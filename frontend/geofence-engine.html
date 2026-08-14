@@ -247,7 +247,8 @@
         A dongle with a barometric altimeter (Elevation Source =
         Barometric, or the extra NUS altitude fields) improves accuracy
         for altitude-gated stops — otherwise altitude is estimated from
-        terrain elevation at your GPS position when 3D Mode is on.
+        terrain elevation at your GPS position, if the workspace owner has
+        turned on Terrain Altitude (separate from 3D Mode).
       </div>
     </div>
   </div>
@@ -1327,8 +1328,8 @@ function zoneNearestDistM(z,p,nowMs){
 }
 /* ============================== HUD ============================== */
 // Default, hardware-free altitude source (3D-mode plan item D, rescoped
-// 2026-08-13). A real barometric reading (fix.altSource==="baro", from a
-// connected BLE dongle via BleGPS below) always wins — it's a live
+// 2026-08-13/14). A real barometric reading (fix.altSource==="baro", from
+// a connected BLE dongle via BleGPS below) always wins — it's a live
 // physical measurement. Failing that, look up ground elevation at the
 // fix's own already-accurate horizontal position from the same terrain
 // DEM Test Mode/the editor already use for authoring — valid because
@@ -1336,13 +1337,23 @@ function zoneNearestDistM(z,p,nowMs){
 // floor, and it means production uses the exact same altitude reference
 // as authoring instead of two disagreeing ones (raw phone coords.altitude
 // is WGS84-ellipsoid; the DEM is orthometric — see decision-ar-3d-mode-
-// planned.md's datum-offset caveat). Falls back to whatever the source
-// itself provided (raw phone altitude, or nothing) when 3D Mode/terrain
-// isn't loaded.
+// planned.md's datum-offset caveat).
+//
+// Gated on BUNDLE.terrainAltitudeEnabled, a SEPARATE flag from
+// threeDEnabled (denormalized the same way, see fence-editor.html's
+// exportBundle()) — turning 3D Mode on only ever changed rendering/UI
+// before this; it must not silently change what altitude source drives a
+// live tour's actual trigger behavior too. A workspace owner has to
+// explicitly opt in (top-nav.js's "Terrain Altitude: On/Off" toggle) and
+// republish before this fallback ever activates for real visitors — Test
+// Mode/Sim's own terrain sampling is intentionally NOT gated by this same
+// flag, since those are authoring/testing aids meant to work regardless.
+// Falls back to whatever the source itself provided (raw phone altitude,
+// or nothing) when the flag is off or 3D Mode/terrain isn't loaded.
 const TERRAIN_ALT_ACC_M = 8;
 function applyTerrainAltFallback(fix){
   if(fix.altSource==='baro') return;
-  if(!BUNDLE.threeDEnabled || !MapView.map || !MapView.map.getTerrain()) return;
+  if(!BUNDLE.threeDEnabled || !BUNDLE.terrainAltitudeEnabled || !MapView.map || !MapView.map.getTerrain()) return;
   try{
     const e=MapView.map.queryTerrainElevation([fix.lon,fix.lat]);
     if(e!=null){ fix.alt=e; fix.altAcc=TERRAIN_ALT_ACC_M; fix.altSource='terrain'; }

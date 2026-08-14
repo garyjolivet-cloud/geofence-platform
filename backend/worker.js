@@ -989,6 +989,7 @@ async function api(request, env, url) {
     if (!A) return json({ apps: [] }, 200, AC);
     const scopedOrg = A.master ? (url.searchParams.get("org") || null) : A.appId;
     const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt,a.three_d_enabled AS threeDEnabled, " +
+      "a.terrain_altitude_enabled AS terrainAltitudeEnabled, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
@@ -1031,10 +1032,18 @@ async function api(request, env, url) {
     // upgrade (terrain on all 5 map surfaces + AR-object authoring in the
     // editor) — omit the field entirely to leave it unchanged.
     const threeD = b.threeDEnabled === undefined ? null : (b.threeDEnabled ? 1 : 0);
-    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), updatedAt=? WHERE id=?")
-      .bind(name, b.description ?? null, threeD, now, aid).run();
+    // terrainAltitudeEnabled is deliberately its own flag, not folded into
+    // threeDEnabled (item D, rescoped 2026-08-14): it controls whether the
+    // production player defaults an altitude-gated stop's trigger to
+    // terrain-DEM elevation instead of raw phone GPS altitude — a real
+    // trigger-behavior change for a live tour, not just a visual one, so it
+    // needs its own explicit opt-in even for a workspace that already has
+    // 3D Mode on.
+    const terrainAlt = b.terrainAltitudeEnabled === undefined ? null : (b.terrainAltitudeEnabled ? 1 : 0);
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, threeD, terrainAlt, now, aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
-    return json({ ok: true, id: aid, name, threeDEnabled: threeD }, 200, AC);
+    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt }, 200, AC);
   }
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---

@@ -986,6 +986,14 @@ map.on("load",()=>{
   updateTerrain();
 });
 let _threeDOn=false; // current app's three_d_enabled — kept in sync by updateAssetPaletteVisibility()
+// Separate, off-by-default flag (item D, rescoped 2026-08-14): whether the
+// PRODUCTION player (geofence-engine.html) should default altitude-gated
+// triggers to terrain-DEM elevation. Does NOT affect Test Mode here —
+// feedSim() already samples terrain unconditionally whenever 3D Mode is
+// on, by design (an authoring/testing aid, not a live-visitor behavior
+// change), so an author can validate an altitude gate with terrain data
+// even before turning this flag on for real visitors.
+let _terrainAltOn=false;
 function isThreeDEnabled(){ return _threeDOn; }
 function updateTerrain(){
   if(!map.getSource(TERRAIN_SOURCE_ID)) return; // not loaded yet — updateTerrain() runs again from the load handler above
@@ -2475,6 +2483,7 @@ async function loadApps(sel){
 function updateAssetPaletteVisibility(){
   const app=_appsCache.find(a=>a.id===document.getElementById("appSel").value);
   _threeDOn=!!(app&&app.threeDEnabled);
+  _terrainAltOn=!!(app&&app.terrainAltitudeEnabled);
   document.getElementById("assetPalette").classList.toggle("on", _threeDOn);
   updateTerrain();
   if(sel>=0) document.getElementById("pAltSection").style.display=_threeDOn?"block":"none";
@@ -3842,6 +3851,12 @@ function exportBundle(){
               // /api/apps round trip. _threeDOn tracks whichever app is
               // currently selected in appSel — see updateAssetPaletteVisibility().
               threeDEnabled:_threeDOn,
+              // Same denormalization, separate flag (item D, rescoped
+              // 2026-08-14) — whether the production player should default
+              // altitude-gated triggers to terrain-DEM elevation. Off by
+              // default even when threeDEnabled is on; see _terrainAltOn's
+              // own comment for why this isn't folded into threeDEnabled.
+              terrainAltitudeEnabled:_terrainAltOn,
               zones:zones.map(zoneToEngine) };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;

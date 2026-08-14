@@ -1,0 +1,12 @@
+-- Dedicated, off-by-default switch for whether the production player
+-- (geofence-engine.html) uses terrain-DEM elevation as the default
+-- altitude source for altitude-gated stops (item D, 3D-mode plan,
+-- rescoped 2026-08-14). Separate from three_d_enabled on purpose: turning
+-- 3D Mode on (terrain rendering, tilt, the AR Objects panel) must not by
+-- itself change what altitude source drives a real live tour's triggers.
+-- DEFAULT 0 means every existing published bundle, including any project
+-- with an already-live altitude-gated stop, keeps today's raw-phone-GPS-
+-- altitude behavior until a workspace owner explicitly opts in AND
+-- republishes (the flag is denormalized into published_bundle at publish
+-- time, same pattern as three_d_enabled).
+ALTER TABLE app ADD COLUMN terrain_altitude_enabled INTEGER NOT NULL DEFAULT 0;
