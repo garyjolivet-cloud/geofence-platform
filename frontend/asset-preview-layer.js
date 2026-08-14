@@ -132,7 +132,15 @@ function placeMesh(e, centerLatLon, anchor, objScale){
   const mesh=e.mesh;
   const lngLat=[centerLatLon[1], centerLatLon[0]];
   const absAlt=groundRelativeAlt(lngLat, anchor.altM);
-  if(absAlt==null) return false;
+  if(absAlt==null){
+    // Terrain is on but DEM tiles haven't loaded at this point yet (real
+    // at page-load time — happened live: the object never got a first
+    // placement, e.refBase stayed unset, and the withMesh filter in
+    // render() then permanently excluded it since nothing ever retried).
+    // render()'s pre-pass now retries this every call until it succeeds.
+    console.debug('asset-preview-layer: placement deferred, terrain elevation not ready yet', e.url);
+    return false;
+  }
   const base=maplibregl.MercatorCoordinate.fromLngLat(lngLat, absAlt);
   // mUnit converts real metres -> mercator units at this point, independent
   // of the object's own scale factor — used for the anchor's lat/lon
@@ -219,6 +227,12 @@ function setObjects(list){
   list.forEach(async o=>{
     const e=await ensureMeshLoaded(o.id, o.url);
     if(!e || !e.mesh) return;   // still loading, or failed — next call will retry from the still-pending cache entry
+    // Stashed on every call (not just first) so render()'s retry pre-pass
+    // can re-attempt placeMesh with the CURRENT desired position/anchor if
+    // the very first attempt failed (terrain on, DEM not loaded yet at
+    // that point) — a call site that only retried with stale data from the
+    // first setObjects() call would re-place at a since-edited anchor.
+    e.want={center:o.center, anchor:o.anchor||{}, scale:o.scale};
     placeMesh(e, o.center, o.anchor||{}, o.scale);
     applyAnimationClip(e, o.animationClip);
   });
@@ -261,6 +275,17 @@ function render(gl, options){
   _mMain.fromArray(options.defaultProjectionData.mainMatrix);
   const dt=clock.getDelta();
   entries.forEach(e=>{ if(e.mixer) e.mixer.update(dt); });
+  // Retry placement for any mesh whose FIRST placeMesh() call failed (real
+  // case: terrain on, DEM tiles not loaded yet at page-load time — the
+  // object attaches, setObjects() runs before the map settles, e.refBase
+  // never gets set, and without this retry the withMesh filter below
+  // excludes it permanently, confirmed live). Cheap once placed (no-op —
+  // e.refBase is already set, this block only fires for the still-unplaced
+  // case); MapLibre repaints as DEM tiles land, so this fires again on
+  // exactly the frame the data actually becomes available.
+  entries.forEach(e=>{
+    if(e.mesh && !e.refBase && e.want) placeMesh(e, e.want.center, e.want.anchor, e.want.scale);
+  });
   const withMesh=[...entries.values()].filter(e=>e.mesh && e.refBase);
   // three.js and MapLibre both cache GL state on the shared context and
   // will corrupt each other's rendering without this reset before/after —
