@@ -1964,10 +1964,11 @@ document.getElementById('arBtn').onclick = async ()=>{
     await ARView.open({
       videoEl: document.getElementById('arVideo'),
       canvas: document.getElementById('arCanvas'),
+      label: document.getElementById('arLabel'),
       zoneCenter, arObjects: _arZone.arObjects, visitorLatLon: [HUD.pos.lat, HUD.pos.lon],
       onClosed: closeArView
     });
-    document.getElementById('arLabel').textContent = oriOk ? '' : 'Motion access denied — object position may be off';
+    if(!oriOk) HUD.log('ev-warn','AR: motion access denied — object position will be off (label now shows live debug readout instead)');
   }catch(err){
     HUD.log('ev-warn','AR unavailable: '+(err&&err.message||err));
     closeArView();   // open() already fires onClosed internally on failure — harmless redundant call, cheap insurance

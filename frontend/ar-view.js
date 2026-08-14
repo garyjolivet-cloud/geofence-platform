@@ -24,8 +24,13 @@
  * passes them into open()/onFix() as plain data.
  *
  * Host contract:
- *   ARView.open({videoEl, canvas, zoneCenter:[lat,lon], arObjects:[...],
+ *   ARView.open({videoEl, canvas, label, zoneCenter:[lat,lon], arObjects:[...],
  *                visitorLatLon:[lat,lon], onClosed})
+ *     label (optional) is a DOM element this module writes a permanent
+ *     live debug readout into every frame — heading/source/beta/gamma and
+ *     the bearing to the nearest active object — for diagnosing on-device
+ *     compass issues that can't be reproduced off-device. Same pattern as
+ *     field-recorder.html's own debug readout.
  *     onClosed is called exactly once whenever this session ends, from
  *     EVERY close path — an explicit close() call, an open() failure, or
  *     this module's own visibilitychange auto-close on phone lock/app
@@ -134,10 +139,11 @@ function applyDeviceQuaternion(cameraQuat, alphaDeg, betaDeg, gammaDeg, screenOr
 }
 
 /* ---- module state ---- */
-let renderer=null, scene=null, camera=null, videoEl=null;
+let renderer=null, scene=null, camera=null, videoEl=null, labelEl=null;
 let stream=null, rafId=null, clock=null;
 let mixers=[];        // active THREE.AnimationMixer instances, ticked every frame
 let active=[];         // [{mesh, zoneCenter:[lat,lon], anchor:{latOffsetM,lonOffsetM,altM}}]
+let lastVisitorLatLon=null;   // most recent onFix() position, for the debug readout below
 const modelCache=new Map();   // url -> loaded GLTF (template; clone before adding to scene)
 
 function initScene(canvas){
@@ -188,6 +194,14 @@ function placeMesh(mesh, zoneCenterLatLon, visitorLatLon, anchor){
   const worldNorth = base.y + (anchor.latOffsetM||0);
   mesh.position.set(worldX, anchor.altM||0, -worldNorth);   // three.js: +Y up, -Z north
 }
+// Same bearing formula as geofence-engine.html's own Geo.bearing() — a
+// local copy for the same reason toXY() is local (no window.Geo coupling).
+function bearingTo(a, b){
+  const y=Math.sin((b[1]-a[1])*Math.PI/180)*Math.cos(b[0]*Math.PI/180);
+  const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-
+          Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
 
 async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
   for(const obj of arObjects){
@@ -215,21 +229,47 @@ async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
   }
 }
 
+// Permanent lightweight debug readout (matches this repo's own established
+// pattern for a live-device-only bug that can't be reproduced off-device —
+// see field-recorder.html's debug readout, added for a similar reason).
+// Shows the human-compass-equivalent heading (inverse of the ios-compass
+// conversion below, so it's directly comparable against a real compass
+// app on the same phone), its source, raw beta/gamma, and the bearing to
+// the nearest active object + the delta between them — a delta near 0°
+// means "should be dead ahead," near 180° means "should be behind."
+function updateDebugLabel(){
+  if(!labelEl) return;
+  const displayHeading=Math.round((360-AROrient.alpha)%360);
+  let extra='';
+  if(active.length && lastVisitorLatLon){
+    const a=active[0];
+    if(a.zoneCenter){
+      const brg=Math.round(bearingTo(lastVisitorLatLon, a.zoneCenter));
+      const delta=Math.round(((brg-displayHeading)%360+360)%360);
+      extra=' | obj brg '+brg+'° Δ'+delta+'°';
+    }
+  }
+  labelEl.textContent='hdg '+displayHeading+'° ('+(AROrient.source||'none')+') '+
+    'β'+Math.round(AROrient.beta)+' γ'+Math.round(AROrient.gamma)+extra;
+}
+
 function render(){
   const screenOrient=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
   applyDeviceQuaternion(camera.quaternion, AROrient.alpha, AROrient.beta, AROrient.gamma, screenOrient);
   const dt=clock.getDelta();
   mixers.forEach(m=>m.update(dt));
   renderer.render(scene, camera);
+  updateDebugLabel();
   rafId=requestAnimationFrame(render);
 }
 
 /* ---- public API ---- */
 let _onClosed=null;   // caller's DOM-restoration hook — see close()'s own comment
-async function open({videoEl:videoElArg, canvas, zoneCenter, arObjects, visitorLatLon, onClosed}){
+async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, visitorLatLon, onClosed}){
   if(rafId!=null) return;   // already open
-  videoEl=videoElArg;
+  videoEl=videoElArg; labelEl=label||null;
   _onClosed=onClosed||null;
+  lastVisitorLatLon=visitorLatLon||null;
   try{
     initScene(canvas);
     clock=new THREE.Clock();
@@ -247,6 +287,7 @@ async function open({videoEl:videoElArg, canvas, zoneCenter, arObjects, visitorL
 
 function onFix(visitorLatLon){
   if(rafId==null) return;
+  lastVisitorLatLon=visitorLatLon;
   active.forEach(a=>{ if(a.zoneCenter) placeMesh(a.mesh, a.zoneCenter, visitorLatLon, a.anchor); });
 }
 
@@ -274,6 +315,7 @@ function close(){
   if(scene) scene.clear();
   if(renderer){ renderer.dispose(); renderer=null; }
   scene=null; camera=null; clock=null; mixers=[]; active=[];
+  labelEl=null; lastVisitorLatLon=null;
   if(_onClosed){ const cb=_onClosed; _onClosed=null; cb(); }
 }
 
