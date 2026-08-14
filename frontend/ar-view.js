@@ -90,8 +90,21 @@ function toXY(p, ref){ return { x:(p[1]-ref[1])*mPerDegLon(ref[0]), y:(p[0]-ref[
  *                   no permission gate exists.
  *   Anything else — plain deviceorientation event.alpha, RELATIVE and
  *                   uncalibrated (may drift) — used only as a last resort. */
+// Smoothing time constant for AROrient's low-pass filter, below. Raw
+// deviceorientation events reach the camera every frame with zero
+// filtering by default, which reads as visible jitter on ordinary hand
+// tremor (confirmed live 2026-08-14: "compass seems unstable, very
+// sensitive to motion of the phone"). Time-based (not per-sample-count-
+// based) so it behaves consistently regardless of how fast the browser
+// actually fires orientation events (varies by platform, unlike GPS's
+// fixed ~1Hz — a fixed per-sample alpha would over- or under-smooth
+// depending on event rate; this doesn't).
+const ORIENT_SMOOTH_TAU_MS = 150;
 const AROrient = {
-  alpha:0, beta:0, gamma:0, ready:false, source:null,
+  // Raw = latest instantaneous sensor reading (kept for reference/debug).
+  // Smoothed (*S) = what actually drives the camera — see applyDeviceQuaternion() below.
+  alpha:0, beta:0, gamma:0, alphaS:0, betaS:0, gammaS:0,
+  ready:false, source:null, _lastT:0,
   _handler(e){
     let alpha;
     if(e.webkitCompassHeading!=null){
@@ -102,9 +115,34 @@ const AROrient = {
     } else if(e.alpha!=null){
       alpha=e.alpha; AROrient.source='relative-uncalibrated';
     } else return;
-    AROrient.alpha=alpha; AROrient.beta=e.beta||0; AROrient.gamma=e.gamma||0; AROrient.ready=true;
+    const beta=e.beta||0, gamma=e.gamma||0;
+    const now=performance.now();
+    if(!AROrient.ready){
+      // First reading — snap straight to it rather than smoothing from a
+      // stale 0, or the camera would visibly swing in from zero on open.
+      AROrient.alphaS=alpha; AROrient.betaS=beta; AROrient.gammaS=gamma;
+    } else {
+      const dt=Math.max(0, now-AROrient._lastT);
+      const a=1-Math.exp(-dt/ORIENT_SMOOTH_TAU_MS);
+      // alpha is circular (wraps 0/360) — a naive linear blend breaks near
+      // the wrap boundary (e.g. 359° and 1° would average to 180°, exactly
+      // backwards). Blend as a unit vector and convert back instead, same
+      // technique CLAUDE.md documents guidance-bot.js already using for
+      // its own GPS-heading smoothing.
+      const curRad=AROrient.alphaS*Math.PI/180, newRad=alpha*Math.PI/180;
+      const x=Math.cos(curRad)*(1-a)+Math.cos(newRad)*a;
+      const y=Math.sin(curRad)*(1-a)+Math.sin(newRad)*a;
+      AROrient.alphaS=(Math.atan2(y,x)*180/Math.PI+360)%360;
+      // beta/gamma don't approach their wrap boundaries in normal
+      // held-up-facing-forward AR use, so plain linear blending is fine.
+      AROrient.betaS=AROrient.betaS*(1-a)+beta*a;
+      AROrient.gammaS=AROrient.gammaS*(1-a)+gamma*a;
+    }
+    AROrient._lastT=now;
+    AROrient.alpha=alpha; AROrient.beta=beta; AROrient.gamma=gamma; AROrient.ready=true;
   },
   start(){
+    this._lastT=0;
     if('ondeviceorientationabsolute' in window) window.addEventListener('deviceorientationabsolute', this._handler, true);
     else window.addEventListener('deviceorientation', this._handler, true);
   },
@@ -234,12 +272,13 @@ async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
 // see field-recorder.html's debug readout, added for a similar reason).
 // Shows the human-compass-equivalent heading (inverse of the ios-compass
 // conversion below, so it's directly comparable against a real compass
-// app on the same phone), its source, raw beta/gamma, and the bearing to
-// the nearest active object + the delta between them — a delta near 0°
+// app on the same phone) computed from the SMOOTHED reading (what the
+// camera actually uses), its source, smoothed beta/gamma, and the bearing
+// to the nearest active object + the delta between them — a delta near 0°
 // means "should be dead ahead," near 180° means "should be behind."
 function updateDebugLabel(){
   if(!labelEl) return;
-  const displayHeading=Math.round((360-AROrient.alpha)%360);
+  const displayHeading=Math.round((360-AROrient.alphaS)%360);
   let extra='';
   if(active.length && lastVisitorLatLon){
     const a=active[0];
@@ -250,12 +289,12 @@ function updateDebugLabel(){
     }
   }
   labelEl.textContent='hdg '+displayHeading+'° ('+(AROrient.source||'none')+') '+
-    'β'+Math.round(AROrient.beta)+' γ'+Math.round(AROrient.gamma)+extra;
+    'β'+Math.round(AROrient.betaS)+' γ'+Math.round(AROrient.gammaS)+extra;
 }
 
 function render(){
   const screenOrient=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
-  applyDeviceQuaternion(camera.quaternion, AROrient.alpha, AROrient.beta, AROrient.gamma, screenOrient);
+  applyDeviceQuaternion(camera.quaternion, AROrient.alphaS, AROrient.betaS, AROrient.gammaS, screenOrient);
   const dt=clock.getDelta();
   mixers.forEach(m=>m.update(dt));
   renderer.render(scene, camera);
