@@ -34,6 +34,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
+console.log('asset-preview-layer: module loaded');
 const draco = new DRACOLoader();
 draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/libs/draco/');
 const gltfLoader = new GLTFLoader();
@@ -134,7 +135,7 @@ function placeMesh(e, centerLatLon, anchor, objScale){
     // placement, e.refBase stayed unset, and the withMesh filter in
     // render() then permanently excluded it since nothing ever retried).
     // render()'s pre-pass now retries this every call until it succeeds.
-    console.debug('asset-preview-layer: placement deferred, terrain elevation not ready yet', e.url);
+    console.log('asset-preview-layer: placement deferred, terrain elevation not ready yet', e.url);
     return false;
   }
   // e.refBase (the object's full absolute mercator position, magnitude
@@ -154,7 +155,7 @@ function placeMesh(e, centerLatLon, anchor, objScale){
   // altitude, so there's no separate altitude delta left to apply here.
   mesh.position.set(anchor.lonOffsetM||0, 0, anchor.latOffsetM||0);
   mesh.scale.setScalar(objScale||1);
-  console.debug('asset-preview-layer: placed', e.url, 'absAlt', absAlt);
+  console.log('asset-preview-layer: placed', e.url, 'absAlt', absAlt, 'refBase', e.refBase.x, e.refBase.y, e.refBase.z);
   return true;
 }
 
@@ -181,6 +182,7 @@ async function ensureMeshLoaded(id, url){
       e.gltfAnimations=gltf.animations;
     }
   }catch(err){
+    console.log('asset-preview-layer: model load FAILED', url, err&&(err.message||err));
     entries.delete(id);
     return null;
   }
@@ -208,8 +210,11 @@ async function listClipNames(url){
 
 // Full desired-state diff, called on every render pass by the host — see
 // this file's header comment for the identity-stability contract.
+let _lastSetObjectsIds='';
 function setObjects(list){
   if(!map) return;   // install() hasn't completed yet (style still loading, or module beat the host to it)
+  const idsKey=list.map(o=>o.id+':'+o.url).join(',');
+  if(idsKey!==_lastSetObjectsIds){ console.log('asset-preview-layer: setObjects', list.length, list.map(o=>({id:o.id,url:o.url}))); _lastSetObjectsIds=idsKey; }
   const wantIds=new Set(list.map(o=>o.id));
   for(const id of [...entries.keys()]) if(!wantIds.has(id)) removeEntry(id);
   list.forEach(async o=>{
@@ -330,8 +335,9 @@ const customLayer={
 function install(mapInstance){
   if(map) return;   // already installed — safe to call more than once
   map=mapInstance;
-  if(map.isStyleLoaded()) map.addLayer(customLayer);
-  else map.once('load', ()=>map.addLayer(customLayer));
+  const add=()=>{ map.addLayer(customLayer); console.log('asset-preview-layer: layer added to map'); };
+  if(map.isStyleLoaded()) add();
+  else map.once('load', add);
 }
 
 // Module/map-load race handshake. fence-editor.html is a classic script
