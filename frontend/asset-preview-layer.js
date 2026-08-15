@@ -174,6 +174,16 @@ async function ensureMeshLoaded(id, url){
   try{
     const gltf=await loadModelTemplate(url);
     if(!entries.has(id) || entries.get(id)!==e) return null;   // removed/superseded while loading
+    if(!scene){
+      // Belt-and-suspenders: install()'s own race (see its comment) is the
+      // real fix, but guard here too so ANY remaining scene-not-ready
+      // window fails safe — skip-and-retry on the next setObjects() call
+      // (loadModelTemplate's own cache means no re-fetch) rather than
+      // throwing and permanently discarding this entry.
+      console.log('asset-preview-layer: scene not ready yet, will retry', url);
+      entries.delete(id);
+      return null;
+    }
     const mesh=cloneModel(gltf);
     scene.add(mesh);
     e.mesh=mesh; e.loading=false;
@@ -349,9 +359,34 @@ const customLayer={
 function install(mapInstance){
   if(map) return;   // already installed — safe to call more than once
   map=mapInstance;
-  const add=()=>{ map.addLayer(customLayer); console.log('asset-preview-layer: layer added to map'); };
-  if(map.isStyleLoaded()) add();
-  else map.once('load', add);
+  // Confirmed live: the naive "check isStyleLoaded() now, else wait for
+  // the one-time 'load' event" version of this function left onAdd()
+  // (and therefore scene/camera/renderer) permanently null in a real
+  // session — 'load' fires exactly once, ever, for a Map instance's FIRST
+  // successful style load; fence-editor.html applies the user's saved/
+  // last-used basemap via setStyle() shortly after construction, which
+  // resets isStyleLoaded() but does NOT re-fire 'load' (only 'style.load'
+  // /'styledata' do) — so a 'load' listener registered even slightly late
+  // (a real risk here: this module has to fetch+parse three.js's own
+  // sizeable import chain before this function ever runs) can end up
+  // waiting for an event that will never come again. Every subsequent
+  // GLTF placement attempt then throws on scene.add() (scene stays null),
+  // caught and silently logged by ensureMeshLoaded's catch, forever.
+  // Fixed by making this level-triggered instead of edge-triggered: keep
+  // re-checking on every event that could mean "style is ready now"
+  // (including 'styledata', which — unlike 'load' — fires reliably on
+  // every style (re)load, initial or via setStyle()), guarded by an
+  // idempotent getLayer() check so re-attempts after the first success
+  // are free no-ops.
+  const tryAdd=()=>{
+    if(map.getLayer(customLayer.id)) return;
+    if(!map.isStyleLoaded()) return;
+    map.addLayer(customLayer);
+    console.log('asset-preview-layer: layer added to map');
+  };
+  tryAdd();
+  map.on('load', tryAdd);
+  map.on('styledata', tryAdd);
 }
 
 // Module/map-load race handshake. fence-editor.html is a classic script
