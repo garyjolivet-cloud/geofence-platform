@@ -185,6 +185,20 @@ async function ensureMeshLoaded(id, url){
       return null;
     }
     const mesh=cloneModel(gltf);
+    // Live diagnostic showed both test ducks projecting to well within
+    // the visible NDC range (x/w, y/w near 0) but with z/w suspiciously
+    // close to 1.0 (the far end of the depth range) even at a close zoom
+    // — consistent with the object depth-testing as "behind" whatever
+    // MapLibre's own terrain mesh already wrote to the depth buffer for
+    // that pixel this frame, regardless of whether it's geometrically
+    // correct. Disabling depth test/write for preview objects sidesteps
+    // this rather than chasing MapLibre's exact terrain depth encoding —
+    // reasonable for an AUTHORING preview anyway (always seeing what you
+    // attached beats it vanishing behind a hill from some camera angles).
+    mesh.traverse(child=>{
+      if(!child.material) return;
+      (Array.isArray(child.material)?child.material:[child.material]).forEach(m=>{ m.depthTest=false; m.depthWrite=false; });
+    });
     scene.add(mesh);
     e.mesh=mesh; e.loading=false;
     if(gltf.animations && gltf.animations.length){
