@@ -74,10 +74,18 @@
   /* AR/3D asset palette — same floating-panel shape as #audioPalette (drag
      header, resize corner, minimize), independently positioned/draggable.
      Unlike Audio Palette (drag-source only, editing lives in Audio Studio),
-     this one owns full CRUD itself — there's no separate "3D Studio". */
+     this one owns full CRUD itself — there's no separate "3D Studio".
+     top/left below are just an unstyled-flash fallback — dockAssetPalette()
+     (real nav-bar-height-aware positioning, chained off #mainPanel's own
+     right edge) overrides both on every dock pass, same as #mainPanel/
+     #audioPalette never trusting their own static CSS position either.
+     z-index:60 (was 6 until 2026-08-14 — real bug, confirmed live: this
+     panel rendered UNDER #crossToolNav's own z-index:50 and out of step
+     with every other floating panel, so drags near the nav bar could get
+     silently swallowed by it) now matches .panel/#audioPalette. */
   #assetPalette{position:absolute;top:10px;left:340px;width:280px;height:340px;min-width:220px;min-height:160px;
                 max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
-                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:6;
+                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:60;
                 backdrop-filter:blur(6px);display:none;flex-direction:column}
   #assetPalette.on{display:flex}
   #assetPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
@@ -473,12 +481,13 @@
      z-index:50. Real bug found live, 2026-08-12: this started at z-index:400,
      sitting on top of the nav bar entirely and silently swallowing every
      click on it, including the one input you need to get out of this
-     screen in the first place. Must stay below 50. Above #assetPalette
-     (the AR/3D panel, out of scope, still z-index:6). Since 2026-08-13
+     screen in the first place. Must stay below 50. Since 2026-08-13
      .panel/#audioPalette moved to z-index:60 (so they can float above the
      nav bar when dragged, same as Code Objects' .co-float always has at
      400) — this hint no longer sits above them, matching Code Objects'
-     own long-standing precedent of floating above this hint too. -->
+     own long-standing precedent of floating above this hint too.
+     #assetPalette joined the same z-index:60 tier 2026-08-14 (previously
+     an out-of-step z-index:6, a real bug — see its own CSS comment). -->
 <div id="noProjectHint" style="display:none;position:fixed;inset:0;z-index:20;background:rgba(6,10,16,.82);
      align-items:center;justify-content:center;text-align:center;font-family:'Barlow Condensed'">
   <div style="max-width:340px;color:var(--ice,#c8dff2);font-size:15px;line-height:1.5">
@@ -766,7 +775,7 @@
       <div id="pArChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       <div id="pArEdit" style="display:none;margin-top:6px;padding:8px;background:rgba(255,255,255,.03);border:1px solid var(--rim);border-radius:8px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">height</label>
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">elevation</label>
           <input id="pArAltM" type="number" step="0.5" style="flex:1">
           <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
         </div>
@@ -779,6 +788,28 @@
           <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">east</label>
           <input id="pArLonOffM" type="number" step="0.5" style="flex:1">
           <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">scale</label>
+          <input id="pArScale" type="number" step="0.1" min="0.01" style="flex:1">
+          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">×</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">rotate</label>
+          <input id="pArRotX" type="number" step="1" title="tilt (X)" style="flex:1">
+          <input id="pArRotY" type="number" step="1" title="heading (Y)" style="flex:1">
+          <input id="pArRotZ" type="number" step="1" title="roll (Z)" style="flex:1">
+          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">°</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">fade in</label>
+          <input id="pArFadeIn" type="number" step="0.1" min="0" style="flex:1">
+          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">s</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">fade out</label>
+          <input id="pArFadeOut" type="number" step="0.1" min="0" style="flex:1">
+          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">s</span>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
           <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">animation</label>
@@ -2520,9 +2551,16 @@ function openArEditPanel(zone,objId){
   if(!o){ panel.style.display="none"; return; }
   panel.style.display="block";
   o.anchor=o.anchor||{latOffsetM:0,lonOffsetM:0,altM:0};
+  o.rotationDeg=o.rotationDeg||{x:0,y:0,z:0};
   document.getElementById("pArAltM").value=o.anchor.altM||0;
   document.getElementById("pArLatOffM").value=o.anchor.latOffsetM||0;
   document.getElementById("pArLonOffM").value=o.anchor.lonOffsetM||0;
+  document.getElementById("pArScale").value=o.scale||1;
+  document.getElementById("pArRotX").value=o.rotationDeg.x||0;
+  document.getElementById("pArRotY").value=o.rotationDeg.y||0;
+  document.getElementById("pArRotZ").value=o.rotationDeg.z||0;
+  document.getElementById("pArFadeIn").value=o.fadeInS||0;
+  document.getElementById("pArFadeOut").value=o.fadeOutS||0;
   populateArClipOptions(_arResolvedUrl(o),o.animationClip);
 }
 async function populateArClipOptions(url,currentClip){
@@ -2552,12 +2590,26 @@ function _arApplyEdit(){
   o.anchor.altM=parseFloat(document.getElementById("pArAltM").value)||0;
   o.anchor.latOffsetM=parseFloat(document.getElementById("pArLatOffM").value)||0;
   o.anchor.lonOffsetM=parseFloat(document.getElementById("pArLonOffM").value)||0;
+  o.scale=Math.max(0.01, parseFloat(document.getElementById("pArScale").value)||1);
+  o.rotationDeg={
+    x:parseFloat(document.getElementById("pArRotX").value)||0,
+    y:parseFloat(document.getElementById("pArRotY").value)||0,
+    z:parseFloat(document.getElementById("pArRotZ").value)||0
+  };
+  o.fadeInS=Math.max(0, parseFloat(document.getElementById("pArFadeIn").value)||0);
+  o.fadeOutS=Math.max(0, parseFloat(document.getElementById("pArFadeOut").value)||0);
   o.animationClip=document.getElementById("pArClip").value||null;
   render();
 }
 document.getElementById("pArAltM").onchange=_arApplyEdit;
 document.getElementById("pArLatOffM").onchange=_arApplyEdit;
 document.getElementById("pArLonOffM").onchange=_arApplyEdit;
+document.getElementById("pArScale").onchange=_arApplyEdit;
+document.getElementById("pArRotX").onchange=_arApplyEdit;
+document.getElementById("pArRotY").onchange=_arApplyEdit;
+document.getElementById("pArRotZ").onchange=_arApplyEdit;
+document.getElementById("pArFadeIn").onchange=_arApplyEdit;
+document.getElementById("pArFadeOut").onchange=_arApplyEdit;
 document.getElementById("pArClip").onchange=_arApplyEdit;
 
 function attachArObjectToZone(zoneIdx,asset){
@@ -2568,6 +2620,7 @@ function attachArObjectToZone(zoneIdx,asset){
     id:crypto.randomUUID(), name:asset.name,
     src: asset.kind==="url" ? {url:asset.url} : {assetId:asset.id},
     anchor:{latOffsetM:0,lonOffsetM:0,altM:0}, rotationDeg:{x:0,y:0,z:0}, scale:1,
+    fadeInS:0, fadeOutS:0,
     animationClip:null, occlusion:true
   };
   z.arObjects.push(newObj);
@@ -2883,6 +2936,26 @@ function dockMainPanel(){
   pnl.style.left="10px";
   pnl.style.top=(navBarHeight()+10)+"px";
 }
+// Real bug fixed 2026-08-14: #assetPalette had NO dock function at all —
+// every other floating panel (#mainPanel, #audioPalette) gets pushed below
+// the real measured nav-bar height by its own dock*() call; this one just
+// sat at its static CSS top:10px forever, which put it partway UNDER
+// #crossToolNav on any project with a tall enough nav row. Chains off
+// #mainPanel's own live rect (not a hardcoded width) so it tracks whether
+// Region Editor is currently mini or expanded, same way codeObjectsHome()
+// chains off Audio Palette's rect instead of assuming a fixed size.
+function dockAssetPalette(){
+  const pal=document.getElementById("assetPalette");
+  const mp=document.getElementById("mainPanel");
+  // A mini Region Editor has already been relocated into the right-end row
+  // by dockCollapsedRow() (chained off Code Objects/Audio Palette, z-index
+  // 400) by the time this runs — chaining off its rect here would land
+  // this panel directly on top of that row instead of its home top-left
+  // corner. Go back to the vacated top-left spot instead, same as
+  // dockMainPanel()'s own "own side of the screen" position.
+  pal.style.left = mp.classList.contains("mini") ? "10px" : (Math.round(mp.getBoundingClientRect().right)+10)+"px";
+  pal.style.top=(navBarHeight()+10)+"px";
+}
 function dockKeyBtn(){
   // navH+44, not +10 (2026-08-13) — .base (the basemap picker) now
   // permanently docks at navH+10, directly above Key, preserving the
@@ -3018,6 +3091,7 @@ document.getElementById("panelMinBtn").onclick=e=>{
   // edge is.
   if(wasMini) dockMainPanel();
   dockCollapsedRow();
+  dockAssetPalette(); // chains off #mainPanel's rect, which this toggle just changed
 };
 // Drag-source-only clip browser — all editing (rename/move/copy/delete/
 // upload) lives in Audio Studio, so this mounts audio-tree.js read-only.
@@ -4202,7 +4276,7 @@ function refreshArPreview(){
       // falsy — a cached null sentinel means resolution was already tried
       // and failed, so don't re-trigger ensureArUrlsResolved() every pass.
       if(!url){ if(key && !_arUrlCache.has(key)) anyMissing=true; return; }
-      list.push({id:o.id, url, center:[c[1],c[0]], anchor:o.anchor||{}, scale:o.scale, animationClip:o.animationClip});
+      list.push({id:o.id, url, center:[c[1],c[0]], anchor:o.anchor||{}, scale:o.scale, rotationDeg:o.rotationDeg||{x:0,y:0,z:0}, fadeInS:o.fadeInS||0, fadeOutS:o.fadeOutS||0, animationClip:o.animationClip});
     });
   });
   if(anyMissing) ensureArUrlsResolved();
@@ -6159,6 +6233,7 @@ if(window.TopNav){
     // alone doesn't account for the real nav bar height.
     dockMainPanel();
     dockAudioPalette(); // also anchors Key
+    dockAssetPalette(); // chains off #mainPanel's just-docked rect
     if(window.CodeObjects) CodeObjects.dock(); // its onDock (dockCollapsedRow) also docks .base and pushes the map's zoom control clear of the row
     map.resize();
   });

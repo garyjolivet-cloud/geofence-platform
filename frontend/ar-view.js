@@ -273,10 +273,37 @@ async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
       // obj.occlusion intentionally unread — designed for WebXR depth
       // sensing, explicitly out of scope for this camera+compass fallback.
       // Don't fake real-world occlusion against the raw video feed.
+      //
+      // Materials cloned per instance, same reasoning as
+      // asset-preview-layer.js's ensureMeshLoaded(): cloneModel() shares
+      // material objects by reference across every clone of the same url,
+      // and this project's own live test tour has two Duck.glb instances
+      // — animating one's opacity for its fade-in would otherwise yank
+      // the other's too. Only set transparent/opacity at all when this
+      // object actually has a fade-in configured (fadeInS>0), so an
+      // object with no fade keeps its authored material untouched.
+      const fadeInS=obj.fadeInS||0;
+      const materials=[];
+      mesh.traverse(child=>{
+        if(!child.material) return;
+        const wasArray=Array.isArray(child.material);
+        const src=wasArray?child.material:[child.material];
+        const cloned=src.map(m=>{
+          const c=m.clone();
+          c._baseOpacity=(m.opacity!=null?m.opacity:1);
+          if(fadeInS>0){ c.transparent=true; c.opacity=0; }
+          return c;
+        });
+        child.material=wasArray?cloned:cloned[0];
+        materials.push(...cloned);
+      });
       scene.add(mesh);
       const anchor=obj.anchor||{latOffsetM:0,lonOffsetM:0,altM:0};
       if(zoneCenter && visitorLatLon) placeMesh(mesh, zoneCenter, visitorLatLon, anchor);
-      active.push({mesh, zoneCenter, anchor});
+      // fadeDone:true when fadeInS<=0 (the default) — render()'s fade loop
+      // below then does nothing for this object, no behavior change from
+      // before this feature existed.
+      active.push({mesh, zoneCenter, anchor, materials, fadeInS, fadeElapsed:0, fadeDone:fadeInS<=0});
       if(gltf.animations && gltf.animations.length){
         const mixer=new THREE.AnimationMixer(mesh);
         const clip=(obj.animationClip && gltf.animations.find(c=>c.name===obj.animationClip)) || gltf.animations[0];
@@ -317,6 +344,28 @@ function render(){
   applyDeviceQuaternion(camera.quaternion, AROrient.alphaS, AROrient.betaS, AROrient.gammaS, screenOrient);
   const dt=clock.getDelta();
   mixers.forEach(m=>m.update(dt));
+  // Fade-in ramp for anything not yet fully faded in (fadeDone:true at
+  // push time for fadeInS<=0, so this is a no-op loop for every object
+  // with no fade configured, including the vext cylinder, which has no
+  // .materials field at all). No fade-out counterpart here — unlike the
+  // editor preview, this view has no per-object removal moment during a
+  // session (loadArObjects() runs once at open()), only a whole-session
+  // close() that has to stay prompt for the camera teardown; fade-out
+  // becomes meaningful once Phase 3 (trigger-based show/hide) exists.
+  active.forEach(a=>{
+    if(a.fadeDone || !a.materials || !a.materials.length) return;
+    a.fadeElapsed+=dt;
+    const factor=Math.min(1, a.fadeElapsed/a.fadeInS);
+    a.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
+    if(factor>=1){
+      a.fadeDone=true;
+      // Drop back to non-transparent once fully faded in — most exported
+      // GLBs are authored opaque, and leaving transparent:true permanently
+      // can show sorting/z-fighting artifacts a normal opaque material
+      // wouldn't have.
+      a.materials.forEach(m=>{ m.opacity=m._baseOpacity; m.transparent=false; });
+    }
+  });
   renderer.render(scene, camera);
   updateDebugLabel();
   rafId=requestAnimationFrame(render);

@@ -71,13 +71,16 @@ let animRafId=null;
 // retry it. This loop self-drives repaints until every pending entry has
 // actually been placed, then stops — same battery/idle-cost hygiene as
 // the animation case, just gated on a different condition.
+const fadingOut=[];   // [{mesh, materials, elapsed, fadeOutS}] — detached entries still completing their fade-out, decoupled from `entries` (see removeEntry())
+
 function ensureAnimLoop(){
   const anyAnimated = [...entries.values()].some(e=>e.mixer);
   const anyPending = [...entries.values()].some(e=>e.mesh && !e.refBase);
-  if((anyAnimated||anyPending) && animRafId==null){
+  const anyFadingIn = [...entries.values()].some(e=>e.mesh && e.refBase && !e._fadeInDone);
+  if((anyAnimated||anyPending||anyFadingIn||fadingOut.length) && animRafId==null){
     const tick=()=>{ if(map) map.triggerRepaint(); animRafId=requestAnimationFrame(tick); };
     animRafId=requestAnimationFrame(tick);
-  } else if(!anyAnimated && !anyPending && animRafId!=null){
+  } else if(!anyAnimated && !anyPending && !anyFadingIn && !fadingOut.length && animRafId!=null){
     cancelAnimationFrame(animRafId); animRafId=null;
   }
 }
@@ -125,7 +128,28 @@ function groundRelativeAlt(lngLat, altM){
 // Returns false if positioning couldn't be computed this tick (terrain on
 // but DEM tiles not loaded yet) — caller (render()'s retry pre-pass)
 // re-attempts on a later frame rather than placing at a wrong position.
-function placeMesh(e, centerLatLon, anchor, objScale){
+// rotationDeg sign correction: this file's scene carries a NET REFLECTION
+// (det=-1) from scene.rotateX(90°)*scale(1,1,-1) above — verified by
+// working the actual matrix product (L=[[1,0,0],[0,0,1],[0,1,0]], the Y/Z
+// swap that maps glTF Y-up into this scene's local east/north/up frame).
+// Conjugating a rotation through a reflection reverses its apparent sense:
+// composing L with Ry(θ)/Rx(θ) and tracking where a pure +X (east) point
+// or a pure +Y (up) point end up shows this scene's rotation.x/rotation.y
+// sweep the OPPOSITE compass direction (east->south, clockwise) that
+// ar-view.js's un-reflected scene produces for the identical value
+// (east->north, counter-clockwise) — rotation.z (roll) has no such flip
+// (both land the same "up" direction). Negating x/y here, not z, is what
+// makes a given rotationDeg value look the same in this authoring preview
+// as it will in the visitor AR view. Derived analytically, not yet
+// live-verified against a real device — flag this as the first thing to
+// re-check (same as the AR view's own compass-sign history) if a future
+// report says the object's facing direction looks mirrored between the
+// two surfaces.
+function applyRotation(mesh, rotationDeg){
+  const r=rotationDeg||{x:0,y:0,z:0};
+  mesh.rotation.set(-(r.x||0)*Math.PI/180, -(r.y||0)*Math.PI/180, (r.z||0)*Math.PI/180);
+}
+function placeMesh(e, centerLatLon, anchor, objScale, rotationDeg){
   const mesh=e.mesh;
   const lngLat=[centerLatLon[1], centerLatLon[0]];
   const absAlt=groundRelativeAlt(lngLat, anchor.altM);
@@ -146,6 +170,7 @@ function placeMesh(e, centerLatLon, anchor, objScale){
   // translation directly into a matrix that also holds real-scale local
   // vertex data causes a confirmed-live float32 precision collapse
   // ("noisy polygons, no shape at all").
+  const firstPlacement=!e.refBase;
   e.refBase=maplibregl.MercatorCoordinate.fromLngLat(lngLat, absAlt);
   // Everything below is in real METRES, relative to e.refBase — same
   // units/frame the official example's own model.position.set(east, up,
@@ -155,14 +180,41 @@ function placeMesh(e, centerLatLon, anchor, objScale){
   // altitude, so there's no separate altitude delta left to apply here.
   mesh.position.set(anchor.lonOffsetM||0, 0, anchor.latOffsetM||0);
   mesh.scale.setScalar(objScale||1);
+  applyRotation(mesh, rotationDeg);
+  // Fade-in starts counting from the object's FIRST successful placement,
+  // not from load time — a model stuck waiting on DEM tiles (see the
+  // deferred-placement path above) shouldn't burn its fade window while
+  // invisible for an unrelated reason. e.materials starts every entry at
+  // opacity 0 (see ensureMeshLoaded), so this is also what makes a
+  // fadeInS:0 object (the default, and every object created before this
+  // feature existed) appear at full opacity on the very next render() tick
+  // instead of staying invisible.
+  if(firstPlacement){ e._fadeInElapsed=0; e._fadeInDone=false; }
   console.log('asset-preview-layer: placed', e.url, 'absAlt', absAlt, 'refBase', e.refBase.x, e.refBase.y, e.refBase.z);
   return true;
 }
 
+// fadeOutS>0 hands the entry off to the `fadingOut` list instead of
+// removing it immediately — render() ramps its cloned materials' opacity
+// down over that duration, then does the actual scene.remove(). This is
+// what makes detaching/swapping an AR object in the editor feel like a
+// dissolve instead of a pop, matching what fadeInS already does on attach.
+// fadeOutS:0 (the default) keeps today's instant-removal behavior exactly.
 function removeEntry(id){
   const e=entries.get(id);
-  if(e && e.mesh) scene.remove(e.mesh);
   entries.delete(id);
+  if(!e) return;
+  const fadeOutS=(e.want&&e.want.fadeOutS)||0;
+  if(!e.mesh || fadeOutS<=0 || !e.materials || !e.materials.length){
+    if(e.mesh) scene.remove(e.mesh);
+    return;
+  }
+  // refBase/url carried along so this can be spliced straight into
+  // render()'s withMesh list below — a fading-out mesh still needs the
+  // exact same per-mesh projection-matrix treatment (it's still visible,
+  // just heading toward opacity 0), it's just no longer in `entries`.
+  fadingOut.push({mesh:e.mesh, materials:e.materials, elapsed:0, fadeOutS, refBase:e.refBase, url:e.url});
+  ensureAnimLoop();
 }
 
 async function ensureMeshLoaded(id, url){
@@ -195,9 +247,30 @@ async function ensureMeshLoaded(id, url){
     // this rather than chasing MapLibre's exact terrain depth encoding —
     // reasonable for an AUTHORING preview anyway (always seeing what you
     // attached beats it vanishing behind a hill from some camera angles).
+    //
+    // Materials are CLONED here, not mutated in place — cloneModel() (both
+    // SkeletonUtils.clone and plain .scene.clone()) shares material objects
+    // by reference with the cached GLTF template AND with every other
+    // clone of the same url. Two arObjects pointing at the same model (the
+    // real live test project has two Duck.glb instances) would otherwise
+    // fight over one shared .opacity during a fade, and the very first
+    // opacity write would also corrupt modelCache's own template. Each
+    // entry's cloned materials are tracked on e.materials for the fade
+    // loop in render() below.
+    e.materials=[];
     mesh.traverse(child=>{
       if(!child.material) return;
-      (Array.isArray(child.material)?child.material:[child.material]).forEach(m=>{ m.depthTest=false; m.depthWrite=false; });
+      const wasArray=Array.isArray(child.material);
+      const src=wasArray?child.material:[child.material];
+      const cloned=src.map(m=>{
+        const c=m.clone();
+        c.transparent=true; c.depthTest=false; c.depthWrite=false;
+        c._baseOpacity=(m.opacity!=null?m.opacity:1);
+        c.opacity=0;   // fade-in starts invisible; render()'s first placement ramps it up (instantly if fadeInS is 0, the default)
+        return c;
+      });
+      child.material=wasArray?cloned:cloned[0];
+      e.materials.push(...cloned);
     });
     scene.add(mesh);
     e.mesh=mesh; e.loading=false;
@@ -256,8 +329,8 @@ function setObjects(list){
     // the very first attempt failed (terrain on, DEM not loaded yet at
     // that point) — a call site that only retried with stale data from the
     // first setObjects() call would re-place at a since-edited anchor.
-    e.want={center:o.center, anchor:o.anchor||{}, scale:o.scale};
-    placeMesh(e, o.center, o.anchor||{}, o.scale);
+    e.want={center:o.center, anchor:o.anchor||{}, scale:o.scale, rotationDeg:o.rotationDeg, fadeInS:o.fadeInS||0, fadeOutS:o.fadeOutS||0};
+    placeMesh(e, o.center, o.anchor||{}, o.scale, o.rotationDeg);
     applyAnimationClip(e, o.animationClip);
     // Also re-evaluate HERE, not just after the forEach below: this whole
     // callback is async (awaits ensureMeshLoaded), so the synchronous
@@ -327,10 +400,35 @@ function render(gl, options){
   // comment — DEM-tile-load does not reliably trigger a repaint on its
   // own, confirmed live), not by hoping something else calls render().
   entries.forEach(e=>{
-    if(e.mesh && !e.refBase && e.want) placeMesh(e, e.want.center, e.want.anchor, e.want.scale);
+    if(e.mesh && !e.refBase && e.want) placeMesh(e, e.want.center, e.want.anchor, e.want.scale, e.want.rotationDeg);
   });
+  // Fade-in ramp for anything placed but not yet fully faded in; fadeInS:0
+  // (the default) resolves to factor 1 on the very first tick after
+  // placement, so this is a no-op appearance-wise for every object created
+  // before this feature existed.
+  entries.forEach(e=>{
+    if(!e.mesh || !e.refBase || e._fadeInDone || !e.materials || !e.materials.length) return;
+    e._fadeInElapsed=(e._fadeInElapsed||0)+dt;
+    const fadeInS=(e.want&&e.want.fadeInS)||0;
+    const factor=fadeInS>0 ? Math.min(1, e._fadeInElapsed/fadeInS) : 1;
+    e.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
+    if(factor>=1) e._fadeInDone=true;
+  });
+  // Fade-out ramp for detached entries (see removeEntry()) — counts down
+  // to actual scene.remove() instead of an instant pop when fadeOutS>0.
+  for(let i=fadingOut.length-1;i>=0;i--){
+    const fo=fadingOut[i];
+    fo.elapsed+=dt;
+    const factor=Math.max(0, 1-fo.elapsed/fo.fadeOutS);
+    fo.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
+    if(factor<=0){ scene.remove(fo.mesh); fadingOut.splice(i,1); }
+  }
   ensureAnimLoop();   // re-evaluate: stop the self-repaint loop once every pending entry above just got placed
-  const withMesh=[...entries.values()].filter(e=>e.mesh && e.refBase);
+  // fadingOut meshes are no longer in `entries` (removeEntry() already
+  // deleted them there) but still need the same per-mesh render pass while
+  // their opacity ramps down — spliced in here rather than duplicating the
+  // whole projection-matrix dance below for a second list.
+  const withMesh=[...entries.values()].filter(e=>e.mesh && e.refBase).concat(fadingOut);
   // three.js and MapLibre both cache GL state on the shared context and
   // will corrupt each other's rendering without this reset before/after —
   // once per render() call (not per mesh); three.js keeps its own state
