@@ -312,7 +312,21 @@ function render(gl, options){
     _mL.makeTranslation(e.refBase.x,e.refBase.y,e.refBase.z).scale(_vScale.set(mUnit,-mUnit,mUnit));
     camera.projectionMatrix.copy(_mMain).multiply(_mL);
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+    // One-time diagnostic per entry: where does this mesh's own origin
+    // actually land in clip space? x/y/z outside roughly [-1,1] after the
+    // perspective divide (or w<=0, meaning behind the camera) means it's
+    // being placed outside the visible frustum regardless of how correct
+    // the matrix math looks in isolation — distinguishes "positioned but
+    // off-screen/behind-camera" from "positioned, on-screen, but not
+    // drawing" (GL state/material/depth issue) without guessing further.
+    if(!e._loggedClip){
+      e._loggedClip=true;
+      const clip=new THREE.Vector4(0,0,0,1).applyMatrix4(e.mesh.matrixWorld).applyMatrix4(camera.projectionMatrix);
+      console.log('asset-preview-layer: clip-space origin', e.url, 'x/w',(clip.x/clip.w).toFixed(3), 'y/w',(clip.y/clip.w).toFixed(3), 'z/w',(clip.z/clip.w).toFixed(3), 'w',clip.w.toFixed(6));
+    }
     renderer.render(scene, camera);
+    const glErr=gl.getError();
+    if(glErr!==0 && !e._loggedGlErr){ e._loggedGlErr=true; console.log('asset-preview-layer: gl.getError()',glErr,'after rendering',e.url); }
     e.mesh.visible=false;
   });
   withMesh.forEach(e=>{ e.mesh.visible=true; });
