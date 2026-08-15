@@ -379,14 +379,22 @@ function install(mapInstance){
   // idempotent getLayer() check so re-attempts after the first success
   // are free no-ops.
   const tryAdd=()=>{
-    if(map.getLayer(customLayer.id)) return;
-    if(!map.isStyleLoaded()) return;
+    if(map.getLayer(customLayer.id)) return true;
+    if(!map.isStyleLoaded()) return false;
     map.addLayer(customLayer);
     console.log('asset-preview-layer: layer added to map');
+    return true;
   };
   tryAdd();
   map.on('load', tryAdd);
   map.on('styledata', tryAdd);
+  // Dumb, reliable fallback on top of the event-driven attempts above:
+  // rather than keep chasing the exact right MapLibre event to listen to
+  // (already burned one round on 'load' alone being wrong), just poll
+  // every second until tryAdd() actually succeeds, then stop. Cheap —
+  // getLayer()/isStyleLoaded() are simple property reads, not real work —
+  // and removes any dependency on correctly predicting event timing/order.
+  const pollId=setInterval(()=>{ if(tryAdd()) clearInterval(pollId); }, 1000);
 }
 
 // Module/map-load race handshake. fence-editor.html is a classic script
