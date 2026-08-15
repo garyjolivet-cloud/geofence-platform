@@ -221,8 +221,15 @@ async function listClipNames(url){
 // Full desired-state diff, called on every render pass by the host — see
 // this file's header comment for the identity-stability contract.
 let _lastSetObjectsIds='';
+let _lastList=[];
 function setObjects(list){
   if(!map) return;   // install() hasn't completed yet (style still loading, or module beat the host to it)
+  // Stashed unconditionally (not just for the dedup-logging check below) —
+  // install()'s tryAdd() replays this once the layer actually registers,
+  // since a duck attempted while scene was still null gets its entry
+  // fully discarded (see ensureMeshLoaded's scene-not-ready path) and
+  // nothing else is guaranteed to call setObjects() again afterward.
+  _lastList=list;
   const idsKey=list.map(o=>o.id+':'+o.url).join(',');
   if(idsKey!==_lastSetObjectsIds){ console.log('asset-preview-layer: setObjects', list.length, list.map(o=>({id:o.id,url:o.url}))); _lastSetObjectsIds=idsKey; }
   const wantIds=new Set(list.map(o=>o.id));
@@ -383,6 +390,13 @@ function install(mapInstance){
     if(!map.isStyleLoaded()) return false;
     map.addLayer(customLayer);
     console.log('asset-preview-layer: layer added to map');
+    // Replay whatever setObjects() was last asked for: anything attempted
+    // while scene was still null had its entry fully discarded (see
+    // ensureMeshLoaded's scene-not-ready path) rather than left pending,
+    // so nothing else is guaranteed to ever call setObjects() again on
+    // its own — confirmed live as the actual remaining gap (registration
+    // succeeded, but the duck that had already failed once stayed gone).
+    if(_lastList.length) setObjects(_lastList);
     return true;
   };
   tryAdd();
