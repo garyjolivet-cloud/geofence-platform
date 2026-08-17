@@ -1512,6 +1512,13 @@ let lastSmoothed=null;
 // Currently-active AR-bearing zone (3D-mode plan, Phase 2), kept in sync by
 // HUD.onFix() every tick — what #arBtn's click handler actually opens.
 let _arZone=null;
+// Which zone's arObjects the CURRENTLY OPEN AR session was opened for
+// (Phase 3, trigger-based show/hide) — set on a successful ARView.open(),
+// cleared once a fadeOutAndClose() has been triggered for it (see
+// HUD.onFix() below) or the session closes. Compared against the freshly
+// recomputed _arZone every tick so a visitor walking away from the stop
+// mid-session gets a fade-out instead of an AR view stuck open on nothing.
+let _arOpenZoneId=null;
 const HUD = {
   pos:null, prev:null, fixes:0,
   el(id){ return document.getElementById(id); },
@@ -1560,6 +1567,17 @@ const HUD = {
     _arZone = arActive ? arActive.zone : null;
     const arBtn=document.getElementById('arBtn');
     if(arBtn && typeof ARView!=='undefined') arBtn.style.display = (_arZone && !ARView.isOpen()) ? 'inline-block' : 'none';
+    // Phase 3 (trigger-based show/hide): the AR session currently open was
+    // opened for _arOpenZoneId — if that zone is no longer the freshly-
+    // recomputed _arZone (visitor walked out of range, or a closer
+    // AR-bearing zone took over), fade the object out and close the whole
+    // session. Reuses the same continuous, shape-aware active[] check that
+    // already drives #arBtn's own visibility above, not a separate
+    // discrete enter/exit stream — same self-healing reasoning.
+    if(_arOpenZoneId && typeof ARView!=='undefined' && ARView.isOpen() && (!_arZone || _arZone.id!==_arOpenZoneId)){
+      ARView.fadeOutAndClose();
+      _arOpenZoneId=null;
+    }
     // p.alt passed through so ARView can track the visitor's real altitude
     // and keep a vertical-extent cylinder's height correct as it changes —
     // the whole point of that feature (paraglider/drone, altitude always
@@ -2143,12 +2161,19 @@ document.getElementById('tiltBtn').onclick = ()=>{
 function closeArView(){
   document.getElementById('arView').style.display='none';
   document.getElementById('map').style.display='';
+  _arOpenZoneId=null;   // funnels through every close path (button, failure, phone-lock auto-close, Phase 3 fade-out) — see this function's own header comment
 }
 document.getElementById('arBtn').onclick = async ()=>{
   if(!_arZone || typeof ARView==='undefined') return;
   Audio.unlock(); Audio.unlocked=true;
   const oriOk = await ARView.requestOrientationPermission();
-  const zoneCenter = _arZone.path ? centerNow(_arZone, Date.now()) : _arZone.center;
+  // Captured right after the first await, not re-read from module-scoped
+  // _arZone later — a GPS fix landing during ARView.open()'s own (longer,
+  // camera-permission-involving) await could otherwise reassign _arZone
+  // out from under this handler, and Phase 3's exit-detection below needs
+  // to know exactly which zone this specific session was opened for.
+  const openedZone=_arZone;
+  const zoneCenter = openedZone.path ? centerNow(openedZone, Date.now()) : openedZone.center;
   document.getElementById('map').style.display='none';
   document.getElementById('arView').style.display='block';
   try{
@@ -2156,17 +2181,18 @@ document.getElementById('arBtn').onclick = async ()=>{
     // layer's radius counts (same lookup MapView's cachedVextFeatures()
     // and field-recorder.html's refreshPublishedZones() use), circle-only,
     // v1 scope. null radius/altM means ARView just won't build the mesh.
-    const arTgt = (_arZone.layers||[]).find(l=>l.kind==='target'&&l.radiusM!=null);
+    const arTgt = (openedZone.layers||[]).find(l=>l.kind==='target'&&l.radiusM!=null);
     await ARView.open({
       videoEl: document.getElementById('arVideo'),
       canvas: document.getElementById('arCanvas'),
       label: document.getElementById('arLabel'),
-      zoneCenter, arObjects: _arZone.arObjects, visitorLatLon: [HUD.pos.lat, HUD.pos.lon],
+      zoneCenter, arObjects: openedZone.arObjects, visitorLatLon: [HUD.pos.lat, HUD.pos.lon],
       zoneRadiusM: arTgt ? arTgt.radiusM : null,
-      zoneAltM: _arZone.altM ?? null,
-      zoneAltToleranceM: _arZone.altToleranceM!=null ? _arZone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M,
+      zoneAltM: openedZone.altM ?? null,
+      zoneAltToleranceM: openedZone.altToleranceM!=null ? openedZone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M,
       onClosed: closeArView
     });
+    _arOpenZoneId=openedZone.id;   // Phase 3: HUD.onFix() watches for this zone dropping out of `active`
     if(!oriOk) HUD.log('ev-warn','AR: motion access denied — object position will be off (label now shows live debug readout instead)');
   }catch(err){
     HUD.log('ev-warn','AR unavailable: '+(err&&err.message||err));

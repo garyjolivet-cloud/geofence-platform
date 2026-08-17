@@ -1,15 +1,16 @@
-/* asset-preview-layer.js — live 3D AR-object preview inside fence-editor.html
+/* asset-preview-layer.js — live 3D AR-object preview, shared by
+ * fence-editor.html (authoring) and geofence-sim.html (desktop simulation)
  * (window.AssetPreviewLayer)
  *
  * Renders zone.arObjects[] as real three.js meshes positioned directly on
- * fence-editor.html's own MapLibre map, via a MapLibre "custom" layer
+ * the host's own MapLibre map, via a MapLibre "custom" layer
  * (type:"custom", onAdd(map,gl)/render(gl,options)) sharing the map's own
  * WebGL context — this repo's first use of that technique. Contrast
  * ar-view.js (the visitor-facing AR camera view), which deliberately runs
  * three.js on its own SEPARATE overlay canvas instead of sharing MapLibre's
  * context — that separation doesn't apply here, since this preview needs to
- * live inside the same tilted/terrain map the author is already editing on,
- * not a full-screen camera overlay.
+ * live inside the same tilted/terrain map the author/tester is already
+ * looking at, not a full-screen camera overlay.
  *
  * Loaded as an ES module (three.js ships ESM-only) — same importmap
  * technique geofence-engine.html already uses for ar-view.js.
@@ -21,13 +22,30 @@
  *     AFTER constructing the map, not inside a "load" handler — see the
  *     module/map-load race handshake at the bottom of this file for why a
  *     "load"-handler-only call site isn't safe here.
- *   AssetPreviewLayer.setObjects([{id, url, center:[lat,lon], anchor, animationClip}, ...])
+ *   AssetPreviewLayer.setObjects([{id, url, center:[lat,lon], anchor, animationClip, startHidden}, ...])
  *     Full desired-state list, safe to call on every render pass (including
  *     drag-frame frequency — fence-editor.html's own renderSources() runs on
  *     every zone-drag mousemove). Identity-stable: diffs against the
  *     current mesh cache by id, only loads what's new, only repositions
  *     what already exists, removes what's gone. Never blocks — a still-
  *     loading model is silently skipped until its GLTF finishes fetching.
+ *     startHidden:true (only meaningful on an object's FIRST-EVER placement
+ *     — see placeMesh()) skips the normal auto-fade-to-visible default,
+ *     leaving it at opacity 0 until an explicit showTriggered() call. Used
+ *     by a simulated walk (Test Mode / geofence-sim.html) so objects start
+ *     hidden and only appear once the simulated avatar actually enters
+ *     their zone — normal editing never sets this, so authoring keeps
+ *     today's always-visible behavior unchanged.
+ *   AssetPreviewLayer.showTriggered(id) / hideTriggered(id)
+ *     Trigger-driven show/hide for an already-attached, already-loaded
+ *     entry — called from a SimFencer/Geofencer onEvent enter/exit handler.
+ *     Distinct from the manual replayFadeIn()/previewFadeOut() pair (those
+ *     back the edit panel's "▶ preview" buttons and are demo-only —
+ *     previewFadeOut bounces back up, hideTriggered stays down).
+ *   AssetPreviewLayer.showAll()
+ *     Forces every current entry to full opacity instantly, clearing any
+ *     trigger-hidden state — call when a simulated walk stops, so editing
+ *     never gets stuck looking at an object left invisible mid-simulation.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -79,10 +97,11 @@ function ensureAnimLoop(){
   const anyPending = [...entries.values()].some(e=>e.mesh && !e.refBase);
   const anyFadingIn = [...entries.values()].some(e=>e.mesh && e.refBase && !e._fadeInDone);
   const anyPreviewOut = [...entries.values()].some(e=>e._previewOut);
-  if((anyAnimated||anyPending||anyFadingIn||anyPreviewOut||fadingOut.length) && animRafId==null){
+  const anyHiding = [...entries.values()].some(e=>e._hiddenByTrigger);
+  if((anyAnimated||anyPending||anyFadingIn||anyPreviewOut||anyHiding||fadingOut.length) && animRafId==null){
     const tick=()=>{ if(map) map.triggerRepaint(); animRafId=requestAnimationFrame(tick); };
     animRafId=requestAnimationFrame(tick);
-  } else if(!anyAnimated && !anyPending && !anyFadingIn && !anyPreviewOut && !fadingOut.length && animRafId!=null){
+  } else if(!anyAnimated && !anyPending && !anyFadingIn && !anyPreviewOut && !anyHiding && !fadingOut.length && animRafId!=null){
     cancelAnimationFrame(animRafId); animRafId=null;
   }
 }
@@ -151,7 +170,7 @@ function applyRotation(mesh, rotationDeg){
   const r=rotationDeg||{x:0,y:0,z:0};
   mesh.rotation.set(-(r.x||0)*Math.PI/180, -(r.y||0)*Math.PI/180, (r.z||0)*Math.PI/180);
 }
-function placeMesh(e, centerLatLon, anchor, objScale, rotationDeg){
+function placeMesh(e, centerLatLon, anchor, objScale, rotationDeg, startHidden){
   const mesh=e.mesh;
   const lngLat=[centerLatLon[1], centerLatLon[0]];
   const absAlt=groundRelativeAlt(lngLat, anchor.altM);
@@ -191,7 +210,23 @@ function placeMesh(e, centerLatLon, anchor, objScale, rotationDeg){
   // fadeInS:0 object (the default, and every object created before this
   // feature existed) appear at full opacity on the very next render() tick
   // instead of staying invisible.
-  if(firstPlacement){ e._fadeInElapsed=0; e._fadeInDone=false; }
+  // startHidden (Phase 3 — trigger-gated visibility during a simulated
+  // walk) skips that auto-reveal: leave _fadeInDone true and opacity
+  // pinned at 0, so the object stays invisible until an explicit
+  // showTriggered() call resets it, same as if it had never fired.
+  // _pendingShow overrides that: a showTriggered() call already arrived
+  // while this entry was still loading (see showTriggered()'s own
+  // comment) — honor it now instead of pinning hidden and silently
+  // dropping the enter event that already happened.
+  if(firstPlacement){
+    if(startHidden && !e._pendingShow){
+      e._fadeInDone=true;
+      e.materials.forEach(m=>{ m.opacity=0; });
+    } else {
+      e._fadeInElapsed=0; e._fadeInDone=false;
+    }
+    e._pendingShow=false;
+  }
   console.log('asset-preview-layer: placed', e.url, 'absAlt', absAlt, 'refBase', e.refBase.x, e.refBase.y, e.refBase.z);
   return true;
 }
@@ -331,8 +366,8 @@ function setObjects(list){
     // the very first attempt failed (terrain on, DEM not loaded yet at
     // that point) — a call site that only retried with stale data from the
     // first setObjects() call would re-place at a since-edited anchor.
-    e.want={center:o.center, anchor:o.anchor||{}, scale:o.scale, rotationDeg:o.rotationDeg, fadeInS:o.fadeInS||0, fadeOutS:o.fadeOutS||0};
-    placeMesh(e, o.center, o.anchor||{}, o.scale, o.rotationDeg);
+    e.want={center:o.center, anchor:o.anchor||{}, scale:o.scale, rotationDeg:o.rotationDeg, fadeInS:o.fadeInS||0, fadeOutS:o.fadeOutS||0, startHidden:!!o.startHidden};
+    placeMesh(e, o.center, o.anchor||{}, o.scale, o.rotationDeg, o.startHidden);
     applyAnimationClip(e, o.animationClip);
     // Also re-evaluate HERE, not just after the forEach below: this whole
     // callback is async (awaits ensureMeshLoaded), so the synchronous
@@ -402,7 +437,7 @@ function render(gl, options){
   // comment — DEM-tile-load does not reliably trigger a repaint on its
   // own, confirmed live), not by hoping something else calls render().
   entries.forEach(e=>{
-    if(e.mesh && !e.refBase && e.want) placeMesh(e, e.want.center, e.want.anchor, e.want.scale, e.want.rotationDeg);
+    if(e.mesh && !e.refBase && e.want) placeMesh(e, e.want.center, e.want.anchor, e.want.scale, e.want.rotationDeg, e.want.startHidden);
   });
   // Fade-in ramp for anything placed but not yet fully faded in; fadeInS:0
   // (the default) resolves to factor 1 on the very first tick after
@@ -435,6 +470,24 @@ function render(gl, options){
       if(factor>=1){ e._previewOut=null; factor=1; }
     }
     e.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
+  });
+  // Trigger-driven hide (Phase 3 — hideTriggered() below, called from a
+  // SimFencer/Geofencer exit event) — ramps down and STAYS at 0, unlike
+  // _previewOut above which bounces back up. The object stays attached
+  // (still in `entries`, still in `scene`) so showTriggered() can bring it
+  // straight back on the next entry without reloading anything.
+  entries.forEach(e=>{
+    if(!e._hiddenByTrigger) return;
+    const h=e._hiddenByTrigger;
+    if(h.fadeOutS<=0){
+      e.materials.forEach(m=>{ m.opacity=0; });
+      e._hiddenByTrigger=null;
+      return;
+    }
+    h.elapsed+=dt;
+    const factor=Math.max(0, 1-h.elapsed/h.fadeOutS);
+    e.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
+    if(factor<=0) e._hiddenByTrigger=null;
   });
   // Fade-out ramp for detached entries (see removeEntry()) — counts down
   // to actual scene.remove() instead of an instant pop when fadeOutS>0.
@@ -545,19 +598,22 @@ function install(mapInstance){
   const pollId=setInterval(()=>{ if(tryAdd()) clearInterval(pollId); }, 1000);
 }
 
-// Module/map-load race handshake. fence-editor.html is a classic script
-// that constructs its map synchronously near the top of its own giant
-// inline <script>; this module is a deferred, CDN-loaded ES module that
-// may finish loading before OR after that point — real machine-timing, not
-// something to assume an order for (the same registration-order-race class
-// as the vext-vol layer-visibility bug found live this session: a function
-// called before the thing it operates on existed, silently no-op'ing).
-// The host stashes its map reference unconditionally right after
-// construction (window._fenceEditorMap = map) AND calls
+// Module/map-load race handshake. Each host (fence-editor.html,
+// geofence-sim.html) is a classic script that constructs its map
+// synchronously near the top of its own giant inline <script>; this module
+// is a deferred, CDN-loaded ES module that may finish loading before OR
+// after that point — real machine-timing, not something to assume an order
+// for (the same registration-order-race class as the vext-vol layer-
+// visibility bug found live this session: a function called before the
+// thing it operates on existed, silently no-op'ing).
+// Each host stashes its map reference unconditionally right after
+// construction (window._arPreviewMap = map) AND calls
 // window.AssetPreviewLayer?.install(map) at that same point — handling the
 // "module already loaded" case. This check handles the other order: if
 // this module finishes loading AFTER the host already stashed its map.
-if(typeof window!=='undefined' && window._fenceEditorMap) install(window._fenceEditorMap);
+// (Named _arPreviewMap, not fence-editor-specific, now that geofence-
+// sim.html hosts this module too — was window._fenceEditorMap.)
+if(typeof window!=='undefined' && window._arPreviewMap) install(window._arPreviewMap);
 
 /* ---- Model inspector: a small, self-contained close-up 3D viewer for the
    Fence Editor's AR-object edit panel ----
@@ -730,4 +786,77 @@ function previewFadeOut(id){
   ensureAnimLoop();
 }
 
-window.AssetPreviewLayer={ install, setObjects, listClipNames, mountInspector, replayFadeIn, previewFadeOut };
+/* ---- Phase 3: trigger-driven show/hide ----
+   Called from a SimFencer/Geofencer 'target'-layer onEvent enter/exit
+   handler — distinct from the manual replayFadeIn()/previewFadeOut() pair
+   above (those back the edit panel's demo-only "▶ preview" buttons). */
+// Real fade-in, driven by an actual zone-enter event — just replayFadeIn()
+// under the hood (identical mechanics), plus clearing any hide ramp still
+// in flight so a quick re-entry before a fade-out finished doesn't leave
+// the object stuck fighting between the two.
+//
+// If the entry isn't placed yet (still fetching its GLTF, or DEM-deferred
+// — see placeMesh()'s own deferred-placement path), replayFadeIn() would
+// silently no-op and this enter event would just be lost — a real gap: an
+// author hitting Play right after page load, before a model has finished
+// loading, would see nothing at all on that first entry. _pendingShow
+// stashes the request so placeMesh()'s startHidden branch (Phase 3) honors
+// it once the entry actually gets placed, instead of pinning it hidden.
+function showTriggered(id){
+  const e=entries.get(id);
+  if(e) e._hiddenByTrigger=null;
+  if(!e || !e.mesh || !e.refBase){
+    if(e) e._pendingShow=true;
+    return;
+  }
+  replayFadeIn(id);
+}
+// Real fade-out, driven by an actual zone-exit event — ramps down and
+// STAYS at 0 (see its own render() loop above), unlike previewFadeOut's
+// dip-and-recover. The object stays attached/loaded so a later
+// showTriggered() brings it straight back with no reload.
+function hideTriggered(id){
+  const e=entries.get(id);
+  if(!e) return;
+  // Symmetric with showTriggered()'s _pendingShow: a quick enter-then-exit
+  // before the model even finished loading should leave it hidden once
+  // placed, not incorrectly revealed by a stale pending-show request —
+  // startHidden's own default (stay hidden) already achieves that once
+  // this is cleared, no separate "_pendingHide" flag needed.
+  e._pendingShow=false;
+  if(!e.mesh || !e.refBase || !e.materials || !e.materials.length) return;
+  e._hiddenByTrigger={elapsed:0, fadeOutS:(e.want&&e.want.fadeOutS)||0};
+  ensureAnimLoop();
+}
+// Called when a simulated walk stops — forces every current entry back to
+// full opacity instantly and clears any hidden/fading state, so normal
+// editing never gets stuck looking at an object left invisible from the
+// last simulation run.
+function showAll(){
+  entries.forEach(e=>{
+    if(!e.materials || !e.materials.length) return;
+    e._hiddenByTrigger=null;
+    e._previewOut=null;
+    e._fadeInDone=true;
+    e.materials.forEach(m=>{ m.opacity=m._baseOpacity; });
+  });
+}
+// Called at the MOMENT a simulated walk starts — instant, no ramp,
+// deliberately not hideTriggered()'s animated version (that would play a
+// visible fade-out the instant you hit Play, before any real exit event
+// happened). setObjects()'s startHidden flag (see placeMesh()) already
+// covers an object that's still loading when Test Mode starts; this
+// covers the other case — one already loaded/visible from normal editing
+// a moment ago — so both together make "hidden at the start of a
+// simulated walk" hold regardless of load timing.
+function hideAll(){
+  entries.forEach(e=>{
+    if(!e.materials || !e.materials.length) return;
+    e._hiddenByTrigger=null;
+    e._previewOut=null;
+    e._fadeInDone=true;
+    e.materials.forEach(m=>{ m.opacity=0; });
+  });
+}
+
+window.AssetPreviewLayer={ install, setObjects, listClipNames, mountInspector, replayFadeIn, previewFadeOut, showTriggered, hideTriggered, showAll, hideAll };

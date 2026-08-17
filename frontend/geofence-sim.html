@@ -10,6 +10,19 @@
 <script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<!-- Live 3D AR-object preview (Phase 3, trigger-based show/hide) — same
+     module fence-editor.html already uses, ported here so a simulated walk
+     can visualize objects fading in/out on zone enter/exit without needing
+     a real phone/camera. See asset-preview-layer.js's own header comment
+     for the module/map-load race handshake this importmap+module tag
+     participates in. -->
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+}}
+</script>
+<script type="module" src="/asset-preview-layer.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -716,6 +729,10 @@ function styleFor(k){ return {version:8,
 const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:[-117.0547,51.3027],zoom:16});
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.addControl(new maplibregl.ScaleControl({maxWidth:120,unit:"metric"}));
+// AR-object live 3D preview module/map-load race handshake — same pattern
+// fence-editor.html uses, see asset-preview-layer.js's own header comment.
+window._arPreviewMap=map;
+window.AssetPreviewLayer?.install(map);
 
 /* ---- 3D Mode: terrain (3D-mode plan, Step 4) ----
    Same free Terrarium DEM source as fence-editor.html/geofence-engine.html.
@@ -1058,7 +1075,43 @@ Geofencer.onEvent=(e)=>{
        if(e.info.flick) log("ev-flick","       ^ flicker (barely moved) — would be ignored"); }
   else if(e.kind==="say") log(e.warn?"ev-warn":"ev-say",'SAY    "'+e.text+'"'+(e.warn?" [approx]":""));
   else if(e.kind==="suppressed") log("ev-flick","HOLD   reveal suppressed (fix too loose)");
+  // Phase 3 (trigger-based show/hide) — same "target layer" gate the
+  // production engine's Geofencer.onEvent and Fence Editor's
+  // SimFencer.onEvent both use.
+  if(window.AssetPreviewLayer && e.layer && e.layer.kind==="target" && e.zone.arObjects){
+    if(e.kind==="enter") e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.showTriggered(o.id));
+    else if(e.kind==="exit") e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.hideTriggered(o.id));
+  }
 };
+
+// Live 3D AR-object preview (Phase 3) — unlike fence-editor.html's live-
+// editing case, a loaded bundle's zone positions are static (this is a
+// simulation of already-published content, not an editor), so this only
+// needs to run once per bundle load, not every render pass. o.url is
+// already resolved/denormalized in the published bundle at publish time
+// (fence-editor.html's resolveArObjectUrls()) — this page, like
+// geofence-engine.html, never needs an authenticated asset-tree lookup.
+// startHidden:true unconditionally, unlike fence-editor.html's simMode-
+// gated version — this page has no separate "editing" state to preserve
+// always-visible behavior for, it's purely a walk simulation.
+// Zones with no static .center (path/moving-ambient stops, whose position
+// is computed live elsewhere — see fitToData()'s own special-casing of
+// z.path) are skipped — a known, disclosed gap, not a silent one.
+function refreshArPreviewSim(){
+  if(!window.AssetPreviewLayer) return;
+  const list=[];
+  (BUNDLE.zones||[]).forEach(z=>{
+    if(!z.arObjects||!z.arObjects.length||!z.center) return;
+    z.arObjects.forEach(o=>{
+      if(!o.url) return;   // unresolved (asset deleted, or published before AR existed) — skip, don't throw
+      list.push({id:o.id, url:o.url, center:z.center, anchor:o.anchor||{}, scale:o.scale,
+                 rotationDeg:o.rotationDeg||{x:0,y:0,z:0}, fadeInS:o.fadeInS||0, fadeOutS:o.fadeOutS||0,
+                 animationClip:o.animationClip, startHidden:true});
+    });
+  });
+  window.AssetPreviewLayer.setObjects(list);
+  window.AssetPreviewLayer.hideAll();   // instant — nothing has been "entered" yet on a fresh bundle load
+}
 
 /* =============================== BUNDLES =============================== */
 function centroidOf(zones){ let la=0,lo=0,n=0;
@@ -1075,6 +1128,7 @@ function loadBundle(b,srcLabel){
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);
   refreshZones(); fitToData();
   updateTerrain(); // each loaded bundle carries its own threeDEnabled
+  refreshArPreviewSim();
   log("ev-sys","loaded "+(b.name||"bundle")+" — "+BUNDLE.zones.length+" zones ("+(srcLabel||"")+")");
 }
 

@@ -53,6 +53,15 @@
  *   ARView.requestOrientationPermission()  — iOS gate; call as the FIRST
  *     statement in a real tap handler, before open() and before any other
  *     await, or iOS silently denies it (transient-activation window).
+ *   ARView.fadeOutAndClose(durationS)   — Phase 3 (trigger-based show/
+ *     hide): the host calls this when it detects the visitor has walked
+ *     out of the zone this session opened for (this view has no per-zone
+ *     reload path — one session is locked to whatever zone it opened
+ *     with, see Phase 2 scoping above — so leaving that zone means
+ *     there's nothing left to show here). Ramps every loaded object's
+ *     opacity down, then calls close(). durationS falls back to a short
+ *     baked-in minimum when 0/omitted, so the transition never reads as
+ *     an instant pop right before the camera view itself vanishes.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -339,36 +348,61 @@ function updateDebugLabel(){
     'β'+Math.round(AROrient.betaS)+' γ'+Math.round(AROrient.gammaS)+extra;
 }
 
+// Phase 3 (trigger-based show/hide): set by fadeOutAndClose() below when
+// the host (geofence-engine.html) detects the visitor has walked out of
+// the zone this AR session was opened for. Handled INSIDE this existing
+// render() loop rather than a second rAF loop, so it can't fight the
+// loop already calling renderer.render() every frame.
+let _closing=null;   // {elapsed, dur} | null
 function render(){
   const screenOrient=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
   applyDeviceQuaternion(camera.quaternion, AROrient.alphaS, AROrient.betaS, AROrient.gammaS, screenOrient);
   const dt=clock.getDelta();
   mixers.forEach(m=>m.update(dt));
-  // Fade-in ramp for anything not yet fully faded in (fadeDone:true at
-  // push time for fadeInS<=0, so this is a no-op loop for every object
-  // with no fade configured, including the vext cylinder, which has no
-  // .materials field at all). No fade-out counterpart here — unlike the
-  // editor preview, this view has no per-object removal moment during a
-  // session (loadArObjects() runs once at open()), only a whole-session
-  // close() that has to stay prompt for the camera teardown; fade-out
-  // becomes meaningful once Phase 3 (trigger-based show/hide) exists.
-  active.forEach(a=>{
-    if(a.fadeDone || !a.materials || !a.materials.length) return;
-    a.fadeElapsed+=dt;
-    const factor=Math.min(1, a.fadeElapsed/a.fadeInS);
-    a.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
-    if(factor>=1){
-      a.fadeDone=true;
-      // Drop back to non-transparent once fully faded in — most exported
-      // GLBs are authored opaque, and leaving transparent:true permanently
-      // can show sorting/z-fighting artifacts a normal opaque material
-      // wouldn't have.
-      a.materials.forEach(m=>{ m.opacity=m._baseOpacity; m.transparent=false; });
+  if(_closing){
+    _closing.elapsed+=dt;
+    const factor=Math.max(0, 1-_closing.elapsed/_closing.dur);
+    active.forEach(a=>{ if(a.materials) a.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; m.transparent=true; }); });
+    if(factor<=0){
+      renderer.render(scene, camera);   // one last frame at full transparency before tearing down
+      close();
+      return;   // deliberately no requestAnimationFrame(render) here — close() already nulled everything render() would touch next
     }
-  });
+  } else {
+    // Fade-in ramp for anything not yet fully faded in (fadeDone:true at
+    // push time for fadeInS<=0, so this is a no-op loop for every object
+    // with no fade configured, including the vext cylinder, which has no
+    // .materials field at all).
+    active.forEach(a=>{
+      if(a.fadeDone || !a.materials || !a.materials.length) return;
+      a.fadeElapsed+=dt;
+      const factor=Math.min(1, a.fadeElapsed/a.fadeInS);
+      a.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
+      if(factor>=1){
+        a.fadeDone=true;
+        // Drop back to non-transparent once fully faded in — most exported
+        // GLBs are authored opaque, and leaving transparent:true permanently
+        // can show sorting/z-fighting artifacts a normal opaque material
+        // wouldn't have.
+        a.materials.forEach(m=>{ m.opacity=m._baseOpacity; m.transparent=false; });
+      }
+    });
+  }
   renderer.render(scene, camera);
   updateDebugLabel();
   rafId=requestAnimationFrame(render);
+}
+// Real fade-out, driven by the host detecting a zone-exit while AR is
+// still open (Phase 3) — ramps every currently-loaded object's opacity
+// down, then closes the whole session (this view has no per-zone reload
+// path — see the file header's Phase 2 scoping — so once the visitor has
+// left the one zone this session opened for, there's nothing left to show
+// them here). durationS falls back to a short baked-in minimum when the
+// object's own fadeOutS is 0 (the default) — popping straight to a closed
+// camera view with no transition at all reads as broken, not "off."
+function fadeOutAndClose(durationS){
+  if(rafId==null || _closing) return;   // not open, or a close is already in flight
+  _closing={elapsed:0, dur:(durationS>0?durationS:0.6)};
 }
 
 /* ---- public API ---- */
@@ -448,7 +482,7 @@ function close(){
   if(scene) scene.clear();
   if(renderer){ renderer.dispose(); renderer=null; }
   scene=null; camera=null; clock=null; mixers=[]; active=[];
-  labelEl=null; lastVisitorLatLon=null;
+  labelEl=null; lastVisitorLatLon=null; _closing=null;
   if(_onClosed){ const cb=_onClosed; _onClosed=null; cb(); }
 }
 
@@ -460,4 +494,4 @@ async function requestOrientationPermission(){ return AROrient.requestPermission
 // here too, not just from the host's close button.
 window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && isOpen()) close(); });
 
-window.ARView = { open, close, onFix, requestOrientationPermission, isOpen };
+window.ARView = { open, close, onFix, requestOrientationPermission, isOpen, fadeOutAndClose };

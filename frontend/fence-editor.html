@@ -1097,9 +1097,10 @@ map.doubleClickZoom.disable(); // dblclick on a stop opens the rename/copy/delet
 // reference unconditionally (independent of whether asset-preview-layer.js,
 // a deferred CDN-loaded ES module, has finished loading yet) and call
 // install() now in case it already has; that module's own top-level code
-// checks window._fenceEditorMap for the reverse ordering. See that file's
+// checks window._arPreviewMap for the reverse ordering (host-neutral name
+// — geofence-sim.html hosts this same module too now). See that file's
 // header comment for the full reasoning.
-window._fenceEditorMap=map;
+window._arPreviewMap=map;
 window.AssetPreviewLayer?.install(map);
 
 /* ---- 3D Mode: terrain (Step 2 of the 3D-mode plan) ----
@@ -4374,7 +4375,13 @@ function refreshArPreview(){
       // falsy — a cached null sentinel means resolution was already tried
       // and failed, so don't re-trigger ensureArUrlsResolved() every pass.
       if(!url){ if(key && !_arUrlCache.has(key)) anyMissing=true; return; }
-      list.push({id:o.id, url, center:[c[1],c[0]], anchor:o.anchor||{}, scale:o.scale, rotationDeg:o.rotationDeg||{x:0,y:0,z:0}, fadeInS:o.fadeInS||0, fadeOutS:o.fadeOutS||0, animationClip:o.animationClip});
+      // startHidden:simMode — Phase 3 (trigger-based show/hide). Normal
+      // editing (simMode false) keeps today's always-visible behavior
+      // unchanged; only matters for an object's FIRST-EVER placement (see
+      // placeMesh()), so this alone only covers an object still loading
+      // when Test Mode starts — enterTestMode()/exitTestMode() separately
+      // call hideAll()/showAll() for objects already loaded/visible.
+      list.push({id:o.id, url, center:[c[1],c[0]], anchor:o.anchor||{}, scale:o.scale, rotationDeg:o.rotationDeg||{x:0,y:0,z:0}, fadeInS:o.fadeInS||0, fadeOutS:o.fadeOutS||0, animationClip:o.animationClip, startHidden:simMode});
     });
   });
   if(anyMissing) ensureArUrlsResolved();
@@ -5951,6 +5958,9 @@ SimFencer.onEvent=async e=>{
         if(typeof TourState!=='undefined') TourState.markVisited(e.zone.id);
         PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { entered:true });
       }
+      // Phase 3 (trigger-based show/hide) — same "visitor, target layer"
+      // gate PipelineRuntime already uses above.
+      if(window.AssetPreviewLayer && e.zone.arObjects) e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.showTriggered(o.id));
     }
   } else if(e.kind==="exit"){
     simLogEv("sev-exit","EXIT   "+who+e.zone.name+"  "+e.info.dur.toFixed(0)+"s");
@@ -5958,6 +5968,7 @@ SimFencer.onEvent=async e=>{
       PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { exited:true });
       PipelineRuntime.unload(e.zone.id);
     }
+    if(!who&&e.layer&&e.layer.kind==="target"&&window.AssetPreviewLayer&&e.zone.arObjects) e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.hideTriggered(o.id));
   } else if(e.kind==="say"){
     simLogEv("sev-say","SAY    "+who+"\""+e.text+"\"");
   }
@@ -6024,6 +6035,14 @@ function enterTestMode(){
   document.getElementById("simPanel").style.display="flex";
   document.getElementById("testModeBtn").textContent="✕ Exit test";
   document.getElementById("testModeBtn").classList.add("on");
+  // Phase 3 (trigger-based show/hide): nothing has been "entered" yet at
+  // the start of a simulated walk — refreshArPreview() (startHidden:true
+  // now that simMode is set) covers anything still loading; hideAll()
+  // instantly hides anything already loaded/visible from normal editing a
+  // moment ago. SimFencer.onEvent's enter/exit handlers below reveal/hide
+  // objects again as the simulated avatar actually crosses zone boundaries.
+  refreshArPreview();
+  if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   refreshSimChips();
   simLogEv("sev-sys","test loaded — "+simBundle.zones.length+" stop"+(simBundle.zones.length===1?"":"s")
     +" — click map or drag dot.");
@@ -6040,6 +6059,12 @@ function exitTestMode(){
   simAmbientMarkers={};
   if(simAvatar){simAvatar.remove();simAvatar=null;}
   render();
+  // Phase 3: back to normal editing — force every AR object back to full
+  // visibility (undoes hideAll()/any mid-walk hideTriggered() state) so
+  // authoring never gets stuck looking at an object left invisible from
+  // the last simulated walk. render() above already re-ran refreshArPreview()
+  // with startHidden:false (simMode is already false by this point).
+  if(window.AssetPreviewLayer) window.AssetPreviewLayer.showAll();
   document.getElementById("editSection").style.display="";
   document.getElementById("editorControls").style.display="";
   document.getElementById("publishBtn").style.display="";
