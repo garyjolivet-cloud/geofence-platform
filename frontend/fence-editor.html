@@ -130,6 +130,23 @@
   label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:11px;letter-spacing:.6px;color:var(--fog);display:block;margin:6px 0 2px}
   label.chk{display:flex;align-items:center;gap:8px;font-family:"Barlow Condensed";font-size:13px;color:var(--snow);text-transform:none;letter-spacing:0;margin:8px 0 4px;cursor:pointer}
   label.chk input{width:auto}
+  /* AR object edit panel: slider+number pairs for every model-transform
+     field (scale/rotation/fade/position offsets) — plain number inputs
+     alone don't give a human any real sense of what a value like "rotate Y
+     40°" actually does; the paired range slider makes it draggable/live,
+     the number stays for exact entry. Same row shape repeated ~8 times, so
+     it's a real CSS class here rather than the file's usual per-element
+     inline style. */
+  .ar-row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+  .ar-row label{flex:0 0 54px;font-size:11px;color:var(--fog)}
+  .ar-row input[type="range"]{flex:1 1 auto;width:auto;padding:0;accent-color:var(--coral)}
+  .ar-row input[type="number"]{flex:0 0 54px;width:54px;padding:4px 5px;text-align:right}
+  .ar-row .u{flex:0 0 auto;font-size:11px;color:var(--fog)}
+  #pArInspector{width:100%;height:150px;display:block;border:1px solid var(--rim);border-radius:6px;
+                background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.05),rgba(0,0,0,.35));
+                margin-bottom:4px;touch-action:none;cursor:grab}
+  #pArInspector:active{cursor:grabbing}
+  .ar-hint{font-size:10px;color:var(--fog);text-align:center;margin:0 0 8px}
   input,textarea,select{width:100%;font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);
          color:var(--snow);border:1px solid var(--rim);border-radius:8px;padding:7px}
   /* select's own background/color style its closed box, but most browsers
@@ -774,42 +791,69 @@
       <label class="k">🧱 AR Objects</label>
       <div id="pArChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       <div id="pArEdit" style="display:none;margin-top:6px;padding:8px;background:rgba(255,255,255,.03);border:1px solid var(--rim);border-radius:8px">
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">elevation</label>
-          <input id="pArAltM" type="number" step="0.5" style="flex:1">
-          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
+        <!-- Close-up 3D inspector (AssetPreviewLayer.mountInspector) — a
+             dedicated, always-clear view of THIS object reacting live as
+             the sliders below move, independent of the main map (which can
+             be tilted/zoomed/occluded by terrain right when you're editing
+             a stop). Unmirrored, same rotation convention as the real
+             visitor-facing AR view — see asset-preview-layer.js's own
+             comment on mountInspector(). Drag to orbit/inspect. -->
+        <canvas id="pArInspector"></canvas>
+        <div class="ar-hint">drag to orbit — updates live as you adjust below</div>
+
+        <div class="ar-row">
+          <label>elevation</label>
+          <input id="pArAltMRange" type="range" min="-20" max="20" step="0.1">
+          <input id="pArAltM" type="number" step="0.5">
+          <span class="u">m</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">north</label>
-          <input id="pArLatOffM" type="number" step="0.5" style="flex:1">
-          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
+        <div class="ar-row">
+          <label>north</label>
+          <input id="pArLatOffMRange" type="range" min="-20" max="20" step="0.1">
+          <input id="pArLatOffM" type="number" step="0.5">
+          <span class="u">m</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">east</label>
-          <input id="pArLonOffM" type="number" step="0.5" style="flex:1">
-          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">m</span>
+        <div class="ar-row">
+          <label>east</label>
+          <input id="pArLonOffMRange" type="range" min="-20" max="20" step="0.1">
+          <input id="pArLonOffM" type="number" step="0.5">
+          <span class="u">m</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">scale</label>
-          <input id="pArScale" type="number" step="0.1" min="0.01" style="flex:1">
-          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">×</span>
+        <div class="ar-row">
+          <label>scale</label>
+          <input id="pArScaleRange" type="range" min="0.1" max="5" step="0.05">
+          <input id="pArScale" type="number" step="0.1" min="0.01">
+          <span class="u">×</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">rotate</label>
-          <input id="pArRotX" type="number" step="1" title="tilt (X)" style="flex:1">
-          <input id="pArRotY" type="number" step="1" title="heading (Y)" style="flex:1">
-          <input id="pArRotZ" type="number" step="1" title="roll (Z)" style="flex:1">
-          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">°</span>
+        <div class="ar-row">
+          <label title="tilt">rot X</label>
+          <input id="pArRotXRange" type="range" min="-180" max="180" step="1">
+          <input id="pArRotX" type="number" step="1" title="tilt (X)">
+          <span class="u">°</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">fade in</label>
-          <input id="pArFadeIn" type="number" step="0.1" min="0" style="flex:1">
-          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">s</span>
+        <div class="ar-row">
+          <label title="heading">rot Y</label>
+          <input id="pArRotYRange" type="range" min="-180" max="180" step="1">
+          <input id="pArRotY" type="number" step="1" title="heading (Y)">
+          <span class="u">°</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-          <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">fade out</label>
-          <input id="pArFadeOut" type="number" step="0.1" min="0" style="flex:1">
-          <span style="font-size:11px;color:var(--fog);flex:0 0 auto">s</span>
+        <div class="ar-row">
+          <label title="roll">rot Z</label>
+          <input id="pArRotZRange" type="range" min="-180" max="180" step="1">
+          <input id="pArRotZ" type="number" step="1" title="roll (Z)">
+          <span class="u">°</span>
+        </div>
+        <div class="ar-row">
+          <label>fade in</label>
+          <input id="pArFadeInRange" type="range" min="0" max="5" step="0.1">
+          <input id="pArFadeIn" type="number" step="0.1" min="0">
+          <span class="u">s</span>
+        </div>
+        <div class="ar-row">
+          <label>fade out</label>
+          <input id="pArFadeOutRange" type="range" min="0" max="5" step="0.1">
+          <input id="pArFadeOut" type="number" step="0.1" min="0">
+          <span class="u">s</span>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
           <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">animation</label>
@@ -2545,6 +2589,34 @@ function detachArObject(zoneIdx,objId){
 // fetch — whichever of the live preview mesh or this picker asks first
 // primes the shared cache for the other).
 const _arClipNameCache=new Map();   // url -> [name,...]
+// Lazily mounted once — AssetPreviewLayer is a deferred ES module (loaded
+// via <script type="module">), so window.AssetPreviewLayer.mountInspector
+// may not exist yet the very first time a stop is selected right after
+// page load; ensureArInspector() just tries again on the next open() call,
+// same "beat the module to it, retry later" tolerance this file already
+// applies to AssetPreviewLayer.setObjects() elsewhere.
+let _arInspector=null;
+function ensureArInspector(){
+  if(_arInspector) return _arInspector;
+  if(!window.AssetPreviewLayer || !window.AssetPreviewLayer.mountInspector) return null;
+  _arInspector=window.AssetPreviewLayer.mountInspector(document.getElementById("pArInspector"));
+  return _arInspector;
+}
+function updateArInspector(o){
+  const insp=ensureArInspector();
+  if(!insp) return;
+  insp.update({url:_arResolvedUrl(o), scale:o.scale, rotationDeg:o.rotationDeg, animationClip:o.animationClip});
+}
+// Keeps a range slider and its paired number input showing the same value
+// without fighting each other — the number input can still hold a value
+// outside the slider's min/max (typed in directly for a rare extreme
+// case); assigning that out-of-range value to the range input just clamps
+// its handle to whichever end is closest, which is an acceptable, honest
+// visual (the slider doesn't lie about not being able to reach that far).
+function _arSetPair(rangeId,numId,val){
+  document.getElementById(rangeId).value=val;
+  document.getElementById(numId).value=val;
+}
 function openArEditPanel(zone,objId){
   const o=(zone.arObjects||[]).find(x=>x.id===objId);
   const panel=document.getElementById("pArEdit");
@@ -2552,16 +2624,17 @@ function openArEditPanel(zone,objId){
   panel.style.display="block";
   o.anchor=o.anchor||{latOffsetM:0,lonOffsetM:0,altM:0};
   o.rotationDeg=o.rotationDeg||{x:0,y:0,z:0};
-  document.getElementById("pArAltM").value=o.anchor.altM||0;
-  document.getElementById("pArLatOffM").value=o.anchor.latOffsetM||0;
-  document.getElementById("pArLonOffM").value=o.anchor.lonOffsetM||0;
-  document.getElementById("pArScale").value=o.scale||1;
-  document.getElementById("pArRotX").value=o.rotationDeg.x||0;
-  document.getElementById("pArRotY").value=o.rotationDeg.y||0;
-  document.getElementById("pArRotZ").value=o.rotationDeg.z||0;
-  document.getElementById("pArFadeIn").value=o.fadeInS||0;
-  document.getElementById("pArFadeOut").value=o.fadeOutS||0;
+  _arSetPair("pArAltMRange","pArAltM",o.anchor.altM||0);
+  _arSetPair("pArLatOffMRange","pArLatOffM",o.anchor.latOffsetM||0);
+  _arSetPair("pArLonOffMRange","pArLonOffM",o.anchor.lonOffsetM||0);
+  _arSetPair("pArScaleRange","pArScale",o.scale||1);
+  _arSetPair("pArRotXRange","pArRotX",o.rotationDeg.x||0);
+  _arSetPair("pArRotYRange","pArRotY",o.rotationDeg.y||0);
+  _arSetPair("pArRotZRange","pArRotZ",o.rotationDeg.z||0);
+  _arSetPair("pArFadeInRange","pArFadeIn",o.fadeInS||0);
+  _arSetPair("pArFadeOutRange","pArFadeOut",o.fadeOutS||0);
   populateArClipOptions(_arResolvedUrl(o),o.animationClip);
+  updateArInspector(o);
 }
 async function populateArClipOptions(url,currentClip){
   const selectEl=document.getElementById("pArClip");
@@ -2600,16 +2673,27 @@ function _arApplyEdit(){
   o.fadeOutS=Math.max(0, parseFloat(document.getElementById("pArFadeOut").value)||0);
   o.animationClip=document.getElementById("pArClip").value||null;
   render();
+  updateArInspector(o);
 }
-document.getElementById("pArAltM").onchange=_arApplyEdit;
-document.getElementById("pArLatOffM").onchange=_arApplyEdit;
-document.getElementById("pArLonOffM").onchange=_arApplyEdit;
-document.getElementById("pArScale").onchange=_arApplyEdit;
-document.getElementById("pArRotX").onchange=_arApplyEdit;
-document.getElementById("pArRotY").onchange=_arApplyEdit;
-document.getElementById("pArRotZ").onchange=_arApplyEdit;
-document.getElementById("pArFadeIn").onchange=_arApplyEdit;
-document.getElementById("pArFadeOut").onchange=_arApplyEdit;
+// Bidirectional slider<->number sync + live updates on every drag frame
+// ('input' fires continuously while dragging; 'change' only fires once on
+// release/blur — for a slider meant to feel alive, waiting for release
+// would defeat the point). The number input still fires _arApplyEdit on
+// its own 'input' too, so typing a precise value is exactly as live.
+function _bindArPair(rangeId,numId){
+  const rangeEl=document.getElementById(rangeId), numEl=document.getElementById(numId);
+  rangeEl.oninput=()=>{ numEl.value=rangeEl.value; _arApplyEdit(); };
+  numEl.oninput=()=>{ rangeEl.value=numEl.value; _arApplyEdit(); };
+}
+_bindArPair("pArAltMRange","pArAltM");
+_bindArPair("pArLatOffMRange","pArLatOffM");
+_bindArPair("pArLonOffMRange","pArLonOffM");
+_bindArPair("pArScaleRange","pArScale");
+_bindArPair("pArRotXRange","pArRotX");
+_bindArPair("pArRotYRange","pArRotY");
+_bindArPair("pArRotZRange","pArRotZ");
+_bindArPair("pArFadeInRange","pArFadeIn");
+_bindArPair("pArFadeOutRange","pArFadeOut");
 document.getElementById("pArClip").onchange=_arApplyEdit;
 
 function attachArObjectToZone(zoneIdx,asset){

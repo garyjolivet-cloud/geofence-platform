@@ -33,6 +33,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 console.log('asset-preview-layer: module loaded');
 const draco = new DRACOLoader();
@@ -537,4 +538,148 @@ function install(mapInstance){
 // this module finishes loading AFTER the host already stashed its map.
 if(typeof window!=='undefined' && window._fenceEditorMap) install(window._fenceEditorMap);
 
-window.AssetPreviewLayer={ install, setObjects, listClipNames };
+/* ---- Model inspector: a small, self-contained close-up 3D viewer for the
+   Fence Editor's AR-object edit panel ----
+   Numbers alone (rotation degrees, a scale multiplier) don't give a human
+   any real sense of what they DO — this gives a dedicated, always-clear
+   view of the actual model reacting live as the edit panel's sliders move,
+   independent of the main map preview (which can be small, tilted, zoomed
+   out, or have the object occluded by terrain at the moment you're editing
+   it). Deliberately a SEPARATE WebGL context on its own <canvas> (same
+   reasoning ar-view.js already uses for staying off MapLibre's shared
+   context) — orbiting/framing an isolated object has nothing to do with
+   the map's own camera or terrain.
+   Also deliberately UNMIRRORED — no scene.rotateX/scale(1,1,-1) reflection
+   like the map preview's own scene (see placeMesh()'s comment on why that
+   exists there). This inspector applies rotationDeg directly, the exact
+   same convention ar-view.js (the real visitor-facing renderer) uses — so
+   what you see here is what a real visitor will actually see, independent
+   of the map preview's own analytically-derived sign correction.
+   Host contract:
+     AssetPreviewLayer.mountInspector(canvasEl) -> { update, destroy }
+       Mount ONCE per canvas element (not idempotent-guarded like install()
+       — the host is expected to lazily mount once and reuse, same pattern
+       as this file's own AssetTree/audio-tree mount() calls elsewhere in
+       fence-editor.html).
+     update({url, scale, rotationDeg, animationClip})
+       Safe to call on every slider drag frame — reuses the SAME
+       loadModelTemplate() cache setObjects() already populates (or primes
+       it), so pointing the inspector at an object already visible on the
+       map never doubles the fetch. Re-frames the camera only when the url
+       actually changes, not on every transform tweak (so orbiting/zooming
+       while adjusting scale isn't fought by an auto-refit every frame).
+     destroy() — stops the render loop and disposes the renderer/controls.
+*/
+function mountInspector(canvas){
+  const scene=new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.4));
+  const dl=new THREE.DirectionalLight(0xffffff, 1.0); dl.position.set(2,3,2); scene.add(dl);
+  const camera=new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
+  const renderer=new THREE.WebGLRenderer({canvas, alpha:true, antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  const controls=new OrbitControls(camera, canvas);
+  controls.enableDamping=true; controls.dampingFactor=0.12;
+  let current=null;   // {mesh, mixer, gltfAnimations, url, playingClip}
+  let rafId=null, lastW=0, lastH=0;
+  const clock=new THREE.Clock();
+
+  function resize(){
+    const w=canvas.clientWidth||220, h=canvas.clientHeight||160;
+    if(w===lastW && h===lastH) return;
+    lastW=w; lastH=h;
+    renderer.setSize(w, h, false);
+    camera.aspect=w/(h||1);
+    camera.updateProjectionMatrix();
+  }
+  // Frames the camera on the model's real bounding box — models arrive at
+  // wildly different native scales (this repo's own test Duck.glb vs a
+  // human-figure export from something like MakeHuman/Blender aren't
+  // remotely the same size), so a fixed camera distance would show one as
+  // a speck and the other as a wall filling the whole view.
+  function frameObject(mesh){
+    const box=new THREE.Box3().setFromObject(mesh);
+    const size=box.getSize(new THREE.Vector3()), center=box.getCenter(new THREE.Vector3());
+    const radius=Math.max(size.length()/2, 0.01);
+    controls.target.copy(center);
+    camera.position.copy(center).add(new THREE.Vector3(radius*1.6, radius*1.1, radius*1.6));
+    camera.near=radius/100; camera.far=radius*100; camera.updateProjectionMatrix();
+    controls.minDistance=radius*0.3; controls.maxDistance=radius*8;
+    controls.update();
+  }
+  // update() is called on every slider drag frame — if the same url's first
+  // load is still in flight (a real multi-second wait for an actual GLB),
+  // every one of those calls would otherwise independently clone+scene.add
+  // once loadModelTemplate's cache resolves, each overwriting `current` and
+  // leaving every earlier clone orphaned in the scene forever (the exact
+  // "superseded while loading" race ensureMeshLoaded() already guards
+  // against elsewhere in this file, just missing here). loadSeq makes only
+  // the LAST in-flight call actually win.
+  let loadSeq=0;
+  async function ensureModel(url, scale){
+    if(current && current.url===url) return;
+    const mySeq=++loadSeq;
+    try{
+      const gltf=await loadModelTemplate(url);
+      if(mySeq!==loadSeq) return;   // a newer update() call superseded this one while the fetch/clone was in flight
+      const mesh=cloneModel(gltf);
+      // Scale applied BEFORE frameObject(), not after — otherwise the
+      // camera frames the model's unscaled bounding box, and a saved
+      // scale of 5 (or 0.2) opens massively overflowing (or shrunk to a
+      // speck) instead of nicely centered.
+      mesh.scale.setScalar(scale||1);
+      if(current && current.mesh) scene.remove(current.mesh);
+      scene.add(mesh);
+      current={mesh, url, mixer:(gltf.animations&&gltf.animations.length)?new THREE.AnimationMixer(mesh):null,
+               gltfAnimations:gltf.animations||[], playingClip:undefined};
+      frameObject(mesh);
+    }catch(e){ console.log('asset-preview-layer inspector: model load failed', url, e&&(e.message||e)); }
+  }
+  function applyClip(clipName){
+    if(!current || !current.mixer) return;
+    if(current.playingClip===clipName) return;
+    current.mixer.stopAllAction();
+    const clip=(clipName && current.gltfAnimations.find(c=>c.name===clipName)) || current.gltfAnimations[0];
+    if(clip) current.mixer.clipAction(clip).play();
+    current.playingClip=clipName;
+  }
+  function tick(){
+    rafId=requestAnimationFrame(tick);
+    // Skip all GL/mixer work while the panel is hidden (#pArEdit or an
+    // ancestor is display:none) — rAF itself keeps scheduling regardless
+    // (it only cares about page visibility, not element visibility), but
+    // there's no reason to keep rendering into a canvas nobody can see for
+    // the rest of the session just because the edit panel was opened once.
+    // Same idle-hygiene standard this file's own ensureAnimLoop() already
+    // holds itself to.
+    if(canvas.offsetParent===null) return;
+    resize();
+    const dt=clock.getDelta();
+    if(current && current.mixer) current.mixer.update(dt);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  tick();
+
+  async function update({url, scale, rotationDeg, animationClip}){
+    if(!url){
+      if(current && current.mesh){ scene.remove(current.mesh); current=null; }
+      return;
+    }
+    await ensureModel(url, scale);
+    if(!current || !current.mesh) return;   // load failed — nothing to transform
+    current.mesh.scale.setScalar(scale||1);
+    const r=rotationDeg||{x:0,y:0,z:0};
+    current.mesh.rotation.set((r.x||0)*Math.PI/180, (r.y||0)*Math.PI/180, (r.z||0)*Math.PI/180);
+    applyClip(animationClip);
+  }
+  function destroy(){
+    if(rafId!=null){ cancelAnimationFrame(rafId); rafId=null; }
+    controls.dispose();
+    renderer.dispose();
+    if(current && current.mesh) scene.remove(current.mesh);
+    current=null;
+  }
+  return {update, destroy};
+}
+
+window.AssetPreviewLayer={ install, setObjects, listClipNames, mountInspector };
