@@ -78,10 +78,11 @@ function ensureAnimLoop(){
   const anyAnimated = [...entries.values()].some(e=>e.mixer);
   const anyPending = [...entries.values()].some(e=>e.mesh && !e.refBase);
   const anyFadingIn = [...entries.values()].some(e=>e.mesh && e.refBase && !e._fadeInDone);
-  if((anyAnimated||anyPending||anyFadingIn||fadingOut.length) && animRafId==null){
+  const anyPreviewOut = [...entries.values()].some(e=>e._previewOut);
+  if((anyAnimated||anyPending||anyFadingIn||anyPreviewOut||fadingOut.length) && animRafId==null){
     const tick=()=>{ if(map) map.triggerRepaint(); animRafId=requestAnimationFrame(tick); };
     animRafId=requestAnimationFrame(tick);
-  } else if(!anyAnimated && !anyPending && !anyFadingIn && !fadingOut.length && animRafId!=null){
+  } else if(!anyAnimated && !anyPending && !anyFadingIn && !anyPreviewOut && !fadingOut.length && animRafId!=null){
     cancelAnimationFrame(animRafId); animRafId=null;
   }
 }
@@ -415,6 +416,26 @@ function render(gl, options){
     e.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
     if(factor>=1) e._fadeInDone=true;
   });
+  // Non-destructive fade-OUT preview (replayFadeIn()/previewFadeOut() below,
+  // triggered by the edit panel's "▶ preview" buttons) — a dip down to 0
+  // and back to full opacity on the SAME still-attached mesh, so a fadeOutS
+  // value can be previewed without actually detaching the object (real
+  // fade-out, via removeEntry()/fadingOut above, only ever plays once, on
+  // an actual detach — there was no way to see it otherwise).
+  entries.forEach(e=>{
+    if(!e._previewOut) return;
+    const p=e._previewOut;
+    p.elapsed+=dt;
+    let factor;
+    if(p.phase==='down'){
+      factor=Math.max(0, 1-p.elapsed/p.fadeOutS);
+      if(factor<=0){ p.phase='up'; p.elapsed=0; factor=0; }
+    } else {
+      factor=Math.min(1, p.elapsed/p.fadeOutS);
+      if(factor>=1){ e._previewOut=null; factor=1; }
+    }
+    e.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
+  });
   // Fade-out ramp for detached entries (see removeEntry()) — counts down
   // to actual scene.remove() instead of an instant pop when fadeOutS>0.
   for(let i=fadingOut.length-1;i>=0;i--){
@@ -682,4 +703,31 @@ function mountInspector(canvas){
   return {update, destroy};
 }
 
-window.AssetPreviewLayer={ install, setObjects, listClipNames, mountInspector };
+// Replays fade-in on demand for an already-placed, already-visible entry —
+// real fade-in only ever runs once, on an object's FIRST placement (see
+// placeMesh()'s firstPlacement check), which for most objects already
+// happened with fadeInS:0 (the default) before the edit panel's fade-in
+// slider was ever touched. Without this, adjusting that slider afterward
+// has no visible effect until the object is detached and reattached.
+// Resetting _fadeInElapsed to 0 makes the very next render() tick above
+// pick up right where a fresh placement would have.
+function replayFadeIn(id){
+  const e=entries.get(id);
+  if(!e || !e.mesh || !e.refBase || !e.materials || !e.materials.length) return;
+  e._fadeInElapsed=0; e._fadeInDone=false;
+  ensureAnimLoop();
+}
+// Non-destructive fade-out preview — see its own render() loop above for
+// the actual down-then-back-up animation. No-ops if fadeOutS is 0 (nothing
+// configured to preview) so the button is a harmless no-op rather than an
+// instant flash when the field is still at its default.
+function previewFadeOut(id){
+  const e=entries.get(id);
+  if(!e || !e.mesh || !e.refBase || !e.materials || !e.materials.length) return;
+  const fadeOutS=(e.want&&e.want.fadeOutS)||0;
+  if(fadeOutS<=0) return;
+  e._previewOut={elapsed:0, fadeOutS, phase:'down'};
+  ensureAnimLoop();
+}
+
+window.AssetPreviewLayer={ install, setObjects, listClipNames, mountInspector, replayFadeIn, previewFadeOut };

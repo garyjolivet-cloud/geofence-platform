@@ -848,12 +848,14 @@
           <input id="pArFadeInRange" type="range" min="0" max="5" step="0.1">
           <input id="pArFadeIn" type="number" step="0.1" min="0">
           <span class="u">s</span>
+          <button id="pArFadeInPreview" class="ghost" type="button" title="replay the fade-in on the object as it sits right now" style="flex:0 0 auto;padding:3px 7px">▶</button>
         </div>
         <div class="ar-row">
           <label>fade out</label>
           <input id="pArFadeOutRange" type="range" min="0" max="5" step="0.1">
           <input id="pArFadeOut" type="number" step="0.1" min="0">
           <span class="u">s</span>
+          <button id="pArFadeOutPreview" class="ghost" type="button" title="preview the fade-out without detaching the object" style="flex:0 0 auto;padding:3px 7px">▶</button>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
           <label style="flex:0 0 60px;font-size:11px;color:var(--fog)">animation</label>
@@ -2695,6 +2697,18 @@ _bindArPair("pArRotZRange","pArRotZ");
 _bindArPair("pArFadeInRange","pArFadeIn");
 _bindArPair("pArFadeOutRange","pArFadeOut");
 document.getElementById("pArClip").onchange=_arApplyEdit;
+// Fade only ever plays once for real (fade-in on an object's first-ever
+// placement; fade-out only on an actual detach) — without these, dragging
+// the fade sliders on an object that's already faded in (the common case:
+// it was attached with the fadeInS:0 default, long before you touched the
+// slider) has no visible effect at all. These buttons replay/preview it
+// on demand against the object as it's actually configured right now.
+document.getElementById("pArFadeInPreview").onclick=()=>{
+  if(_arEditingObjId && window.AssetPreviewLayer) window.AssetPreviewLayer.replayFadeIn(_arEditingObjId);
+};
+document.getElementById("pArFadeOutPreview").onclick=()=>{
+  if(_arEditingObjId && window.AssetPreviewLayer) window.AssetPreviewLayer.previewFadeOut(_arEditingObjId);
+};
 
 function attachArObjectToZone(zoneIdx,asset){
   if(zoneIdx<0||!zones[zoneIdx])return;
