@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ridge Quest</title>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:var(--night);color:var(--snow);font-family:"Barlow",system-ui,sans-serif}
+  a{color:inherit}
+  .wrap{max-width:520px;margin:0 auto;padding:26px 20px 60px}
+  header{display:flex;align-items:center;gap:11px;padding:8px 0 18px;border-bottom:1px solid var(--rim);margin-bottom:22px}
+  .glyph{width:36px;height:36px;border-radius:10px;background:linear-gradient(150deg,var(--coral),#ff9166);position:relative}
+  .glyph::after{content:"";position:absolute;inset:10px;border-radius:50%;border:2px solid #1a0d07}
+  header h1{font-family:"Black Han Sans";font-weight:400;font-size:19px;margin:0}
+  header p{margin:0;font-family:"Barlow Condensed";font-size:11.5px;letter-spacing:1.1px;text-transform:uppercase;color:var(--fog)}
+  .card{background:linear-gradient(180deg,var(--slate),#10192640);border:1px solid var(--rim);border-radius:18px;padding:24px}
+  h2{font-family:"Barlow Condensed";font-weight:600;font-size:22px;margin:0 0 6px}
+  p.lead{color:var(--ice);font-size:14px;line-height:1.5;margin:0 0 18px}
+  label{display:block;font-family:"Barlow Condensed";font-size:12.5px;letter-spacing:.4px;text-transform:uppercase;color:var(--fog);margin:14px 0 6px}
+  input[type=email],input[type=password],input[type=text]{width:100%;background:var(--night);border:1px solid var(--rim);color:var(--snow);border-radius:10px;padding:11px 13px;font-family:"Barlow";font-size:15px}
+  input:focus{outline:none;border-color:var(--coral)}
+  button{font-family:"Barlow Condensed";font-weight:700;font-size:14px;letter-spacing:.4px;text-transform:uppercase;border:none;border-radius:10px;padding:12px 18px;cursor:pointer;width:100%;margin-top:18px}
+  button.primary{background:var(--coral);color:#1a0d07}
+  button.primary:hover:not(:disabled){filter:brightness(1.07)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.ghost{background:transparent;border:1px solid var(--rim);color:var(--ice);margin-top:10px}
+  button.danger{background:transparent;border:1px solid var(--hazard);color:var(--hazard);margin-top:10px}
+  .switcher{text-align:center;margin-top:16px;font-size:13.5px;color:var(--fog)}
+  .switcher a{color:var(--ice);cursor:pointer;text-decoration:underline}
+  .err{background:#2a0f14;border:1px solid var(--hazard);color:#ff9aab;border-radius:10px;padding:10px 13px;font-size:13.5px;margin-top:14px}
+  .msg{color:var(--fog);font-family:"Barlow Condensed";text-align:center;padding:40px 10px}
+  .doc{max-height:min(46vh,380px);overflow-y:auto;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:16px 18px;font-size:13.5px;line-height:1.65;color:var(--ice);margin-bottom:6px}
+  .doc h3{font-family:"Barlow Condensed";font-size:15px;color:var(--snow);margin:14px 0 6px}
+  .doc h3:first-child{margin-top:0}
+  .doc ol{margin:0;padding-left:20px}
+  .doc li{margin-bottom:8px}
+  .doc .placeholder{background:#2a1f0f;border:1px solid #5a4520;color:#ffcf7a;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:12px}
+  .scrollhint{text-align:center;font-family:"Barlow Condensed";font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:var(--fog);margin:8px 0 0}
+  .steps{display:flex;gap:6px;margin-bottom:16px}
+  .steps span{flex:1;height:4px;border-radius:2px;background:var(--rim)}
+  .steps span.done{background:var(--go)}
+  .steps span.active{background:var(--coral)}
+  table.wx{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  table.wx th,table.wx td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--rim)}
+  table.wx th{color:var(--fog);font-family:"Barlow Condensed";font-weight:600;letter-spacing:.3px;text-transform:uppercase;font-size:11px}
+  .now{display:flex;gap:18px;margin-bottom:16px}
+  .now .stat{flex:1;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:12px;text-align:center}
+  .now .stat b{display:block;font-family:"Barlow Condensed";font-size:22px;color:var(--snow)}
+  .now .stat span{font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px}
+  .welcome{text-align:center;padding:20px 6px}
+  .welcome .go{font-family:"Black Han Sans";font-size:26px;color:var(--go);margin:0 0 6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="glyph"></div><div><h1>Ridge Quest</h1><p>Fog-of-war terrain game</p></div></header>
+  <div id="app"></div>
+</div>
+
+<script>
+"use strict";
+const API = location.origin;
+const RQ_APP_ID = new URLSearchParams(location.search).get("app") || "golden-nordic";
+const app = document.getElementById("app");
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+/* ---- session storage — deliberately separate keys from the staff
+   RoleGate session (localStorage["gp.session"]). Players are a wholly
+   different, non-staff auth domain (see worker.js's playerAuth()), so this
+   never touches or checks RoleGate at all. ---- */
+function getSession(){ try{ return JSON.parse(localStorage.getItem("rq.session")||"null"); }catch(e){ return null; } }
+function setSession(token, player){ localStorage.setItem("rq.session", JSON.stringify({token, player})); }
+function clearSession(){ localStorage.removeItem("rq.session"); }
+
+async function api(path, opts){
+  const s = getSession();
+  const headers = Object.assign({"Content-Type":"application/json"}, (opts&&opts.headers)||{});
+  if(s && s.token) headers.authorization = "Bearer "+s.token;
+  const r = await fetch(API+path, Object.assign({}, opts, {headers}));
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error || ("request failed ("+r.status+")"));
+  return j;
+}
+
+/* ============================= AUTH VIEW ============================= */
+function renderAuth(mode){
+  mode = mode || "login";
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>'+(mode==="login"?"Log in":"Create your account")+'</h2>'
+    +'<p class="lead">Track every run, chute, bowl and ridge you ski — and reveal the mountain as you go.</p>'
+    +'<div id="authErr"></div>'
+    +(mode==="signup" ? '<label for="fName">Display name</label><input id="fName" type="text" autocomplete="nickname" placeholder="Trail name">' : '')
+    +'<label for="fEmail">Email</label><input id="fEmail" type="email" autocomplete="email">'
+    +'<label for="fPass">Password</label><input id="fPass" type="password" autocomplete="'+(mode==="login"?"current-password":"new-password")+'">'
+    +'<button class="primary" id="btnGo">'+(mode==="login"?"Log in":"Create account")+'</button>'
+    +'<div class="switcher">'
+      +(mode==="login" ? 'New here? <a id="toSignup">Create an account</a>' : 'Already playing? <a id="toLogin">Log in</a>')
+    +'</div>'
+    +'</div>';
+  const toSignup=document.getElementById("toSignup"); if(toSignup) toSignup.onclick=()=>renderAuth("signup");
+  const toLogin=document.getElementById("toLogin"); if(toLogin) toLogin.onclick=()=>renderAuth("login");
+  document.getElementById("btnGo").onclick=async()=>{
+    const email=document.getElementById("fEmail").value.trim();
+    const password=document.getElementById("fPass").value;
+    const errEl=document.getElementById("authErr");
+    errEl.innerHTML="";
+    if(!email || !password){ errEl.innerHTML='<div class="err">Email and password are required.</div>'; return; }
+    const btn=document.getElementById("btnGo"); btn.disabled=true;
+    try{
+      const body={email, password, appId:RQ_APP_ID};
+      if(mode==="signup") body.displayName=(document.getElementById("fName").value||"").trim()||null;
+      const j = await api(mode==="signup" ? "/api/players/signup" : "/api/players/login", {method:"POST", body:JSON.stringify(body)});
+      setSession(j.token, j.player);
+      boot();
+    }catch(e){
+      errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>';
+    }finally{ btn.disabled=false; }
+  };
+}
+
+/* ========================= ONBOARDING GATE ========================= */
+// Server-side REQUIRED_CONSENT versions (worker.js) are the source of
+// truth for whether a version is CURRENT; the text below is what the
+// player actually reads. Keep the ordering (privacy -> liability ->
+// responsibility code) and the version strings in lockstep with worker.js.
+const GATE_SCOPES = [
+  {
+    scope: "data-privacy", version: "1", title: "Your data",
+    body: '<div class="placeholder">Placeholder copy — replace with the resort’s reviewed privacy notice before this goes live to the public.</div>'
+      +'<p>To play Ridge Quest we collect your GPS location while a session is active, and derive from it: which runs/chutes/bowls/ridges/lifts you used, your vertical descended, and your day-by-day and season stats. We use this to show your own map, your stats, and leaderboards (your display name and points may be visible to other players).</p>'
+      +'<p>We keep this data for as long as your account exists. You can permanently delete your account and everything derived from your GPS history at any time from Account settings — this is a real deletion, not a deactivation.</p>'
+      +'<p>We do not sell your location data.</p>'
+  },
+  {
+    scope: "liability-waiver", version: "1", title: "Risk & liability",
+    body: '<div class="placeholder">Placeholder copy — this MUST be reviewed and finalized by the resort’s own legal counsel before this ships. Skiing/snowboarding is an inherently dangerous activity and this screen carries real liability weight.</div>'
+      +'<p>Skiing and snowboarding carry inherent and significant risks of injury or death, including risks from terrain, weather, snow conditions, collisions, lift use, and other skiers.</p>'
+      +'<p><b>Using a phone or any device while skiing or riding — including this app — adds risk.</b> Looking at a screen reduces your awareness of terrain, obstacles, and other people. Only check the app while safely stopped, off to the side of a trail. Never operate this app while in motion.</p>'
+      +'<p>By continuing, you acknowledge these risks and agree that you assume them voluntarily. Ridge Quest and the resort operating this mountain are not responsible for injuries related to distraction, poor judgment, or terrain choices while playing.</p>'
+  },
+  {
+    scope: "responsibility-code", version: "1", title: "Alpine Responsibility Code",
+    body: '<div class="placeholder">Standard Canadian Alpine Responsibility Code shown below — confirm this matches the resort’s own currently-posted wording before launch.</div>'
+      +'<ol>'
+      +'<li>Always stay in control. You must be able to stop or avoid other people or objects.</li>'
+      +'<li>People ahead of or downhill of you have the right of way. You must avoid them.</li>'
+      +'<li>You must not stop where you obstruct a trail, or are not visible from above.</li>'
+      +'<li>Whenever starting downhill or merging into a trail, look uphill and yield to others.</li>'
+      +'<li>Always use proper devices to help prevent runaway equipment.</li>'
+      +'<li>Observe all posted signs and warnings. Keep off closed trails and out of closed areas.</li>'
+      +'<li>Prior to using any lift, you must have the knowledge and ability to load, ride and unload safely.</li>'
+      +'</ol>'
+  }
+];
+
+function renderGateScreen(g, onDone){
+  const idx = GATE_SCOPES.indexOf(g);
+  app.innerHTML =
+    '<div class="card">'
+    +'<div class="steps">'+GATE_SCOPES.map((s,i)=>'<span class="'+(i<idx?"done":i===idx?"active":"")+'"></span>').join('')+'</div>'
+    +'<h2>'+esc(g.title)+'</h2>'
+    +'<p class="lead">Step '+(idx+1)+' of '+GATE_SCOPES.length+' — required before you can play.</p>'
+    +'<div class="doc" id="docBody">'+g.body+'</div>'
+    +'<div class="scrollhint" id="scrollHint">Scroll to the bottom to continue</div>'
+    +'<button class="primary" id="btnAccept" disabled>I have read and accept</button>'
+    +'</div>';
+  const doc=document.getElementById("docBody");
+  const btn=document.getElementById("btnAccept");
+  const hint=document.getElementById("scrollHint");
+  function checkScrolled(){
+    // 4px slack for sub-pixel rounding across browsers.
+    const atBottom = doc.scrollTop + doc.clientHeight >= doc.scrollHeight - 4;
+    if(atBottom){ btn.disabled=false; hint.style.visibility="hidden"; }
+  }
+  doc.addEventListener("scroll", checkScrolled);
+  // A short document that never needs scrolling shouldn't trap the player —
+  // check once on render too.
+  checkScrolled();
+  btn.onclick=async()=>{
+    btn.disabled=true;
+    try{
+      const s=getSession();
+      await api("/api/players/"+s.player.id+"/consent", {method:"POST", body:JSON.stringify({scope:g.scope})});
+      onDone();
+    }catch(e){
+      btn.disabled=false;
+      const errDiv=document.createElement("div"); errDiv.className="err"; errDiv.textContent=e.message;
+      doc.parentElement.insertBefore(errDiv, hint);
+    }
+  };
+}
+
+async function runGate(){
+  const s=getSession();
+  const status = await api("/api/players/"+s.player.id+"/consent");
+  if(status.complete){ return true; }
+  return new Promise((resolve)=>{
+    function next(){
+      const pending = GATE_SCOPES.find(g=>status.missing.includes(g.scope));
+      if(!pending){ resolve(true); return; }
+      renderGateScreen(pending, ()=>{
+        status.missing = status.missing.filter(sc=>sc!==pending.scope);
+        next();
+      });
+    }
+    next();
+  });
+}
+
+/* ============================ CONDITIONS ============================ */
+function fmtDate(d){ try{ return new Date(d+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"}); }catch(e){ return d; } }
+
+async function renderConditions(onContinue){
+  app.innerHTML = '<div class="card"><h2>Conditions</h2><p class="lead">Loading the last 14 days…</p></div>';
+  let now=null, history=[];
+  try{ now = await api("/api/weather"); }catch(e){}
+  try{ history = await api("/api/snow-history"); }catch(e){ history=[]; }
+  const rows = (history||[]).map(r=>
+    '<tr><td>'+esc(fmtDate(r.snapshot_date))+'</td>'
+    +'<td>'+(r.hn24_cm!=null?r.hn24_cm+' cm':'—')+'</td>'
+    +'<td>'+(r.hs_cm!=null?r.hs_cm+' cm':'—')+'</td>'
+    +'<td>'+(r.ww_temp_c!=null?r.ww_temp_c+'°C':'—')+'</td></tr>'
+  ).join('');
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Conditions</h2>'
+    +'<p class="lead">Check before you head out. Only look at this while stopped and off the trail — see the risk notice you just accepted.</p>'
+    +(now && !now.error
+      ? '<div class="now">'
+        +'<div class="stat"><b>'+(now.ww_temp_c!=null?now.ww_temp_c+'°':'—')+'</b><span>Temp C</span></div>'
+        +'<div class="stat"><b>'+(now.ww_wind_spd_kph!=null?Math.round(now.ww_wind_spd_kph):'—')+'</b><span>Wind kph</span></div>'
+        +'<div class="stat"><b>'+(now.precip_24hr_mm!=null?now.precip_24hr_mm:'—')+'</b><span>24h precip mm</span></div>'
+        +'</div>'
+      : '<p class="lead">Current conditions unavailable right now.</p>')
+    +(rows
+      ? '<table class="wx"><thead><tr><th>Date</th><th>New snow</th><th>Base</th><th>Temp</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      : '<p class="lead">No snow history yet.</p>')
+    +'<button class="primary" id="btnCont">Continue</button>'
+    +'</div>';
+  document.getElementById("btnCont").onclick=onContinue;
+}
+
+/* ============================ HOME (v1 stub) ============================ */
+function renderHome(){
+  const s=getSession();
+  app.innerHTML =
+    '<div class="card welcome">'
+    +'<p class="go">You’re in.</p>'
+    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. The fog-of-war map, runs, and leaderboards land in the next build — your account and onboarding are ready to go.</p>'
+    +'<button class="ghost" id="btnConditions">Check conditions again</button>'
+    +'<button class="ghost" id="btnLogout">Log out</button>'
+    +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
+    +'</div>';
+  document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
+  document.getElementById("btnLogout").onclick=async()=>{
+    try{ await api("/api/players/logout",{method:"POST"}); }catch(e){}
+    clearSession(); renderAuth("login");
+  };
+  document.getElementById("btnDelete").onclick=async()=>{
+    if(!confirm("This permanently deletes your Ridge Quest account and everything derived from it. This cannot be undone. Continue?")) return;
+    try{
+      await api("/api/players/"+s.player.id+"/forget", {method:"POST"});
+      clearSession(); renderAuth("login");
+    }catch(e){ alert(e.message); }
+  };
+}
+
+/* ============================== BOOT ============================== */
+async function boot(){
+  const s=getSession();
+  if(!s || !s.token){ renderAuth("login"); return; }
+  app.innerHTML = '<div class="msg">Loading…</div>';
+  try{
+    await api("/api/players/me"); // validates the session is still live
+  }catch(e){
+    clearSession(); renderAuth("login"); return;
+  }
+  const gateOk = await runGate();
+  if(!gateOk) return; // runGate's own screens handle re-entry
+  renderConditions(renderHome);
+}
+boot();
+</script>
+</body>
+</html>

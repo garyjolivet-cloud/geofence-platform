@@ -641,6 +641,10 @@
     <label class="k" style="flex:0 0 auto;align-self:center;margin:0">reveal radius m</label>
     <input id="newRadius" type="number" value="12" min="3" style="flex:1">
   </div>
+  <div class="row" id="corridorRow" style="display:none">
+    <label class="k" style="flex:0 0 auto;align-self:center;margin:0">corridor width m</label>
+    <input id="newCorridorWidth" type="number" value="10" min="2" style="flex:1">
+  </div>
   <div class="row" id="finishCancelRow" style="display:none">
     <button id="finishBtn" class="ghost" style="flex:1">Finish polygon</button>
     <button id="cancelBtn" class="ghost" style="flex:0 0 auto">✕</button>
@@ -674,6 +678,31 @@
         <option value="once">Once — play through, then stay at the end</option>
       </select>
       <div class="hint" style="margin:4px 0 0">Position is always on a shared real-world clock — visitors near the route at the same moment hear it in the same place.</div>
+    </div>
+
+    <!-- ── Corridor run taxonomy (Ridge Quest R0, corridor stops only) ── -->
+    <div class="va-section" id="pCorridorSection" style="display:none">
+      <div class="va-label">Run details</div>
+      <label class="k">difficulty</label>
+      <select id="pDifficulty">
+        <option value="">— not set —</option>
+        <option value="green">Green</option>
+        <option value="blue">Blue</option>
+        <option value="black">Black</option>
+        <option value="double-black">Double black</option>
+      </select>
+      <label class="k" style="margin-top:6px">type</label>
+      <select id="pRunType">
+        <option value="run">Run</option>
+        <option value="chute">Chute</option>
+        <option value="bowl">Bowl</option>
+        <option value="ridge">Ridge</option>
+        <option value="hike">Hike</option>
+        <option value="lift">Lift</option>
+      </select>
+      <label class="k" style="margin-top:6px">width (m)</label>
+      <input id="pCorridorWidth" type="number" min="2" step="1">
+      <div class="hint" style="margin:4px 0 0">The stop's "name" field above is this run's display name — no separate field needed.</div>
     </div>
 
     <!-- ── Hearing range — every stop gets its own full-volume override,
@@ -1596,6 +1625,12 @@ function makeZone(name,shape){
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
   }
+  // Ridge Quest (R0) — run taxonomy. difficulty/runType are read by R1's
+  // corridor-crossing classification and by the points/leaderboard system;
+  // this editor doesn't validate or act on them itself. base.name (the
+  // existing per-stop name field, shown as "name" in the panel) doubles as
+  // the run's display name — no separate runName field needed.
+  if(shape.type==="corridor"){ base.difficulty=null; base.runType="run"; }
   return base;
 }
 
@@ -1780,6 +1815,13 @@ function renderSourcesInner(){
     }
     else if(s.type==="path") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:true},
         geometry:{type:"LineString",coordinates:s.coords}});
+    // Corridor (Ridge Quest R0) — rendered as a plain line via the existing
+    // fence-line layer, same as path/tripline. No buffered-width fill yet
+    // (would need a real polyline-buffer-to-polygon helper, not built in
+    // this pass) — the width number lives in the property panel and in the
+    // exported geometry; visually it's a labeled line only for now.
+    else if(s.type==="corridor") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name+" ("+(s.widthM||10)+"m)",isPath:false},
+        geometry:{type:"LineString",coordinates:s.coords}});
     // label
     const _lp={kind:"label",name:z.name,zIdx:i};
     if(z[zoneAudioField(z)]) _lp.hasAudio=true;
@@ -1840,7 +1882,7 @@ function renderSourcesInner(){
   // not just the draft's own point marker, but (since a thrown/rejected
   // setData mid-render-cycle could leave the map's internal source-update
   // pipeline in a bad state) other zones' rings on the "fences" source too.
-  if((tool==="polygon"||tool==="tripline"||tool==="path")&&draft.length>=2) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
+  if((tool==="polygon"||tool==="tripline"||tool==="path"||tool==="corridor")&&draft.length>=2) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
   if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
         geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
@@ -2092,6 +2134,7 @@ map.on("click",e=>{
     else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
     else if(tool==="polygon"){ draft.push(p); render(); }
     else if(tool==="path"){ draft.push(p); render(); }
+    else if(tool==="corridor"){ draft.push(p); render(); }
     return;
   }
   // deselect when clicking empty map (zone mousedown handles zone clicks)
@@ -2108,20 +2151,22 @@ function resetShapePickerBtn(){
 // is actually being drawn — collapsed the rest of the time, same as circleRow.
 function updateDrawUiVisibility(t){
   document.getElementById("circleRow").style.display = t==="circle"?"flex":"none";
+  document.getElementById("corridorRow").style.display = t==="corridor"?"flex":"none";
   document.getElementById("finishCancelRow").style.display = t?"flex":"none";
   document.getElementById("drawHint").style.display = t?"block":"none";
 }
 function setTool(t){ tool=t; draft=[];
-  const shapeLabel={circle:"● Circle",polygon:"⬡ Polygon",tripline:"／ Tripline",path:"〜 Path"}[t];
+  const shapeLabel={circle:"● Circle",polygon:"⬡ Polygon",tripline:"／ Tripline",path:"〜 Path",corridor:"➰ Corridor"}[t];
   if(shapeLabel){ document.getElementById("shapePickerBtn").textContent=shapeLabel+" — drawing…"; document.getElementById("shapePickerBtn").classList.add("on"); }
   else resetShapePickerBtn();
   updateDrawUiVisibility(t);
-  document.getElementById("finishBtn").textContent = t==="path"?"Finish path":"Finish polygon";
+  document.getElementById("finishBtn").textContent = (t==="path"||t==="corridor")?"Finish "+t:"Finish polygon";
   document.getElementById("drawHint").textContent={
     circle:"click the center on the map (reveal radius set above)",
     polygon:"click each corner; press Finish to close it",
     tripline:"click the two ends of the crossing line",
-    path:"click each point along the route; press Finish when done (2+ points)"}[t]||"pick a shape to start drawing";
+    path:"click each point along the route; press Finish when done (2+ points)",
+    corridor:"click each point down the run (top to bottom); press Finish when done (2+ points)"}[t]||"pick a shape to start drawing";
   render();
 }
 function openShapePicker(anchorBtn){
@@ -2132,12 +2177,18 @@ function openShapePicker(anchorBtn){
     mkItem("／ Tripline",()=>setTool("tripline"));
     mkItem("〜 Path",()=>setTool("path"));
     mkItem("🥾 Walking Path",()=>openWalkingPathPicker(anchorBtn));
+    // Ridge Quest (R0) — the corridor trigger primitive (signed distance to
+    // a polyline minus half-width) already exists and works in Geofencer/
+    // SimFencer, it just had no authoring UI until now. Draws like Path
+    // (multi-click, Finish button) with an added width.
+    mkItem("➰ Corridor",()=>setTool("corridor"));
   });
 }
 document.getElementById("shapePickerBtn").onclick=e=>{ e.stopPropagation(); openShapePicker(e.currentTarget); };
 document.getElementById("finishBtn").onclick=()=>{
   if(tool==="polygon"&&draft.length>=3) finishShape();
   else if(tool==="path"&&draft.length>=2) finishShape();
+  else if(tool==="corridor"&&draft.length>=2) finishShape();
 };
 document.getElementById("cancelBtn").onclick=()=>{ draft=[]; tool=null;
   resetShapePickerBtn();
@@ -2151,6 +2202,7 @@ function finishShape(){
   else if(tool==="polygon") shape={type:"polygon",coords:draft.slice()};
   else if(tool==="tripline") shape={type:"tripline",from:draft[0],to:draft[1]};
   else if(tool==="path") shape={type:"path",coords:draft.slice()};
+  else if(tool==="corridor") shape={type:"corridor",coords:draft.slice(),widthM:+document.getElementById("newCorridorWidth").value||10};
   const z=makeZone(name,shape);
   z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as audio uploads
   // Snap onto the nearest active walking path only if placed near it —
@@ -2324,6 +2376,13 @@ function refreshProps(){
     document.getElementById("pSpeed").value=z.speedKmh??MOVE_SPEEDS[z.movementMode||"walk"];
     document.getElementById("pLoopMode").value=z.loopMode||"loop";
     // fall through — path zones also populate the normal trigger fields below
+  }
+  const isCorridor=z.shape.type==="corridor";
+  document.getElementById("pCorridorSection").style.display=isCorridor?"block":"none";
+  if(isCorridor){
+    document.getElementById("pDifficulty").value=z.difficulty||"";
+    document.getElementById("pRunType").value=z.runType||"run";
+    document.getElementById("pCorridorWidth").value=z.shape.widthM||10;
   }
   // Hearing-range override — every stop type now, not just path.
   document.getElementById("pRangeClear").value=z.spatialClearM??"";
@@ -2790,6 +2849,9 @@ document.getElementById("pMoveMode").addEventListener("input",()=>{
 });
 bindProp("pSpeed",z=>{ z.speedKmh=Math.max(0,+document.getElementById("pSpeed").value||0); });
 bindProp("pLoopMode",z=>{ z.loopMode=document.getElementById("pLoopMode").value; });
+bindProp("pDifficulty",z=>{ z.difficulty=document.getElementById("pDifficulty").value||null; });
+bindProp("pRunType",z=>{ z.runType=document.getElementById("pRunType").value; });
+bindProp("pCorridorWidth",z=>{ if(z.shape.type==="corridor") z.shape.widthM=Math.max(2,+document.getElementById("pCorridorWidth").value||10); });
 bindProp("pRangeClear",z=>{ const v=document.getElementById("pRangeClear").value; z.spatialClearM=v===""?null:Math.max(0,+v||0); });
 bindProp("pAltM",z=>{ const v=document.getElementById("pAltM").value; z.altM=v===""?null:+v||0; });
 bindProp("pAltTol",z=>{ const v=document.getElementById("pAltTol").value; z.altToleranceM=v===""?null:Math.max(0,+v||0); });
@@ -4239,6 +4301,12 @@ function zoneToEngine(z){
   if(s.type==="circle")        zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM}];
   else if(s.type==="polygon")  zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"polygon",coords:s.coords.map(LL)}}];
   else if(s.type==="tripline") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}];
+  // Corridor (Ridge Quest R0) — the geometry shape Geofencer/SimFencer's
+  // existing corridor primitive already reads (nearest-segment distance to
+  // path, minus half of widthM). R1 (not built yet) adds top/bottom
+  // tripline pairing on top of this for direction+speed classification —
+  // this only needs to get the corridor's own volume authored correctly.
+  else if(s.type==="corridor") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"corridor",path:s.coords.map(LL),widthM:s.widthM||10}}];
   else if(isPath)              zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:genR}];
   const trig=[];
   const rev={ oncePerVisit:true, layer:"target" };
@@ -4272,6 +4340,10 @@ function zoneToEngine(z){
   // existing behavior. Only exported when actually set.
   if(z.altM!=null) zo.altM=z.altM;
   if(z.altToleranceM!=null) zo.altToleranceM=z.altToleranceM;
+  if(s.type==="corridor"){
+    if(z.difficulty) zo.difficulty=z.difficulty;
+    if(z.runType) zo.runType=z.runType;
+  }
   if(isPath){
     zo.path=s.coords.map(LL);
     zo.movementMode=z.movementMode||"walk";
@@ -4458,9 +4530,11 @@ function engineToZone(zo,legacyPathId){
     if(tgt.radiusM!=null) shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:tgt.radiusM};
     else if(tgt.geometry&&tgt.geometry.type==="polygon") shape={type:"polygon",coords:tgt.geometry.coords.map(LonLat)};
     else if(tgt.geometry&&tgt.geometry.type==="tripline") shape={type:"tripline",from:LonLat(tgt.geometry.from),to:LonLat(tgt.geometry.to)};
+    else if(tgt.geometry&&tgt.geometry.type==="corridor") shape={type:"corridor",coords:tgt.geometry.path.map(LonLat),widthM:tgt.geometry.widthM||10};
     else shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:12};
   }
   const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
+  if(shape.type==="corridor"){ z.difficulty=zo.difficulty||null; z.runType=zo.runType||"run"; }
   z.audioM = zo.audibleFromM!=null?zo.audibleFromM:DEFAULTS.audioM;
   z.volume = zo.volume!=null?zo.volume:1;
   z.loopAudio = zo.loopAudio!==false;
@@ -5632,6 +5706,7 @@ function editorToSimBundle(){
     // SimAmbient/simAmbientCenterNow below; this `center` is only a
     // load-time fallback (e.g. for the ref-point average).
     else if(s.type==="path") center=[s.coords[0][1],s.coords[0][0]];
+    else if(s.type==="corridor"){const c=centroidLonLat(s.coords);center=[c[1],c[0]];}
     const isPath=s.type==="path";
     // Path stops fire triggers too now, against a circle centered on their
     // *current* live position (resolved at eval-time in SimFencer.sd via
@@ -5643,6 +5718,7 @@ function editorToSimBundle(){
     if(s.type==="circle") targetLayer={kind:"target",radiusM:s.radiusM||12};
     else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
     else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
+    else if(s.type==="corridor") targetLayer={kind:"target",geometry:{type:"corridor",path:s.coords.map(c=>[c[1],c[0]]),widthM:s.widthM||10}};
     else if(isPath) targetLayer={kind:"target",radiusM:z.approachM||30};
     const triggers=[];
     if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true});
@@ -5670,7 +5746,12 @@ function editorToSimBundle(){
       arObjects:(z.arObjects&&z.arObjects.length)?z.arObjects:[],
       // Altitude gate (3D Mode) — same class of field again; Test Mode must
       // see this or altitude-gated triggers would silently always fire.
-      altM:z.altM??null,altToleranceM:z.altToleranceM??null};
+      altM:z.altM??null,altToleranceM:z.altToleranceM??null,
+      // Ridge Quest R0 — not consumed by Test Mode yet (R1 adds corridor-
+      // crossing classification), exported now so the 3 mirror locations
+      // stay in sync from day one instead of drifting like ttsVoice did.
+      difficulty:s.type==="corridor"?(z.difficulty||null):null,
+      runType:s.type==="corridor"?(z.runType||"run"):null};
     if(s.type==="path"){
       out.path=s.coords.map(c=>[c[1],c[0]]);
       out.movementMode=z.movementMode||"walk";

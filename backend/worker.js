@@ -521,6 +521,32 @@ async function createSession(env, userId, ip) {
   ).bind(crypto.randomUUID(), userId, hash, Date.now() + 30 * 24 * 3600 * 1000, new Date().toISOString(), ip || "").run();
   return raw;
 }
+// Ridge Quest player session — same token shape/expiry as createSession()
+// above, deliberately a separate function/table (player_session, not
+// user_session) since players and staff are different security domains.
+async function createPlayerSession(env, playerId, ip) {
+  const raw = randomHex(32);
+  const hash = await sha256hex(raw);
+  await env.DB.prepare(
+    "INSERT INTO player_session (id, player_id, token_hash, expires_at, created_at, ip) VALUES (?,?,?,?,?,?)"
+  ).bind(crypto.randomUUID(), playerId, hash, Date.now() + 30 * 24 * 3600 * 1000, new Date().toISOString(), ip || "").run();
+  return raw;
+}
+// Resolves a bearer token to a logged-in player, or null. Deliberately not
+// folded into auth() — see the "Ridge Quest: player auth" route block's own
+// comment for why staff and player auth are kept as separate resolvers.
+async function playerAuth(request, env) {
+  const tok = bearer(request);
+  if (!tok || !env.DB) return null;
+  try {
+    const hash = await sha256hex(tok);
+    const row = await env.DB.prepare(
+      "SELECT s.id AS sid, p.id AS pid, p.email, p.display_name, p.app_id FROM player_session s JOIN player_account p ON p.id=s.player_id WHERE s.token_hash=? AND s.expires_at>?"
+    ).bind(hash, Date.now()).first();
+    if (!row) return null;
+    return { playerId: row.pid, email: row.email, displayName: row.display_name, appId: row.app_id };
+  } catch (e) { return null; }
+}
 function appUrl(env, path, request) {
   if (env.APP_URL) return env.APP_URL.replace(/\/+$/, "") + path;
   if (request) { try { return new URL(request.url).origin + path; } catch(e) {} }
@@ -562,7 +588,8 @@ export default {
       "/login": "/login.html",
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
-      "/clients": "/clients.html"
+      "/clients": "/clients.html",
+      "/quest": "/ridge-quest.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     // Client-scoped login, e.g. /c/chase-life/login — same login.html, the
@@ -697,6 +724,122 @@ async function api(request, env, url) {
     ).bind(hash, salt, b.name || null, new Date().toISOString(), user.id).run();
     const token = await createSession(env, user.id, request.headers.get("cf-connecting-ip") || "");
     return json({ ok: true, token, user: { id: user.id, email: user.email, name: b.name || user.name, role: user.role } }, 200, AC);
+  }
+
+  // --- Ridge Quest: player auth ---
+  // Deliberately NOT reusing auth()/scopesForRole() — players are a wholly
+  // different security domain from staff (no scopes, no master, no
+  // publish/analytics access at all), and folding them into the same
+  // resolver would risk a privilege-escalation bug down the line if the two
+  // concepts ever got confused. Mirrors the staff hashPassword/createSession
+  // pattern exactly (same PBKDF2 + session-token shape), just against
+  // player_account/player_session instead of user_account/user_session.
+  // email is unique per app_id (not globally, unlike staff accounts) — see
+  // migrations/0036_ridge_quest_players.sql's own comment on why.
+  if (path === "/api/players/signup" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const email = (b.email || "").toLowerCase().trim();
+    if (!email || !b.password || !b.appId) return json({ error: "email, password and appId required" }, 400, AC);
+    if (b.password.length < 8) return json({ error: "password must be at least 8 characters" }, 400, AC);
+    const existing = await env.DB.prepare("SELECT id FROM player_account WHERE app_id=? AND email=?").bind(b.appId, email).first().catch(() => null);
+    if (existing) return json({ error: "an account with this email already exists" }, 409, AC);
+    const id = crypto.randomUUID();
+    const salt = randomHex(16);
+    const hash = await hashPassword(b.password, salt);
+    await env.DB.prepare(
+      "INSERT INTO player_account (id,email,password_hash,salt,app_id,display_name,created_at) VALUES (?,?,?,?,?,?,?)"
+    ).bind(id, email, hash, salt, b.appId, b.displayName || null, new Date().toISOString()).run();
+    const token = await createPlayerSession(env, id, request.headers.get("cf-connecting-ip") || "");
+    return json({ ok: true, token, player: { id, email, displayName: b.displayName || null, appId: b.appId } }, 200, AC);
+  }
+  if (path === "/api/players/login" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const email = (b.email || "").toLowerCase().trim();
+    if (!email || !b.password || !b.appId) return json({ error: "email, password and appId required" }, 400, AC);
+    const player = await env.DB.prepare(
+      "SELECT id,email,display_name,password_hash,salt FROM player_account WHERE app_id=? AND email=?"
+    ).bind(b.appId, email).first().catch(() => null);
+    if (!player) return json({ error: "invalid credentials" }, 401, AC);
+    const computed = await hashPassword(b.password, player.salt);
+    if (computed !== player.password_hash) return json({ error: "invalid credentials" }, 401, AC);
+    const token = await createPlayerSession(env, player.id, request.headers.get("cf-connecting-ip") || "");
+    await env.DB.prepare("UPDATE player_account SET last_login_at=? WHERE id=?").bind(new Date().toISOString(), player.id).run().catch(() => {});
+    return json({ ok: true, token, player: { id: player.id, email: player.email, displayName: player.display_name, appId: b.appId } }, 200, AC);
+  }
+  if (path === "/api/players/logout" && method === "POST") {
+    const tok = bearer(request);
+    if (tok && env.DB) {
+      const h = await sha256hex(tok).catch(() => null);
+      if (h) env.DB.prepare("DELETE FROM player_session WHERE token_hash=?").bind(h).run().catch(() => {});
+    }
+    return json({ ok: true }, 200, AC);
+  }
+  if (path === "/api/players/me" && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    return json({ id: P.playerId, email: P.email, displayName: P.displayName, appId: P.appId }, 200, AC);
+  }
+
+  // --- Ridge Quest: mandatory onboarding gate (data consent, liability
+  // waiver, Skier Responsibility Code) ---
+  // Reuses the `consent` table (already append-only + versioned, extended
+  // in migrations/0036 with a playerId column) rather than a new table —
+  // same shape as the existing device-consent routes just below, keyed by
+  // playerId instead of deviceId. Versions are SERVER-side, not
+  // client-supplied — bump the version string here when the resort updates
+  // any of these documents' wording, and every returning player is
+  // re-gated on next consent-status check until they accept the new
+  // version. This route only records acceptance; it does not store or
+  // serve the actual document text (that's static frontend content).
+  const REQUIRED_CONSENT = { "data-privacy": "1", "liability-waiver": "1", "responsibility-code": "1" };
+  const mc = path.match(/^\/api\/players\/([^/]+)\/consent$/);
+  if (mc && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mc[1])) return json({ error: "not authenticated" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    if (!b.scope || !(b.scope in REQUIRED_CONSENT)) return json({ error: "unknown consent scope" }, 400, AC);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO consent (id,deviceId,playerId,scope,granted,version,grantedAt,revokedAt) VALUES (?,NULL,?,?,1,?,?,NULL)"
+    ).bind(crypto.randomUUID(), P.playerId, b.scope, REQUIRED_CONSENT[b.scope], now).run();
+    return json({ ok: true, scope: b.scope, version: REQUIRED_CONSENT[b.scope] }, 200, AC);
+  }
+  if (mc && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mc[1])) return json({ error: "not authenticated" }, 401, AC);
+    const { results } = await env.DB
+      .prepare("SELECT scope,granted,version,grantedAt FROM consent WHERE playerId=? ORDER BY grantedAt ASC")
+      .bind(P.playerId).all();
+    const latest = {};
+    (results || []).forEach(r => { latest[r.scope] = r; }); // later rows overwrite earlier ones — ASC order means last-write-wins
+    const missing = Object.keys(REQUIRED_CONSENT).filter(scope => {
+      const r = latest[scope];
+      return !r || !r.granted || r.version !== REQUIRED_CONSENT[scope];
+    });
+    return json({ complete: missing.length === 0, missing, required: REQUIRED_CONSENT }, 200, AC);
+  }
+
+  // --- Ridge Quest: right to delete (real delete, not deactivation) ---
+  // Mirrors POST /api/devices/:id/forget's exact pattern. NOTE for future
+  // phases: R1-R3 add quest_session/quest_run/player_fog_cell/
+  // player_day_stats — each of those tables MUST be added to this batch
+  // when it's created, or a player's "delete my data" request will silently
+  // leave their GPS-derived run history behind. Same class of trap as this
+  // codebase's other "field added in N places, one got missed" incidents
+  // (see CLAUDE.md's editorToSimBundle()/Code Object attach-detach notes) —
+  // grep this function whenever a new player-scoped table is added.
+  const mplf = path.match(/^\/api\/players\/([^/]+)\/forget$/);
+  if (mplf && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mplf[1])) return json({ error: "not authenticated" }, 401, AC);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM consent WHERE playerId=?").bind(P.playerId),
+      env.DB.prepare("DELETE FROM player_session WHERE player_id=?").bind(P.playerId),
+      env.DB.prepare("DELETE FROM player_account WHERE id=?").bind(P.playerId)
+    ]);
+    return json({ ok: true, forgotten: P.playerId }, 200, AC);
   }
 
   // --- users: list ---
