@@ -305,6 +305,7 @@ const TUNING = {
   MOVE_MIN_M: 8,         // a visit that moved less than this + was short = flicker
   SHORT_VISIT_S: 12,
   ALT_TOLERANCE_DEFAULT_M: 25, // used when a zone sets altM but not altToleranceM
+  AR_PRELOAD_RADIUS_M: 75, // Phase 4 — start fetching an approaching stop's AR model this far out, well outside its own trigger radius, so it's already cached by the time #arBtn would open it. Real tradeoff, not a magic number: bigger = smoother AR open for people who reach the stop, more wasted mobile data for people who pass nearby without entering.
   // Position smoothing moved to an Extended Kalman Filter (2026-08-07,
   // frontend/kalman-filter.js/GPSFilter) — replaced the old speed-adaptive
   // EMA that lived here (SMOOTH_TAU_MAX_S/MIN_S/SMOOTH_SPEED_LO_MPS/HI_MPS/
@@ -1519,6 +1520,11 @@ let _arZone=null;
 // recomputed _arZone every tick so a visitor walking away from the stop
 // mid-session gets a fade-out instead of an AR view stuck open on nothing.
 let _arOpenZoneId=null;
+// Zone ids already handed to ARView.preload() this session (Phase 4) —
+// loadModelTemplate()'s own cache already makes a repeat call harmless,
+// but there's no reason to re-walk BUNDLE.zones and rebuild url arrays on
+// every single GPS fix once a zone's already been preloaded.
+const _arPreloadedZones=new Set();
 const HUD = {
   pos:null, prev:null, fixes:0,
   el(id){ return document.getElementById(id); },
@@ -1577,6 +1583,26 @@ const HUD = {
     if(_arOpenZoneId && typeof ARView!=='undefined' && ARView.isOpen() && (!_arZone || _arZone.id!==_arOpenZoneId)){
       ARView.fadeOutAndClose();
       _arOpenZoneId=null;
+    }
+    // Phase 4 (predictive preload): start fetching an approaching stop's
+    // AR model well before the visitor reaches its own trigger radius or
+    // taps #arBtn, so it's already cached by then instead of a multi-
+    // second wait on real cellular. Deliberately a plain distance check
+    // (Geo.hav against each zone's own center, or centerNow() for a path
+    // zone) rather than reading Geofencer's internal layer/approach-ring
+    // structure — simpler, no dependency on that engine's internal
+    // semantics. _arPreloadedZones makes this a one-time cost per zone
+    // per session, not a fresh BUNDLE.zones walk every single GPS fix.
+    if(typeof ARView!=='undefined' && ARView.preload){
+      BUNDLE.zones.forEach(z=>{
+        if(_arPreloadedZones.has(z.id) || !z.arObjects || !z.arObjects.some(o=>o.url)) return;
+        const zc = z.path ? centerNow(z,fix.t) : z.center;
+        if(!zc) return;
+        if(Geo.hav([p.lat,p.lon],zc) <= TUNING.AR_PRELOAD_RADIUS_M){
+          _arPreloadedZones.add(z.id);
+          ARView.preload(z.arObjects.map(o=>o.url));
+        }
+      });
     }
     // p.alt passed through so ARView can track the visitor's real altitude
     // and keep a vertical-extent cylinder's height correct as it changes —

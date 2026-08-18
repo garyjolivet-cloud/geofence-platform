@@ -62,6 +62,11 @@
  *     opacity down, then calls close(). durationS falls back to a short
  *     baked-in minimum when 0/omitted, so the transition never reads as
  *     an instant pop right before the camera view itself vanishes.
+ *   ARView.preload(urls)   — Phase 4 (predictive preload): call while the
+ *     visitor is still APPROACHING a stop, before open() would ever run,
+ *     so the model's already fetched+parsed by the time they tap AR.
+ *     Doesn't touch scene/camera/anything open()-specific — just warms
+ *     the same modelCache loadArObjects() reads from.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -232,6 +237,16 @@ async function loadModelTemplate(url){
   const gltf=await new Promise((res,rej)=>gltfLoader.load(url, res, undefined, rej));
   modelCache.set(url, gltf);
   return gltf;
+}
+// Phase 4 (predictive preload) — the host calls this while the visitor is
+// still APPROACHING a stop, well before open() would ever run, so the
+// GLTF fetch+parse is already sitting in modelCache by the time they
+// actually tap the AR button. Doesn't touch scene/camera/renderer at all
+// (none of that exists yet, and doesn't need to) — purely warms the same
+// cache loadArObjects() already reads from, so there's no duplicate
+// fetch either way. One bad/unreachable url shouldn't block the others.
+function preload(urls){
+  (urls||[]).forEach(url=>{ if(url) loadModelTemplate(url).catch(()=>{}); });
 }
 // Skinned/animated models need SkeletonUtils.clone(), not plain .clone() —
 // a plain clone breaks the skeleton bindings silently (mesh renders but
@@ -494,4 +509,4 @@ async function requestOrientationPermission(){ return AROrient.requestPermission
 // here too, not just from the host's close button.
 window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && isOpen()) close(); });
 
-window.ARView = { open, close, onFix, requestOrientationPermission, isOpen, fadeOutAndClose };
+window.ARView = { open, close, onFix, requestOrientationPermission, isOpen, fadeOutAndClose, preload };
