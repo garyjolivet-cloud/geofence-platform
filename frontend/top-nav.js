@@ -652,6 +652,19 @@
           const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,visitorsFly:next})});
           if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
         });
+        // Fourth toggle (Phase 5a, forward hazard raycasting, 2026-08-17):
+        // gates the proactive "walking toward a hazard" warning — the
+        // safety feature for the cm-accurate/off-grid "hazard aware" tier.
+        // Shown alongside Terrain Altitude/Flying Visitors (same 3D-Mode-on
+        // gate) since the warning needs a circle+altM hazard zone, which
+        // only exists meaningfully once 3D Mode is on.
+        if(app.threeDEnabled) mkBtn(app.hazardAwareEnabled ? "Hazard Aware: On" : "Hazard Aware: Off", async () => {
+          const next = !app.hazardAwareEnabled;
+          if(!confirm((next?"Turn ON":"Turn OFF")+' hazard-ahead warnings for "'+(app.name||app.id)+'"? Affects every circle+altitude hazard zone in this workspace, once each project is republished.')) return;
+          const token = askToken(); if(!token) return;
+          const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,hazardAwareEnabled:next})});
+          if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
+        });
         if(apps.length > 1) mkBtn("Merge into…", async () => {
           const others = apps.filter(a => a.id!==app.id);
           const names = others.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");

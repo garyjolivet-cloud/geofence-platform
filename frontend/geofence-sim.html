@@ -321,7 +321,9 @@ const TUNING = {
   // (2026-08-07, frontend/kalman-filter.js/GPSFilter) — see that file's own
   // header comment for the design. Mirrored across this file and
   // geofence-engine.html the same way the old EMA constants were.
-  HEAD_WINDOW: 8         // compass readings used for heading-confidence variance
+  HEAD_WINDOW: 8,        // compass readings used for heading-confidence variance
+  HAZARD_LOOKAHEAD_M: 20, // Phase 5a — mirrors geofence-engine.html's TUNING.HAZARD_LOOKAHEAD_M
+  HAZARD_WARN_COOLDOWN_S: 15 // Phase 5a — mirrors geofence-engine.html's TUNING.HAZARD_WARN_COOLDOWN_S
 };
 
 /* ============================ GEO MATH ============================ */
@@ -339,6 +341,15 @@ const Geo = {
             const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-
                     Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
             return (Math.atan2(y,x)*180/Math.PI+360)%360; },
+  // inverse of bearing() — see geofence-engine.html's Geo.destPoint for the
+  // full comment (Phase 5a forward hazard ray). Mirrored verbatim.
+  destPoint(p, distM, bearingDeg){
+    const toR=Math.PI/180, d=distM/this.R, b=bearingDeg*toR;
+    const lat1=p[0]*toR, lon1=p[1]*toR;
+    const lat2=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(b));
+    const lon2=lon1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+    return [lat2/toR, lon2/toR];
+  },
   // signed distance to a circle: + outside, − inside
   sdCircle(p, center, R){ return this.hav(p,center) - R; },
   // point-to-segment distance in metres (planar)
@@ -982,6 +993,57 @@ function zoneNearestDistM(z,p,nowMs){
   const zc=z.path?ambientCenterNow(z,nowMs):z.center;
   return Geo.hav([p.lat,p.lon],zc);
 }
+// Mirrors geofence-engine.html's TravelHeading exactly — GPSFilter.push()
+// already emits headingTravel here too (used below only), this file just
+// never had a consumer for it before Phase 5a needed a heading source for
+// the forward hazard ray.
+const TravelHeading = {
+  heading:null,
+  MIN_SPEED:0.5, ALPHA:0.15,
+  update(speed, headingTravel){
+    if(speed>=this.MIN_SPEED && headingTravel!=null){
+      this.heading = this.heading==null ? headingTravel : this._ema(headingTravel, this.heading);
+    }
+  },
+  _ema(raw, prev){
+    let diff=raw-prev; diff=((diff+540)%360)-180;
+    return (prev+this.ALPHA*diff+360)%360;
+  }
+};
+// Phase 5a: forward hazard raycasting — see geofence-engine.html's own
+// header comment (same section title) for the full design rationale.
+// Mirrored verbatim except for warning delivery, which uses this file's
+// own console log() instead of a visitor-facing DOM banner (desktop
+// authoring tool, not the visitor engine).
+const HAZARD_CODE_OBJECT_ID="hazard-zone";
+const _hazardWarnState=new Map();
+function isHazardZone(z){ return !!(z.isHazard || (z.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID)); }
+function checkHazardAhead(p, headingDeg, speedMps, nowMs){
+  // speedMps gate: TravelHeading.heading is sticky (retains its last value
+  // below TravelHeading.MIN_SPEED rather than going null) — see
+  // geofence-engine.html's identical comment for the full reasoning.
+  if(!BUNDLE.hazardAwareEnabled || headingDeg==null || speedMps<TravelHeading.MIN_SPEED || p.acc>TUNING.ACCURACY_CAP_M) return;
+  const proj=Geo.destPoint([p.lat,p.lon], TUNING.HAZARD_LOOKAHEAD_M, headingDeg);
+  for(const z of BUNDLE.zones){
+    if(!isHazardZone(z) || z.altM==null) continue;
+    const layer=(z.layers||[]).find(l=>l.kind==="target"&&l.radiusM!=null);
+    if(!layer) continue;
+    const last=_hazardWarnState.get(z.id);
+    if(last!=null && (nowMs-last)/1000 < TUNING.HAZARD_WARN_COOLDOWN_S) continue;
+    const zc=z.path?ambientCenterNow(z,nowMs):z.center;
+    if(!zc) continue;
+    const tol=z.altToleranceM!=null?z.altToleranceM:TUNING.ALT_TOLERANCE_DEFAULT_M;
+    const cross=Geo.segCylinderCross([p.lat,p.lon], proj, p.alt, p.alt, zc, layer.radiusM, z.altM-tol, z.altM+tol);
+    // tEnter>0 excludes a visitor already standing inside the cylinder —
+    // see geofence-engine.html's identical comment for the full reasoning.
+    if(cross.crossed && cross.tEnter>0){
+      _hazardWarnState.set(z.id, nowMs);
+      const msg="Hazard ahead: "+(z.name||"unmarked hazard");
+      Audio.say(msg);
+      log("ev-hazard", msg);
+    }
+  }
+}
 /* =========================== ENGINE PIPELINE =========================== */
 /* mirrors HUD.onFix: smooth -> geofence -> needle pick */
 let prevP=null, fixCount=0;
@@ -1010,10 +1072,12 @@ function feed(lat,lon,acc,t,bleFix){
   const fix={lat,lon,acc,t};
   if(effAlt!=null){ fix.alt=effAlt; fix.altAcc=(bleFix&&bleFix.altAcc!=null)?bleFix.altAcc:5; fix.altSource="baro"; }
   const sm=GPSFilter.push(fix);
+  TravelHeading.update(sm.speed, sm.headingTravel);
   // p.alt uses the immediate sample, not the EKF-smoothed sm.alt — same
   // reasoning as feedSim(): avoids lag behind a fast simulated
   // teleport/drag between stops at different elevations.
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:effAlt};
+  checkHazardAhead(p, TravelHeading.heading, sm.speed, t);
   const active=Geofencer.update(p,prevP,t);
   prevP=p; fixCount++;
   AmbientClip.update(p, t);

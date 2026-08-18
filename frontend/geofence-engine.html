@@ -306,6 +306,8 @@ const TUNING = {
   SHORT_VISIT_S: 12,
   ALT_TOLERANCE_DEFAULT_M: 25, // used when a zone sets altM but not altToleranceM
   AR_PRELOAD_RADIUS_M: 75, // Phase 4 — start fetching an approaching stop's AR model this far out, well outside its own trigger radius, so it's already cached by the time #arBtn would open it. Real tradeoff, not a magic number: bigger = smoother AR open for people who reach the stop, more wasted mobile data for people who pass nearby without entering.
+  HAZARD_LOOKAHEAD_M: 20, // Phase 5a — how far ahead of the visitor's current heading to project the forward hazard ray. Longer = more warning lead time but more false positives from heading noise at walking speed.
+  HAZARD_WARN_COOLDOWN_S: 15, // Phase 5a — minimum time between repeat warnings for the same hazard zone, so walking toward-but-not-reaching a hazard doesn't re-warn every tick.
   // Position smoothing moved to an Extended Kalman Filter (2026-08-07,
   // frontend/kalman-filter.js/GPSFilter) — replaced the old speed-adaptive
   // EMA that lived here (SMOOTH_TAU_MAX_S/MIN_S/SMOOTH_SPEED_LO_MPS/HI_MPS/
@@ -382,6 +384,19 @@ const Geo = {
             const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-
                     Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
             return (Math.atan2(y,x)*180/Math.PI+360)%360; },
+  // inverse of bearing(): destination point [lat,lon] distM out along
+  // bearingDeg from p [lat,lon] — Phase 5a's forward hazard ray projects
+  // the visitor's current position this way before testing it against
+  // segCylinderCross(). Same formula as fence-editor.html's standalone
+  // destPoint(), adapted to this object's [lat,lon] convention instead of
+  // fence-editor's map-native [lon,lat].
+  destPoint(p, distM, bearingDeg){
+    const toR=Math.PI/180, d=distM/this.R, b=bearingDeg*toR;
+    const lat1=p[0]*toR, lon1=p[1]*toR;
+    const lat2=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(b));
+    const lon2=lon1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+    return [lat2/toR, lon2/toR];
+  },
   // signed distance to a circle: + outside, − inside
   sdCircle(p, center, R){ return this.hav(p,center) - R; },
   // point-to-segment distance in metres (planar)
@@ -1008,6 +1023,69 @@ const TravelHeading = {
   }
 };
 
+/* =================== Phase 5a: forward hazard raycasting ===================
+   Proactive "you're walking toward a hazard" warning, distinct from
+   GuidanceBot's reactive 2D buffer+tangent re-routing (guidance-bot.js) —
+   this projects the visitor's own current heading forward and tests it
+   against the same real 3D cylinder geometry (Geo.segCylinderCross, used
+   above for fast-mover rescue) that circle+altM hazard zones already get.
+   No WebXR/THREE.Raycaster — pure closed-form Geo math, same idiom as the
+   rest of this trigger engine. v1 only covers circle+altM hazard zones,
+   same as the existing cylinder treatment; polygon/tripline hazards keep
+   today's 2D-only GuidanceBot avoidance (no vertical extent exists for
+   those shapes anywhere in this codebase yet). */
+const HAZARD_CODE_OBJECT_ID="hazard-zone";
+const _hazardWarnState=new Map(); // zoneId -> last-warned epoch ms, for the per-zone cooldown
+function isHazardZone(z){ return !!(z.isHazard || (z.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID)); }
+function checkHazardAhead(p, headingDeg, speedMps, nowMs){
+  // speedMps gate: TravelHeading.heading is sticky (retains its last value
+  // below TravelHeading.MIN_SPEED rather than going null), so a visitor who
+  // walks toward a hazard and then stops to look at it would otherwise keep
+  // the stale toward-hazard heading and get nagged forever. Stationary
+  // visitors are still covered by the ordinary zone-proximity triggers.
+  if(!BUNDLE.hazardAwareEnabled || headingDeg==null || speedMps<TravelHeading.MIN_SPEED || p.acc>TUNING.ACCURACY_CAP_M) return;
+  const proj=Geo.destPoint([p.lat,p.lon], TUNING.HAZARD_LOOKAHEAD_M, headingDeg);
+  for(const z of BUNDLE.zones){
+    if(!isHazardZone(z) || z.altM==null) continue;
+    const layer=(z.layers||[]).find(l=>l.kind==="target"&&l.radiusM!=null);
+    if(!layer) continue; // v1: only circle+altM hazard zones get real cylinder geometry, same gate as the fast-mover rescue above
+    const last=_hazardWarnState.get(z.id);
+    if(last!=null && (nowMs-last)/1000 < TUNING.HAZARD_WARN_COOLDOWN_S) continue;
+    const zc=z.path?centerNow(z,nowMs):z.center;
+    if(!zc) continue;
+    const tol=z.altToleranceM!=null?z.altToleranceM:TUNING.ALT_TOLERANCE_DEFAULT_M;
+    const cross=Geo.segCylinderCross([p.lat,p.lon], proj, p.alt, p.alt, zc, layer.radiusM, z.altM-tol, z.altM+tol);
+    // tEnter>0 excludes a visitor already standing inside the cylinder —
+    // segCylinderCross reports tEnter=0 when the segment STARTS inside,
+    // which would otherwise fire "hazard ahead" even while walking OUT of
+    // it. Only warn when the ray actually enters the hazard ahead.
+    if(cross.crossed && cross.tEnter>0){
+      _hazardWarnState.set(z.id, nowMs);
+      Audio.say("Hazard ahead: "+(z.name||"unmarked hazard"), true, z);
+      showHazardBanner(z.name||"unmarked hazard");
+    }
+  }
+}
+let _hazardBannerTimer=null;
+function showHazardBanner(zoneName){
+  let b=document.getElementById('_hazardBanner');
+  if(!b){
+    b=document.createElement('div');
+    b.id='_hazardBanner';
+    b.style.cssText='position:fixed;top:0;left:0;right:0;background:rgba(255,47,78,.9);color:#fff;'+
+      'text-align:center;padding:6px 12px;font-family:"Barlow Condensed";font-size:13px;'+
+      'font-weight:700;letter-spacing:.03em;z-index:9999;pointer-events:none';
+    document.body.prepend(b);
+  }
+  b.textContent='⚠ HAZARD AHEAD — '+zoneName;
+  clearTimeout(_hazardBannerTimer);
+  _hazardBannerTimer=setTimeout(hideHazardBanner, 5000);
+}
+function hideHazardBanner(){
+  clearTimeout(_hazardBannerTimer);
+  document.getElementById('_hazardBanner')?.remove();
+}
+
 /* =================== PROXIMITY AUDIO — distance-clarity (§5a) ===================
    Mono graph: chime -> low-pass(cutoff=f(dist)) -> [dry + reverb*wet] -> gain(dist).
    One distance value drives treble, reverb wash, and loudness together, so a stop
@@ -1541,6 +1619,7 @@ const HUD = {
     TravelHeading.update(sm.speed, sm.headingTravel);
     this.fixes++;
     const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
+    checkHazardAhead(p, TravelHeading.heading, sm.speed, fix.t);
     const active=Geofencer.update(p,this.prev,fix.t);
     this.prev=p; this.pos=p;
     // Global functions (Code Objects dropped on the map, not a stop) run on

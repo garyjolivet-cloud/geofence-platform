@@ -1137,6 +1137,13 @@ let _terrainAltOn=false;
 // rather than relying on "use terrain height here", which samples ground
 // elevation and is hidden in the property panel when this is on).
 let _visitorsFlyOn=false;
+// Fourth, separate flag (Phase 5a, forward hazard raycasting, 2026-08-17):
+// gates the proactive "walking toward a hazard" warning at runtime
+// (checkHazardAhead() in geofence-engine.html/geofence-sim.html and this
+// file's own SimFencer). Not read anywhere in this file's own UI today —
+// kept in sync purely so exportBundle() can denormalize it into the
+// published bundle, same as its three siblings.
+let _hazardAwareOn=false;
 function isThreeDEnabled(){ return _threeDOn; }
 function updateTerrain(){
   if(!map.getSource(TERRAIN_SOURCE_ID)) return; // not loaded yet — updateTerrain() runs again from the load handler above
@@ -2908,6 +2915,7 @@ function updateAssetPaletteVisibility(){
   _threeDOn=!!(app&&app.threeDEnabled);
   _terrainAltOn=!!(app&&app.terrainAltitudeEnabled);
   _visitorsFlyOn=!!(app&&app.visitorsFly);
+  _hazardAwareOn=!!(app&&app.hazardAwareEnabled);
   document.getElementById("assetPalette").classList.toggle("on", _threeDOn);
   updateTerrain();
   if(sel>=0){
@@ -4425,6 +4433,11 @@ async function exportBundle(){
               // should win over the terrain-elevation default above. See
               // _visitorsFlyOn's own comment.
               visitorsFly:_visitorsFlyOn,
+              // Fourth denormalized flag (Phase 5a, forward hazard
+              // raycasting, 2026-08-17) — gates the proactive "walking
+              // toward a hazard" warning at runtime. See _hazardAwareOn's
+              // own comment.
+              hazardAwareEnabled:_hazardAwareOn,
               zones:zonesOut };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -5045,7 +5058,7 @@ function doXhrUpload(blob, key, mimeType, opts){
 // copy had already drifted, 160 vs 25 m/s, the moment this Test Mode's
 // speed slider was widened — exactly the class of bug the EKF's
 // self-scaling outlier gate eliminates structurally).
-const SIM_TUNING={EXIT_BUFFER_M:20,ENTER_DWELL_S:3,ACCURACY_CAP_M:40,MOVE_MIN_M:8,SHORT_VISIT_S:12,ALT_TOLERANCE_DEFAULT_M:25};
+const SIM_TUNING={EXIT_BUFFER_M:20,ENTER_DWELL_S:3,ACCURACY_CAP_M:40,MOVE_MIN_M:8,SHORT_VISIT_S:12,ALT_TOLERANCE_DEFAULT_M:25,HAZARD_LOOKAHEAD_M:20,HAZARD_WARN_COOLDOWN_S:15};
 const SimGeo={
   R:6371000,
   hav(a,b){const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
@@ -5053,6 +5066,13 @@ const SimGeo={
   bearing(a,b){const y=Math.sin((b[1]-a[1])*Math.PI/180)*Math.cos(b[0]*Math.PI/180);
     const x=Math.cos(a[0]*Math.PI/180)*Math.sin(b[0]*Math.PI/180)-Math.sin(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.cos((b[1]-a[1])*Math.PI/180);
     return(Math.atan2(y,x)*180/Math.PI+360)%360;},
+  // inverse of bearing() — Phase 5a forward hazard ray, mirrored verbatim
+  // from geofence-engine.html's Geo.destPoint.
+  destPoint(p,distM,bearingDeg){const toR=Math.PI/180,d=distM/this.R,b=bearingDeg*toR;
+    const lat1=p[0]*toR,lon1=p[1]*toR;
+    const lat2=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(b));
+    const lon2=lon1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+    return[lat2/toR,lon2/toR];},
   toXY(p,ref){return{x:(p[1]-ref[1])*(111320*Math.cos(ref[0]*Math.PI/180)),y:(p[0]-ref[0])*111320};},
   segDist(P,A,B){const vx=B.x-A.x,vy=B.y-A.y,wx=P.x-A.x,wy=P.y-A.y;const c1=vx*wx+vy*wy;if(c1<=0)return Math.hypot(wx,wy);
     const c2=vx*vx+vy*vy;if(c2<=c1)return Math.hypot(P.x-B.x,P.y-B.y);const t=c1/c2;return Math.hypot(P.x-(A.x+t*vx),P.y-(A.y+t*vy));},
@@ -5696,6 +5716,53 @@ function simZoneNearestDistM(z,raw){
   return SimGeo.hav([raw.lat,raw.lon],z.center);
 }
 
+// Mirrors geofence-engine.html's TravelHeading exactly — GPSFilter.push()
+// already emits headingTravel here too (used below only, at line ~5805 for
+// SimVoice.update's panning), this file just never wrapped it with EMA
+// smoothing before Phase 5a needed a stable heading source for the
+// forward hazard ray.
+const SimTravelHeading={heading:null,MIN_SPEED:0.5,ALPHA:0.15,
+  update(speed,headingTravel){
+    if(speed>=this.MIN_SPEED&&headingTravel!=null){
+      this.heading=this.heading==null?headingTravel:this._ema(headingTravel,this.heading);
+    }
+  },
+  _ema(raw,prev){let diff=raw-prev;diff=((diff+540)%360)-180;return(prev+this.ALPHA*diff+360)%360;}
+};
+// Phase 5a: forward hazard raycasting — see geofence-engine.html's own
+// header comment (same section title) for the full design rationale.
+// Mirrored verbatim except for warning delivery, which reuses this file's
+// own simLogEv/simTTS Test Mode plumbing instead of a visitor-facing DOM
+// banner. Reuses the existing zoneIsHazard() predicate (line ~1554)
+// instead of redefining one — that helper already accounts for this
+// file's own isHazard->codeObjects migration on load.
+const _hazardWarnState=new Map();
+function checkHazardAhead(p,headingDeg,speedMps,nowMs){
+  // speedMps gate: SimTravelHeading.heading is sticky (retains its last
+  // value below SimTravelHeading.MIN_SPEED) — see geofence-engine.html's
+  // identical comment for the full reasoning.
+  if(!_hazardAwareOn||headingDeg==null||speedMps<SimTravelHeading.MIN_SPEED||p.acc>SIM_TUNING.ACCURACY_CAP_M) return;
+  const proj=SimGeo.destPoint([p.lat,p.lon],SIM_TUNING.HAZARD_LOOKAHEAD_M,headingDeg);
+  for(const z of simBundle.zones){
+    if(!zoneIsHazard(z)||z.altM==null) continue;
+    const layer=(z.layers||[]).find(l=>l.kind==="target"&&l.radiusM!=null);
+    if(!layer) continue;
+    const last=_hazardWarnState.get(z.id);
+    if(last!=null&&(nowMs-last)/1000<SIM_TUNING.HAZARD_WARN_COOLDOWN_S) continue;
+    const zc=z.path?simAmbientCenterNow(z,nowMs):z.center;
+    if(!zc) continue;
+    const tol=z.altToleranceM!=null?z.altToleranceM:SIM_TUNING.ALT_TOLERANCE_DEFAULT_M;
+    const cross=SimGeo.segCylinderCross([p.lat,p.lon],proj,p.alt,p.alt,zc,layer.radiusM,z.altM-tol,z.altM+tol);
+    // tEnter>0 excludes a visitor already standing inside the cylinder —
+    // see geofence-engine.html's identical comment for the full reasoning.
+    if(cross.crossed&&cross.tEnter>0){
+      _hazardWarnState.set(z.id,nowMs);
+      const msg="Hazard ahead: "+(z.name||"unmarked hazard");
+      simLogEv("sev-hazard",msg);
+      if(simSoundOn) simTTS(msg);
+    }
+  }
+}
 function feedSim(lat,lon,acc,t,bleFix){
   acc=acc||5; t=t||Date.now();
   // Altitude priority (3D-mode plan, Step 2, item D rescoped 2026-08-14):
@@ -5724,6 +5791,7 @@ function feedSim(lat,lon,acc,t,bleFix){
   const fix={lat,lon,acc,t};
   if(effAlt!=null){ fix.alt=effAlt; fix.altAcc=(bleFix&&bleFix.altAcc!=null)?bleFix.altAcc:5; fix.altSource="baro"; }
   const sm=GPSFilter.push(fix);
+  SimTravelHeading.update(sm.speed, sm.headingTravel);
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
   simLastSmoothed=sm;
   // use raw (unsmoothed) position for zone detection so small zones aren't
@@ -5731,6 +5799,7 @@ function feedSim(lat,lon,acc,t,bleFix){
   // reason (not the EKF-smoothed sm.alt, which would lag behind a fast
   // simulated walk between stops at different elevations).
   const raw={lat,lon,acc,alt:effAlt};
+  checkHazardAhead(raw, SimTravelHeading.heading, sm.speed, t);
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;
