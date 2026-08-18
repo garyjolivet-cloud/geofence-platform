@@ -2287,6 +2287,20 @@ document.getElementById('arBtn').onclick = async ()=>{
     // and field-recorder.html's refreshPublishedZones() use), circle-only,
     // v1 scope. null radius/altM means ARView just won't build the mesh.
     const arTgt = (openedZone.layers||[]).find(l=>l.kind==='target'&&l.radiusM!=null);
+    // Phase 5b (AR occlusion) — same hazard-cylinder gate Phase 5a's
+    // checkHazardAhead() already uses (isHazardZone + target-layer radiusM
+    // + altM set). Snapshotted once here, not re-read live — a path-zone
+    // hazard moving mid-AR-session goes stale, same acceptable tradeoff
+    // already made for zoneCenter itself a few lines above.
+    const hazardCylinders = BUNDLE.zones
+      .filter(z => isHazardZone(z) && z.altM!=null)
+      .map(z => {
+        const layer=(z.layers||[]).find(l=>l.kind==='target'&&l.radiusM!=null);
+        if(!layer) return null;
+        const tol=z.altToleranceM!=null?z.altToleranceM:TUNING.ALT_TOLERANCE_DEFAULT_M;
+        const zc=z.path?centerNow(z,Date.now()):z.center;
+        return zc && {center:zc, radiusM:layer.radiusM, bottom:z.altM-tol, top:z.altM+tol};
+      }).filter(Boolean);
     await ARView.open({
       videoEl: document.getElementById('arVideo'),
       canvas: document.getElementById('arCanvas'),
@@ -2295,6 +2309,7 @@ document.getElementById('arBtn').onclick = async ()=>{
       zoneRadiusM: arTgt ? arTgt.radiusM : null,
       zoneAltM: openedZone.altM ?? null,
       zoneAltToleranceM: openedZone.altToleranceM!=null ? openedZone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M,
+      hazardCylinders,
       onClosed: closeArView
     });
     _arOpenZoneId=openedZone.id;   // Phase 3: HUD.onFix() watches for this zone dropping out of `active`

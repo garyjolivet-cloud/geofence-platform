@@ -26,7 +26,7 @@
  * Host contract:
  *   ARView.open({videoEl, canvas, label, zoneCenter:[lat,lon], arObjects:[...],
  *                visitorLatLon:[lat,lon], zoneRadiusM, zoneAltM, zoneAltToleranceM,
- *                onClosed})
+ *                hazardCylinders, onClosed})
  *     label (optional) is a DOM element this module writes a permanent
  *     live debug readout into every frame — heading/source/beta/gamma and
  *     the bearing to the nearest active object — for diagnosing on-device
@@ -67,6 +67,16 @@
  *     so the model's already fetched+parsed by the time they tap AR.
  *     Doesn't touch scene/camera/anything open()-specific — just warms
  *     the same modelCache loadArObjects() reads from.
+ *   open()'s hazardCylinders (Phase 5b, AR occlusion, optional) —
+ *     [{center:[lat,lon], radiusM, bottom, top}], a snapshot of nearby
+ *     hazard cylinders (same circle+altM geometry the trigger engine's
+ *     forward hazard raycasting, Phase 5a, already uses) taken once at
+ *     open() time. Any placed arObject with obj.occlusion:true fades out
+ *     (closed-form segment-vs-cylinder test, computed in onFix() at
+ *     GPS-fix rate — no THREE.Raycaster, every occluder here is a known
+ *     analytic cylinder, not scanned geometry) when one of these cylinders
+ *     genuinely sits between the visitor and the object, and fades back in
+ *     once the line of sight clears.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -207,6 +217,13 @@ let mixers=[];        // active THREE.AnimationMixer instances, ticked every fra
 let active=[];         // [{mesh, zoneCenter:[lat,lon], anchor:{latOffsetM,lonOffsetM,altM}}]
 let lastVisitorLatLon=null;   // most recent onFix() position, for the debug readout below
 const modelCache=new Map();   // url -> loaded GLTF (template; clone before adding to scene)
+// Phase 5b (AR occlusion) — snapshot of nearby hazard cylinders, taken
+// once at open() (see open()'s own comment on why snapshotting is
+// acceptable for v1). [{center:[lat,lon], radiusM, bottom, top}], bottom/
+// top are ABSOLUTE altitudes (converted to visitor-relative in onFix(),
+// same as the vext cylinder's own altitude handling).
+let hazardCylinders=[];
+const OCCLUSION_FADE_S=0.4;   // full opacity transition when occlusion state flips — short, this is a visibility correction, not an authored fade
 
 function initScene(canvas){
   renderer=new THREE.WebGLRenderer({canvas, alpha:true, antialias:true});
@@ -275,6 +292,50 @@ function bearingTo(a, b){
   return (Math.atan2(y,x)*180/Math.PI+360)%360;
 }
 
+// Phase 5b (AR occlusion) — does the segment from local origin (the
+// visitor/camera — placeMesh() already positions everything relative to
+// them) to P1 (an AR object's local position) pass through a hazard
+// cylinder centered at cylCenterXZ {x,z}, radius R, vertical band
+// [bottom,top] (all local coordinates, already visitor-relative)? Same
+// horizontal-quadratic + vertical-band combination as
+// geofence-engine.html's Geo.segCylinderCross, just run in this module's
+// own local XYZ instead of lat/lon — no THREE.Raycaster needed, every
+// occluder here is a known analytic cylinder, not scanned geometry.
+// tEnter>0 && tExit<1 is deliberately strict on BOTH ends: tEnter<=0 means
+// the segment starts inside the cylinder (visitor standing in a hazard —
+// still sees their own object, fail open); tExit>=1 means the object
+// itself is inside the cylinder (an object placed inside a hazard's own
+// volume isn't hidden by it). Only a genuine "passes through and exits
+// before reaching the object" counts as occluded.
+function segCylinderOcclude(P1, cylCenterXZ, R, bottom, top){
+  const dx=P1.x, dz=P1.z;                          // origin->P1 delta (translation-invariant)
+  const cx=-cylCenterXZ.x, cz=-cylCenterXZ.z;       // origin, relative to cylinder center
+  const a=dx*dx+dz*dz, b=2*(cx*dx+cz*dz), c=cx*cx+cz*cz-R*R;
+  let hLo, hHi;
+  if(a<1e-9){                          // segment doesn't move horizontally at all
+    if(c>0) return false;              // sitting outside the circle the whole time
+    hLo=0; hHi=1;
+  } else {
+    const disc=b*b-4*a*c;
+    if(disc<0) return false;           // line never reaches the circle at all
+    const sq=Math.sqrt(disc);
+    hLo=Math.max(0,(-b-sq)/(2*a)); hHi=Math.min(1,(-b+sq)/(2*a));
+    if(hLo>hHi) return false;
+  }
+  let vLo, vHi;
+  const y0=0, y1=P1.y;
+  if(Math.abs(y1-y0)<1e-6){
+    if(y0<bottom || y0>top) return false;
+    vLo=0; vHi=1;
+  } else {
+    const t1=(bottom-y0)/(y1-y0), t2=(top-y0)/(y1-y0);
+    vLo=Math.max(0,Math.min(t1,t2)); vHi=Math.min(1,Math.max(t1,t2));
+    if(vLo>vHi) return false;
+  }
+  const tEnter=Math.max(hLo,vLo), tExit=Math.min(hHi,vHi);
+  return tEnter<=tExit && tEnter>0 && tExit<1;
+}
+
 // Vertical-extent cylinder (item A, 2026-08-14) — this module's first
 // primitive mesh; every other object here is a loaded/cloned GLB. Open-
 // ended (no top/bottom caps) so the translucent side wall reads as a
@@ -294,9 +355,15 @@ async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
       const rot=obj.rotationDeg||{x:0,y:0,z:0};
       mesh.rotation.set((rot.x||0)*Math.PI/180, (rot.y||0)*Math.PI/180, (rot.z||0)*Math.PI/180);
       mesh.scale.setScalar(obj.scale||1);
-      // obj.occlusion intentionally unread — designed for WebXR depth
-      // sensing, explicitly out of scope for this camera+compass fallback.
-      // Don't fake real-world occlusion against the raw video feed.
+      // obj.occlusion (Phase 5b, AR occlusion against hazard cylinders) —
+      // per-object opt-in: only objects with this set get checked against
+      // the session's hazardCylinders snapshot in onFix(). Originally
+      // authored for a since-skipped WebXR depth-sensing path; repurposed
+      // here since the flag/data already exists on real published objects
+      // (this project's own test Duck has occlusion:true) and the new
+      // meaning (fade out when a real hazard cylinder blocks the line of
+      // sight) is a closer match to what "occlusion" actually means than
+      // leaving it dead.
       //
       // Materials cloned per instance, same reasoning as
       // asset-preview-layer.js's ensureMeshLoaded(): cloneModel() shares
@@ -327,7 +394,11 @@ async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
       // fadeDone:true when fadeInS<=0 (the default) — render()'s fade loop
       // below then does nothing for this object, no behavior change from
       // before this feature existed.
-      active.push({mesh, zoneCenter, anchor, materials, fadeInS, fadeElapsed:0, fadeDone:fadeInS<=0});
+      // occlusionFactor/occlusionTarget: Phase 5b — both start at 1 (fully
+      // visible, nothing occluding yet) until the first onFix() after
+      // hazardCylinders is available actually evaluates this object.
+      active.push({mesh, zoneCenter, anchor, materials, fadeInS, fadeElapsed:0, fadeDone:fadeInS<=0,
+        occlusion:!!obj.occlusion, occlusionFactor:1, occlusionTarget:1});
       if(gltf.animations && gltf.animations.length){
         const mixer=new THREE.AnimationMixer(mesh);
         const clip=(obj.animationClip && gltf.animations.find(c=>c.name===obj.animationClip)) || gltf.animations[0];
@@ -384,23 +455,35 @@ function render(){
       return;   // deliberately no requestAnimationFrame(render) here — close() already nulled everything render() would touch next
     }
   } else {
-    // Fade-in ramp for anything not yet fully faded in (fadeDone:true at
-    // push time for fadeInS<=0, so this is a no-op loop for every object
-    // with no fade configured, including the vext cylinder, which has no
-    // .materials field at all).
+    // Opacity is one product of independent factors — fade-in ramp
+    // (existing) and occlusion ramp (Phase 5b, new) — computed once per
+    // frame per entry, instead of two writers that could stomp each other
+    // (fade-in used to unconditionally set transparent:false once done,
+    // which an occlusion event happening later would need undone). isVext
+    // entries (the hazard/vertical-extent cylinder mesh) have no
+    // .materials at all and are skipped, same as before this change.
     active.forEach(a=>{
-      if(a.fadeDone || !a.materials || !a.materials.length) return;
-      a.fadeElapsed+=dt;
-      const factor=Math.min(1, a.fadeElapsed/a.fadeInS);
-      a.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; });
-      if(factor>=1){
-        a.fadeDone=true;
-        // Drop back to non-transparent once fully faded in — most exported
-        // GLBs are authored opaque, and leaving transparent:true permanently
-        // can show sorting/z-fighting artifacts a normal opaque material
-        // wouldn't have.
-        a.materials.forEach(m=>{ m.opacity=m._baseOpacity; m.transparent=false; });
+      if(!a.materials || !a.materials.length) return;
+      const fadeSettled=a.fadeDone;
+      const occlusionSettled=!a.occlusion || a.occlusionFactor===a.occlusionTarget;
+      if(fadeSettled && occlusionSettled) return;   // opacity already correct, nothing to ramp
+      if(!fadeSettled){
+        a.fadeElapsed+=dt;
+        if(a.fadeElapsed/a.fadeInS>=1) a.fadeDone=true;
       }
+      if(!occlusionSettled){
+        const step=dt/OCCLUSION_FADE_S;
+        a.occlusionFactor = a.occlusionTarget>a.occlusionFactor
+          ? Math.min(a.occlusionTarget, a.occlusionFactor+step)
+          : Math.max(a.occlusionTarget, a.occlusionFactor-step);
+      }
+      const fadeInFactor=a.fadeDone?1:Math.min(1, a.fadeElapsed/a.fadeInS);
+      const product=fadeInFactor*a.occlusionFactor;
+      // transparent only when the product actually reduces opacity — most
+      // exported GLBs are authored opaque, and leaving transparent:true
+      // permanently can show sorting/z-fighting artifacts a normal opaque
+      // material wouldn't have.
+      a.materials.forEach(m=>{ m.opacity=m._baseOpacity*product; m.transparent=product<1; });
     });
   }
   renderer.render(scene, camera);
@@ -423,11 +506,12 @@ function fadeOutAndClose(durationS){
 /* ---- public API ---- */
 let _onClosed=null;   // caller's DOM-restoration hook — see close()'s own comment
 async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, visitorLatLon,
-                      zoneRadiusM, zoneAltM, zoneAltToleranceM, onClosed}){
+                      zoneRadiusM, zoneAltM, zoneAltToleranceM, hazardCylinders:hazardCylindersArg, onClosed}){
   if(rafId!=null) return;   // already open
   videoEl=videoElArg; labelEl=label||null;
   _onClosed=onClosed||null;
   lastVisitorLatLon=visitorLatLon||null;
+  hazardCylinders=hazardCylindersArg||[];
   try{
     initScene(canvas);
     clock=new THREE.Clock();
@@ -470,6 +554,24 @@ function onFix(visitorLatLon, visitorAltM){
     if(!a.zoneCenter) return;
     if(a.isVext) a.anchor.altM = (visitorAltM!=null) ? (a.vextAltM-visitorAltM) : 0;
     placeMesh(a.mesh, a.zoneCenter, visitorLatLon, a.anchor);
+    // Phase 5b (AR occlusion): position-only (visitor/object location, not
+    // camera orientation), so it's computed here at GPS-fix rate, not every
+    // render() frame. hazardCylinders is a fixed snapshot from open() but
+    // each cylinder's position RELATIVE TO THE VISITOR still needs
+    // recomputing every fix, same as zoneCenter's own placeMesh() call
+    // above. No visitorAltM yet -> fail open (visible), same "no data =
+    // pass" convention as altOk()/5a's own missing-altitude handling.
+    if(a.occlusion){
+      if(hazardCylinders.length && visitorAltM!=null){
+        const occluded=hazardCylinders.some(cyl=>{
+          const c=toXY(cyl.center, visitorLatLon);
+          return segCylinderOcclude(a.mesh.position, {x:c.x, z:-c.y}, cyl.radiusM, cyl.bottom-visitorAltM, cyl.top-visitorAltM);
+        });
+        a.occlusionTarget=occluded?0:1;
+      } else {
+        a.occlusionTarget=1;
+      }
+    }
   });
 }
 
@@ -497,7 +599,7 @@ function close(){
   if(scene) scene.clear();
   if(renderer){ renderer.dispose(); renderer=null; }
   scene=null; camera=null; clock=null; mixers=[]; active=[];
-  labelEl=null; lastVisitorLatLon=null; _closing=null;
+  labelEl=null; lastVisitorLatLon=null; _closing=null; hazardCylinders=[];
   if(_onClosed){ const cb=_onClosed; _onClosed=null; cb(); }
 }
 
