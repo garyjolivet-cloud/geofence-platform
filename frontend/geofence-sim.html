@@ -23,6 +23,12 @@
 }}
 </script>
 <script type="module" src="/asset-preview-layer.js"></script>
+<!-- Simulated first-person AR view (2026-08-18) — same window.ARView module
+     geofence-engine.html uses on a real device, opened here in its new
+     simulated:true mode (no camera/device-sensors) so occlusion and the
+     distance fade can be seen at a desk. See ar-view.js's own header
+     comment for the simulated-mode contract. -->
+<script type="module" src="/ar-view.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -109,6 +115,7 @@ input[type=range]{width:100%;accent-color:var(--coral)}
         <button class="sm" id="btnOSM">Streets</button>
         <button class="sm" id="btnTilt" style="display:none" title="Tilt to see terrain (3D Mode)">⛰ Tilt</button>
         <button class="sm" id="btnBle" title="Connect a real BLE GPS/barometer dongle — its live fixes drive the avatar instead of Play/drag">📡 BLE preview</button>
+        <button class="sm" id="btnAr" style="display:none" title="View in AR (simulated first-person — no camera/device sensors needed)">🕶 AR</button>
       </div>
     </div>
 
@@ -1044,6 +1051,25 @@ function checkHazardAhead(p, headingDeg, speedMps, nowMs){
     }
   }
 }
+// Same pure function as geofence-engine.html's zoneAudioFadeRadii() (ported
+// verbatim, not re-derived) — this sim has no spatial-audio playback of its
+// own to source the numbers from, but the simulated AR view's distance fade
+// (2026-08-18) still needs the exact same farM/clearM the real audio fade
+// would use for this zone, so "same as audio" stays literal here too.
+function zoneAudioFadeRadii(zone){
+  const farM=(zone && zone.audibleFromM!=null) ? zone.audibleFromM
+    : (BUNDLE && BUNDLE.spatialRangeM!=null) ? BUNDLE.spatialRangeM
+    : 64;
+  const desiredClearM=(zone && zone.spatialClearM!=null) ? zone.spatialClearM
+    : (BUNDLE && BUNDLE.spatialClearM!=null) ? BUNDLE.spatialClearM
+    : Math.max(5, farM*0.12);
+  return {farM, clearM:Math.min(desiredClearM, farM*0.9)};
+}
+
+// Simulated AR view (2026-08-18) — see geofence-sim.html's #btnAr handler
+// below and ar-view.js's simulated-mode header comment.
+let _arZone=null, _arOpenZoneId=null;
+
 /* =========================== ENGINE PIPELINE =========================== */
 /* mirrors HUD.onFix: smooth -> geofence -> needle pick */
 let prevP=null, fixCount=0;
@@ -1079,6 +1105,21 @@ function feed(lat,lon,acc,t,bleFix){
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:effAlt};
   checkHazardAhead(p, TravelHeading.heading, sm.speed, t);
   const active=Geofencer.update(p,prevP,t);
+  // Simulated AR view (2026-08-18) — same #arBtn pattern as
+  // geofence-engine.html's HUD.onFix() (button visibility off the
+  // continuous active array, not a hand-tracked enter/exit flag; Phase 3
+  // auto-close when the visitor/avatar leaves the zone the open session was
+  // opened for). .some(o=>o.url) excludes a stale bundle with unresolved AR
+  // objects, same reasoning as the engine.
+  const arActive=active.find(a=>a.zone.arObjects&&a.zone.arObjects.some(o=>o.url)&&a.d<0);
+  _arZone = arActive ? arActive.zone : null;
+  const btnAr=document.getElementById("btnAr");
+  if(btnAr && typeof ARView!=="undefined") btnAr.style.display = (_arZone && !ARView.isOpen()) ? "inline-block" : "none";
+  if(_arOpenZoneId && typeof ARView!=="undefined" && ARView.isOpen() && (!_arZone || _arZone.id!==_arOpenZoneId)){
+    ARView.fadeOutAndClose();
+    _arOpenZoneId=null;
+  }
+  if(typeof ARView!=="undefined" && ARView.isOpen()) ARView.onFix([p.lat,p.lon], p.alt);
   prevP=p; fixCount++;
   AmbientClip.update(p, t);
   let pick=null,best=Infinity;
@@ -1125,6 +1166,57 @@ BleGPS.init({
 document.getElementById("btnBle").onclick=()=>{
   if(BleGPS.active) BleGPS.disconnect();
   else BleGPS.connect();
+};
+
+// Simulated AR view (2026-08-18) — opens ar-view.js's window.ARView in its
+// new simulated:true mode (no camera/device sensors) so occlusion and the
+// distance fade can be checked at a desk instead of only on a real device
+// walk. Mirrors geofence-engine.html's #arBtn handler; skips the
+// orientation-permission step entirely (not applicable here) and passes
+// videoEl:null since simulated mode never calls startCamera().
+function closeArViewSim(){
+  document.getElementById("arView").style.display="none";
+  _arOpenZoneId=null;
+}
+document.getElementById("btnAr").onclick=async ()=>{
+  if(!_arZone || typeof ARView==="undefined") return;
+  const openedZone=_arZone;
+  const zoneCenter=openedZone.path ? ambientCenterNow(openedZone, Date.now()) : openedZone.center;
+  document.getElementById("arView").style.display="block";
+  try{
+    const arTgt=(openedZone.layers||[]).find(l=>l.kind==="target"&&l.radiusM!=null);
+    const hazardCylinders=BUNDLE.zones
+      .filter(z=>isHazardZone(z)&&z.altM!=null)
+      .map(z=>{
+        const layer=(z.layers||[]).find(l=>l.kind==="target"&&l.radiusM!=null);
+        if(!layer) return null;
+        const tol=z.altToleranceM!=null?z.altToleranceM:TUNING.ALT_TOLERANCE_DEFAULT_M;
+        const zc=z.path?ambientCenterNow(z,Date.now()):z.center;
+        return zc && {center:zc, radiusM:layer.radiusM, bottom:z.altM-tol, top:z.altM+tol};
+      }).filter(Boolean);
+    const {farM:distFarM, clearM:distClearM}=zoneAudioFadeRadii(openedZone);
+    await ARView.open({
+      videoEl:null,
+      canvas: document.getElementById("arCanvas"),
+      label: document.getElementById("arLabel"),
+      zoneCenter, arObjects: openedZone.arObjects,
+      visitorLatLon: prevP ? [prevP.lat, prevP.lon] : null,
+      distFarM, distClearM,
+      zoneRadiusM: arTgt ? arTgt.radiusM : null,
+      zoneAltM: openedZone.altM ?? null,
+      zoneAltToleranceM: openedZone.altToleranceM!=null ? openedZone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M,
+      hazardCylinders,
+      simulated: true,
+      onClosed: closeArViewSim
+    });
+    _arOpenZoneId=openedZone.id;
+  }catch(err){
+    log("ev-warn","AR (sim) unavailable: "+(err&&err.message||err));
+    closeArViewSim();
+  }
+};
+document.getElementById("arCloseBtn").onclick=()=>{
+  if(typeof ARView!=="undefined") ARView.close();
 };
 
 /* =============================== CONSOLE =============================== */
@@ -1403,5 +1495,17 @@ document.getElementById("btnReset").onclick=()=>{ GPSFilter.reset(); Geofencer.r
 
 log("ev-sys","simulator ready — sample walk loaded. Drag the dot, or Draw path → Play.");
 </script>
+<!-- Simulated first-person AR view (2026-08-18) — mirrors geofence-engine.html's
+     #arView overlay, minus the <video> element: simulated:true never calls
+     startCamera(), so there's no camera feed — this div's own black
+     background is the whole backdrop. -->
+<div id="arView" style="display:none;position:fixed;inset:0;z-index:9000;background:#000">
+  <canvas id="arCanvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+  <button id="arCloseBtn" aria-label="Close AR view"
+          style="position:absolute;top:16px;right:16px;z-index:1;width:40px;height:40px;border-radius:50%;
+                 background:rgba(6,10,16,.7);color:var(--snow);border:1px solid var(--rim);font-size:18px">✕</button>
+  <div id="arLabel" style="position:absolute;bottom:24px;left:0;right:0;text-align:center;
+       font-family:'Barlow Condensed';color:var(--snow);text-shadow:0 1px 3px #000;pointer-events:none"></div>
+</div>
 </body>
 </html>

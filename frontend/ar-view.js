@@ -85,6 +85,18 @@
  *     here so the two are literally the same numbers, not just visually
  *     similar). Falls back to SpatialVoice's own defaults (64/8) if
  *     omitted.
+ *   open()'s simulated (optional, 2026-08-18 — geofence-sim.html needed a
+ *     way to see occlusion/fade without a real device+walk, for a "fog of
+ *     war" game being built on top of this system) — skips startCamera()
+ *     (no getUserMedia(), videoEl may be null) and AROrient.start() (no
+ *     device sensors, no permission gate). render() aims the camera at the
+ *     nearest placed object with camera.lookAt() instead of driving it from
+ *     device orientation — freeform look-around is out of scope for v1, the
+ *     acceptance bar here is seeing fade/occlusion state, not aiming
+ *     realism. Everything else (loadArObjects, onFix's occlusion/distance
+ *     math, the opacity product, fadeOutAndClose, close()) is identical
+ *     between both modes — this is the same session, just driven by a
+ *     simulated position feed instead of a real GPS/camera/compass.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -244,6 +256,8 @@ const OCCLUSION_FADE_S=0.4;   // full opacity transition when occlusion state fl
 // copy of geofence-engine.html's function of the same name — same
 // no-window-coupling reasoning as toXY()/bearingTo() above.
 let distFarM=64, distClearM=8;
+// Simulated mode (geofence-sim.html) — see this file's header comment.
+let simulated=false;
 const DIST_FADE_DB_RANGE=30;
 function distFadeGain(f){
   const floor=Math.pow(10,-DIST_FADE_DB_RANGE/20);
@@ -476,8 +490,19 @@ function updateDebugLabel(){
 // loop already calling renderer.render() every frame.
 let _closing=null;   // {elapsed, dur} | null
 function render(){
-  const screenOrient=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
-  applyDeviceQuaternion(camera.quaternion, AROrient.alphaS, AROrient.betaS, AROrient.gammaS, screenOrient);
+  if(simulated){
+    // No device compass/tilt to drive off — aim at whatever's actually
+    // placed instead (prefer a real object over the vext hazard-cylinder
+    // mesh, same active[0] preference updateDebugLabel() already has).
+    // Camera stays at local origin either way (three.js default, matches
+    // placeMesh()'s visitor-relative convention). No-op if nothing's
+    // loaded yet.
+    const target=active.find(a=>!a.isVext)||active[0];
+    if(target) camera.lookAt(target.mesh.position);
+  } else {
+    const screenOrient=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    applyDeviceQuaternion(camera.quaternion, AROrient.alphaS, AROrient.betaS, AROrient.gammaS, screenOrient);
+  }
   const dt=clock.getDelta();
   mixers.forEach(m=>m.update(dt));
   if(_closing){
@@ -560,7 +585,7 @@ function fadeOutAndClose(durationS){
 let _onClosed=null;   // caller's DOM-restoration hook — see close()'s own comment
 async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, visitorLatLon,
                       zoneRadiusM, zoneAltM, zoneAltToleranceM, hazardCylinders:hazardCylindersArg,
-                      distFarM:distFarMArg, distClearM:distClearMArg, onClosed}){
+                      distFarM:distFarMArg, distClearM:distClearMArg, simulated:simulatedArg, onClosed}){
   if(rafId!=null) return;   // already open
   videoEl=videoElArg; labelEl=label||null;
   _onClosed=onClosed||null;
@@ -568,12 +593,17 @@ async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, v
   hazardCylinders=hazardCylindersArg||[];
   distFarM=distFarMArg>0?distFarMArg:64;
   distClearM=distClearMArg!=null?distClearMArg:8;
+  simulated=!!simulatedArg;
   try{
     initScene(canvas);
     clock=new THREE.Clock();
     active=[]; mixers=[];
-    await startCamera();
-    AROrient.start();
+    if(simulated){
+      // No camera feed, no device sensors — see this file's header comment.
+    } else {
+      await startCamera();
+      AROrient.start();
+    }
     window.addEventListener('resize', onResize);
     await loadArObjects(zoneCenter, arObjects||[], visitorLatLon);
     // Vertical-extent cylinder — pushed AFTER arObjects so active[0] (what
@@ -666,7 +696,7 @@ function close(){
   if(renderer){ renderer.dispose(); renderer=null; }
   scene=null; camera=null; clock=null; mixers=[]; active=[];
   labelEl=null; lastVisitorLatLon=null; _closing=null; hazardCylinders=[];
-  distFarM=64; distClearM=8;
+  distFarM=64; distClearM=8; simulated=false;
   if(_onClosed){ const cb=_onClosed; _onClosed=null; cb(); }
 }
 
