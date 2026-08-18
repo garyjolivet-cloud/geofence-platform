@@ -191,7 +191,7 @@
     <div class="controls">
       <button id="btnStart" class="primary">Start GPS</button>
       <button id="btnSim">Sim</button>
-      <button id="btnAudio">Audio</button>
+      <button id="btnAudio" title="Ambient proximity chime — a placeholder synth tone that gets brighter as you approach a stop, separate from spoken narration (which always plays)">Chime</button>
       <button id="btnOffline" title="download tour for use with no signal">⬇ Offline</button>
     </div>
 
@@ -2301,11 +2301,18 @@ document.getElementById('arBtn').onclick = async ()=>{
         const zc=z.path?centerNow(z,Date.now()):z.center;
         return zc && {center:zc, radiusM:layer.radiusM, bottom:z.altM-tol, top:z.altM+tol};
       }).filter(Boolean);
+    // Distance-based AR fade (2026-08-18 field report: "the duck should
+    // fade the same as audio distance") — same zoneAudioFadeRadii() the
+    // audio path itself already uses (SpatialVoice/AmbientVoice, the map's
+    // fadeband rings), so this is literally the same numbers, not a
+    // separately-tuned curve.
+    const {farM: distFarM, clearM: distClearM} = zoneAudioFadeRadii(openedZone);
     await ARView.open({
       videoEl: document.getElementById('arVideo'),
       canvas: document.getElementById('arCanvas'),
       label: document.getElementById('arLabel'),
       zoneCenter, arObjects: openedZone.arObjects, visitorLatLon: [HUD.pos.lat, HUD.pos.lon],
+      distFarM, distClearM,
       zoneRadiusM: arTgt ? arTgt.radiusM : null,
       zoneAltM: openedZone.altM ?? null,
       zoneAltToleranceM: openedZone.altToleranceM!=null ? openedZone.altToleranceM : TUNING.ALT_TOLERANCE_DEFAULT_M,
@@ -2418,9 +2425,9 @@ function toggleSim(){
 }
 document.getElementById('btnSim').onclick=toggleSim;
 document.getElementById('btnAudio').onclick=function(){
-  if(Clarity.on){ Clarity.disable(); this.classList.remove('on'); HUD.log('ev-sys','clarity audio OFF'); }
+  if(Clarity.on){ Clarity.disable(); this.classList.remove('on'); HUD.log('ev-sys','proximity chime OFF'); }
   else { Clarity.enable(); this.classList.add('on');
-    HUD.log('ev-sys','audio ON — move toward a stop to hear the voice'); }
+    HUD.log('ev-sys','proximity chime ON — spoken narration plays either way'); }
 };
 
 document.querySelectorAll('.sim .pad [data-dir]').forEach(b=>{

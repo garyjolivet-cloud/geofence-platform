@@ -26,7 +26,7 @@
  * Host contract:
  *   ARView.open({videoEl, canvas, label, zoneCenter:[lat,lon], arObjects:[...],
  *                visitorLatLon:[lat,lon], zoneRadiusM, zoneAltM, zoneAltToleranceM,
- *                hazardCylinders, onClosed})
+ *                hazardCylinders, distFarM, distClearM, onClosed})
  *     label (optional) is a DOM element this module writes a permanent
  *     live debug readout into every frame — heading/source/beta/gamma and
  *     the bearing to the nearest active object — for diagnosing on-device
@@ -77,6 +77,14 @@
  *     analytic cylinder, not scanned geometry) when one of these cylinders
  *     genuinely sits between the visitor and the object, and fades back in
  *     once the line of sight clears.
+ *   open()'s distFarM/distClearM (both optional, 2026-08-18 field report
+ *     "the duck should fade the same as audio distance") — every placed
+ *     arObject fades with distance-to-zoneCenter using the SAME curve
+ *     geofence-engine.html's SpatialVoice/AmbientVoice use for a stop's
+ *     recorded audio (pass the host's own zoneAudioFadeRadii(zone) output
+ *     here so the two are literally the same numbers, not just visually
+ *     similar). Falls back to SpatialVoice's own defaults (64/8) if
+ *     omitted.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -224,6 +232,24 @@ const modelCache=new Map();   // url -> loaded GLTF (template; clone before addi
 // same as the vext cylinder's own altitude handling).
 let hazardCylinders=[];
 const OCCLUSION_FADE_S=0.4;   // full opacity transition when occlusion state flips — short, this is a visibility correction, not an authored fade
+
+// Distance-based opacity fade (2026-08-18 field report: "the duck should
+// fade the same as audio distance") — reuses the EXACT curve
+// geofence-engine.html's SpatialVoice/AmbientVoice already use for a
+// stop's recorded-audio volume, so "same as audio" is literal, not
+// approximate. distFarM/distClearM come from the host's own
+// zoneAudioFadeRadii(zone) (same helper feeding the audio fade + the
+// map's own fadeband rings), passed into open(); fall back to that
+// helper's own defaults if the host omits them. fadeGain() is a local
+// copy of geofence-engine.html's function of the same name — same
+// no-window-coupling reasoning as toXY()/bearingTo() above.
+let distFarM=64, distClearM=8;
+const DIST_FADE_DB_RANGE=30;
+function distFadeGain(f){
+  const floor=Math.pow(10,-DIST_FADE_DB_RANGE/20);
+  return (Math.pow(10,-DIST_FADE_DB_RANGE*f/20)-floor)/(1-floor);
+}
+const DISTANCE_FADE_S=0.6;   // opacity transition rate as distanceFactor's target changes — short enough to track a walking visitor without visible stepping between 1Hz GPS fixes
 
 function initScene(canvas){
   renderer=new THREE.WebGLRenderer({canvas, alpha:true, antialias:true});
@@ -397,8 +423,12 @@ async function loadArObjects(zoneCenter, arObjects, visitorLatLon){
       // occlusionFactor/occlusionTarget: Phase 5b — both start at 1 (fully
       // visible, nothing occluding yet) until the first onFix() after
       // hazardCylinders is available actually evaluates this object.
+      // distanceFactor/distanceTarget: same starting-at-1 reasoning, for
+      // the distance-based fade (matches SpatialVoice's own audio fade) —
+      // applies to every placed object, not just occlusion opt-ins.
       active.push({mesh, zoneCenter, anchor, materials, fadeInS, fadeElapsed:0, fadeDone:fadeInS<=0,
-        occlusion:!!obj.occlusion, occlusionFactor:1, occlusionTarget:1});
+        occlusion:!!obj.occlusion, occlusionFactor:1, occlusionTarget:1,
+        distanceFactor:1, distanceTarget:1});
       if(gltf.animations && gltf.animations.length){
         const mixer=new THREE.AnimationMixer(mesh);
         const clip=(obj.animationClip && gltf.animations.find(c=>c.name===obj.animationClip)) || gltf.animations[0];
@@ -427,7 +457,12 @@ function updateDebugLabel(){
     if(a.zoneCenter){
       const brg=Math.round(bearingTo(lastVisitorLatLon, a.zoneCenter));
       const delta=Math.round(((brg-displayHeading)%360+360)%360);
-      extra=' | obj brg '+brg+'° Δ'+delta+'°';
+      // Distance to zone center — cheap live diagnostic (2026-08-18) so a
+      // future "did I walk far enough for auto-close" field report can be
+      // answered with a number instead of "far enough".
+      const distXY=toXY(a.zoneCenter, lastVisitorLatLon);
+      const dist=Math.round(Math.hypot(distXY.x, distXY.y));
+      extra=' | obj brg '+brg+'° Δ'+delta+'° dist '+dist+'m';
     }
   }
   labelEl.textContent='hdg '+displayHeading+'° ('+(AROrient.source||'none')+') '+
@@ -448,7 +483,18 @@ function render(){
   if(_closing){
     _closing.elapsed+=dt;
     const factor=Math.max(0, 1-_closing.elapsed/_closing.dur);
-    active.forEach(a=>{ if(a.materials) a.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor; m.transparent=true; }); });
+    // Ramp down from wherever this entry's opacity actually was, not from
+    // full brightness — without capturing the fade-in/occlusion/distance
+    // product here too, a duck already dimmed by distance or occlusion
+    // would pop to full-bright for one frame before the close-out ramp
+    // started, right at the exact moment a walking-away test is watching
+    // for a fade. None of these factors update while closing (this is the
+    // only writer active), so this is a clean snapshot, not a race.
+    active.forEach(a=>{
+      if(!a.materials) return;
+      const prod=(a.fadeDone?1:Math.min(1,a.fadeElapsed/a.fadeInS))*(a.occlusionFactor??1)*(a.distanceFactor??1);
+      a.materials.forEach(m=>{ m.opacity=m._baseOpacity*factor*prod; m.transparent=true; });
+    });
     if(factor<=0){
       renderer.render(scene, camera);   // one last frame at full transparency before tearing down
       close();
@@ -466,7 +512,8 @@ function render(){
       if(!a.materials || !a.materials.length) return;
       const fadeSettled=a.fadeDone;
       const occlusionSettled=!a.occlusion || a.occlusionFactor===a.occlusionTarget;
-      if(fadeSettled && occlusionSettled) return;   // opacity already correct, nothing to ramp
+      const distanceSettled=a.distanceFactor===a.distanceTarget;
+      if(fadeSettled && occlusionSettled && distanceSettled) return;   // opacity already correct, nothing to ramp
       if(!fadeSettled){
         a.fadeElapsed+=dt;
         if(a.fadeElapsed/a.fadeInS>=1) a.fadeDone=true;
@@ -477,8 +524,14 @@ function render(){
           ? Math.min(a.occlusionTarget, a.occlusionFactor+step)
           : Math.max(a.occlusionTarget, a.occlusionFactor-step);
       }
+      if(!distanceSettled){
+        const step=dt/DISTANCE_FADE_S;
+        a.distanceFactor = a.distanceTarget>a.distanceFactor
+          ? Math.min(a.distanceTarget, a.distanceFactor+step)
+          : Math.max(a.distanceTarget, a.distanceFactor-step);
+      }
       const fadeInFactor=a.fadeDone?1:Math.min(1, a.fadeElapsed/a.fadeInS);
-      const product=fadeInFactor*a.occlusionFactor;
+      const product=fadeInFactor*a.occlusionFactor*a.distanceFactor;
       // transparent only when the product actually reduces opacity — most
       // exported GLBs are authored opaque, and leaving transparent:true
       // permanently can show sorting/z-fighting artifacts a normal opaque
@@ -506,12 +559,15 @@ function fadeOutAndClose(durationS){
 /* ---- public API ---- */
 let _onClosed=null;   // caller's DOM-restoration hook — see close()'s own comment
 async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, visitorLatLon,
-                      zoneRadiusM, zoneAltM, zoneAltToleranceM, hazardCylinders:hazardCylindersArg, onClosed}){
+                      zoneRadiusM, zoneAltM, zoneAltToleranceM, hazardCylinders:hazardCylindersArg,
+                      distFarM:distFarMArg, distClearM:distClearMArg, onClosed}){
   if(rafId!=null) return;   // already open
   videoEl=videoElArg; labelEl=label||null;
   _onClosed=onClosed||null;
   lastVisitorLatLon=visitorLatLon||null;
   hazardCylinders=hazardCylindersArg||[];
+  distFarM=distFarMArg>0?distFarMArg:64;
+  distClearM=distClearMArg!=null?distClearMArg:8;
   try{
     initScene(canvas);
     clock=new THREE.Clock();
@@ -572,6 +628,16 @@ function onFix(visitorLatLon, visitorAltM){
         a.occlusionTarget=1;
       }
     }
+    // Distance-based fade (matches SpatialVoice's own audio fade curve) —
+    // every placed object, not just occlusion opt-ins. Planar distance via
+    // the same toXY() this module already uses for placement, precise
+    // enough at AR-relevant (tens of metres) scale.
+    if(a.materials && a.materials.length){
+      const base=toXY(a.zoneCenter, visitorLatLon);
+      const distM=Math.hypot(base.x, base.y);
+      const f=Math.max(0, Math.min(1, (distM-distClearM)/Math.max(1, distFarM-distClearM)));
+      a.distanceTarget=distFadeGain(f);
+    }
   });
 }
 
@@ -600,6 +666,7 @@ function close(){
   if(renderer){ renderer.dispose(); renderer=null; }
   scene=null; camera=null; clock=null; mixers=[]; active=[];
   labelEl=null; lastVisitorLatLon=null; _closing=null; hazardCylinders=[];
+  distFarM=64; distClearM=8;
   if(_onClosed){ const cb=_onClosed; _onClosed=null; cb(); }
 }
 
