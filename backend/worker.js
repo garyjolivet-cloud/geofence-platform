@@ -505,6 +505,14 @@ async function logAudit(env, request, A, action, target) {
 function randomHex(n = 32) {
   return [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, "0")).join("");
 }
+// Ridge Quest password reset — a short numeric code (typed back in, not a
+// clicked link) is easier to use on a phone. crypto.getRandomValues, not
+// Math.random(), for the same reason every other token in this file uses it.
+function randomSixDigitCode() {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return String(buf[0] % 1000000).padStart(6, "0");
+}
 async function hashPassword(password, salt) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
@@ -780,6 +788,65 @@ async function api(request, env, url) {
     const P = await playerAuth(request, env);
     if (!P) return json({ error: "not authenticated" }, 401, AC);
     return json({ id: P.playerId, email: P.email, displayName: P.displayName, appId: P.appId }, 200, AC);
+  }
+  // --- Ridge Quest: forgot / reset password (6-digit code, not a link —
+  // easier to type back in on a phone mid-hill than tap through email) ---
+  // reset_token stores the HASH of the code (never the raw code), same
+  // never-store-raw-secrets convention as every session token in this file.
+  // forgot-password always returns ok regardless of whether the email
+  // exists, so this endpoint can't be used to enumerate accounts.
+  if (path === "/api/players/forgot-password" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const email = (b.email || "").toLowerCase().trim();
+    if (!email || !b.appId) return json({ error: "email and appId required" }, 400, AC);
+    const player = await env.DB.prepare("SELECT id FROM player_account WHERE app_id=? AND email=?").bind(b.appId, email).first().catch(() => null);
+    if (player) {
+      const code = randomSixDigitCode();
+      const codeHash = await sha256hex(code);
+      const resetExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
+      await env.DB.prepare("UPDATE player_account SET reset_token=?,reset_expires=? WHERE id=?").bind(codeHash, resetExpires, player.id).run();
+      await sendEmail(env, {
+        to: email, subject: "Your Ridge Quest reset code",
+        html: `<p>Your password reset code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:4px">${code}</p><p>This code expires in 15 minutes. If you didn't request this, you can ignore this email.</p>`
+      }).catch(() => {});
+    }
+    return json({ ok: true }, 200, AC);
+  }
+  // Read-only check (doesn't consume the code) — lets the frontend show
+  // immediate "wrong code" feedback before asking for a new password.
+  // reset-password below re-validates the code itself, so this step being
+  // skipped or bypassed client-side isn't a security boundary, just UX.
+  if (path === "/api/players/verify-reset-code" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const email = (b.email || "").toLowerCase().trim();
+    if (!email || !b.appId || !b.code) return json({ error: "email, appId and code required" }, 400, AC);
+    const codeHash = await sha256hex(String(b.code).trim());
+    const player = await env.DB.prepare(
+      "SELECT id FROM player_account WHERE app_id=? AND email=? AND reset_token=? AND reset_expires>?"
+    ).bind(b.appId, email, codeHash, Date.now()).first().catch(() => null);
+    return json({ ok: !!player }, 200, AC);
+  }
+  if (path === "/api/players/reset-password" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const email = (b.email || "").toLowerCase().trim();
+    if (!email || !b.appId || !b.code || !b.password) return json({ error: "email, appId, code and password required" }, 400, AC);
+    if (b.password.length < 8) return json({ error: "password must be at least 8 characters" }, 400, AC);
+    const codeHash = await sha256hex(String(b.code).trim());
+    const player = await env.DB.prepare(
+      "SELECT id FROM player_account WHERE app_id=? AND email=? AND reset_token=? AND reset_expires>?"
+    ).bind(b.appId, email, codeHash, Date.now()).first().catch(() => null);
+    if (!player) return json({ error: "invalid or expired code" }, 400, AC);
+    const salt = randomHex(16);
+    const hash = await hashPassword(b.password, salt);
+    await env.DB.prepare("UPDATE player_account SET password_hash=?,salt=?,reset_token=NULL,reset_expires=NULL WHERE id=?").bind(hash, salt, player.id).run();
+    // Invalidate every existing session on this account — a password reset
+    // is often prompted by a compromised account, so any session an
+    // attacker already holds should be logged out too, not just future ones.
+    await env.DB.prepare("DELETE FROM player_session WHERE player_id=?").bind(player.id).run().catch(() => {});
+    return json({ ok: true }, 200, AC);
   }
 
   // --- Ridge Quest: mandatory onboarding gate (data consent, liability

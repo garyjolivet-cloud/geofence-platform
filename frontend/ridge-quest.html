@@ -43,9 +43,6 @@
   .steps span{flex:1;height:4px;border-radius:2px;background:var(--rim)}
   .steps span.done{background:var(--go)}
   .steps span.active{background:var(--coral)}
-  table.wx{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
-  table.wx th,table.wx td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--rim)}
-  table.wx th{color:var(--fog);font-family:"Barlow Condensed";font-weight:600;letter-spacing:.3px;text-transform:uppercase;font-size:11px}
   .now{display:flex;gap:18px;margin-bottom:16px}
   .now .stat{flex:1;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:12px;text-align:center}
   .now .stat b{display:block;font-family:"Barlow Condensed";font-size:22px;color:var(--snow)}
@@ -100,9 +97,11 @@ function renderAuth(mode){
     +'<div class="switcher">'
       +(mode==="login" ? 'New here? <a id="toSignup">Create an account</a>' : 'Already playing? <a id="toLogin">Log in</a>')
     +'</div>'
+    +(mode==="login" ? '<div class="switcher"><a id="toForgot">Forgot password?</a></div>' : '')
     +'</div>';
   const toSignup=document.getElementById("toSignup"); if(toSignup) toSignup.onclick=()=>renderAuth("signup");
   const toLogin=document.getElementById("toLogin"); if(toLogin) toLogin.onclick=()=>renderAuth("login");
+  const toForgot=document.getElementById("toForgot"); if(toForgot) toForgot.onclick=()=>renderForgotEmail();
   document.getElementById("btnGo").onclick=async()=>{
     const email=document.getElementById("fEmail").value.trim();
     const password=document.getElementById("fPass").value;
@@ -119,6 +118,88 @@ function renderAuth(mode){
     }catch(e){
       errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>';
     }finally{ btn.disabled=false; }
+  };
+}
+
+/* ===================== FORGOT / RESET PASSWORD ===================== */
+// Three steps: email -> 6-digit code (emailed, 15 min) -> new password.
+// The code is re-validated server-side at the final submit regardless of
+// verify-reset-code's own check — see worker.js's own comment on why that
+// intermediate check is a UX nicety, not a security boundary.
+function renderForgotEmail(){
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Reset your password</h2>'
+    +'<p class="lead">We’ll send a 6-digit code to your email. It’s good for 15 minutes.</p>'
+    +'<div id="fpErr"></div>'
+    +'<label for="fpEmail">Email</label><input id="fpEmail" type="email" autocomplete="email">'
+    +'<button class="primary" id="fpSend">Send code</button>'
+    +'<div class="switcher"><a id="fpBack">Back to log in</a></div>'
+    +'</div>';
+  document.getElementById("fpBack").onclick=()=>renderAuth("login");
+  document.getElementById("fpSend").onclick=async()=>{
+    const email=document.getElementById("fpEmail").value.trim();
+    const errEl=document.getElementById("fpErr"); errEl.innerHTML="";
+    if(!email){ errEl.innerHTML='<div class="err">Enter your email.</div>'; return; }
+    const btn=document.getElementById("fpSend"); btn.disabled=true;
+    try{
+      await api("/api/players/forgot-password", {method:"POST", body:JSON.stringify({email, appId:RQ_APP_ID})});
+      renderForgotCode(email);
+    }catch(e){
+      errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>';
+    }finally{ btn.disabled=false; }
+  };
+}
+function renderForgotCode(email){
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Enter your code</h2>'
+    +'<p class="lead">We sent a 6-digit code to '+esc(email)+'. It expires in 15 minutes.</p>'
+    +'<div id="fcErr"></div>'
+    +'<label for="fcCode">6-digit code</label>'
+    +'<input id="fcCode" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" style="letter-spacing:6px;font-size:22px;text-align:center">'
+    +'<button class="primary" id="fcVerify">Continue</button>'
+    +'<div class="switcher"><a id="fcResend">Resend code</a> &nbsp;·&nbsp; <a id="fcBack">Back</a></div>'
+    +'</div>';
+  document.getElementById("fcBack").onclick=()=>renderForgotEmail();
+  document.getElementById("fcResend").onclick=async()=>{
+    try{ await api("/api/players/forgot-password", {method:"POST", body:JSON.stringify({email, appId:RQ_APP_ID})}); }catch(e){}
+    const errEl=document.getElementById("fcErr"); errEl.innerHTML='<div class="err" style="background:#0f2a1f;border-color:var(--go);color:#9af0c8">New code sent.</div>';
+  };
+  document.getElementById("fcVerify").onclick=async()=>{
+    const code=document.getElementById("fcCode").value.trim();
+    const errEl=document.getElementById("fcErr"); errEl.innerHTML="";
+    if(!/^\d{6}$/.test(code)){ errEl.innerHTML='<div class="err">Enter the 6-digit code.</div>'; return; }
+    const btn=document.getElementById("fcVerify"); btn.disabled=true;
+    try{
+      const j = await api("/api/players/verify-reset-code", {method:"POST", body:JSON.stringify({email, appId:RQ_APP_ID, code})});
+      if(!j.ok){ errEl.innerHTML='<div class="err">That code is wrong or expired.</div>'; btn.disabled=false; return; }
+      renderResetPassword(email, code);
+    }catch(e){
+      errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>'; btn.disabled=false;
+    }
+  };
+}
+function renderResetPassword(email, code){
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Set a new password</h2>'
+    +'<div id="rpErr"></div>'
+    +'<label for="rpPass">New password</label><input id="rpPass" type="password" autocomplete="new-password">'
+    +'<button class="primary" id="rpSave">Save new password</button>'
+    +'</div>';
+  document.getElementById("rpSave").onclick=async()=>{
+    const password=document.getElementById("rpPass").value;
+    const errEl=document.getElementById("rpErr"); errEl.innerHTML="";
+    if(!password || password.length<8){ errEl.innerHTML='<div class="err">Password must be at least 8 characters.</div>'; return; }
+    const btn=document.getElementById("rpSave"); btn.disabled=true;
+    try{
+      await api("/api/players/reset-password", {method:"POST", body:JSON.stringify({email, appId:RQ_APP_ID, code, password})});
+      app.innerHTML='<div class="card welcome"><p class="go">Password updated.</p><p class="lead">Log in with your new password.</p></div>';
+      setTimeout(()=>renderAuth("login"), 1400);
+    }catch(e){
+      errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>'; btn.disabled=false;
+    }
   };
 }
 
@@ -212,33 +293,40 @@ async function runGate(){
 }
 
 /* ============================ CONDITIONS ============================ */
-function fmtDate(d){ try{ return new Date(d+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"}); }catch(e){ return d; } }
+// ww_* fields (weather_cache/snow_history) are the White Wall top station —
+// confirmed against the scraper (backend/worker.js's scrapeWeather()
+// column comment) rather than assumed. Simple 4-way compass direction, per
+// request — not the raw degree bearing.
+const COMPASS4 = ["N","E","S","W"];
+function compass4(deg){ return deg==null ? null : COMPASS4[Math.round(deg/90)%4]; }
+function sumSnow(rows,n){
+  const slice = rows.slice(0, n); // rows arrive newest-first from /api/snow-history
+  if(!slice.length || slice.every(r=>r.hn24_cm==null)) return null;
+  return Math.round(slice.reduce((s,r)=>s+(r.hn24_cm||0),0)*10)/10;
+}
 
 async function renderConditions(onContinue){
-  app.innerHTML = '<div class="card"><h2>Conditions</h2><p class="lead">Loading the last 14 days…</p></div>';
+  app.innerHTML = '<div class="card"><h2>Conditions</h2><p class="lead">Loading…</p></div>';
   let now=null, history=[];
   try{ now = await api("/api/weather"); }catch(e){}
   try{ history = await api("/api/snow-history"); }catch(e){ history=[]; }
-  const rows = (history||[]).map(r=>
-    '<tr><td>'+esc(fmtDate(r.snapshot_date))+'</td>'
-    +'<td>'+(r.hn24_cm!=null?r.hn24_cm+' cm':'—')+'</td>'
-    +'<td>'+(r.hs_cm!=null?r.hs_cm+' cm':'—')+'</td>'
-    +'<td>'+(r.ww_temp_c!=null?r.ww_temp_c+'°C':'—')+'</td></tr>'
-  ).join('');
+  const snow24 = history.length ? history[0].hn24_cm : null;
+  const snow7 = sumSnow(history,7);
+  const snow14 = sumSnow(history,14);
+  const dir = now && !now.error ? compass4(now.ww_wind_dir_deg) : null;
   app.innerHTML =
     '<div class="card">'
     +'<h2>Conditions</h2>'
     +'<p class="lead">Check before you head out. Only look at this while stopped and off the trail — see the risk notice you just accepted.</p>'
-    +(now && !now.error
-      ? '<div class="now">'
-        +'<div class="stat"><b>'+(now.ww_temp_c!=null?now.ww_temp_c+'°':'—')+'</b><span>Temp C</span></div>'
-        +'<div class="stat"><b>'+(now.ww_wind_spd_kph!=null?Math.round(now.ww_wind_spd_kph):'—')+'</b><span>Wind kph</span></div>'
-        +'<div class="stat"><b>'+(now.precip_24hr_mm!=null?now.precip_24hr_mm:'—')+'</b><span>24h precip mm</span></div>'
-        +'</div>'
-      : '<p class="lead">Current conditions unavailable right now.</p>')
-    +(rows
-      ? '<table class="wx"><thead><tr><th>Date</th><th>New snow</th><th>Base</th><th>Temp</th></tr></thead><tbody>'+rows+'</tbody></table>'
-      : '<p class="lead">No snow history yet.</p>')
+    +'<div class="now">'
+      +'<div class="stat"><b>'+(now&&!now.error&&now.ww_temp_c!=null?now.ww_temp_c+'°':'—')+'</b><span>White Wall top</span></div>'
+      +'<div class="stat"><b>'+(now&&!now.error&&now.ww_wind_spd_kph!=null?Math.round(now.ww_wind_spd_kph):'—')+'</b><span>Wind kph'+(dir?' '+dir:'')+'</span></div>'
+      +'</div>'
+    +'<div class="now">'
+      +'<div class="stat"><b>'+(snow24!=null?snow24+'cm':'—')+'</b><span>Last 24h</span></div>'
+      +'<div class="stat"><b>'+(snow7!=null?snow7+'cm':'—')+'</b><span>Last 7 days</span></div>'
+      +'<div class="stat"><b>'+(snow14!=null?snow14+'cm':'—')+'</b><span>Last 14 days</span></div>'
+      +'</div>'
     +'<button class="primary" id="btnCont">Continue</button>'
     +'</div>';
   document.getElementById("btnCont").onclick=onContinue;
