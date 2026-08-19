@@ -555,6 +555,51 @@ async function playerAuth(request, env) {
     return { playerId: row.pid, email: row.email, displayName: row.display_name, appId: row.app_id };
   } catch (e) { return null; }
 }
+// Google Sign-In (Ridge Quest OAuth addendum). This Client ID is public by
+// design (Google's own docs: it's meant to be embedded in frontend JS,
+// never a secret) — unlike RESEND_API_KEY, it's a plain constant, not a
+// wrangler secret.
+const GOOGLE_OAUTH_CLIENT_ID = "228254697293-80gino7h5nfbbth1tlui3ndided7bjr8.apps.googleusercontent.com";
+function b64urlToBytes(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+function b64urlToJson(s) {
+  return JSON.parse(new TextDecoder().decode(b64urlToBytes(s)));
+}
+// Verifies a Google Identity Services ID token entirely with native Web
+// Crypto (no external JWT library — this repo has zero npm dependencies by
+// design). Fetches Google's current public keys, checks the RS256
+// signature, then exp/iss/aud. Returns the decoded payload (sub, email,
+// email_verified, name, ...) or throws.
+async function verifyGoogleIdToken(idToken, audience) {
+  const parts = (idToken || "").split(".");
+  if (parts.length !== 3) throw new Error("malformed token");
+  const [headerB64, payloadB64, sigB64] = parts;
+  const header = b64urlToJson(headerB64);
+  const payload = b64urlToJson(payloadB64);
+  if (header.alg !== "RS256") throw new Error("unexpected alg");
+  const jwksRes = await fetch("https://www.googleapis.com/oauth2/v3/certs");
+  if (!jwksRes.ok) throw new Error("could not fetch Google signing keys");
+  const jwks = await jwksRes.json();
+  const jwk = (jwks.keys || []).find(k => k.kid === header.kid);
+  if (!jwk) throw new Error("no matching Google signing key");
+  const key = await crypto.subtle.importKey(
+    "jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]
+  );
+  const signedData = new TextEncoder().encode(headerB64 + "." + payloadB64);
+  const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlToBytes(sigB64), signedData);
+  if (!ok) throw new Error("bad signature");
+  const now = Math.floor(Date.now() / 1000);
+  if (!payload.exp || payload.exp < now) throw new Error("token expired");
+  if (payload.iss !== "https://accounts.google.com" && payload.iss !== "accounts.google.com") throw new Error("bad issuer");
+  if (payload.aud !== audience) throw new Error("bad audience");
+  return payload;
+}
 function appUrl(env, path, request) {
   if (env.APP_URL) return env.APP_URL.replace(/\/+$/, "") + path;
   if (request) { try { return new URL(request.url).origin + path; } catch(e) {} }
@@ -788,6 +833,47 @@ async function api(request, env, url) {
     const P = await playerAuth(request, env);
     if (!P) return json({ error: "not authenticated" }, 401, AC);
     return json({ id: P.playerId, email: P.email, displayName: P.displayName, appId: P.appId }, 200, AC);
+  }
+  // --- Ridge Quest: Google Sign-In ---
+  // Looks up by google_sub first; falls back to matching (app_id, email) to
+  // auto-link an existing password account — safe because Google has
+  // already verified the email (checked below), not just asserted by the
+  // client. Creates a new google_sub-only account (no password) if neither
+  // matches. Issues a session the same way /api/players/login does.
+  if (path === "/api/players/oauth/google" && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    if (!b.credential || !b.appId) return json({ error: "credential and appId required" }, 400, AC);
+    let payload;
+    try {
+      payload = await verifyGoogleIdToken(b.credential, GOOGLE_OAUTH_CLIENT_ID);
+    } catch (e) {
+      return json({ error: "invalid Google credential: " + e.message }, 401, AC);
+    }
+    if (!payload.email_verified) return json({ error: "Google account email is not verified" }, 401, AC);
+    const email = (payload.email || "").toLowerCase().trim();
+    if (!email) return json({ error: "Google account has no email" }, 400, AC);
+    let player = await env.DB.prepare(
+      "SELECT id,email,display_name FROM player_account WHERE app_id=? AND google_sub=?"
+    ).bind(b.appId, payload.sub).first().catch(() => null);
+    if (!player) {
+      const byEmail = await env.DB.prepare(
+        "SELECT id,email,display_name FROM player_account WHERE app_id=? AND email=?"
+      ).bind(b.appId, email).first().catch(() => null);
+      if (byEmail) {
+        await env.DB.prepare("UPDATE player_account SET google_sub=? WHERE id=?").bind(payload.sub, byEmail.id).run();
+        player = byEmail;
+      } else {
+        const id = crypto.randomUUID();
+        await env.DB.prepare(
+          "INSERT INTO player_account (id,email,google_sub,app_id,display_name,created_at) VALUES (?,?,?,?,?,?)"
+        ).bind(id, email, payload.sub, b.appId, payload.name || null, new Date().toISOString()).run();
+        player = { id, email, display_name: payload.name || null };
+      }
+    }
+    const token = await createPlayerSession(env, player.id, request.headers.get("cf-connecting-ip") || "");
+    await env.DB.prepare("UPDATE player_account SET last_login_at=? WHERE id=?").bind(new Date().toISOString(), player.id).run().catch(() => {});
+    return json({ ok: true, token, player: { id: player.id, email: player.email, displayName: player.display_name, appId: b.appId } }, 200, AC);
   }
   // --- Ridge Quest: forgot / reset password (6-digit code, not a link —
   // easier to type back in on a phone mid-hill than tap through email) ---

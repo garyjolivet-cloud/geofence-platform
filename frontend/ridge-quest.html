@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ridge Quest</title>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Google Identity Services — client-side Sign in with Google. The button
+     returns a signed ID token directly to this page; the actual identity
+     verification happens server-side (verifyGoogleIdToken() in worker.js),
+     this script only renders the button and hands us that token. -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -29,6 +34,8 @@
   button.ghost{background:transparent;border:1px solid var(--rim);color:var(--ice);margin-top:10px}
   button.danger{background:transparent;border:1px solid var(--hazard);color:var(--hazard);margin-top:10px}
   .switcher{text-align:center;margin-top:16px;font-size:13.5px;color:var(--fog)}
+  .orDivider{display:flex;align-items:center;gap:10px;color:var(--fog);font-family:"Barlow Condensed";font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin:14px 0}
+  .orDivider::before,.orDivider::after{content:"";flex:1;height:1px;background:var(--rim)}
   .switcher a{color:var(--ice);cursor:pointer;text-decoration:underline}
   .err{background:#2a0f14;border:1px solid var(--hazard);color:#ff9aab;border-radius:10px;padding:10px 13px;font-size:13.5px;margin-top:14px}
   .msg{color:var(--fog);font-family:"Barlow Condensed";text-align:center;padding:40px 10px}
@@ -61,6 +68,9 @@
 "use strict";
 const API = location.origin;
 const RQ_APP_ID = new URLSearchParams(location.search).get("app") || "golden-nordic";
+// Public by design (Google's own docs) — safe to ship in frontend JS, not
+// a secret. Must match backend's GOOGLE_OAUTH_CLIENT_ID (worker.js) exactly.
+const RQ_GOOGLE_CLIENT_ID = "228254697293-80gino7h5nfbbth1tlui3ndided7bjr8.apps.googleusercontent.com";
 const app = document.getElementById("app");
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
@@ -90,6 +100,8 @@ function renderAuth(mode){
     +'<h2>'+(mode==="login"?"Log in":"Create your account")+'</h2>'
     +'<p class="lead">Track every run, chute, bowl and ridge you ski — and reveal the mountain as you go.</p>'
     +'<div id="authErr"></div>'
+    +'<div id="googleBtn" style="margin:4px 0 4px;display:flex;justify-content:center"></div>'
+    +'<div class="orDivider" id="orDivider">or</div>'
     +(mode==="signup" ? '<label for="fName">Display name</label><input id="fName" type="text" autocomplete="nickname" placeholder="Trail name">' : '')
     +'<label for="fEmail">Email</label><input id="fEmail" type="email" autocomplete="email">'
     +'<label for="fPass">Password</label><input id="fPass" type="password" autocomplete="'+(mode==="login"?"current-password":"new-password")+'">'
@@ -102,6 +114,16 @@ function renderAuth(mode){
   const toSignup=document.getElementById("toSignup"); if(toSignup) toSignup.onclick=()=>renderAuth("signup");
   const toLogin=document.getElementById("toLogin"); if(toLogin) toLogin.onclick=()=>renderAuth("login");
   const toForgot=document.getElementById("toForgot"); if(toForgot) toForgot.onclick=()=>renderForgotEmail();
+  renderGoogleButton(async(credential)=>{
+    const errEl=document.getElementById("authErr"); errEl.innerHTML="";
+    try{
+      const j = await api("/api/players/oauth/google", {method:"POST", body:JSON.stringify({credential, appId:RQ_APP_ID})});
+      setSession(j.token, j.player);
+      boot();
+    }catch(e){
+      errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>';
+    }
+  });
   document.getElementById("btnGo").onclick=async()=>{
     const email=document.getElementById("fEmail").value.trim();
     const password=document.getElementById("fPass").value;
@@ -119,6 +141,25 @@ function renderAuth(mode){
       errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>';
     }finally{ btn.disabled=false; }
   };
+}
+// Google's GIS script is loaded async/defer (see <head>), so it may not be
+// ready yet the instant this runs — poll briefly rather than assume.
+// Fails silently (hides the button+divider, password form still works)
+// rather than erroring if it never loads (blocked network, offline, etc).
+function renderGoogleButton(onCredential){
+  const el=document.getElementById("googleBtn");
+  const divider=document.getElementById("orDivider");
+  if(!el) return;
+  function tryInit(attemptsLeft){
+    if(window.google && google.accounts && google.accounts.id){
+      google.accounts.id.initialize({client_id:RQ_GOOGLE_CLIENT_ID, callback:(resp)=>onCredential(resp.credential)});
+      google.accounts.id.renderButton(el, {theme:"filled_black", size:"large", width:280, text:"continue_with"});
+      return;
+    }
+    if(attemptsLeft<=0){ el.style.display="none"; if(divider) divider.style.display="none"; return; }
+    setTimeout(()=>tryInit(attemptsLeft-1), 300);
+  }
+  tryInit(15);
 }
 
 /* ===================== FORGOT / RESET PASSWORD ===================== */
