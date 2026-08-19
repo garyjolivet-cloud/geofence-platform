@@ -806,10 +806,16 @@ async function api(request, env, url) {
       const codeHash = await sha256hex(code);
       const resetExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
       await env.DB.prepare("UPDATE player_account SET reset_token=?,reset_expires=? WHERE id=?").bind(codeHash, resetExpires, player.id).run();
+      // Failure is logged, not surfaced to the caller — this endpoint must
+      // not reveal whether an email exists or whether sending succeeded
+      // (same reasoning as the unconditional {ok:true} below). console.error
+      // shows up in `wrangler tail`, the only way to diagnose a bad
+      // RESEND_API_KEY/FROM_EMAIL/unverified-domain failure in production
+      // since nothing here can surface it to the player.
       await sendEmail(env, {
         to: email, subject: "Your Ridge Quest reset code",
         html: `<p>Your password reset code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:4px">${code}</p><p>This code expires in 15 minutes. If you didn't request this, you can ignore this email.</p>`
-      }).catch(() => {});
+      }).catch(e => { console.error("sendEmail (reset code) failed:", e.message); });
     }
     return json({ ok: true }, 200, AC);
   }
@@ -967,7 +973,7 @@ async function api(request, env, url) {
     await sendEmail(env, {
       to: email, subject: "You've been invited to Chase Life",
       html: `<p>You've been added to the Chase Life guide platform.</p><p><a href="${inviteUrl}">Set your password and get started</a></p><p>This link expires in 7 days.</p>`
-    }).catch(() => {});
+    }).catch(e => { console.error("sendEmail (invite) failed:", e.message); });
     await logAudit(env, request, A, "user.create", id);
     return json({ ok: true, id, inviteUrl }, 200, AC);
   }
@@ -1034,7 +1040,7 @@ async function api(request, env, url) {
     await sendEmail(env, {
       to: user.email, subject: "Your Chase Life invite link",
       html: `<p>Here is your updated invite link for Chase Life:</p><p><a href="${inviteUrl}">Set your password</a></p><p>This link expires in 7 days.</p>`
-    }).catch(() => {});
+    }).catch(e => { console.error("sendEmail (resend invite) failed:", e.message); });
     return json({ ok: true, inviteUrl }, 200, AC);
   }
 
