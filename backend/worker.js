@@ -997,9 +997,44 @@ async function api(request, env, url) {
       env.DB.prepare("DELETE FROM consent WHERE playerId=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_session WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM quest_run WHERE player_id=?").bind(P.playerId),
+      env.DB.prepare("DELETE FROM player_fog_cell WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_account WHERE id=?").bind(P.playerId)
     ]);
     return json({ ok: true, forgotten: P.playerId }, 200, AC);
+  }
+
+  // --- Ridge Quest R2: H3 fog-of-war reveal ---
+  // Client computes which H3 res-10 cells to grant (disk-reveal around each
+  // confidence-gated GPS fix — see ridge-quest.html's Quest module) and the
+  // server just persists it, upgrade-only, same trust model as quest_run
+  // above. state=2 ("Visible", actually skied) is the only value R2 ever
+  // sends; state=1 ("Fog", viewpoint-seen) is reserved for R4's
+  // action.reveal_viewshed pipeline block, not built yet. Absence of a row
+  // for a cell means Shroud (never seen).
+  if (path === "/api/fog-cells" && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const cells = Array.isArray(b.cells) ? b.cells.filter(c => typeof c === "string" && c.length > 0 && c.length <= 20) : [];
+    const state = b.state === 1 ? 1 : 2;
+    if (!cells.length) return json({ error: "cells (non-empty array) required" }, 400, AC);
+    if (cells.length > 500) return json({ error: "too many cells in one call (max 500)" }, 400, AC);
+    const now = new Date().toISOString();
+    await env.DB.batch(cells.map(cell =>
+      env.DB.prepare(
+        "INSERT INTO player_fog_cell (player_id,h3_cell,state,updated_at) VALUES (?,?,?,?) ON CONFLICT(player_id,h3_cell) DO UPDATE SET state=MAX(state,excluded.state), updated_at=excluded.updated_at"
+      ).bind(P.playerId, cell, state, now)
+    ));
+    return json({ ok: true, count: cells.length }, 200, AC);
+  }
+  const mpfog = path.match(/^\/api\/players\/([^/]+)\/fog$/);
+  if (mpfog && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mpfog[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const { results } = await env.DB.prepare("SELECT h3_cell,state FROM player_fog_cell WHERE player_id=?").bind(P.playerId).all();
+    return json({ cells: results || [] }, 200, AC);
   }
 
   // --- Ridge Quest R1: corridor-crossing runs ---

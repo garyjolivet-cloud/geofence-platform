@@ -13,6 +13,12 @@
 <!-- R1: shared GPS smoothing module, same EKF every other GPS-consuming
      page in this codebase already loads. Reused as-is, not modified. -->
 <script src="/kalman-filter.js"></script>
+<!-- R2: H3 geo-indexing (disk-reveal math) and MapLibre (personal fog-map
+     rendering) — same MapLibre version geofence-engine.html/fence-editor.html
+     already use elsewhere in this codebase. -->
+<script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -71,6 +77,14 @@
   .runrow .name{flex:1;color:var(--snow)}
   .runrow .meta{color:var(--fog);font-size:12px;white-space:nowrap}
   .empty{color:var(--fog);font-size:13px;text-align:center;padding:10px 0}
+  /* R2 — fog map screen: a full-viewport overlay, deliberately OUTSIDE
+     .wrap's 520px max-width (a map needs the whole screen, not a card). */
+  .fogMapOverlay{position:fixed;inset:0;background:var(--night);z-index:1000}
+  #fogMap{position:absolute;inset:0}
+  .fogMapBack{position:absolute;top:14px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
+  .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
+  .fogMapLegend span{display:flex;align-items:center;gap:6px}
+  .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
 </style>
 </head>
 <body>
@@ -414,7 +428,9 @@ const QUEST_TUNING = {
   MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
   MAX_DURATION_S: 5400,    // 90 min — something went wrong (GPS stuck in-band), discard
   SKI_SPEED_MIN_MPS: 2.5,  // ~9 km/h; below this while descending a run = skinning/walking it, not skiing it
-  COOLDOWN_MS: 4000        // avoid double-counting a lingering crossing at the band edge
+  COOLDOWN_MS: 4000,       // avoid double-counting a lingering crossing at the band edge
+  ACCURACY_CAP_M: 40,      // R2: fixes worse than this don't drive fog reveal — same value/reasoning as geofence-engine.html's TUNING.ACCURACY_CAP_M
+  FOG_RESOLUTION: 10       // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
 };
 
 const QGeo = {
@@ -443,16 +459,20 @@ const QGeo = {
 };
 
 const Quest = {
-  corridors: [],      // [{zoneId,name,difficulty,runType,widthM,path,ref}]
-  states: {},          // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
+  corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,ref}]
+  ref: null,            // [lat,lon] project reference point (R2 map center) — set by loadCorridors() regardless of whether any corridor exists
+  states: {},           // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
+  fogCells: new Map(),  // R2: h3Cell -> state (2="Visible"/skied; 1="Fog" reserved for R4) — the player's own local mirror of player_fog_cell
   watchId: null,
-  onRunLogged: null,   // callback(run) — fired after a run is successfully posted
+  onRunLogged: null,    // callback(run) — fired after a run is successfully posted
+  onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
 
   async loadCorridors(){
     try{
       const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
       if(bundle.error){ this.corridors=[]; return; }
       const ref = bundle.ref || [0,0];
+      this.ref = ref;
       this.corridors = (bundle.zones||[]).map(z=>{
         const target = (z.layers||[]).find(l=>l.kind==="target" && l.geometry && l.geometry.type==="corridor");
         if(!target) return null;
@@ -462,8 +482,19 @@ const Quest = {
     }catch(e){ this.corridors=[]; }
   },
 
-  start(onRunLogged){
+  // R2 — loads the player's already-revealed cells once (session start /
+  // map open) so _revealFog() only ever POSTs genuinely NEW cells, not the
+  // same disk every tick a player lingers in one spot.
+  async loadFogCells(playerId){
+    try{
+      const j = await api("/api/players/"+playerId+"/fog");
+      this.fogCells = new Map((j.cells||[]).map(c=>[c.h3_cell, c.state]));
+    }catch(e){ /* keep whatever was already loaded (or empty) — a failed fetch here shouldn't block tracking */ }
+  },
+
+  start(onRunLogged, onFogUpdated){
     this.onRunLogged = onRunLogged;
+    this.onFogUpdated = onFogUpdated || null;
     this.states = {};
     GPSFilter.reset();
     if(!navigator.geolocation) return false;
@@ -483,6 +514,26 @@ const Quest = {
                   alt: c.altitude!=null ? c.altitude : null, altAcc: c.altitudeAccuracy!=null ? c.altitudeAccuracy : null };
     const p = GPSFilter.push(fix);
     this.corridors.forEach(corridor=>this._tick(corridor, p));
+    this._revealFog(p, fix.acc);
+  },
+
+  // R2 — H3 disk-reveal: mark the fix's own cell plus its k=1 ring (7 cells,
+  // ~200m across — the "torch radius" absorbing normal GPS jitter, per the
+  // plan's Fog-of-World precedent) as state=2 ("Visible"). Confidence-gated
+  // on fix.acc, same "no data = pass, don't act on garbage" convention
+  // TUNING.ACCURACY_CAP_M already uses in geofence-engine.html. Only NEW
+  // cells (not already in this.fogCells) get POSTed — revisiting already-
+  // revealed terrain is a local no-op, not a wasted network call.
+  _revealFog(p, acc){
+    if(acc > QUEST_TUNING.ACCURACY_CAP_M) return;
+    if(typeof h3 === "undefined") return; // CDN script blocked/offline — fail safe, no reveal rather than throw
+    const origin = h3.latLngToCell(p.lat, p.lon, QUEST_TUNING.FOG_RESOLUTION);
+    const disk = h3.gridDisk(origin, 1);
+    const newCells = disk.filter(cell => (this.fogCells.get(cell)||0) < 2);
+    if(!newCells.length) return;
+    newCells.forEach(cell => this.fogCells.set(cell, 2));
+    if(this.onFogUpdated) this.onFogUpdated();
+    api("/api/fog-cells", { method:"POST", body: JSON.stringify({ cells:newCells, state:2 }) }).catch(()=>{});
   },
 
   _tick(corridor, p){
@@ -578,8 +629,9 @@ function renderHome(){
   app.innerHTML =
     '<div class="card welcome">'
     +'<p class="go">You’re in.</p>'
-    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. The fog-of-war map, points and leaderboards land in a later build — tracking runs is live.</p>'
+    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Points and leaderboards land in a later build — tracking runs and revealing the mountain are live.</p>'
     +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
+    +'<button class="ghost" id="btnMap">My map</button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<button class="ghost" id="btnConditions">Check conditions again</button>'
     +'<button class="ghost" id="btnLogout">Log out</button>'
@@ -587,6 +639,7 @@ function renderHome(){
     +'</div>';
   refreshRuns(s.player.id);
   Quest.loadCorridors();
+  Quest.loadFogCells(s.player.id);
   const trackBtn=document.getElementById("btnTrack");
   trackBtn.onclick=()=>{
     if(Quest.active()){
@@ -598,6 +651,7 @@ function renderHome(){
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
     }
   };
+  document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
   document.getElementById("btnLogout").onclick=async()=>{
     Quest.stop();
@@ -612,6 +666,63 @@ function renderHome(){
       clearSession(); renderAuth("login");
     }catch(e){ alert(e.message); }
   };
+}
+
+/* =========================== FOG MAP (R2) ===========================
+   Personal fog-of-war map — renders Quest.fogCells (already loaded/kept
+   live by the Quest module, tracking or not) as a MapLibre fill layer over
+   the same Esri World_Imagery raster basemap geofence-engine.html already
+   uses (plain OSM raster tiles have no CORS headers and silently fail —
+   see the discovery-osm-tile-cors-block memory, already worked around
+   elsewhere in this codebase). A fixed full-viewport overlay, deliberately
+   outside .wrap's 520px card width — a map needs the whole screen. */
+function fogFeatureCollection(){
+  const features=[];
+  Quest.fogCells.forEach((state, cell)=>{
+    const ring = h3.cellToBoundary(cell, true); // geoJson:true -> [lon,lat] pairs, already closed
+    features.push({ type:"Feature", properties:{ state }, geometry:{ type:"Polygon", coordinates:[ring] } });
+  });
+  return { type:"FeatureCollection", features };
+}
+function renderFogMap(){
+  if(!Quest.ref){
+    app.innerHTML =
+      '<div class="fogMapOverlay"><button class="ghost fogMapBack" id="fogBack">← Back</button>'
+      +'<div class="msg" style="padding-top:120px">Map isn’t available yet — this resort’s runs haven’t been configured.</div></div>';
+    document.getElementById("fogBack").onclick=renderHome;
+    return;
+  }
+  app.innerHTML =
+    '<div class="fogMapOverlay"><div id="fogMap"></div>'
+    +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
+    +'<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span></div>'
+    +'</div>';
+  const map = new maplibregl.Map({
+    container:"fogMap",
+    style:{ version:8,
+      sources:{ base:{ type:"raster",
+        tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize:256, attribution:"Esri, Maxar" } },
+      layers:[{ id:"base", type:"raster", source:"base" }] },
+    center:[Quest.ref[1], Quest.ref[0]], zoom:13
+  });
+  map.addControl(new maplibregl.NavigationControl());
+  function syncSource(){
+    const src = map.getSource("fog");
+    if(src) src.setData(fogFeatureCollection());
+  }
+  map.on("load", ()=>{
+    map.addSource("fog", { type:"geojson", data: fogFeatureCollection() });
+    map.addLayer({ id:"fog-fill", type:"fill", source:"fog",
+      paint:{ "fill-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "fill-opacity":0.5 } });
+    map.addLayer({ id:"fog-line", type:"line", source:"fog",
+      paint:{ "line-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "line-width":1.5, "line-opacity":0.8 } });
+  });
+  // Live redraw as new cells get revealed WHILE this screen is open (tracking
+  // may already be running from Home) — cleared on back-out so a later fix,
+  // after navigating away, doesn't try to touch a torn-down map instance.
+  Quest.onFogUpdated = syncSource;
+  document.getElementById("fogBack").onclick=()=>{ Quest.onFogUpdated=null; renderHome(); };
 }
 
 /* ============================== BOOT ============================== */
