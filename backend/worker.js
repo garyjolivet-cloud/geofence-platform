@@ -996,9 +996,53 @@ async function api(request, env, url) {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM consent WHERE playerId=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_session WHERE player_id=?").bind(P.playerId),
+      env.DB.prepare("DELETE FROM quest_run WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_account WHERE id=?").bind(P.playerId)
     ]);
     return json({ ok: true, forgotten: P.playerId }, 200, AC);
+  }
+
+  // --- Ridge Quest R1: corridor-crossing runs ---
+  // Classification (ski/lift/hike, direction, speed, vertical) happens
+  // CLIENT-SIDE in ridge-quest.html's own self-contained corridor detector
+  // and the server trusts it — same trust model this whole platform already
+  // uses for zone behavior (CLAUDE.md's Pipeline System: "executed locally
+  // on the visitor's device... no server round-trip to decide what fires"),
+  // not a new concession. appId is taken from the authenticated player's own
+  // account, never from the request body, so a player can't attribute a run
+  // to a different app's leaderboard.
+  if (path === "/api/quest-runs" && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    if (!b.zoneId || !b.activity || !b.startedAt || !b.endedAt)
+      return json({ error: "zoneId, activity, startedAt and endedAt are required" }, 400, AC);
+    if (!["ski", "lift", "hike"].includes(b.activity))
+      return json({ error: "activity must be ski, lift, or hike" }, 400, AC);
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO quest_run
+       (id,player_id,app_id,zone_id,run_name,difficulty,run_type,activity,started_at,ended_at,duration_s,vertical_m,distance_m,avg_speed_mps,max_speed_mps,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      id, P.playerId, P.appId, b.zoneId, b.runName || null, b.difficulty || null, b.runType || null, b.activity,
+      b.startedAt, b.endedAt, b.durationS || 0, b.verticalM != null ? b.verticalM : null,
+      b.distanceM != null ? b.distanceM : null, b.avgSpeedMps != null ? b.avgSpeedMps : null,
+      b.maxSpeedMps != null ? b.maxSpeedMps : null, new Date().toISOString()
+    ).run();
+    return json({ ok: true, id }, 200, AC);
+  }
+  const mpr = path.match(/^\/api\/players\/([^/]+)\/runs$/);
+  if (mpr && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mpr[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const limit = Math.min(200, Math.max(1, +(url.searchParams.get("limit") || 50)));
+    const { results } = await env.DB.prepare(
+      "SELECT id,zone_id,run_name,difficulty,run_type,activity,started_at,ended_at,duration_s,vertical_m,distance_m,avg_speed_mps,max_speed_mps FROM quest_run WHERE player_id=? ORDER BY started_at DESC LIMIT ?"
+    ).bind(P.playerId, limit).all();
+    return json({ runs: results || [] }, 200, AC);
   }
 
   // --- users: list ---

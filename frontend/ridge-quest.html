@@ -10,6 +10,9 @@
      verification happens server-side (verifyGoogleIdToken() in worker.js),
      this script only renders the button and hands us that token. -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<!-- R1: shared GPS smoothing module, same EKF every other GPS-consuming
+     page in this codebase already loads. Reused as-is, not modified. -->
+<script src="/kalman-filter.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -56,6 +59,18 @@
   .now .stat span{font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px}
   .welcome{text-align:center;padding:20px 6px}
   .welcome .go{font-family:"Black Han Sans";font-size:26px;color:var(--go);margin:0 0 6px}
+  .trackBtn{background:var(--go);color:#052018}
+  .trackBtn.tracking{background:var(--hazard);color:#2a0f14}
+  .runlist{margin-top:16px}
+  .runlist h3{font-family:"Barlow Condensed";font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--fog);margin:18px 0 8px}
+  .runrow{display:flex;align-items:center;gap:10px;background:var(--night);border:1px solid var(--rim);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13.5px}
+  .runrow .badge{flex:0 0 auto;font-family:"Barlow Condensed";font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:3px 8px;border-radius:6px;background:var(--rim);color:var(--snow)}
+  .runrow .badge.ski{background:var(--coral);color:#1a0d07}
+  .runrow .badge.lift{background:var(--ice);color:#08202f}
+  .runrow .badge.hike{background:var(--go);color:#052018}
+  .runrow .name{flex:1;color:var(--snow)}
+  .runrow .meta{color:var(--fog);font-size:12px;white-space:nowrap}
+  .empty{color:var(--fog);font-size:13px;text-align:center;padding:10px 0}
 </style>
 </head>
 <body>
@@ -373,25 +388,226 @@ async function renderConditions(onContinue){
   document.getElementById("btnCont").onclick=onContinue;
 }
 
-/* ============================ HOME (v1 stub) ============================ */
+/* ================ CORRIDOR CROSSING DETECTOR (R1) ================
+   Self-contained — local copies of the corridor signed-distance math and
+   haversine (same math Geofencer.sd()'s corridor branch and Geo.hav() use
+   in geofence-engine.html, copied not imported), same "no coupling to a
+   host page's globals" pattern ar-view.js already established. GPSFilter
+   (kalman-filter.js) IS reused as-is — that's a real shared module every
+   GPS-consuming page in this codebase already loads, not a local copy.
+
+   Zero changes to geofence-engine.html/geofence-sim.html/fence-editor.html:
+   this reads corridor geometry from the existing PUBLIC bundle endpoint
+   (the same one Fence Editor publishes to and the tour engine reads), and
+   classification (ski/lift/hike, direction, speed, vertical) happens here,
+   client-side — the server just stores what this reports, same trust model
+   this whole platform already uses for zone behavior (Pipeline System:
+   "executed locally on the visitor's device", per CLAUDE.md). */
+
+// Which project's corridors to read — separate from RQ_APP_ID (that's the
+// player-account app; a project's corridors can live in any project under
+// it). Needs a real project id once the mountain's runs are drawn in Fence
+// Editor — not a blocker to building this detector.
+const RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || "REPLACE_WITH_QUEST_PROJECT_ID";
+
+const QUEST_TUNING = {
+  MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
+  MAX_DURATION_S: 5400,    // 90 min — something went wrong (GPS stuck in-band), discard
+  SKI_SPEED_MIN_MPS: 2.5,  // ~9 km/h; below this while descending a run = skinning/walking it, not skiing it
+  COOLDOWN_MS: 4000        // avoid double-counting a lingering crossing at the band edge
+};
+
+const QGeo = {
+  R: 6371000,
+  mPerDegLat: 111320,
+  mPerDegLon(lat){ return 111320*Math.cos(lat*Math.PI/180); },
+  toXY(p, ref){ return { x:(p[1]-ref[1])*this.mPerDegLon(ref[0]), y:(p[0]-ref[0])*this.mPerDegLat }; },
+  haversineM(a,b){ const p1=a[0]*Math.PI/180,p2=b[0]*Math.PI/180,
+            dp=(b[0]-a[0])*Math.PI/180,dl=(b[1]-a[1])*Math.PI/180;
+            const x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+            return 2*this.R*Math.asin(Math.sqrt(x)); },
+  segDist(P,A,B){ const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
+            const c1=vx*wx+vy*wy; if(c1<=0) return Math.hypot(wx,wy);
+            const c2=vx*vx+vy*vy; if(c2<=c1) return Math.hypot(P.x-B.x,P.y-B.y);
+            const t=c1/c2; return Math.hypot(P.x-(A.x+t*vx), P.y-(A.y+t*vy)); },
+  // signed distance from p [lat,lon] to a corridor polyline `path` ([lat,lon]
+  // pairs), minus half its width — same formula as geofence-engine.html's
+  // Geofencer.sd() corridor branch.
+  corridorDist(p, corridor, ref){
+    const P=this.toXY(p,ref);
+    const pts=corridor.path.map(c=>this.toXY(c,ref));
+    let best=Infinity;
+    for(let i=1;i<pts.length;i++) best=Math.min(best, this.segDist(P,pts[i-1],pts[i]));
+    return best - (corridor.widthM||10)/2;
+  }
+};
+
+const Quest = {
+  corridors: [],      // [{zoneId,name,difficulty,runType,widthM,path,ref}]
+  states: {},          // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
+  watchId: null,
+  onRunLogged: null,   // callback(run) — fired after a run is successfully posted
+
+  async loadCorridors(){
+    try{
+      const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
+      if(bundle.error){ this.corridors=[]; return; }
+      const ref = bundle.ref || [0,0];
+      this.corridors = (bundle.zones||[]).map(z=>{
+        const target = (z.layers||[]).find(l=>l.kind==="target" && l.geometry && l.geometry.type==="corridor");
+        if(!target) return null;
+        return { zoneId:z.id, name:z.name||"Run", difficulty:z.difficulty||null, runType:z.runType||"run",
+                 widthM:target.geometry.widthM||10, path:target.geometry.path, ref };
+      }).filter(Boolean);
+    }catch(e){ this.corridors=[]; }
+  },
+
+  start(onRunLogged){
+    this.onRunLogged = onRunLogged;
+    this.states = {};
+    GPSFilter.reset();
+    if(!navigator.geolocation) return false;
+    this.watchId = navigator.geolocation.watchPosition(
+      pos=>this._onFix(pos), ()=>{}, { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
+    );
+    return true;
+  },
+  stop(){
+    if(this.watchId!=null){ navigator.geolocation.clearWatch(this.watchId); this.watchId=null; }
+  },
+  active(){ return this.watchId!=null; },
+
+  _onFix(pos){
+    const c=pos.coords;
+    const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy||30, t:pos.timestamp||Date.now(),
+                  alt: c.altitude!=null ? c.altitude : null, altAcc: c.altitudeAccuracy!=null ? c.altitudeAccuracy : null };
+    const p = GPSFilter.push(fix);
+    this.corridors.forEach(corridor=>this._tick(corridor, p));
+  },
+
+  _tick(corridor, p){
+    const st = this.states[corridor.zoneId] || (this.states[corridor.zoneId] = { phase:"idle", buffer:[], cooldownUntil:0 });
+    if(Date.now() < st.cooldownUntil) return;
+    const inBand = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref) < 0;
+    if(st.phase==="idle" && inBand){
+      st.phase="inRun"; st.buffer=[p];
+    } else if(st.phase==="inRun" && inBand){
+      st.buffer.push(p);
+    } else if(st.phase==="inRun" && !inBand){
+      st.buffer.push(p);
+      this._classifyAndLog(corridor, st.buffer);
+      st.phase="idle"; st.buffer=[]; st.cooldownUntil=Date.now()+QUEST_TUNING.COOLDOWN_MS;
+    }
+  },
+
+  _classifyAndLog(corridor, buffer){
+    if(buffer.length<2) return;
+    const first=buffer[0], last=buffer[buffer.length-1];
+    const durationS = (last.t-first.t)/1000;
+    if(durationS < QUEST_TUNING.MIN_DURATION_S || durationS > QUEST_TUNING.MAX_DURATION_S) return;
+
+    // Direction: which drawn endpoint (path[0]="top" vs path[last]="bottom",
+    // by authoring convention) the player was nearer to at entry vs exit —
+    // no authored top/bottom triplines needed (R1's scope simplification).
+    const endTop = corridor.path[0], endBottom = corridor.path[corridor.path.length-1];
+    const nearTop = (pt)=> QGeo.haversineM([pt.lat,pt.lon], endTop) < QGeo.haversineM([pt.lat,pt.lon], endBottom);
+    const descending = nearTop(first) && !nearTop(last);
+    const ascending = !nearTop(first) && nearTop(last);
+
+    let distanceM=0;
+    for(let i=1;i<buffer.length;i++) distanceM += QGeo.haversineM([buffer[i-1].lat,buffer[i-1].lon],[buffer[i].lat,buffer[i].lon]);
+    const speeds = buffer.map(p=>p.speed||0);
+    const avgSpeedMps = speeds.reduce((a,b)=>a+b,0)/speeds.length;
+    const maxSpeedMps = Math.max.apply(null, speeds);
+    // Net vertical delta using the EKF's own smoothed altitude (null if no
+    // fix in this run ever carried a device altitude reading).
+    const verticalM = (first.alt!=null && last.alt!=null) ? (last.alt-first.alt) : null;
+
+    let activity;
+    if(corridor.runType==="lift"){
+      if(!ascending) return; // downhill lift-line foot traffic isn't a lift ride
+      activity="lift";
+    } else if(corridor.runType==="hike"){
+      activity="hike";
+    } else {
+      activity = (descending && avgSpeedMps >= QUEST_TUNING.SKI_SPEED_MIN_MPS) ? "ski" : "hike";
+    }
+
+    const run = {
+      zoneId: corridor.zoneId, runName: corridor.name, difficulty: corridor.difficulty, runType: corridor.runType,
+      activity, startedAt: new Date(first.t).toISOString(), endedAt: new Date(last.t).toISOString(),
+      durationS, verticalM, distanceM: Math.round(distanceM), avgSpeedMps, maxSpeedMps
+    };
+    api("/api/quest-runs", { method:"POST", body: JSON.stringify(run) })
+      .then(()=>{ if(this.onRunLogged) this.onRunLogged(run); })
+      .catch(()=>{});
+  }
+};
+
+/* ============================ HOME ============================ */
+function fmtDuration(s){
+  s=Math.round(s); const m=Math.floor(s/60), r=s%60;
+  return m+":"+String(r).padStart(2,"0");
+}
+function runRowHtml(r){
+  const activity = r.activity;
+  const meta = [
+    fmtDuration(r.duration_s!=null?r.duration_s:r.durationS),
+    (r.vertical_m!=null?Math.abs(Math.round(r.vertical_m))+"m vert":(r.verticalM!=null?Math.abs(Math.round(r.verticalM))+"m vert":null)),
+  ].filter(Boolean).join(" · ");
+  return '<div class="runrow"><span class="badge '+esc(activity)+'">'+esc(activity)+'</span>'
+    +'<span class="name">'+esc(r.run_name||r.runName||"Run")+'</span>'
+    +'<span class="meta">'+esc(meta)+'</span></div>';
+}
+async function refreshRuns(playerId){
+  const listEl=document.getElementById("todayRuns");
+  if(!listEl) return;
+  try{
+    const j = await api("/api/players/"+playerId+"/runs");
+    const today = new Date().toDateString();
+    const todays = (j.runs||[]).filter(r=>new Date(r.started_at).toDateString()===today);
+    listEl.innerHTML = todays.length
+      ? todays.map(runRowHtml).join("")
+      : '<div class="empty">No runs logged yet today.</div>';
+  }catch(e){
+    listEl.innerHTML = '<div class="empty">Couldn’t load runs.</div>';
+  }
+}
 function renderHome(){
   const s=getSession();
   app.innerHTML =
     '<div class="card welcome">'
     +'<p class="go">You’re in.</p>'
-    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. The fog-of-war map, runs, and leaderboards land in the next build — your account and onboarding are ready to go.</p>'
+    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. The fog-of-war map, points and leaderboards land in a later build — tracking runs is live.</p>'
+    +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
+    +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<button class="ghost" id="btnConditions">Check conditions again</button>'
     +'<button class="ghost" id="btnLogout">Log out</button>'
     +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
     +'</div>';
+  refreshRuns(s.player.id);
+  Quest.loadCorridors();
+  const trackBtn=document.getElementById("btnTrack");
+  trackBtn.onclick=()=>{
+    if(Quest.active()){
+      Quest.stop();
+      trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
+    } else {
+      const ok=Quest.start(()=>refreshRuns(s.player.id));
+      if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
+      trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
+    }
+  };
   document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
   document.getElementById("btnLogout").onclick=async()=>{
+    Quest.stop();
     try{ await api("/api/players/logout",{method:"POST"}); }catch(e){}
     clearSession(); renderAuth("login");
   };
   document.getElementById("btnDelete").onclick=async()=>{
     if(!confirm("This permanently deletes your Ridge Quest account and everything derived from it. This cannot be undone. Continue?")) return;
     try{
+      Quest.stop();
       await api("/api/players/"+s.player.id+"/forget", {method:"POST"});
       clearSession(); renderAuth("login");
     }catch(e){ alert(e.message); }
