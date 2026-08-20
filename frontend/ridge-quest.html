@@ -430,7 +430,9 @@ const QUEST_TUNING = {
   SKI_SPEED_MIN_MPS: 2.5,  // ~9 km/h; below this while descending a run = skinning/walking it, not skiing it
   COOLDOWN_MS: 4000,       // avoid double-counting a lingering crossing at the band edge
   ACCURACY_CAP_M: 40,      // R2: fixes worse than this don't drive fog reveal — same value/reasoning as geofence-engine.html's TUNING.ACCURACY_CAP_M
-  FOG_RESOLUTION: 10       // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
+  FOG_RESOLUTION: 10,      // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
+  VIEWPOINT_RADIUS_M: 15,  // R4: a viewpoint is a spot to stand at, not a zone to cross — small trigger radius
+  FOG_CELLS_POST_CHUNK: 500 // R4: /api/fog-cells caps at 500 cells/call; a full viewshed grant is chunked to this size
 };
 
 const QGeo = {
@@ -462,7 +464,9 @@ const Quest = {
   corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,ref}]
   ref: null,            // [lat,lon] project reference point (R2 map center) — set by loadCorridors() regardless of whether any corridor exists
   states: {},           // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
-  fogCells: new Map(),  // R2: h3Cell -> state (2="Visible"/skied; 1="Fog" reserved for R4) — the player's own local mirror of player_fog_cell
+  fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
+  viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
+  enteredViewpoints: new Set(), // zoneId set — a viewpoint grants once per session; the server's upgrade-only upsert makes a duplicate POST harmless but wasteful, so this avoids re-sending every fix while lingering at a viewpoint
   watchId: null,
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
   onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
@@ -470,7 +474,7 @@ const Quest = {
   async loadCorridors(){
     try{
       const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
-      if(bundle.error){ this.corridors=[]; return; }
+      if(bundle.error){ this.corridors=[]; this.viewpoints=[]; return; }
       const ref = bundle.ref || [0,0];
       this.ref = ref;
       this.corridors = (bundle.zones||[]).map(z=>{
@@ -479,7 +483,13 @@ const Quest = {
         return { zoneId:z.id, name:z.name||"Run", difficulty:z.difficulty||null, runType:z.runType||"run",
                  widthM:target.geometry.widthM||10, path:target.geometry.path, ref };
       }).filter(Boolean);
-    }catch(e){ this.corridors=[]; }
+      // R4 — Viewpoint zones: a plain circle stop flagged isViewpoint, with
+      // a precomputed viewshedCells list (staff-computed in Fence Editor,
+      // never per-player/per-tick). center comes straight from zo.center
+      // ([lat,lon], same convention every other zone here already uses).
+      this.viewpoints = (bundle.zones||[]).filter(z=>z.isViewpoint && z.center && (z.viewshedCells||[]).length)
+        .map(z=>({ zoneId:z.id, name:z.name||"Viewpoint", center:z.center, cells:z.viewshedCells }));
+    }catch(e){ this.corridors=[]; this.viewpoints=[]; }
   },
 
   // R2 — loads the player's already-revealed cells once (session start /
@@ -515,6 +525,41 @@ const Quest = {
     const p = GPSFilter.push(fix);
     this.corridors.forEach(corridor=>this._tick(corridor, p));
     this._revealFog(p, fix.acc);
+    this._tickViewpoints(p);
+  },
+
+  // R4 — Viewpoint entry: a plain distance-to-center check (a viewpoint is
+  // a spot to stand at, not a zone to cross — no corridor-style band
+  // needed). Fires the grant once per session per viewpoint via
+  // enteredViewpoints; the server's own upgrade-only upsert would make a
+  // repeat POST harmless, this just avoids sending one on every fix while
+  // lingering there.
+  _tickViewpoints(p){
+    this.viewpoints.forEach(vp=>{
+      if(this.enteredViewpoints.has(vp.zoneId)) return;
+      if(QGeo.haversineM([p.lat,p.lon], vp.center) > QUEST_TUNING.VIEWPOINT_RADIUS_M) return;
+      this.enteredViewpoints.add(vp.zoneId);
+      this._grantViewshed(vp);
+    });
+  },
+
+  // R4 — grants a viewpoint's precomputed cell-set at state=1 ("Fog"/seen).
+  // Local dedupe must be STATE-AWARE and must never downgrade: a cell
+  // already locally at state 2 (actually skied) stays 2 — Math.max, not an
+  // overwrite. The server's own MAX() upsert protects the DB regardless,
+  // but the local fogCells Map is what the map renderer trusts, so it needs
+  // the same invariant. Chunked to FOG_CELLS_POST_CHUNK per call —
+  // /api/fog-cells caps at 500 cells/request and a full viewshed can be
+  // 1000-2000 cells.
+  _grantViewshed(vp){
+    const newCells = vp.cells.filter(cell => (this.fogCells.get(cell)||0) < 1);
+    if(!newCells.length) return;
+    newCells.forEach(cell => this.fogCells.set(cell, Math.max(this.fogCells.get(cell)||0, 1)));
+    if(this.onFogUpdated) this.onFogUpdated();
+    for(let i=0; i<newCells.length; i+=QUEST_TUNING.FOG_CELLS_POST_CHUNK){
+      const chunk = newCells.slice(i, i+QUEST_TUNING.FOG_CELLS_POST_CHUNK);
+      api("/api/fog-cells", { method:"POST", body: JSON.stringify({ cells:chunk, state:1 }) }).catch(()=>{});
+    }
   },
 
   // R2 — H3 disk-reveal: mark the fix's own cell plus its k=1 ring (7 cells,
@@ -776,7 +821,7 @@ function renderFogMap(){
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
-    +'<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span></div>'
+    +'<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span></div>'
     +'</div>';
   const map = new maplibregl.Map({
     container:"fogMap",
