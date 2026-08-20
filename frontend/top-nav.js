@@ -671,8 +671,20 @@
         // `if(app.threeDEnabled)` like its three siblings above). Ridge
         // Quest's H3 coverage TRACKING keeps working regardless of this
         // flag — it only hides the shroud/colored-cell overlay.
-        mkBtn(app.fogEnabled===false ? "Fog of War: Off" : "Fog of War: On", async () => {
-          const next = app.fogEnabled===false; // off -> turn on; on/undefined -> turn off
+        // Bug fixed 2026-08-20: D1 returns fog_enabled as a raw SQLite
+        // INTEGER (a JS number, 0 or 1) — never the boolean `false`. The
+        // old `app.fogEnabled===false` check could therefore never match,
+        // so the button always displayed "On" and every click always sent
+        // fogEnabled:false, silently forcing it off no matter what — it
+        // could only ever turn fog OFF, never back on, while lying about
+        // the current state. `===0` is the correct check for a D1 integer
+        // column; questEnabled's sibling toggle below already gets this
+        // right via truthy coercion (`!app.questEnabled`), which also works
+        // for 0/1 — this one used strict-equality-against-boolean instead
+        // and that was the actual defect.
+        const fogIsOff = app.fogEnabled === 0;
+        mkBtn(fogIsOff ? "Fog of War: Off" : "Fog of War: On", async () => {
+          const next = fogIsOff; // off(0) -> turn on; on(1)/undefined -> turn off
           if(!confirm((next?"Turn ON":"Turn OFF")+' the fog-of-war reveal visuals for "'+(app.name||app.id)+'" in Ridge Quest? Fog TRACKING keeps working either way — this only hides the shroud/colored map layer.')) return;
           const token = askToken(); if(!token) return;
           const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,fogEnabled:next})});
