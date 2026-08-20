@@ -423,6 +423,9 @@ async function renderConditions(onContinue){
 // it). Needs a real project id once the mountain's runs are drawn in Fence
 // Editor — not a blocker to building this detector.
 const RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || "REPLACE_WITH_QUEST_PROJECT_ID";
+// ?sim=1 reveals the dev-only "Simulate walk" button on Home (Quest.simulateWalk) —
+// never shown to a real player by default, opt-in via URL only.
+const IS_SIM_MODE = new URLSearchParams(location.search).get("sim") === "1";
 
 const QUEST_TUNING = {
   MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
@@ -470,6 +473,7 @@ const Quest = {
   watchId: null,
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
   onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
+  onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
 
   async loadCorridors(){
     try{
@@ -502,14 +506,20 @@ const Quest = {
     }catch(e){ /* keep whatever was already loaded (or empty) — a failed fetch here shouldn't block tracking */ }
   },
 
-  start(onRunLogged, onFogUpdated){
+  start(onRunLogged, onFogUpdated, onStatus){
     this.onRunLogged = onRunLogged;
     this.onFogUpdated = onFogUpdated || null;
+    this.onStatus = onStatus || null;
     this.states = {};
     GPSFilter.reset();
     if(!navigator.geolocation) return false;
     this.watchId = navigator.geolocation.watchPosition(
-      pos=>this._onFix(pos), ()=>{}, { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
+      pos=>this._onFix(pos),
+      // A denied/unavailable permission used to vanish silently here — the
+      // button flips to "Stop tracking" and nothing ever happens again,
+      // indistinguishable from a real bug. Surface it instead.
+      err=>{ if(this.onStatus) this.onStatus({ok:false, message: err && err.message ? err.message : "location error (code "+(err&&err.code)+")"}); },
+      { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
     );
     return true;
   },
@@ -526,7 +536,59 @@ const Quest = {
     this.corridors.forEach(corridor=>this._tick(corridor, p));
     this._revealFog(p, fix.acc);
     this._tickViewpoints(p);
+    if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t});
   },
+
+  // ---- DEV/TEST-ONLY: simulate a walk without real GPS -----------------
+  // Requested directly ("we need to be able to test this... in the edit
+  // test code") after "start tracking does nothing" turned out to mean
+  // "nothing happens at a desk with no real movement" — expected, not a
+  // bug, but there was no way to exercise the game loop without walking
+  // outside. Deliberately built HERE, not as a Fence Editor Test Mode
+  // integration: Test Mode driving this would need its own copy of the
+  // corridor detector (the exact 3-file-mirror trap this repo's CLAUDE.md
+  // already warns about), and still wouldn't exercise the real page, the
+  // real player auth, or the real /api/quest-runs + fog persistence calls.
+  // Feeding synthetic fixes through the SAME _onFix() the real GPS path
+  // uses (including through GPSFilter, not bypassing it) exercises the
+  // actual shipped code end-to-end instead of a parallel simulation.
+  _simCancelled: false,
+  simulateWalk(speedMps, onProgress, onDone){
+    this._simCancelled = false;
+    const corridor = this.corridors[0];
+    if(!corridor || !corridor.path || corridor.path.length<2){ onDone && onDone("no corridor loaded to walk"); return; }
+    const path = corridor.path; // [[lat,lon],...]
+    // Resample the path into ~5m steps so speed/timing is controllable,
+    // independent of however densely the authored path was drawn.
+    const STEP_M = 5;
+    const pts=[];
+    for(let i=1;i<path.length;i++){
+      const a=path[i-1], b=path[i];
+      const segM = QGeo.haversineM(a,b);
+      const steps = Math.max(1, Math.round(segM/STEP_M));
+      for(let s=0;s<steps;s++){
+        const f=s/steps;
+        pts.push([ a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f ]);
+      }
+    }
+    pts.push(path[path.length-1]);
+    this.states = {};
+    GPSFilter.reset();
+    let i=0, simT=Date.now();
+    const stepDtMs = (STEP_M/speedMps)*1000; // simulated time between resampled points
+    const tick=()=>{
+      if(this._simCancelled) return;
+      if(i>=pts.length){ onDone && onDone(null); return; }
+      const [lat,lon]=pts[i];
+      simT += stepDtMs;
+      this._onFix({ coords:{ latitude:lat, longitude:lon, accuracy:8, altitude:null, altitudeAccuracy:null }, timestamp: simT });
+      i++;
+      if(onProgress) onProgress(i, pts.length);
+      setTimeout(tick, 120); // wall-clock pace — fast enough a 400m walk finishes in seconds
+    };
+    tick();
+  },
+  cancelSim(){ this._simCancelled = true; },
 
   // R4 — Viewpoint entry: a plain distance-to-center check (a viewpoint is
   // a spot to stand at, not a zone to cross — no corridor-style band
@@ -718,6 +780,8 @@ function renderHome(){
     +'<div id="statsTiles"></div>'
     +'<p class="scrollhint" id="statsStreak" style="margin-bottom:14px"></p>'
     +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
+    +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0 14px"></p>'
+    +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
     +'<button class="ghost" id="btnMap">My map</button>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
@@ -730,16 +794,39 @@ function renderHome(){
   Quest.loadCorridors();
   Quest.loadFogCells(s.player.id);
   const trackBtn=document.getElementById("btnTrack");
+  const statusEl=document.getElementById("gpsStatus");
+  const onStatus=(st)=>{
+    if(!statusEl) return;
+    statusEl.textContent = st.ok
+      ? "last fix "+new Date(st.t).toLocaleTimeString()+", ±"+Math.round(st.acc)+"m"
+      : "location error: "+st.message+" — check your browser's location permission for this site";
+  };
   trackBtn.onclick=()=>{
     if(Quest.active()){
       Quest.stop();
       trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
+      statusEl.textContent="";
     } else {
-      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); });
+      statusEl.textContent="waiting for GPS…";
+      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
     }
   };
+  if(IS_SIM_MODE){
+    const simBtn=document.getElementById("btnSim");
+    simBtn.onclick=()=>{
+      if(simBtn.dataset.running){ Quest.cancelSim(); simBtn.textContent="Simulate walk (test mode)"; delete simBtn.dataset.running; statusEl.textContent=""; return; }
+      simBtn.dataset.running="1"; simBtn.textContent="Simulating… (tap to cancel)";
+      Quest.simulateWalk(1.5,
+        (i,total)=>{ statusEl.textContent="simulating: "+i+"/"+total; },
+        (err)=>{
+          simBtn.textContent="Simulate walk (test mode)"; delete simBtn.dataset.running;
+          statusEl.textContent = err ? "simulation: "+err : "simulation complete";
+          refreshRuns(s.player.id); refreshStats(s.player.id);
+        });
+    };
+  }
   document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
   document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
@@ -810,6 +897,23 @@ function fogFeatureCollection(){
   });
   return { type:"FeatureCollection", features };
 }
+// The actual "fog of war" look: fogFeatureCollection() above only ever
+// emits a shape for cells you've ALREADY revealed — unrevealed terrain has
+// no feature at all, so it just showed the plain satellite basemap,
+// indistinguishable from "nothing is fogged." This draws the inverse: one
+// world-covering polygon with a hole punched out for every revealed cell,
+// so unexplored terrain reads as genuinely dark and revealed terrain shows
+// the basemap through (plus the colored fog-fill/fog-line layers on top
+// for the skied/seen tint). One hole per cell is fine as disjoint H3 hexes
+// never overlap, so nothing here needs union/dissolve logic.
+function shroudFeatureCollection(){
+  const world = [[-180,-85],[180,-85],[180,85],[-180,85],[-180,-85]];
+  const holes=[];
+  Quest.fogCells.forEach((state, cell)=>{ holes.push(h3.cellToBoundary(cell, true)); });
+  return { type:"FeatureCollection", features:[
+    { type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[world, ...holes] } }
+  ]};
+}
 function renderFogMap(){
   if(!Quest.ref){
     app.innerHTML =
@@ -823,32 +927,49 @@ function renderFogMap(){
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
     +'<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span></div>'
     +'</div>';
-  const map = new maplibregl.Map({
-    container:"fogMap",
-    style:{ version:8,
-      sources:{ base:{ type:"raster",
-        tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-        tileSize:256, attribution:"Esri, Maxar" } },
-      layers:[{ id:"base", type:"raster", source:"base" }] },
-    center:[Quest.ref[1], Quest.ref[0]], zoom:13
-  });
-  map.addControl(new maplibregl.NavigationControl());
-  function syncSource(){
-    const src = map.getSource("fog");
-    if(src) src.setData(fogFeatureCollection());
-  }
-  map.on("load", ()=>{
-    map.addSource("fog", { type:"geojson", data: fogFeatureCollection() });
-    map.addLayer({ id:"fog-fill", type:"fill", source:"fog",
-      paint:{ "fill-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "fill-opacity":0.5 } });
-    map.addLayer({ id:"fog-line", type:"line", source:"fog",
-      paint:{ "line-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "line-width":1.5, "line-opacity":0.8 } });
-  });
-  // Live redraw as new cells get revealed WHILE this screen is open (tracking
-  // may already be running from Home) — cleared on back-out so a later fix,
-  // after navigating away, doesn't try to touch a torn-down map instance.
-  Quest.onFogUpdated = syncSource;
+  // Bind Back FIRST, before anything that can throw (maplibregl failing to
+  // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
+  // exception here aborts the script before the button's handler is ever
+  // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{ Quest.onFogUpdated=null; renderHome(); };
+  try{
+    const map = new maplibregl.Map({
+      container:"fogMap",
+      style:{ version:8,
+        sources:{ base:{ type:"raster",
+          tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+          tileSize:256, attribution:"Esri, Maxar" } },
+        layers:[{ id:"base", type:"raster", source:"base" }] },
+      center:[Quest.ref[1], Quest.ref[0]], zoom:13
+    });
+    map.addControl(new maplibregl.NavigationControl());
+    function syncSource(){
+      const shroudSrc = map.getSource("shroud");
+      if(shroudSrc) shroudSrc.setData(shroudFeatureCollection());
+      const src = map.getSource("fog");
+      if(src) src.setData(fogFeatureCollection());
+    }
+    map.on("load", ()=>{
+      // Shroud goes in FIRST (and its layer added first) so it paints
+      // underneath the colored fog-fill/fog-line layers below.
+      map.addSource("shroud", { type:"geojson", data: shroudFeatureCollection() });
+      map.addLayer({ id:"shroud-fill", type:"fill", source:"shroud",
+        paint:{ "fill-color":"#050810", "fill-opacity":0.72 } });
+      map.addSource("fog", { type:"geojson", data: fogFeatureCollection() });
+      map.addLayer({ id:"fog-fill", type:"fill", source:"fog",
+        paint:{ "fill-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "fill-opacity":0.5 } });
+      map.addLayer({ id:"fog-line", type:"line", source:"fog",
+        paint:{ "line-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "line-width":1.5, "line-opacity":0.8 } });
+    });
+    // Live redraw as new cells get revealed WHILE this screen is open
+    // (tracking may already be running from Home) — cleared on back-out so
+    // a later fix, after navigating away, doesn't try to touch a torn-down
+    // map instance.
+    Quest.onFogUpdated = syncSource;
+  }catch(e){
+    document.getElementById("fogMap").outerHTML =
+      '<div class="msg" style="padding-top:120px">Map couldn’t load (connection or device issue) — try again from a better signal.</div>';
+  }
 }
 
 /* ============================== BOOT ============================== */
