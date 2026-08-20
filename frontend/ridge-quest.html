@@ -479,7 +479,16 @@ async function renderConditions(onContinue){
 // player-account app; a project's corridors can live in any project under
 // it). Needs a real project id once the mountain's runs are drawn in Fence
 // Editor — not a blocker to building this detector.
-const RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || "REPLACE_WITH_QUEST_PROJECT_ID";
+// R7 — let, not const: renderProjectPicker()'s button handler and boot()'s
+// localStorage-fallback resolution both reassign this after the picker
+// ships. RQ_APP_ID got the same const->let change at the time (see below);
+// this one was missed, so every picker project button silently threw
+// "Assignment to constant variable" the instant it tried to reassign this —
+// the click handler died right there, RQ_APP_ID had already been set (it's
+// the first of the two assignments on that line) but RQ_PROJECT_ID never
+// updated, and boot() was never reached. From the outside this looked like
+// the button doing nothing at all.
+let RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || "REPLACE_WITH_QUEST_PROJECT_ID";
 // ?sim=1 reveals the dev-only "Simulate walk" button on Home (Quest.simulateWalk) —
 // never shown to a real player by default, opt-in via URL only.
 const IS_SIM_MODE = new URLSearchParams(location.search).get("sim") === "1";
