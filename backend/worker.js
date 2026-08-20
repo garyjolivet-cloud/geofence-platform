@@ -1008,6 +1008,12 @@ async function api(request, env, url) {
       env.DB.prepare("DELETE FROM quest_run WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_fog_cell WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_day_stats WHERE player_id=?").bind(P.playerId),
+      // player_day_activity_stats (R6, 2026-08-20) — added per this
+      // function's own header warning: a player_id FK to player_account
+      // means skipping this actually BLOCKS the delete outright (caught
+      // live, D1_ERROR: FOREIGN KEY constraint failed), not just leaves
+      // orphaned data behind like the others technically could.
+      env.DB.prepare("DELETE FROM player_day_activity_stats WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_account WHERE id=?").bind(P.playerId)
     ]);
     return json({ ok: true, forgotten: P.playerId }, 200, AC);
@@ -1096,10 +1102,42 @@ async function api(request, env, url) {
     for (const [threshold, mult] of QUEST_SNOW_BONUS_TIERS) if (hn24Cm >= threshold) return mult;
     return 1;
   }
-  function questPoints(activity, difficulty, runType, verticalM, snowBonus) {
-    if (activity === "lift" || verticalM == null) return 0;
-    const w = (QUEST_DIFFICULTY_POINTS_PER_VERT_M[difficulty] || 1) * (QUEST_RUNTYPE_POINTS_MULTIPLIER[runType] || 1) * (snowBonus || 1);
-    return Math.round(Math.abs(verticalM) * w);
+  // R6 — bike/drive earn points from DISTANCE, not vertical (confirmed
+  // product decision, 2026-08-20 — a road/bike trail doesn't have a "vertical
+  // descended" the way a ski run does). Rates sized so a typical outing
+  // lands near ski's own ~400-600pt range: a 2.5km blue MTB trail scores
+  // 2500*0.18*1.4 ≈ 630; an 8km scenic drive scores 8000*0.06 ≈ 480. Drive's
+  // rate is roughly a third of bike's — a drive covers far more ground per
+  // minute of actual player engagement, so per-metre needs to be lower to
+  // land in the same ballpark.
+  const QUEST_ACTIVITY_DISTANCE_POINTS_PER_M = { bike: 0.18, drive: 0.06 };
+  // Bike reuses ski's exact green/blue/black/double-black corridor field —
+  // real MTB trail systems are rated on this identical scale — but with its
+  // OWN multiplier values (ski's own table above stays locked/tuned as
+  // confirmed 2026-08-19, not touched here). Drive corridors aren't
+  // difficulty-rated in the real world (a road isn't "green/blue/black"),
+  // so any difficulty present is ignored — multiplier fixed at 1 rather than
+  // borrowed from bike/ski's scale, which wouldn't mean anything applied to
+  // a road. Neither activity gets a runType-equivalent; runType stays ski
+  // vocabulary (run/chute/bowl/ridge/hike/lift) and simply isn't applied —
+  // an incidental runType/difficulty value on a bike/drive corridor is
+  // harmless no-op metadata, same as it already is for lift corridors today.
+  const QUEST_BIKE_DIFFICULTY_MULTIPLIER = { green: 1, blue: 1.4, black: 1.8, "double-black": 2.4 };
+  const QUEST_LEADERBOARD_ACTIVITIES = ["ski", "hike", "bike", "drive"];
+  function questPoints(activity, difficulty, runType, verticalM, distanceM, snowBonus) {
+    if (activity === "lift") return 0;
+    if (activity === "ski" || activity === "hike") {
+      if (verticalM == null) return 0;
+      const w = (QUEST_DIFFICULTY_POINTS_PER_VERT_M[difficulty] || 1) * (QUEST_RUNTYPE_POINTS_MULTIPLIER[runType] || 1) * (snowBonus || 1);
+      return Math.round(Math.abs(verticalM) * w);
+    }
+    if (activity === "bike" || activity === "drive") {
+      if (distanceM == null) return 0;
+      const perM = QUEST_ACTIVITY_DISTANCE_POINTS_PER_M[activity] || 0;
+      const diffMult = activity === "bike" ? (QUEST_BIKE_DIFFICULTY_MULTIPLIER[difficulty] || 1) : 1;
+      return Math.round(Math.abs(distanceM) * perM * diffMult);
+    }
+    return 0;
   }
 
   // --- Ridge Quest R1: corridor-crossing runs ---
@@ -1118,10 +1156,11 @@ async function api(request, env, url) {
     const b = await request.json().catch(() => ({}));
     if (!b.zoneId || !b.activity || !b.startedAt || !b.endedAt)
       return json({ error: "zoneId, activity, startedAt and endedAt are required" }, 400, AC);
-    if (!["ski", "lift", "hike"].includes(b.activity))
-      return json({ error: "activity must be ski, lift, or hike" }, 400, AC);
+    if (!["ski", "lift", "hike", "bike", "drive"].includes(b.activity))
+      return json({ error: "activity must be ski, lift, hike, bike, or drive" }, 400, AC);
     const id = crypto.randomUUID();
     const verticalM = b.verticalM != null ? b.verticalM : null;
+    const distanceM = b.distanceM != null ? b.distanceM : null;
     // R3-core rollup, folded into the SAME batch as the quest_run insert —
     // a run and its day-stats update can never diverge (no separate write
     // path to fall out of sync). Incrementing (ON CONFLICT DO UPDATE
@@ -1129,10 +1168,16 @@ async function api(request, env, url) {
     const dateBucket = questDateBucket(b.startedAt);
     const seasonId = questSeasonId(b.startedAt);
     const snowRow = await env.DB.prepare("SELECT hn24_cm FROM snow_history WHERE snapshot_date=?").bind(dateBucket).first().catch(() => null);
-    const snowBonus = questSnowBonus(snowRow ? snowRow.hn24_cm : null);
-    const points = questPoints(b.activity, b.difficulty, b.runType, verticalM, snowBonus);
+    // R6 — the snow bonus is a ski/hike-only concept (fresh powder doesn't
+    // change how far a road goes). Forced to 1 for bike/drive BEFORE it's
+    // stored, not just inside the points formula — otherwise a powder-day
+    // bike run would store a misleading nonzero snow_bonus on a run that
+    // earned no bonus at all.
+    const snowBonusRaw = questSnowBonus(snowRow ? snowRow.hn24_cm : null);
+    const snowBonus = (b.activity === "ski" || b.activity === "hike") ? snowBonusRaw : 1;
+    const points = questPoints(b.activity, b.difficulty, b.runType, verticalM, distanceM, snowBonus);
     const now = new Date().toISOString();
-    await env.DB.batch([
+    const batch = [
       env.DB.prepare(
         `INSERT INTO quest_run
          (id,player_id,app_id,zone_id,run_name,difficulty,run_type,activity,started_at,ended_at,duration_s,vertical_m,distance_m,avg_speed_mps,max_speed_mps,created_at,points,snow_bonus)
@@ -1140,7 +1185,7 @@ async function api(request, env, url) {
       ).bind(
         id, P.playerId, P.appId, b.zoneId, b.runName || null, b.difficulty || null, b.runType || null, b.activity,
         b.startedAt, b.endedAt, b.durationS || 0, verticalM,
-        b.distanceM != null ? b.distanceM : null, b.avgSpeedMps != null ? b.avgSpeedMps : null,
+        distanceM, b.avgSpeedMps != null ? b.avgSpeedMps : null,
         b.maxSpeedMps != null ? b.maxSpeedMps : null, now, points, snowBonus
       ),
       env.DB.prepare(
@@ -1153,7 +1198,24 @@ async function api(request, env, url) {
         P.playerId, P.appId, dateBucket, seasonId, points, Math.abs(verticalM || 0),
         b.activity === "ski" ? 1 : 0, b.activity === "lift" ? 1 : 0, b.activity === "hike" ? 1 : 0
       )
-    ]);
+    ];
+    // R6 — the new per-activity rollup, only for activities that actually
+    // earn a leaderboard spot (never 'lift'). Left completely separate from
+    // the player_day_stats upsert above, which stays byte-for-byte
+    // unchanged — bike/drive runs DO still add into its combined `points`
+    // column (so the existing single leaderboard now genuinely reflects
+    // every activity), but never touch its vertical_m/runs_count/
+    // lift_rides/hikes, which stay ski/lift/hike-specific.
+    if (b.activity !== "lift") {
+      batch.push(env.DB.prepare(
+        `INSERT INTO player_day_activity_stats (player_id,app_id,date,season_id,activity,points,vertical_m,distance_m,runs_count)
+         VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(player_id,date,activity) DO UPDATE SET
+           points=points+excluded.points, vertical_m=vertical_m+excluded.vertical_m,
+           distance_m=distance_m+excluded.distance_m, runs_count=runs_count+excluded.runs_count`
+      ).bind(P.playerId, P.appId, dateBucket, seasonId, b.activity, points, Math.abs(verticalM || 0), Math.abs(distanceM || 0), 1));
+    }
+    await env.DB.batch(batch);
     return json({ ok: true, id, points, snowBonus }, 200, AC);
   }
   const mpr = path.match(/^\/api\/players\/([^/]+)\/runs$/);
@@ -1200,6 +1262,19 @@ async function api(request, env, url) {
     if (!P) return json({ error: "not authenticated" }, 401, AC);
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
     const date = url.searchParams.get("date") || questDateBucket(new Date().toISOString());
+    // R6 — optional per-activity filter, fully backward-compatible: absent
+    // is today's exact combined query, byte-for-byte unchanged below.
+    const activity = url.searchParams.get("activity");
+    if (activity) {
+      if (!QUEST_LEADERBOARD_ACTIVITIES.includes(activity)) return json({ error: "invalid activity" }, 400, AC);
+      const { results } = await env.DB.prepare(
+        `SELECT s.player_id, p.display_name, s.points, s.vertical_m, s.distance_m, s.runs_count
+         FROM player_day_activity_stats s JOIN player_account p ON p.id = s.player_id
+         WHERE s.app_id=? AND s.date=? AND s.activity=? ORDER BY s.points DESC LIMIT 100`
+      ).bind(P.appId, date, activity).all();
+      const board = (results || []).map(r => ({ playerId: r.player_id, name: leaderboardName(r), points: r.points, verticalM: r.vertical_m, distanceM: r.distance_m, runsCount: r.runs_count }));
+      return json({ date, activity, board }, 200, AC);
+    }
     const { results } = await env.DB.prepare(
       `SELECT s.player_id, p.display_name, s.points, s.vertical_m, s.runs_count
        FROM player_day_stats s JOIN player_account p ON p.id = s.player_id
@@ -1213,6 +1288,17 @@ async function api(request, env, url) {
     if (!P) return json({ error: "not authenticated" }, 401, AC);
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
     const seasonId = url.searchParams.get("seasonId") || questSeasonId(new Date().toISOString());
+    const activity = url.searchParams.get("activity");
+    if (activity) {
+      if (!QUEST_LEADERBOARD_ACTIVITIES.includes(activity)) return json({ error: "invalid activity" }, 400, AC);
+      const { results } = await env.DB.prepare(
+        `SELECT s.player_id, p.display_name, SUM(s.points) AS points, SUM(s.vertical_m) AS vertical_m, SUM(s.distance_m) AS distance_m, SUM(s.runs_count) AS runs_count
+         FROM player_day_activity_stats s JOIN player_account p ON p.id = s.player_id
+         WHERE s.app_id=? AND s.season_id=? AND s.activity=? GROUP BY s.player_id ORDER BY points DESC LIMIT 100`
+      ).bind(P.appId, seasonId, activity).all();
+      const board = (results || []).map(r => ({ playerId: r.player_id, name: leaderboardName(r), points: r.points, verticalM: r.vertical_m, distanceM: r.distance_m, runsCount: r.runs_count }));
+      return json({ seasonId, activity, board }, 200, AC);
+    }
     const { results } = await env.DB.prepare(
       `SELECT s.player_id, p.display_name, SUM(s.points) AS points, SUM(s.vertical_m) AS vertical_m, SUM(s.runs_count) AS runs_count
        FROM player_day_stats s JOIN player_account p ON p.id = s.player_id
@@ -1220,6 +1306,40 @@ async function api(request, env, url) {
     ).bind(P.appId, seasonId).all();
     const board = (results || []).map(r => ({ playerId: r.player_id, name: leaderboardName(r), points: r.points, verticalM: r.vertical_m, runsCount: r.runs_count }));
     return json({ seasonId, board }, 200, AC);
+  }
+  // --- Ridge Quest R6: idempotent backfill of player_day_activity_stats
+  // from historical quest_run rows (needed because activity stats didn't
+  // exist before this phase — without this, a new "Ski" leaderboard filter
+  // would look blank next to an already-populated combined board for the
+  // exact same days). Safe to re-run any time: fully wipes and rebuilds
+  // (it's a derived rollup, never a source of truth). Uses
+  // questDateBucket/questSeasonId, not raw SQL date math, so it can never
+  // drift from the exact bucketing rule every other read/write path uses.
+  if (path === "/api/quest-backfill-activity-stats" && method === "POST") {
+    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    await env.DB.prepare("DELETE FROM player_day_activity_stats").run();
+    const { results } = await env.DB.prepare(
+      "SELECT player_id, app_id, activity, points, vertical_m, distance_m, started_at FROM quest_run WHERE activity != 'lift'"
+    ).all();
+    const agg = new Map(); // "playerId|date|activity" -> {playerId,appId,date,seasonId,activity,points,verticalM,distanceM,runsCount}
+    for (const r of (results || [])) {
+      const date = questDateBucket(r.started_at);
+      const seasonId = questSeasonId(r.started_at);
+      const key = r.player_id + "|" + date + "|" + r.activity;
+      const row = agg.get(key) || { playerId: r.player_id, appId: r.app_id, date, seasonId, activity: r.activity, points: 0, verticalM: 0, distanceM: 0, runsCount: 0 };
+      row.points += r.points || 0;
+      row.verticalM += Math.abs(r.vertical_m || 0);
+      row.distanceM += Math.abs(r.distance_m || 0);
+      row.runsCount += 1;
+      agg.set(key, row);
+    }
+    const rows = [...agg.values()];
+    const batch = rows.map(row => env.DB.prepare(
+      `INSERT INTO player_day_activity_stats (player_id,app_id,date,season_id,activity,points,vertical_m,distance_m,runs_count) VALUES (?,?,?,?,?,?,?,?,?)`
+    ).bind(row.playerId, row.appId, row.date, row.seasonId, row.activity, row.points, row.verticalM, row.distanceM, row.runsCount));
+    if (batch.length) await env.DB.batch(batch);
+    return json({ ok: true, rows: rows.length }, 200, AC);
   }
 
   // --- users: list ---

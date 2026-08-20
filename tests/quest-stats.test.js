@@ -39,10 +39,22 @@ function questSeasonId(iso) {
 }
 const QUEST_DIFFICULTY_POINTS_PER_VERT_M = { green: 1, blue: 1.5, black: 2, "double-black": 3 };
 const QUEST_RUNTYPE_POINTS_MULTIPLIER = { run: 1, chute: 1.4, bowl: 1.2, ridge: 1.3, hike: 1.1 };
-function questPoints(activity, difficulty, runType, verticalM, snowBonus) {
-  if (activity === "lift" || verticalM == null) return 0;
-  const w = (QUEST_DIFFICULTY_POINTS_PER_VERT_M[difficulty] || 1) * (QUEST_RUNTYPE_POINTS_MULTIPLIER[runType] || 1) * (snowBonus || 1);
-  return Math.round(Math.abs(verticalM) * w);
+const QUEST_ACTIVITY_DISTANCE_POINTS_PER_M = { bike: 0.18, drive: 0.06 };
+const QUEST_BIKE_DIFFICULTY_MULTIPLIER = { green: 1, blue: 1.4, black: 1.8, "double-black": 2.4 };
+function questPoints(activity, difficulty, runType, verticalM, distanceM, snowBonus) {
+  if (activity === "lift") return 0;
+  if (activity === "ski" || activity === "hike") {
+    if (verticalM == null) return 0;
+    const w = (QUEST_DIFFICULTY_POINTS_PER_VERT_M[difficulty] || 1) * (QUEST_RUNTYPE_POINTS_MULTIPLIER[runType] || 1) * (snowBonus || 1);
+    return Math.round(Math.abs(verticalM) * w);
+  }
+  if (activity === "bike" || activity === "drive") {
+    if (distanceM == null) return 0;
+    const perM = QUEST_ACTIVITY_DISTANCE_POINTS_PER_M[activity] || 0;
+    const diffMult = activity === "bike" ? (QUEST_BIKE_DIFFICULTY_MULTIPLIER[difficulty] || 1) : 1;
+    return Math.round(Math.abs(distanceM) * perM * diffMult);
+  }
+  return 0;
 }
 const QUEST_SNOW_BONUS_TIERS = [[30, 1.5], [15, 1.25], [5, 1.1]];
 function questSnowBonus(hn24Cm) {
@@ -93,27 +105,61 @@ const questDateBucketClient = new Function("date", bucketM[0].slice(bucketM[0].i
 /* ---- questPoints ---- */
 
 (function testPointsWeightedByDifficultyAndRunType() {
-  const p = questPoints("ski", "black", "chute", 300, 1);
+  const p = questPoints("ski", "black", "chute", 300, null, 1);
   assert(p === Math.round(300 * 2 * 1.4), "black chute: 300m * 2 (black) * 1.4 (chute), got " + p);
 })();
 
 (function testPointsDefaultWeightsForUnknownValues() {
-  const p = questPoints("ski", "unknown-difficulty", "unknown-runtype", 100, 1);
+  const p = questPoints("ski", "unknown-difficulty", "unknown-runtype", 100, null, 1);
   assert(p === 100, "unrecognized difficulty/runType both default to weight 1, got " + p);
 })();
 
 (function testLiftAlwaysZeroPoints() {
-  assert(questPoints("lift", "black", "run", 500, 1.5) === 0, "a lift ride always earns 0 points regardless of other inputs");
+  assert(questPoints("lift", "black", "run", 500, 2000, 1.5) === 0, "a lift ride always earns 0 points regardless of other inputs");
 })();
 
 (function testNoVerticalZeroPoints() {
-  assert(questPoints("ski", "black", "run", null, 1) === 0, "a run with no altitude reading earns 0 points");
+  assert(questPoints("ski", "black", "run", null, null, 1) === 0, "a run with no altitude reading earns 0 points");
 })();
 
 (function testSnowBonusMultiplies() {
-  const base = questPoints("ski", "blue", "run", 200, 1);
-  const withBonus = questPoints("ski", "blue", "run", 200, 1.5);
+  const base = questPoints("ski", "blue", "run", 200, null, 1);
+  const withBonus = questPoints("ski", "blue", "run", 200, null, 1.5);
   assert(withBonus === Math.round(base * 1.5), "a 1.5x snow bonus multiplies the final points, got base=" + base + " withBonus=" + withBonus);
+})();
+
+/* ---- questPoints: bike/drive (R6, distance-based) ---- */
+
+(function testBikeWeightedByDistanceAndDifficulty() {
+  const p = questPoints("bike", "black", null, null, 2000, 1);
+  assert(p === Math.round(2000 * 0.18 * 1.8), "black MTB trail: 2000m * 0.18 (per-m) * 1.8 (black), got " + p);
+})();
+
+(function testDriveIgnoresDifficulty() {
+  const withDiff = questPoints("drive", "black", null, null, 8000, 1);
+  const noDiff = questPoints("drive", null, null, null, 8000, 1);
+  assert(withDiff === noDiff, "drive's difficulty multiplier is always 1 regardless of the corridor's difficulty field, got withDiff=" + withDiff + " noDiff=" + noDiff);
+  assert(withDiff === Math.round(8000 * 0.06), "8km drive: 8000m * 0.06 (per-m), got " + withDiff);
+})();
+
+(function testBikeNoDistanceZeroPoints() {
+  assert(questPoints("bike", "blue", null, null, null, 1) === 0, "a bike run with no distance reading earns 0 points");
+})();
+
+(function testDriveNoDistanceZeroPoints() {
+  assert(questPoints("drive", null, null, null, null, 1) === 0, "a drive with no distance reading earns 0 points");
+})();
+
+(function testBikeIgnoresVerticalAndSnowBonus() {
+  // bike/drive dispatch entirely on distanceM — verticalM/snowBonus (both
+  // ski/hike-only concepts) must have zero effect on the result.
+  const a = questPoints("bike", "green", null, 500, 1000, 1.5);
+  const b = questPoints("bike", "green", null, null, 1000, 1);
+  assert(a === b, "vertical/snowBonus don't affect bike scoring at all, got a=" + a + " b=" + b);
+})();
+
+(function testLiftZeroRegardlessOfDistance() {
+  assert(questPoints("lift", "black", "run", null, 5000, 1) === 0, "a lift ride earns 0 points even with a distance reading present");
 })();
 
 /* ---- questSnowBonus ---- */
