@@ -998,6 +998,7 @@ async function api(request, env, url) {
       env.DB.prepare("DELETE FROM player_session WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM quest_run WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_fog_cell WHERE player_id=?").bind(P.playerId),
+      env.DB.prepare("DELETE FROM player_day_stats WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_account WHERE id=?").bind(P.playerId)
     ]);
     return json({ ok: true, forgotten: P.playerId }, 200, AC);
@@ -1037,6 +1038,61 @@ async function api(request, env, url) {
     return json({ cells: results || [] }, 200, AC);
   }
 
+  // --- Ridge Quest R3-core: points/day-bucket/season helpers ---
+  // D1/SQLite has no timezone database, so date(started_at) alone buckets
+  // by UTC day — wrong for Golden BC (UTC-7/-6 depending on DST, which D1
+  // can't model either). QUEST_DAY_BUCKET_OFFSET_H is a fixed, non-DST-aware
+  // rule applied in JS before bucketing, named as a constant so the
+  // simplification is visible rather than buried in a magic SQL literal.
+  // Mirrored verbatim in tests/quest-stats.test.js — keep both in sync.
+  const QUEST_DAY_BUCKET_OFFSET_H = -7;
+  function questDateBucket(iso) {
+    return new Date(new Date(iso).getTime() + QUEST_DAY_BUCKET_OFFSET_H * 3600000).toISOString().slice(0, 10);
+  }
+  // Ski season spans one calendar year-end; September is well before any
+  // real season starts, so picking it as the rollover point never
+  // misclassifies a real day.
+  function questSeasonId(iso) {
+    const d = new Date(new Date(iso).getTime() + QUEST_DAY_BUCKET_OFFSET_H * 3600000);
+    const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1;
+    return m >= 9 ? (y + "-" + (y + 1)) : ((y - 1) + "-" + y);
+  }
+  // Per-vertical-metre weight by difficulty, MULTIPLIED by a second weight
+  // for runType — both tuning knobs, not architecture decisions (start
+  // simple, adjust after real play data, same spirit as this codebase's
+  // other TUNING-object constants). runType is the corridor's AUTHORED
+  // category (run/chute/bowl/ridge/hike/lift, set in Fence Editor),
+  // distinct from `activity` (ski/lift/hike, DETECTED per-crossing by R1's
+  // speed/direction classifier) — a run-type corridor skinned slowly still
+  // gets its "run" runType weight even though that crossing's activity is
+  // "hike". Only ski/hike activity earns points; a lift ride is transport,
+  // not an accomplishment (zeroed via the activity check regardless of
+  // runType). No separate "trees" category — tree runs are rated through
+  // the existing difficulty scale like any other terrain, per explicit
+  // product decision (2026-08-19).
+  const QUEST_DIFFICULTY_POINTS_PER_VERT_M = { green: 1, blue: 1.5, black: 2, "double-black": 3 };
+  const QUEST_RUNTYPE_POINTS_MULTIPLIER = { run: 1, chute: 1.4, bowl: 1.2, ridge: 1.3, hike: 1.1 };
+  // Conditions bonus (fresh snow only, confirmed via AskUserQuestion,
+  // 2026-08-19) — looked up SERVER-SIDE from snow_history by the run's own
+  // date bucket, never client-supplied (a player could otherwise just claim
+  // "it was a powder day" to farm points). snapshot_date is already a local
+  // YYYY-MM-DD date from the same 8am MST daily snapshot cron (CLAUDE.md) —
+  // matches questDateBucket's own local-day convention closely enough here.
+  // Highest-threshold-first; hn24_cm==null (no snapshot yet, or the
+  // scraper's own upstream source was down) is a bonus of 1, not a penalty —
+  // same "no data = pass" convention altOk()/hazard raycasting already use.
+  const QUEST_SNOW_BONUS_TIERS = [[30, 1.5], [15, 1.25], [5, 1.1]]; // [hn24_cm threshold, multiplier]
+  function questSnowBonus(hn24Cm) {
+    if (hn24Cm == null) return 1;
+    for (const [threshold, mult] of QUEST_SNOW_BONUS_TIERS) if (hn24Cm >= threshold) return mult;
+    return 1;
+  }
+  function questPoints(activity, difficulty, runType, verticalM, snowBonus) {
+    if (activity === "lift" || verticalM == null) return 0;
+    const w = (QUEST_DIFFICULTY_POINTS_PER_VERT_M[difficulty] || 1) * (QUEST_RUNTYPE_POINTS_MULTIPLIER[runType] || 1) * (snowBonus || 1);
+    return Math.round(Math.abs(verticalM) * w);
+  }
+
   // --- Ridge Quest R1: corridor-crossing runs ---
   // Classification (ski/lift/hike, direction, speed, vertical) happens
   // CLIENT-SIDE in ridge-quest.html's own self-contained corridor detector
@@ -1056,17 +1112,40 @@ async function api(request, env, url) {
     if (!["ski", "lift", "hike"].includes(b.activity))
       return json({ error: "activity must be ski, lift, or hike" }, 400, AC);
     const id = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO quest_run
-       (id,player_id,app_id,zone_id,run_name,difficulty,run_type,activity,started_at,ended_at,duration_s,vertical_m,distance_m,avg_speed_mps,max_speed_mps,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      id, P.playerId, P.appId, b.zoneId, b.runName || null, b.difficulty || null, b.runType || null, b.activity,
-      b.startedAt, b.endedAt, b.durationS || 0, b.verticalM != null ? b.verticalM : null,
-      b.distanceM != null ? b.distanceM : null, b.avgSpeedMps != null ? b.avgSpeedMps : null,
-      b.maxSpeedMps != null ? b.maxSpeedMps : null, new Date().toISOString()
-    ).run();
-    return json({ ok: true, id }, 200, AC);
+    const verticalM = b.verticalM != null ? b.verticalM : null;
+    // R3-core rollup, folded into the SAME batch as the quest_run insert —
+    // a run and its day-stats update can never diverge (no separate write
+    // path to fall out of sync). Incrementing (ON CONFLICT DO UPDATE
+    // SET x=x+excluded.x), not overwriting, since a day can have many runs.
+    const dateBucket = questDateBucket(b.startedAt);
+    const seasonId = questSeasonId(b.startedAt);
+    const snowRow = await env.DB.prepare("SELECT hn24_cm FROM snow_history WHERE snapshot_date=?").bind(dateBucket).first().catch(() => null);
+    const snowBonus = questSnowBonus(snowRow ? snowRow.hn24_cm : null);
+    const points = questPoints(b.activity, b.difficulty, b.runType, verticalM, snowBonus);
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO quest_run
+         (id,player_id,app_id,zone_id,run_name,difficulty,run_type,activity,started_at,ended_at,duration_s,vertical_m,distance_m,avg_speed_mps,max_speed_mps,created_at,points,snow_bonus)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(
+        id, P.playerId, P.appId, b.zoneId, b.runName || null, b.difficulty || null, b.runType || null, b.activity,
+        b.startedAt, b.endedAt, b.durationS || 0, verticalM,
+        b.distanceM != null ? b.distanceM : null, b.avgSpeedMps != null ? b.avgSpeedMps : null,
+        b.maxSpeedMps != null ? b.maxSpeedMps : null, now, points, snowBonus
+      ),
+      env.DB.prepare(
+        `INSERT INTO player_day_stats (player_id,app_id,date,season_id,points,vertical_m,runs_count,lift_rides,hikes)
+         VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(player_id,date) DO UPDATE SET
+           points=points+excluded.points, vertical_m=vertical_m+excluded.vertical_m,
+           runs_count=runs_count+excluded.runs_count, lift_rides=lift_rides+excluded.lift_rides, hikes=hikes+excluded.hikes`
+      ).bind(
+        P.playerId, P.appId, dateBucket, seasonId, points, Math.abs(verticalM || 0),
+        b.activity === "ski" ? 1 : 0, b.activity === "lift" ? 1 : 0, b.activity === "hike" ? 1 : 0
+      )
+    ]);
+    return json({ ok: true, id, points, snowBonus }, 200, AC);
   }
   const mpr = path.match(/^\/api\/players\/([^/]+)\/runs$/);
   if (mpr && method === "GET") {
@@ -1075,9 +1154,63 @@ async function api(request, env, url) {
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
     const limit = Math.min(200, Math.max(1, +(url.searchParams.get("limit") || 50)));
     const { results } = await env.DB.prepare(
-      "SELECT id,zone_id,run_name,difficulty,run_type,activity,started_at,ended_at,duration_s,vertical_m,distance_m,avg_speed_mps,max_speed_mps FROM quest_run WHERE player_id=? ORDER BY started_at DESC LIMIT ?"
+      "SELECT id,zone_id,run_name,difficulty,run_type,activity,started_at,ended_at,duration_s,vertical_m,distance_m,avg_speed_mps,max_speed_mps,points,snow_bonus FROM quest_run WHERE player_id=? ORDER BY started_at DESC LIMIT ?"
     ).bind(P.playerId, limit).all();
     return json({ runs: results || [] }, 200, AC);
+  }
+
+  // --- Ridge Quest R3-core: a player's own day-stats (streaks/today's
+  // tiles are derived CLIENT-SIDE from these rows, not stored/computed
+  // server-side — a season is at most ~200 rows per player, cheap to scan,
+  // and this avoids a second incremental counter that could drift from
+  // player_day_stats itself) ---
+  const mps = path.match(/^\/api\/players\/([^/]+)\/stats$/);
+  if (mps && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mps[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const { results } = await env.DB.prepare(
+      "SELECT date,season_id,points,vertical_m,runs_count,lift_rides,hikes FROM player_day_stats WHERE player_id=? ORDER BY date DESC LIMIT 200"
+    ).bind(P.playerId).all();
+    return json({ days: results || [] }, 200, AC);
+  }
+
+  // --- Ridge Quest R3-core: leaderboards ---
+  // Scoped to the CALLER's own app_id (never client-supplied) — same
+  // reasoning quest_run already uses, so one resort's leaderboard can never
+  // leak into another's. NEVER returns email — the R0 data-privacy consent
+  // screen explicitly told players only their display name and points may
+  // be visible to others. A null display_name gets a generated fallback
+  // ("Skier 4821"-style, from the player id) rather than falling back to
+  // email or leaking a raw UUID.
+  function leaderboardName(row) {
+    return row.display_name || ("Skier " + row.player_id.replace(/-/g, "").slice(0, 4).toUpperCase());
+  }
+  if (path === "/api/leaderboard/daily" && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const date = url.searchParams.get("date") || questDateBucket(new Date().toISOString());
+    const { results } = await env.DB.prepare(
+      `SELECT s.player_id, p.display_name, s.points, s.vertical_m, s.runs_count
+       FROM player_day_stats s JOIN player_account p ON p.id = s.player_id
+       WHERE s.app_id=? AND s.date=? ORDER BY s.points DESC LIMIT 100`
+    ).bind(P.appId, date).all();
+    const board = (results || []).map(r => ({ playerId: r.player_id, name: leaderboardName(r), points: r.points, verticalM: r.vertical_m, runsCount: r.runs_count }));
+    return json({ date, board }, 200, AC);
+  }
+  if (path === "/api/leaderboard/season" && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const seasonId = url.searchParams.get("seasonId") || questSeasonId(new Date().toISOString());
+    const { results } = await env.DB.prepare(
+      `SELECT s.player_id, p.display_name, SUM(s.points) AS points, SUM(s.vertical_m) AS vertical_m, SUM(s.runs_count) AS runs_count
+       FROM player_day_stats s JOIN player_account p ON p.id = s.player_id
+       WHERE s.app_id=? AND s.season_id=? GROUP BY s.player_id ORDER BY points DESC LIMIT 100`
+    ).bind(P.appId, seasonId).all();
+    const board = (results || []).map(r => ({ playerId: r.player_id, name: leaderboardName(r), points: r.points, verticalM: r.vertical_m, runsCount: r.runs_count }));
+    return json({ seasonId, board }, 200, AC);
   }
 
   // --- users: list ---

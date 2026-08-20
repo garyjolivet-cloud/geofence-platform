@@ -600,15 +600,24 @@ function fmtDuration(s){
   s=Math.round(s); const m=Math.floor(s/60), r=s%60;
   return m+":"+String(r).padStart(2,"0");
 }
+// R3-core — mirrors worker.js's questDateBucket() exactly (fixed -7h,
+// non-DST-aware — see the plan's day-bucket note): used client-side only to
+// find "today's" row in the /stats response, not to compute anything sent
+// to the server.
+function questDateBucketClient(date){
+  return new Date(date.getTime()-7*3600000).toISOString().slice(0,10);
+}
 function runRowHtml(r){
   const activity = r.activity;
   const meta = [
     fmtDuration(r.duration_s!=null?r.duration_s:r.durationS),
     (r.vertical_m!=null?Math.abs(Math.round(r.vertical_m))+"m vert":(r.verticalM!=null?Math.abs(Math.round(r.verticalM))+"m vert":null)),
   ].filter(Boolean).join(" · ");
+  const points = r.points!=null ? r.points : null;
+  const powder = (r.snow_bonus!=null?r.snow_bonus:1) > 1;
   return '<div class="runrow"><span class="badge '+esc(activity)+'">'+esc(activity)+'</span>'
-    +'<span class="name">'+esc(r.run_name||r.runName||"Run")+'</span>'
-    +'<span class="meta">'+esc(meta)+'</span></div>';
+    +'<span class="name">'+esc(r.run_name||r.runName||"Run")+(powder?' ❄':'')+'</span>'
+    +'<span class="meta">'+esc(meta)+(points?' · +'+points+' pts':'')+'</span></div>';
 }
 async function refreshRuns(playerId){
   const listEl=document.getElementById("todayRuns");
@@ -624,20 +633,55 @@ async function refreshRuns(playerId){
     listEl.innerHTML = '<div class="empty">Couldn’t load runs.</div>';
   }
 }
+// R3-core — today's points/vertical tiles + current streak, both derived
+// client-side from GET /api/players/:id/stats's day rows (not stored/
+// computed server-side — see the plan's streak-derivation note).
+async function refreshStats(playerId){
+  const tilesEl=document.getElementById("statsTiles");
+  const streakEl=document.getElementById("statsStreak");
+  if(!tilesEl) return;
+  try{
+    const j = await api("/api/players/"+playerId+"/stats");
+    const days = j.days||[];
+    const byDate = {}; days.forEach(d=>{ byDate[d.date]=d; });
+    const todayKey = questDateBucketClient(new Date());
+    const today = byDate[todayKey] || { points:0, vertical_m:0 };
+    let streak=0, cursor=new Date();
+    for(;;){
+      const key = questDateBucketClient(cursor);
+      const row = byDate[key];
+      if(!row || (row.runs_count<=0 && row.lift_rides<=0 && row.hikes<=0)) break;
+      streak++;
+      cursor = new Date(cursor.getTime()-24*3600000);
+    }
+    tilesEl.innerHTML =
+      '<div class="now">'
+      +'<div class="stat"><b>'+Math.round(today.points||0)+'</b><span>Points today</span></div>'
+      +'<div class="stat"><b>'+Math.round(Math.abs(today.vertical_m||0))+'m</b><span>Vertical today</span></div>'
+      +'</div>';
+    if(streakEl) streakEl.textContent = streak>0 ? streak+"-day streak" : "";
+  }catch(e){
+    tilesEl.innerHTML='';
+  }
+}
 function renderHome(){
   const s=getSession();
   app.innerHTML =
     '<div class="card welcome">'
     +'<p class="go">You’re in.</p>'
-    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Points and leaderboards land in a later build — tracking runs and revealing the mountain are live.</p>'
+    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Track runs, reveal the mountain, and climb the leaderboard.</p>'
+    +'<div id="statsTiles"></div>'
+    +'<p class="scrollhint" id="statsStreak" style="margin-bottom:14px"></p>'
     +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
     +'<button class="ghost" id="btnMap">My map</button>'
+    +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<button class="ghost" id="btnConditions">Check conditions again</button>'
     +'<button class="ghost" id="btnLogout">Log out</button>'
     +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
     +'</div>';
   refreshRuns(s.player.id);
+  refreshStats(s.player.id);
   Quest.loadCorridors();
   Quest.loadFogCells(s.player.id);
   const trackBtn=document.getElementById("btnTrack");
@@ -646,12 +690,13 @@ function renderHome(){
       Quest.stop();
       trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
     } else {
-      const ok=Quest.start(()=>refreshRuns(s.player.id));
+      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); });
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
     }
   };
   document.getElementById("btnMap").onclick=()=>renderFogMap();
+  document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
   document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
   document.getElementById("btnLogout").onclick=async()=>{
     Quest.stop();
@@ -666,6 +711,42 @@ function renderHome(){
       clearSession(); renderAuth("login");
     }catch(e){ alert(e.message); }
   };
+}
+
+/* ========================= LEADERBOARD (R3-core) ========================= */
+function leaderboardRowHtml(row, meId, rank){
+  const mine = row.playerId===meId;
+  return '<div class="runrow"'+(mine?' style="border-color:var(--coral)"':'')+'>'
+    +'<span class="badge" style="background:var(--rim)">#'+rank+'</span>'
+    +'<span class="name">'+esc(row.name)+(mine?' (you)':'')+'</span>'
+    +'<span class="meta">'+Math.round(row.points)+' pts</span></div>';
+}
+async function renderLeaderboard(mode){
+  mode = mode || "daily";
+  const s=getSession();
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Leaderboard</h2>'
+    +'<div style="display:flex;gap:10px;margin-bottom:14px">'
+      +'<button class="ghost" id="lbDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
+      +'<button class="ghost" id="lbSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
+    +'</div>'
+    +'<div id="lbList"><div class="empty">Loading…</div></div>'
+    +'<button class="ghost" id="lbBack">← Back</button>'
+    +'</div>';
+  document.getElementById("lbBack").onclick=renderHome;
+  document.getElementById("lbDailyBtn").onclick=()=>renderLeaderboard("daily");
+  document.getElementById("lbSeasonBtn").onclick=()=>renderLeaderboard("season");
+  const listEl=document.getElementById("lbList");
+  try{
+    const j = await api(mode==="daily" ? "/api/leaderboard/daily" : "/api/leaderboard/season");
+    const board = j.board||[];
+    listEl.innerHTML = board.length
+      ? board.map((row,i)=>leaderboardRowHtml(row, s.player.id, i+1)).join("")
+      : '<div class="empty">No runs logged yet '+(mode==="daily"?"today":"this season")+'.</div>';
+  }catch(e){
+    listEl.innerHTML = '<div class="empty">Couldn’t load the leaderboard.</div>';
+  }
 }
 
 /* =========================== FOG MAP (R2) ===========================
