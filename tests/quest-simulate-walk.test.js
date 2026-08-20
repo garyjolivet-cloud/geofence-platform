@@ -35,16 +35,16 @@ function extractMethodBody(startTag) {
 
 // eslint-disable-next-line no-new-func
 const simulateWalk = new Function(
-  "speedMps", "onProgress", "onDone", "QGeo", "GPSFilter", "setTimeout",
-  extractMethodBody("simulateWalk(speedMps, onProgress, onDone){")
+  "speedMps", "onProgress", "onDone", "selectedActivity", "QGeo", "GPSFilter", "setTimeout",
+  extractMethodBody("simulateWalk(speedMps, onProgress, onDone, selectedActivity){")
 );
 
 function mkQuest(corridors, fixSink) {
   return {
     corridors, states: {}, _simCancelled: false,
     _onFix(pos) { fixSink.push(pos); },
-    simulateWalk(speedMps, onProgress, onDone, setTimeoutFn) {
-      return simulateWalk.call(this, speedMps, onProgress, onDone, QGeo,
+    simulateWalk(speedMps, onProgress, onDone, setTimeoutFn, selectedActivity) {
+      return simulateWalk.call(this, speedMps, onProgress, onDone, selectedActivity, QGeo,
         { reset(){} }, setTimeoutFn);
     }
   };
@@ -110,6 +110,23 @@ function immediateSetTimeout(fn) { fn(); }
   }, (err) => { cancelled = true; }, immediateSetTimeout);
   assert(fixes.length < 24, "cancelling partway through stops generating fixes before the full path completes, got " + fixes.length);
   assert(!cancelled, "onDone is never called when cancelled mid-walk (the tick loop just returns)");
+})();
+
+/* ---- R8: selectedActivity defaults to "ski", or respects what's passed ---- */
+(function testSelectedActivityDefaultsToSki() {
+  const fixes = [];
+  const path = [[51.30000, -117.05000], [51.30030, -117.05000]];
+  const q = mkQuest([{ path }], fixes);
+  q.simulateWalk(1.5, null, () => {}, immediateSetTimeout);
+  assert(q.selectedActivity === "ski", "simulateWalk defaults selectedActivity to ski when not passed, got " + q.selectedActivity);
+})();
+
+(function testSelectedActivityRespectsArgument() {
+  const fixes = [];
+  const path = [[51.30000, -117.05000], [51.30030, -117.05000]];
+  const q = mkQuest([{ path }], fixes);
+  q.simulateWalk(1.5, null, () => {}, immediateSetTimeout, "bike");
+  assert(q.selectedActivity === "bike", "simulateWalk respects an explicit selectedActivity argument, got " + q.selectedActivity);
 })();
 
 console.log(pass + " passed, " + fail + " failed");

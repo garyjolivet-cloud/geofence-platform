@@ -31,10 +31,10 @@ const startTag = "_revealFog(p, acc){";
 const startIdx = html.indexOf(startTag);
 if (startIdx < 0) { console.log("FAIL: could not find _revealFog in ridge-quest.html"); process.exit(1); }
 // The method body ends at the closing "  },\n" that precedes the next
-// method definition ("_tick(corridor, p){") — find that boundary rather
-// than a fixed-depth brace count, matching this codebase's other
-// string-slice extractions.
-const nextMethodIdx = html.indexOf("_tick(corridor, p){", startIdx);
+// method definition ("_tick(corridor, p, selectedActivity){", R8) — find
+// that boundary rather than a fixed-depth brace count, matching this
+// codebase's other string-slice extractions.
+const nextMethodIdx = html.indexOf("_tick(corridor, p, selectedActivity){", startIdx);
 if (nextMethodIdx < 0) { console.log("FAIL: could not find end boundary of _revealFog"); process.exit(1); }
 const bodyEnd = html.lastIndexOf("},", nextMethodIdx);
 const revealFogBody = html.slice(startIdx + startTag.length, bodyEnd);

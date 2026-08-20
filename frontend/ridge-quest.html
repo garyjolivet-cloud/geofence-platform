@@ -74,6 +74,8 @@
   .runrow .badge.ski{background:var(--coral);color:#1a0d07}
   .runrow .badge.lift{background:var(--ice);color:#08202f}
   .runrow .badge.hike{background:var(--go);color:#052018}
+  .runrow .badge.bike{background:var(--go);color:#052018}
+  .runrow .badge.drive{background:var(--fog);color:#0b1420}
   .runrow .name{flex:1;color:var(--snow)}
   .runrow .meta{color:var(--fog);font-size:12px;white-space:nowrap}
   .empty{color:var(--fog);font-size:13px;text-align:center;padding:10px 0}
@@ -490,6 +492,7 @@ const QUEST_TUNING = {
   MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
   MAX_DURATION_S: 5400,    // 90 min — something went wrong (GPS stuck in-band), discard
   SKI_SPEED_MIN_MPS: 2.5,  // ~9 km/h; below this while descending a run = skinning/walking it, not skiing it
+  BIKE_SPEED_MIN_MPS: 3.0, // R8 — ~11 km/h; below this while descending a trail = walking/pushing the bike, not riding it
   COOLDOWN_MS: 4000,       // avoid double-counting a lingering crossing at the band edge
   ACCURACY_CAP_M: 40,      // R2: fixes worse than this don't drive fog reveal — same value/reasoning as geofence-engine.html's TUNING.ACCURACY_CAP_M
   FOG_RESOLUTION: 10,      // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
@@ -565,10 +568,14 @@ const Quest = {
     }catch(e){ /* keep whatever was already loaded (or empty) — a failed fetch here shouldn't block tracking */ }
   },
 
-  start(onRunLogged, onFogUpdated, onStatus){
+  start(onRunLogged, onFogUpdated, onStatus, selectedActivity){
     this.onRunLogged = onRunLogged;
     this.onFogUpdated = onFogUpdated || null;
     this.onStatus = onStatus || null;
+    // R8 — defaults to "ski" so anyone who never touches the activity
+    // picker (or an older cached page) gets today's exact existing
+    // behavior, unchanged.
+    this.selectedActivity = selectedActivity || "ski";
     this.states = {};
     GPSFilter.reset();
     if(!navigator.geolocation) return false;
@@ -592,7 +599,7 @@ const Quest = {
     const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy||30, t:pos.timestamp||Date.now(),
                   alt: c.altitude!=null ? c.altitude : null, altAcc: c.altitudeAccuracy!=null ? c.altitudeAccuracy : null };
     const p = GPSFilter.push(fix);
-    this.corridors.forEach(corridor=>this._tick(corridor, p));
+    this.corridors.forEach(corridor=>this._tick(corridor, p, this.selectedActivity));
     this._revealFog(p, fix.acc);
     this._tickViewpoints(p);
     if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t});
@@ -612,8 +619,11 @@ const Quest = {
   // uses (including through GPSFilter, not bypassing it) exercises the
   // actual shipped code end-to-end instead of a parallel simulation.
   _simCancelled: false,
-  simulateWalk(speedMps, onProgress, onDone){
+  simulateWalk(speedMps, onProgress, onDone, selectedActivity){
     this._simCancelled = false;
+    // R8 — defaults to whatever a prior start() set (or "ski") so existing
+    // callers/tests that don't pass a fourth arg keep working unchanged.
+    this.selectedActivity = selectedActivity || this.selectedActivity || "ski";
     const corridor = this.corridors[0];
     if(!corridor || !corridor.path || corridor.path.length<2){ onDone && onDone("no corridor loaded to walk"); return; }
     const path = corridor.path; // [[lat,lon],...]
@@ -702,7 +712,7 @@ const Quest = {
     api("/api/fog-cells", { method:"POST", body: JSON.stringify({ cells:newCells, state:2 }) }).catch(()=>{});
   },
 
-  _tick(corridor, p){
+  _tick(corridor, p, selectedActivity){
     const st = this.states[corridor.zoneId] || (this.states[corridor.zoneId] = { phase:"idle", buffer:[], cooldownUntil:0 });
     if(Date.now() < st.cooldownUntil) return;
     const inBand = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref) < 0;
@@ -712,12 +722,12 @@ const Quest = {
       st.buffer.push(p);
     } else if(st.phase==="inRun" && !inBand){
       st.buffer.push(p);
-      this._classifyAndLog(corridor, st.buffer);
+      this._classifyAndLog(corridor, st.buffer, selectedActivity);
       st.phase="idle"; st.buffer=[]; st.cooldownUntil=Date.now()+QUEST_TUNING.COOLDOWN_MS;
     }
   },
 
-  _classifyAndLog(corridor, buffer){
+  _classifyAndLog(corridor, buffer, selectedActivity){
     if(buffer.length<2) return;
     const first=buffer[0], last=buffer[buffer.length-1];
     const durationS = (last.t-first.t)/1000;
@@ -740,12 +750,24 @@ const Quest = {
     // fix in this run ever carried a device altitude reading).
     const verticalM = (first.alt!=null && last.alt!=null) ? (last.alt-first.alt) : null;
 
+    // R8 — selectedActivity is the player's own manual choice (Ski/Hike/
+    // Bike/Drive on Home) and is now the PRIMARY driver of classification,
+    // with two exceptions that stay authoritative regardless of what was
+    // selected: a lift is mechanized transport, physically detected by
+    // ascending a runType:"lift" corridor, not something you can "select"
+    // your way out of; and a corridor the author explicitly marked
+    // runType:"hike" (a real hiking-only trail) stays hike even if a fast
+    // trail-runner briefly clears the ski-speed threshold on it.
     let activity;
     if(corridor.runType==="lift"){
       if(!ascending) return; // downhill lift-line foot traffic isn't a lift ride
       activity="lift";
     } else if(corridor.runType==="hike"){
       activity="hike";
+    } else if(selectedActivity==="hike" || selectedActivity==="drive"){
+      activity=selectedActivity; // manual override, no speed check
+    } else if(selectedActivity==="bike"){
+      activity = (descending && avgSpeedMps >= QUEST_TUNING.BIKE_SPEED_MIN_MPS) ? "bike" : "hike";
     } else {
       activity = (descending && avgSpeedMps >= QUEST_TUNING.SKI_SPEED_MIN_MPS) ? "ski" : "hike";
     }
@@ -775,9 +797,14 @@ function questDateBucketClient(date){
 }
 function runRowHtml(r){
   const activity = r.activity;
+  const verticalM = r.vertical_m!=null ? r.vertical_m : r.verticalM;
+  const distanceM = r.distance_m!=null ? r.distance_m : r.distanceM;
   const meta = [
     fmtDuration(r.duration_s!=null?r.duration_s:r.durationS),
-    (r.vertical_m!=null?Math.abs(Math.round(r.vertical_m))+"m vert":(r.verticalM!=null?Math.abs(Math.round(r.verticalM))+"m vert":null)),
+    // R8 — bike/drive score by distance, not vertical (verticalM is null
+    // for them) — show whichever the activity actually earned points from.
+    (verticalM!=null ? Math.abs(Math.round(verticalM))+"m vert"
+      : (distanceM!=null ? (Math.round(distanceM/100)/10)+"km" : null)),
   ].filter(Boolean).join(" · ");
   const points = r.points!=null ? r.points : null;
   const powder = (r.snow_bonus!=null?r.snow_bonus:1) > 1;
@@ -838,6 +865,9 @@ function renderHome(){
     +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Track runs, reveal the mountain, and climb the leaderboard.</p>'
     +'<div id="statsTiles"></div>'
     +'<p class="scrollhint" id="statsStreak" style="margin-bottom:14px"></p>'
+    +'<div class="activityPicker" id="activityPicker" style="display:flex;gap:6px;margin-bottom:10px">'
+      +['ski','hike','bike','drive'].map(a=>'<button class="ghost" data-activity="'+a+'" style="flex:1;margin:0;text-transform:capitalize">'+a+'</button>').join('')
+    +'</div>'
     +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
     +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0 14px"></p>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
@@ -861,16 +891,37 @@ function renderHome(){
       ? "last fix "+new Date(st.t).toLocaleTimeString()+", ±"+Math.round(st.acc)+"m"
       : "location error: "+st.message+" — check your browser's location permission for this site";
   };
+  // R8 — manual activity choice, remembered across visits so re-selecting
+  // "Bike" every session isn't required. Buttons are disabled while
+  // tracking is active: switching mid-run would split one crossing's
+  // classification across two activities, which _classifyAndLog has no way
+  // to reconcile (it only sees the buffer, not a mid-buffer activity change).
+  let selectedActivity = localStorage.getItem("rq.activity") || "ski";
+  const activityBtns = [...document.querySelectorAll("#activityPicker button")];
+  function paintActivityButtons(){
+    activityBtns.forEach(b=>{ b.style.borderColor = (b.dataset.activity===selectedActivity) ? "var(--coral)" : ""; });
+  }
+  paintActivityButtons();
+  activityBtns.forEach(b=>{
+    b.onclick=()=>{
+      if(Quest.active()) return; // disabled while tracking, see comment above
+      selectedActivity = b.dataset.activity;
+      localStorage.setItem("rq.activity", selectedActivity);
+      paintActivityButtons();
+    };
+  });
   trackBtn.onclick=()=>{
     if(Quest.active()){
       Quest.stop();
       trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
       statusEl.textContent="";
+      activityBtns.forEach(b=>b.style.opacity="1");
     } else {
       statusEl.textContent="waiting for GPS…";
-      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus);
+      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
+      activityBtns.forEach(b=>b.style.opacity="0.4");
     }
   };
   if(IS_SIM_MODE){
@@ -878,13 +929,17 @@ function renderHome(){
     simBtn.onclick=()=>{
       if(simBtn.dataset.running){ Quest.cancelSim(); simBtn.textContent="Simulate walk (test mode)"; delete simBtn.dataset.running; statusEl.textContent=""; return; }
       simBtn.dataset.running="1"; simBtn.textContent="Simulating… (tap to cancel)";
-      Quest.simulateWalk(1.5,
+      // Bike needs a pace above BIKE_SPEED_MIN_MPS to actually classify as
+      // bike rather than falling back to hike; ski/hike/drive keep the
+      // original walking-pace default (drive doesn't speed-gate at all).
+      const simSpeed = selectedActivity==="bike" ? 4 : 1.5;
+      Quest.simulateWalk(simSpeed,
         (i,total)=>{ statusEl.textContent="simulating: "+i+"/"+total; },
         (err)=>{
           simBtn.textContent="Simulate walk (test mode)"; delete simBtn.dataset.running;
           statusEl.textContent = err ? "simulation: "+err : "simulation complete";
           refreshRuns(s.player.id); refreshStats(s.player.id);
-        });
+        }, selectedActivity);
     };
   }
   document.getElementById("btnMap").onclick=()=>renderFogMap();
@@ -914,25 +969,34 @@ function leaderboardRowHtml(row, meId, rank){
     +'<span class="name">'+esc(row.name)+(mine?' (you)':'')+'</span>'
     +'<span class="meta">'+Math.round(row.points)+' pts</span></div>';
 }
-async function renderLeaderboard(mode){
+async function renderLeaderboard(mode, activityFilter){
   mode = mode || "daily";
   const s=getSession();
   app.innerHTML =
     '<div class="card">'
     +'<h2>Leaderboard</h2>'
-    +'<div style="display:flex;gap:10px;margin-bottom:14px">'
+    +'<div style="display:flex;gap:10px;margin-bottom:10px">'
       +'<button class="ghost" id="lbDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
       +'<button class="ghost" id="lbSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
+    +'</div>'
+    // R8 — optional per-activity view, reusing R6's ?activity= filter.
+    // "All" (no filter) stays the default, unchanged combined board.
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
+      +["","ski","hike","bike","drive"].map(a=>'<button class="ghost" data-act="'+a+'" style="margin:0;font-size:12px;padding:6px 10px;'+((activityFilter||"")===a?"border-color:var(--coral)":"")+'">'+(a||"All")+'</button>').join('')
     +'</div>'
     +'<div id="lbList"><div class="empty">Loading…</div></div>'
     +'<button class="ghost" id="lbBack">← Back</button>'
     +'</div>';
   document.getElementById("lbBack").onclick=renderHome;
-  document.getElementById("lbDailyBtn").onclick=()=>renderLeaderboard("daily");
-  document.getElementById("lbSeasonBtn").onclick=()=>renderLeaderboard("season");
+  document.getElementById("lbDailyBtn").onclick=()=>renderLeaderboard("daily", activityFilter);
+  document.getElementById("lbSeasonBtn").onclick=()=>renderLeaderboard("season", activityFilter);
+  document.querySelectorAll("button[data-act]").forEach(btn=>{
+    btn.onclick=()=>renderLeaderboard(mode, btn.dataset.act || null);
+  });
   const listEl=document.getElementById("lbList");
   try{
-    const j = await api(mode==="daily" ? "/api/leaderboard/daily" : "/api/leaderboard/season");
+    const base = mode==="daily" ? "/api/leaderboard/daily" : "/api/leaderboard/season";
+    const j = await api(activityFilter ? base+"?activity="+encodeURIComponent(activityFilter) : base);
     const board = j.board||[];
     listEl.innerHTML = board.length
       ? board.map((row,i)=>leaderboardRowHtml(row, s.player.id, i+1)).join("")

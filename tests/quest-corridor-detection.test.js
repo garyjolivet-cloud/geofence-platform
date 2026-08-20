@@ -36,7 +36,7 @@ const QUEST_TUNING = eval("(" + tuningM[0].replace(/^const QUEST_TUNING = /, "")
 // ---- extract the classification body of Quest._classifyAndLog, stopping
 // before the api() POST (needs a live session/fetch, out of scope for a
 // unit test) ----
-const startTag = "_classifyAndLog(corridor, buffer){";
+const startTag = "_classifyAndLog(corridor, buffer, selectedActivity){";
 const startIdx = html.indexOf(startTag);
 if (startIdx < 0) { console.log("FAIL: could not find _classifyAndLog in ridge-quest.html"); process.exit(1); }
 const endTag = "\n    api(\"/api/quest-runs\"";
@@ -44,7 +44,7 @@ const endIdx = html.indexOf(endTag, startIdx);
 if (endIdx < 0) { console.log("FAIL: could not find end of _classifyAndLog body in ridge-quest.html"); process.exit(1); }
 const classifyBody = html.slice(startIdx + startTag.length, endIdx) + "\nreturn run;";
 // eslint-disable-next-line no-new-func
-const classify = new Function("corridor", "buffer", "QGeo", "QUEST_TUNING", classifyBody);
+const classify = new Function("corridor", "buffer", "selectedActivity", "QGeo", "QUEST_TUNING", classifyBody);
 
 // ---- test fixtures ----
 // A straight north-south corridor near Golden BC, "top" at path[0] (higher
@@ -103,7 +103,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.305, -117.05, 20, { speed: 6 }),
     mkFix(51.300, -117.05, 40, { speed: 6 })
   ];
-  const run = classify(straightRun, buffer, QGeo, QUEST_TUNING);
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run && run.activity === "ski", "descending fast enough on a plain run classifies as ski, got " + (run && run.activity));
 })();
 
@@ -113,7 +113,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.305, -117.05, 60, { speed: 1 }),
     mkFix(51.300, -117.05, 120, { speed: 1 })
   ];
-  const run = classify(straightRun, buffer, QGeo, QUEST_TUNING);
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run && run.activity === "hike", "descending too slowly on a plain run classifies as hike (skinning), got " + (run && run.activity));
 })();
 
@@ -123,7 +123,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.305, -117.05, 60, { speed: 1 }),
     mkFix(51.310, -117.05, 120, { speed: 1 })
   ];
-  const run = classify(straightRun, buffer, QGeo, QUEST_TUNING);
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run && run.activity === "hike", "ascending a plain run (not descending, so never 'ski') classifies as hike, got " + (run && run.activity));
 })();
 
@@ -132,7 +132,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.300, -117.05, 0, { speed: 4 }),
     mkFix(51.310, -117.05, 300, { speed: 4 })
   ];
-  const run = classify(liftLine, buffer, QGeo, QUEST_TUNING);
+  const run = classify(liftLine, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run && run.activity === "lift", "ascending a lift corridor classifies as lift, got " + (run && run.activity));
 })();
 
@@ -141,7 +141,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.310, -117.05, 0, { speed: 4 }),
     mkFix(51.300, -117.05, 300, { speed: 4 })
   ];
-  const run = classify(liftLine, buffer, QGeo, QUEST_TUNING);
+  const run = classify(liftLine, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run === undefined, "descending a lift corridor (foot traffic) is discarded, not logged, got " + JSON.stringify(run));
 })();
 
@@ -150,7 +150,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.300, -117.05, 0, { speed: 1 }),
     mkFix(51.310, -117.05, 400, { speed: 1 })
   ];
-  const run = classify(hikeRoute, buffer, QGeo, QUEST_TUNING);
+  const run = classify(hikeRoute, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run && run.activity === "hike", "any crossing of a hike-type corridor classifies as hike, got " + (run && run.activity));
 })();
 
@@ -159,7 +159,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.310, -117.05, 0, { speed: 6 }),
     mkFix(51.300, -117.05, 2, { speed: 6 }) // 2s, below MIN_DURATION_S
   ];
-  const run = classify(straightRun, buffer, QGeo, QUEST_TUNING);
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run === undefined, "a crossing shorter than MIN_DURATION_S is discarded (flicker), got " + JSON.stringify(run));
 })();
 
@@ -168,7 +168,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.310, -117.05, 0, { speed: 6 }),
     mkFix(51.300, -117.05, 6000, { speed: 6 }) // 100min, above MAX_DURATION_S
   ];
-  const run = classify(straightRun, buffer, QGeo, QUEST_TUNING);
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run === undefined, "a crossing longer than MAX_DURATION_S is discarded (stuck GPS), got " + JSON.stringify(run));
 })();
 
@@ -177,7 +177,7 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.310, -117.05, 0, { speed: 6, alt: 2400 }),
     mkFix(51.300, -117.05, 40, { speed: 6, alt: 2100 })
   ];
-  const run = classify(straightRun, buffer, QGeo, QUEST_TUNING);
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run && run.verticalM === -300, "vertical_m is the net (last-first) altitude delta, got " + (run && run.verticalM));
 })();
 
@@ -186,8 +186,86 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.310, -117.05, 0, { speed: 6 }),
     mkFix(51.300, -117.05, 40, { speed: 6 })
   ];
-  const run = classify(straightRun, buffer, QGeo, QUEST_TUNING);
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(run && run.verticalM === null, "vertical_m is null when no fix carried an altitude reading, got " + (run && run.verticalM));
+})();
+
+// ---- R8: selectedActivity — manual player choice drives classification
+// on plain (non-lift, non-hike-runType) corridors ----
+
+(function testBikeDescendingFastEnough() {
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 5 }),
+    mkFix(51.305, -117.05, 20, { speed: 5 }),
+    mkFix(51.300, -117.05, 40, { speed: 5 })
+  ];
+  const run = classify(straightRun, buffer, "bike", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "bike", "descending fast enough with bike selected classifies as bike, got " + (run && run.activity));
+})();
+
+(function testBikeDescendingTooSlowFallsBackToHike() {
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 1 }),
+    mkFix(51.305, -117.05, 60, { speed: 1 }),
+    mkFix(51.300, -117.05, 120, { speed: 1 })
+  ];
+  const run = classify(straightRun, buffer, "bike", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "descending too slowly with bike selected falls back to hike (pushing the bike), got " + (run && run.activity));
+})();
+
+(function testHikeSelectedOverridesSpeed() {
+  // Fast enough to clear the SKI threshold, but hike was explicitly
+  // selected — manual choice overrides auto-detection entirely for hike.
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 6 }),
+    mkFix(51.305, -117.05, 20, { speed: 6 }),
+    mkFix(51.300, -117.05, 40, { speed: 6 })
+  ];
+  const run = classify(straightRun, buffer, "hike", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "hike selected classifies as hike regardless of speed, got " + (run && run.activity));
+})();
+
+(function testDriveSelectedAnySpeed() {
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 15 }),
+    mkFix(51.300, -117.05, 40, { speed: 15 })
+  ];
+  const run = classify(straightRun, buffer, "drive", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "drive", "drive selected classifies as drive at any speed, got " + (run && run.activity));
+})();
+
+(function testDriveSelectedEvenAscending() {
+  // Manual override, no direction check either — driving up a road logs
+  // as drive, not silently discarded the way an ascending ski corridor
+  // (non-lift) would fall to "hike" under the default branch.
+  const buffer = [
+    mkFix(51.300, -117.05, 0, { speed: 15 }),
+    mkFix(51.310, -117.05, 40, { speed: 15 })
+  ];
+  const run = classify(straightRun, buffer, "drive", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "drive", "drive selected classifies as drive even ascending, got " + (run && run.activity));
+})();
+
+(function testBikeCrossingLiftCorridorStillLift() {
+  // Lift detection stays authoritative regardless of what's selected — you
+  // can't "select" your way out of having ridden a lift.
+  const buffer = [
+    mkFix(51.300, -117.05, 0, { speed: 4 }),
+    mkFix(51.310, -117.05, 300, { speed: 4 })
+  ];
+  const run = classify(liftLine, buffer, "bike", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "lift", "ascending a lift corridor is still a lift ride regardless of selectedActivity, got " + (run && run.activity));
+})();
+
+(function testBikeCrossingHikeRuntypeStillHike() {
+  // A corridor the author explicitly marked runType:"hike" stays hike even
+  // with a different activity selected — it's a real hiking-only trail.
+  const buffer = [
+    mkFix(51.300, -117.05, 0, { speed: 5 }),
+    mkFix(51.310, -117.05, 60, { speed: 5 })
+  ];
+  const run = classify(hikeRoute, buffer, "bike", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "a runType:hike corridor stays hike regardless of selectedActivity, got " + (run && run.activity));
 })();
 
 console.log(pass + " passed, " + fail + " failed");
