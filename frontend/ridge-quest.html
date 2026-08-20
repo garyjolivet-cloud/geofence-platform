@@ -497,7 +497,21 @@ const QUEST_TUNING = {
   ACCURACY_CAP_M: 40,      // R2: fixes worse than this don't drive fog reveal — same value/reasoning as geofence-engine.html's TUNING.ACCURACY_CAP_M
   FOG_RESOLUTION: 10,      // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
   VIEWPOINT_RADIUS_M: 15,  // R4: a viewpoint is a spot to stand at, not a zone to cross — small trigger radius
-  FOG_CELLS_POST_CHUNK: 500 // R4: /api/fog-cells caps at 500 cells/call; a full viewshed grant is chunked to this size
+  FOG_CELLS_POST_CHUNK: 500, // R4: /api/fog-cells caps at 500 cells/call; a full viewshed grant is chunked to this size
+  // R9 — tripline fix: a corridor only counts as "run" (points logged) once
+  // this fraction of ITS OWN length was actually traversed by the crossing,
+  // not just clipped. Sampled every CORRIDOR_SAMPLE_STEP_M along the
+  // corridor's authored path; a sample counts as hit if the crossing's
+  // buffer track passed within corridor width/2 + CORRIDOR_GPS_TOLERANCE_M
+  // of it. Fixes the "traverse a bowl, clip 3 chutes" over-crediting bug —
+  // a brief clip covers only a sliver of any one chute's own length, well
+  // under this threshold, while actually descending it covers nearly all
+  // of it. 0.5 is a starting point, not measured: it zeros mid-run drop-ins
+  // (traverse in, ski only the bottom half) by design — tune after field
+  // testing, same as every other QUEST_TUNING constant.
+  CORRIDOR_SAMPLE_STEP_M: 25,
+  CORRIDOR_COMPLETION_PCT: 0.5,
+  CORRIDOR_GPS_TOLERANCE_M: 15
 };
 
 const QGeo = {
@@ -522,6 +536,46 @@ const QGeo = {
     let best=Infinity;
     for(let i=1;i<pts.length;i++) best=Math.min(best, this.segDist(P,pts[i-1],pts[i]));
     return best - (corridor.widthM||10)/2;
+  },
+  // Resamples a [lat,lon] polyline into ~stepM-spaced points — same
+  // technique Quest.simulateWalk() already uses for synthetic-fix pacing,
+  // pulled out here as a shared pure helper for corridorCoverage below.
+  resamplePath(path, stepM){
+    const pts=[];
+    for(let i=1;i<path.length;i++){
+      const a=path[i-1], b=path[i];
+      const segM=this.haversineM(a,b);
+      const steps=Math.max(1, Math.round(segM/stepM));
+      for(let s=0;s<steps;s++){
+        const f=s/steps;
+        pts.push([ a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f ]);
+      }
+    }
+    pts.push(path[path.length-1]);
+    return pts;
+  },
+  // R9 — what fraction of `corridor`'s own length (sampled every stepM) did
+  // this crossing's buffer track actually pass within corridor-width/2 +
+  // toleranceM of? Distinguishes "skied the whole chute" from "traverse
+  // clipped its edge for a few seconds" — both used to log identically as
+  // long as they crossed the band at all. Deliberately point-to-buffer-
+  // POLYLINE distance (not point-to-nearest-fix): a fast mover's fixes are
+  // sparse (~10-15m apart at speed with ~1s GPS intervals), so measuring
+  // against raw fix points would under-count a genuine fast descent between
+  // fixes; the polyline the fixes trace out doesn't have that gap.
+  corridorCoverage(corridor, buffer, stepM, toleranceM){
+    const ref = corridor.ref;
+    const samples = this.resamplePath(corridor.path, stepM);
+    const bufXY = buffer.map(p=>this.toXY([p.lat,p.lon], ref));
+    const halfWidth = (corridor.widthM||10)/2;
+    let covered=0;
+    samples.forEach(s=>{
+      const S=this.toXY(s, ref);
+      let best=Infinity;
+      for(let i=1;i<bufXY.length;i++) best=Math.min(best, this.segDist(S, bufXY[i-1], bufXY[i]));
+      if(best <= halfWidth + toleranceM) covered++;
+    });
+    return samples.length ? covered/samples.length : 0;
   }
 };
 
@@ -536,6 +590,7 @@ const Quest = {
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
   onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
+  onCoverage: null,     // R9 — callback(corridorName, pct, passed) — fired once per band exit (whether it logged a run or was discarded), so a partial/clipped crossing isn't silent the way a below-threshold discard otherwise would be
 
   async loadCorridors(){
     try{
@@ -568,10 +623,11 @@ const Quest = {
     }catch(e){ /* keep whatever was already loaded (or empty) — a failed fetch here shouldn't block tracking */ }
   },
 
-  start(onRunLogged, onFogUpdated, onStatus, selectedActivity){
+  start(onRunLogged, onFogUpdated, onStatus, selectedActivity, onCoverage){
     this.onRunLogged = onRunLogged;
     this.onFogUpdated = onFogUpdated || null;
     this.onStatus = onStatus || null;
+    this.onCoverage = onCoverage || null;
     // R8 — defaults to "ski" so anyone who never touches the activity
     // picker (or an older cached page) gets today's exact existing
     // behavior, unchanged.
@@ -733,6 +789,16 @@ const Quest = {
     const durationS = (last.t-first.t)/1000;
     if(durationS < QUEST_TUNING.MIN_DURATION_S || durationS > QUEST_TUNING.MAX_DURATION_S) return;
 
+    // R9 — tripline fix: gate on how much of THIS corridor's own length the
+    // crossing actually covered, not just whether the band was entered and
+    // exited at all. A bowl traverse that clips 3 nearby chutes' bands only
+    // covers a sliver of each one's length; a real descent of one covers
+    // nearly all of it. See QUEST_TUNING.CORRIDOR_* for the tunable knobs.
+    const coverage = QGeo.corridorCoverage(corridor, buffer, QUEST_TUNING.CORRIDOR_SAMPLE_STEP_M, QUEST_TUNING.CORRIDOR_GPS_TOLERANCE_M);
+    const coveragePassed = coverage >= QUEST_TUNING.CORRIDOR_COMPLETION_PCT;
+    if(this.onCoverage) this.onCoverage(corridor.name, coverage, coveragePassed);
+    if(!coveragePassed) return;
+
     // Direction: which drawn endpoint (path[0]="top" vs path[last]="bottom",
     // by authoring convention) the player was nearer to at entry vs exit —
     // no authored top/bottom triplines needed (R1's scope simplification).
@@ -869,7 +935,8 @@ function renderHome(){
       +['ski','hike','bike','drive'].map(a=>'<button class="ghost" data-activity="'+a+'" style="flex:1;margin:0;text-transform:capitalize">'+a+'</button>').join('')
     +'</div>'
     +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
-    +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0 14px"></p>'
+    +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0"></p>'
+    +'<p class="scrollhint" id="coverageStatus" style="margin:0 0 14px"></p>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
     +'<button class="ghost" id="btnMap">My map</button>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
@@ -885,11 +952,25 @@ function renderHome(){
   Quest.loadFogCells(s.player.id);
   const trackBtn=document.getElementById("btnTrack");
   const statusEl=document.getElementById("gpsStatus");
+  const coverageEl=document.getElementById("coverageStatus");
   const onStatus=(st)=>{
     if(!statusEl) return;
     statusEl.textContent = st.ok
       ? "last fix "+new Date(st.t).toLocaleTimeString()+", ±"+Math.round(st.acc)+"m"
       : "location error: "+st.message+" — check your browser's location permission for this site";
+  };
+  // R9 — surfaces every band-exit's coverage check, not just the ones that
+  // logged a run: a clipped/partial crossing used to vanish silently the
+  // same way a too-short flicker always has, with no way to tell them
+  // apart. Sticks until the next crossing (not cleared on Stop) so a player
+  // who just finished sees the result of their last run before it scrolls
+  // into Today's list.
+  const onCoverage=(name, pct, passed)=>{
+    if(!coverageEl) return;
+    const pctStr = Math.round(pct*100)+"%";
+    coverageEl.textContent = passed
+      ? name+" — "+pctStr+" ✓ logged"
+      : name+" — "+pctStr+" (not enough of it covered to count)";
   };
   // R8 — manual activity choice, remembered across visits so re-selecting
   // "Bike" every session isn't required. Buttons are disabled while
@@ -918,7 +999,8 @@ function renderHome(){
       activityBtns.forEach(b=>b.style.opacity="1");
     } else {
       statusEl.textContent="waiting for GPS…";
-      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity);
+      coverageEl.textContent="";
+      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity, onCoverage);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
       activityBtns.forEach(b=>b.style.opacity="0.4");
@@ -929,6 +1011,9 @@ function renderHome(){
     simBtn.onclick=()=>{
       if(simBtn.dataset.running){ Quest.cancelSim(); simBtn.textContent="Simulate walk (test mode)"; delete simBtn.dataset.running; statusEl.textContent=""; return; }
       simBtn.dataset.running="1"; simBtn.textContent="Simulating… (tap to cancel)";
+      // simulateWalk() doesn't route through start(), so onCoverage needs
+      // setting directly here to see the coverage readout during a sim run.
+      Quest.onCoverage = onCoverage;
       // Bike needs a pace above BIKE_SPEED_MIN_MPS to actually classify as
       // bike rather than falling back to hike; ski/hike/drive keep the
       // original walking-pace default (drive doesn't speed-gate at all).

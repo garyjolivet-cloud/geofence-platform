@@ -268,5 +268,72 @@ function mkFix(lat, lon, tOffsetS, extra) {
   assert(run && run.activity === "hike", "a runType:hike corridor stays hike regardless of selectedActivity, got " + (run && run.activity));
 })();
 
+// ---- R9: coverage-percentage gate — fixes the "traverse clips multiple
+// nearby corridors" over-crediting bug by requiring the crossing to have
+// actually covered most of THIS corridor's own length, not just entered
+// and exited its band once ----
+
+(function testPerpendicularClipDiscardedForLowCoverage() {
+  // A short crossing near the corridor's midpoint only (like a traverse
+  // clipping across a chute) — covers a sliver of the corridor's ~1.1km
+  // length, nowhere near CORRIDOR_COMPLETION_PCT.
+  const buffer = [
+    mkFix(51.305, -117.0505, 0, { speed: 2 }),
+    mkFix(51.305, -117.0495, 20, { speed: 2 })
+  ];
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(run === undefined, "a brief midpoint-only clip is discarded for low coverage, got " + JSON.stringify(run));
+})();
+
+(function testPartialDescentBelowThresholdDiscarded() {
+  // Covers only the top ~30% of the corridor's length (dropped in, stopped
+  // partway) — below the default 50% threshold.
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 6 }),
+    mkFix(51.307, -117.05, 15, { speed: 6 })
+  ];
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(run === undefined, "covering well under half the corridor's length is discarded, got " + JSON.stringify(run));
+})();
+
+(function testFullDescentSparseBufferPasses() {
+  // Only 2 fixes (start/end of the full corridor) — a fast mover's sparse
+  // fix sequence still traces the corridor's whole length as a polyline,
+  // so coverage is measured against that line, not against the 2 raw
+  // points, and a genuine full descent isn't penalized for having few fixes.
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 6 }),
+    mkFix(51.300, -117.05, 40, { speed: 6 })
+  ];
+  const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "ski", "a full-length crossing with only 2 fixes still passes the coverage gate, got " + JSON.stringify(run));
+})();
+
+(function testOnCoverageFeedbackFires() {
+  const calls = [];
+  const self = { onCoverage: (name, pct, passed) => calls.push({ name, pct, passed }) };
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 6 }),
+    mkFix(51.300, -117.05, 40, { speed: 6 })
+  ];
+  classify.call(self, straightRun, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(calls.length === 1, "onCoverage fires once per classified crossing, got " + calls.length);
+  assert(calls[0].name === "Test Run", "onCoverage receives the corridor's name, got " + calls[0].name);
+  assert(calls[0].pct > 0.9, "a full-length crossing reports high coverage, got " + calls[0].pct);
+  assert(calls[0].passed === true, "a full-length crossing reports passed=true, got " + calls[0].passed);
+})();
+
+(function testOnCoverageFeedbackFiresOnDiscard() {
+  const calls = [];
+  const self = { onCoverage: (name, pct, passed) => calls.push({ name, pct, passed }) };
+  const buffer = [
+    mkFix(51.305, -117.0505, 0, { speed: 2 }),
+    mkFix(51.305, -117.0495, 20, { speed: 2 })
+  ];
+  classify.call(self, straightRun, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(calls.length === 1, "onCoverage fires even when the crossing is discarded for low coverage, got " + calls.length);
+  assert(calls[0].passed === false, "a low-coverage crossing reports passed=false, got " + calls[0].passed);
+})();
+
 console.log(pass + " passed, " + fail + " failed");
 if (fail > 0) process.exit(1);
