@@ -914,6 +914,28 @@ function shroudFeatureCollection(){
     { type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[world, ...holes] } }
   ]};
 }
+// A revealed patch can be a handful of ~66m hexes — easy to miss entirely
+// against a fixed zoom:13 view of the whole resort. Fit the initial view to
+// whatever's actually there instead: revealed cells first (so a small real
+// patch is never off-screen or too tiny to notice), falling back to the
+// corridor network's own extent if nothing's revealed yet (so there's
+// something to orient to on a first-ever visit), falling back to null
+// (caller keeps the old fixed ref/zoom view) if neither exists.
+function questMapBounds(){
+  const lonlats=[];
+  if(Quest.fogCells.size){
+    Quest.fogCells.forEach((state, cell)=>{ h3.cellToBoundary(cell, true).forEach(pt=>lonlats.push(pt)); });
+  } else if(Quest.corridors.length){
+    Quest.corridors.forEach(c=>(c.path||[]).forEach(([lat,lon])=>lonlats.push([lon,lat])));
+  }
+  if(!lonlats.length) return null;
+  let minLon=Infinity,maxLon=-Infinity,minLat=Infinity,maxLat=-Infinity;
+  lonlats.forEach(([lon,lat])=>{
+    if(lon<minLon)minLon=lon; if(lon>maxLon)maxLon=lon;
+    if(lat<minLat)minLat=lat; if(lat>maxLat)maxLat=lat;
+  });
+  return [[minLon,minLat],[maxLon,maxLat]];
+}
 function renderFogMap(){
   if(!Quest.ref){
     app.innerHTML =
@@ -943,6 +965,8 @@ function renderFogMap(){
       center:[Quest.ref[1], Quest.ref[0]], zoom:13
     });
     map.addControl(new maplibregl.NavigationControl());
+    const initialBounds = questMapBounds();
+    if(initialBounds) map.fitBounds(initialBounds, { padding:70, maxZoom:17, duration:0 });
     function syncSource(){
       const shroudSrc = map.getSource("shroud");
       if(shroudSrc) shroudSrc.setData(shroudFeatureCollection());
