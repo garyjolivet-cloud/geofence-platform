@@ -665,6 +665,19 @@
           const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,hazardAwareEnabled:next})});
           if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
         });
+        // Fifth toggle (Ridge Quest R5, 2026-08-20): gates ONLY the fog-of-war
+        // VISUAL layer on the player-facing /quest map — unrelated to 3D
+        // Mode, so unconditional like threeDEnabled itself (not gated behind
+        // `if(app.threeDEnabled)` like its three siblings above). Ridge
+        // Quest's H3 coverage TRACKING keeps working regardless of this
+        // flag — it only hides the shroud/colored-cell overlay.
+        mkBtn(app.fogEnabled===false ? "Fog of War: Off" : "Fog of War: On", async () => {
+          const next = app.fogEnabled===false; // off -> turn on; on/undefined -> turn off
+          if(!confirm((next?"Turn ON":"Turn OFF")+' the fog-of-war reveal visuals for "'+(app.name||app.id)+'" in Ridge Quest? Fog TRACKING keeps working either way — this only hides the shroud/colored map layer.')) return;
+          const token = askToken(); if(!token) return;
+          const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,fogEnabled:next})});
+          if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
+        });
         if(apps.length > 1) mkBtn("Merge into…", async () => {
           const others = apps.filter(a => a.id!==app.id);
           const names = others.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");

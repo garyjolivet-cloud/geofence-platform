@@ -1,0 +1,18 @@
+-- Ridge Quest (R5): per-app fog-of-war VISUAL toggle. Same app-level flag
+-- pattern as three_d_enabled/terrain_altitude_enabled/visitors_fly/
+-- hazard_aware_enabled (0033-0035), but DEFAULT 1, not 0 — a deliberate
+-- deviation. Those four flags gate brand-new capabilities nothing depended
+-- on yet; fog-of-war is CORE to Ridge Quest and already shipped/live
+-- (R2, 2026-08-19). DEFAULT 0 here would silently blank the shroud/reveal
+-- visuals for the already-live golden-nordic app the moment this migration
+-- runs, before any admin gets a chance to opt back in. DEFAULT 1 preserves
+-- current behavior for every existing app; turning fog OFF is the new
+-- opt-out capability, not opt-in.
+--
+-- Gates ONLY the visual layers (ridge-quest.html's renderFogMap() shroud/
+-- fog sources) — Quest._revealFog()'s H3 cell tracking and its
+-- POST /api/fog-cells persistence are UNAFFECTED regardless of this flag;
+-- data collection stays independent of the visual, per explicit product
+-- decision (an admin may want the coverage data even while hiding the
+-- shroud UI from players).
+ALTER TABLE app ADD COLUMN fog_enabled INTEGER NOT NULL DEFAULT 1;

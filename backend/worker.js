@@ -832,7 +832,16 @@ async function api(request, env, url) {
   if (path === "/api/players/me" && method === "GET") {
     const P = await playerAuth(request, env);
     if (!P) return json({ error: "not authenticated" }, 401, AC);
-    return json({ id: P.playerId, email: P.email, displayName: P.displayName, appId: P.appId }, 200, AC);
+    // Ridge Quest R5 — fogEnabled needs to reach the game client, but this
+    // is the ONLY player-facing call Ridge Quest already makes on every
+    // boot, and GET /api/apps (where every other app-level flag lives) is
+    // staff-token-gated — players have none. A one-column join here avoids
+    // adding a whole new public app-lookup endpoint just for this one flag.
+    // A missing/failed row reads as "on," matching the column's DEFAULT 1
+    // (fail open, not closed, for a purely visual feature).
+    const appRow = await env.DB.prepare("SELECT fog_enabled FROM app WHERE id=?").bind(P.appId).first().catch(() => null);
+    return json({ id: P.playerId, email: P.email, displayName: P.displayName, appId: P.appId,
+                  fogEnabled: !(appRow && appRow.fog_enabled === 0) }, 200, AC);
   }
   // --- Ridge Quest: Google Sign-In ---
   // Looks up by google_sub first; falls back to matching (app_id, email) to
@@ -1504,7 +1513,7 @@ async function api(request, env, url) {
     const scopedOrg = A.master ? (url.searchParams.get("org") || null) : A.appId;
     const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt,a.three_d_enabled AS threeDEnabled, " +
       "a.terrain_altitude_enabled AS terrainAltitudeEnabled, a.visitors_fly AS visitorsFly, " +
-      "a.hazard_aware_enabled AS hazardAwareEnabled, " +
+      "a.hazard_aware_enabled AS hazardAwareEnabled, a.fog_enabled AS fogEnabled, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
@@ -1565,10 +1574,17 @@ async function api(request, env, url) {
     // hazard" warning. Same "own explicit opt-in" reasoning as its three
     // siblings above.
     const hazardAware = b.hazardAwareEnabled === undefined ? null : (b.hazardAwareEnabled ? 1 : 0);
-    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), updatedAt=? WHERE id=?")
-      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, now, aid).run();
+    // fogEnabled (Ridge Quest R5, 2026-08-20) — a fifth flag, gating ONLY
+    // Ridge Quest's fog-of-war VISUAL layer (the shroud/colored-cell map
+    // overlay). Unlike its four siblings above, this doesn't gate a new
+    // capability nothing depended on — fog-of-war is already live, so its
+    // column DEFAULT is 1 (see migrations/0043); omitting this field here
+    // leaves it unchanged, same COALESCE convention as the others.
+    const fogEnabled = b.fogEnabled === undefined ? null : (b.fogEnabled ? 1 : 0);
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), fog_enabled=COALESCE(?,fog_enabled), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, fogEnabled, now, aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
-    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware }, 200, AC);
+    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware, fogEnabled }, 200, AC);
   }
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---

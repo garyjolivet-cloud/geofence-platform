@@ -426,6 +426,10 @@ const RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || "RE
 // ?sim=1 reveals the dev-only "Simulate walk" button on Home (Quest.simulateWalk) —
 // never shown to a real player by default, opt-in via URL only.
 const IS_SIM_MODE = new URLSearchParams(location.search).get("sim") === "1";
+// R5 — per-app admin toggle (GET /api/players/me's fogEnabled), set once at
+// boot(). Gates ONLY renderFogMap()'s visual layers; Quest._revealFog()'s H3
+// tracking and POST /api/fog-cells persistence are never gated by this.
+let RQ_FOG_ENABLED = true;
 
 const QUEST_TUNING = {
   MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
@@ -947,7 +951,7 @@ function renderFogMap(){
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
-    +'<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span></div>'
+    +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span></div>' : '')
     +'</div>';
   // Bind Back FIRST, before anything that can throw (maplibregl failing to
   // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
@@ -974,6 +978,11 @@ function renderFogMap(){
       if(src) src.setData(fogFeatureCollection());
     }
     map.on("load", ()=>{
+      // R5 — admin-gated: fogFeatureCollection()/shroudFeatureCollection()
+      // stay pure/untouched either way (Quest.fogCells itself is never
+      // gated — only whether it gets DRAWN here is). When off, this whole
+      // block is simply skipped: just the plain satellite basemap shows.
+      if(!RQ_FOG_ENABLED) return;
       // Shroud goes in FIRST (and its layer added first) so it paints
       // underneath the colored fog-fill/fog-line layers below.
       map.addSource("shroud", { type:"geojson", data: shroudFeatureCollection() });
@@ -988,8 +997,10 @@ function renderFogMap(){
     // Live redraw as new cells get revealed WHILE this screen is open
     // (tracking may already be running from Home) — cleared on back-out so
     // a later fix, after navigating away, doesn't try to touch a torn-down
-    // map instance.
-    Quest.onFogUpdated = syncSource;
+    // map instance. Left null when fog is admin-disabled: there's no source
+    // to sync into (map.on("load") returned early above), and Quest itself
+    // keeps tracking regardless — this only controls the redraw callback.
+    if(RQ_FOG_ENABLED) Quest.onFogUpdated = syncSource;
   }catch(e){
     document.getElementById("fogMap").outerHTML =
       '<div class="msg" style="padding-top:120px">Map couldn’t load (connection or device issue) — try again from a better signal.</div>';
@@ -1001,11 +1012,13 @@ async function boot(){
   const s=getSession();
   if(!s || !s.token){ renderAuth("login"); return; }
   app.innerHTML = '<div class="msg">Loading…</div>';
+  let me;
   try{
-    await api("/api/players/me"); // validates the session is still live
+    me = await api("/api/players/me"); // validates the session is still live
   }catch(e){
     clearSession(); renderAuth("login"); return;
   }
+  RQ_FOG_ENABLED = me.fogEnabled !== false;
   const gateOk = await runGate();
   if(!gateOk) return; // runGate's own screens handle re-entry
   renderConditions(renderHome);
