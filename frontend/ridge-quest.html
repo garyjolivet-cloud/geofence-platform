@@ -1133,20 +1133,50 @@ function shroudFeatureCollection(){
     { type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[world, ...holes] } }
   ]};
 }
+// R10 — "normalize the project so the tiles are over the entire project":
+// a player who's only ever walked ONE of a project's several corridors used
+// to see one bright hex strip floating alone in an otherwise featureless
+// black void — no sense of the project's actual size/shape. Precomputes
+// every corridor's own H3 footprint (same k=1 "torch radius" disk
+// _revealFog() would eventually paint if you walked it, so the shape never
+// jumps when a preview cell later gets genuinely revealed) and renders it as
+// a dim, always-on outline UNDER the real fog-fill/fog-line layers. Purely
+// client-side/visual — never touches Quest.fogCells, never written to
+// player_fog_cell, so R4's viewpoint semantics (state=1 = "seen from a
+// viewpoint") stay exactly what they were; this is a third, visually
+// distinct layer, not a new fog state.
+function corridorPreviewCells(){
+  const cells = new Set();
+  if(typeof h3 === "undefined") return cells;
+  Quest.corridors.forEach(corridor=>{
+    QGeo.resamplePath(corridor.path, QUEST_TUNING.CORRIDOR_SAMPLE_STEP_M).forEach(([lat,lon])=>{
+      const origin = h3.latLngToCell(lat, lon, QUEST_TUNING.FOG_RESOLUTION);
+      h3.gridDisk(origin, 1).forEach(c=>cells.add(c));
+    });
+  });
+  return cells;
+}
+function corridorPreviewFeatureCollection(){
+  const features=[];
+  corridorPreviewCells().forEach(cell=>{
+    const ring = h3.cellToBoundary(cell, true);
+    features.push({ type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[ring] } });
+  });
+  return { type:"FeatureCollection", features };
+}
 // A revealed patch can be a handful of ~66m hexes — easy to miss entirely
-// against a fixed zoom:13 view of the whole resort. Fit the initial view to
-// whatever's actually there instead: revealed cells first (so a small real
-// patch is never off-screen or too tiny to notice), falling back to the
-// corridor network's own extent if nothing's revealed yet (so there's
-// something to orient to on a first-ever visit), falling back to null
-// (caller keeps the old fixed ref/zoom view) if neither exists.
+// against a fixed zoom:13 view of the whole resort. Fits the initial view to
+// the UNION of the corridor network's full extent (so the whole project is
+// always in frame, per the same "normalize... entire project" request
+// corridorPreviewCells() above addresses) and any actually-revealed cells
+// (so real progress reachable outside a corridor — plain GPS wandering,
+// _revealFog() has no proximity check — is never cropped out even though it
+// isn't part of that union on its own). Falls back to null (caller keeps
+// the old fixed ref/zoom view) only when the project has neither.
 function questMapBounds(){
   const lonlats=[];
-  if(Quest.fogCells.size){
-    Quest.fogCells.forEach((state, cell)=>{ h3.cellToBoundary(cell, true).forEach(pt=>lonlats.push(pt)); });
-  } else if(Quest.corridors.length){
-    Quest.corridors.forEach(c=>(c.path||[]).forEach(([lat,lon])=>lonlats.push([lon,lat])));
-  }
+  Quest.corridors.forEach(c=>(c.path||[]).forEach(([lat,lon])=>lonlats.push([lon,lat])));
+  Quest.fogCells.forEach((state, cell)=>{ h3.cellToBoundary(cell, true).forEach(pt=>lonlats.push(pt)); });
   if(!lonlats.length) return null;
   let minLon=Infinity,maxLon=-Infinity,minLat=Infinity,maxLat=-Infinity;
   lonlats.forEach(([lon,lat])=>{
@@ -1166,7 +1196,7 @@ function renderFogMap(){
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
-    +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span></div>' : '')
+    +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
   // Bind Back FIRST, before anything that can throw (maplibregl failing to
   // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
@@ -1203,6 +1233,17 @@ function renderFogMap(){
       map.addSource("shroud", { type:"geojson", data: shroudFeatureCollection() });
       map.addLayer({ id:"shroud-fill", type:"fill", source:"shroud",
         paint:{ "fill-color":"#050810", "fill-opacity":0.72 } });
+      // R10 — dim, always-on corridor-network outline, drawn ON TOP of the
+      // shroud (so it's visible through the dark) but UNDER the real
+      // fog-fill/fog-line below (so actually-earned progress stays the most
+      // prominent thing on screen). Static for the life of this map screen —
+      // Quest.corridors doesn't change mid-session, so unlike shroud/fog
+      // this never needs a place in syncSource()'s live-redraw.
+      map.addSource("corridorPreview", { type:"geojson", data: corridorPreviewFeatureCollection() });
+      map.addLayer({ id:"corridorPreview-fill", type:"fill", source:"corridorPreview",
+        paint:{ "fill-color":"#8fb6d4", "fill-opacity":0.14 } });
+      map.addLayer({ id:"corridorPreview-line", type:"line", source:"corridorPreview",
+        paint:{ "line-color":"#8fb6d4", "line-width":1, "line-opacity":0.3 } });
       map.addSource("fog", { type:"geojson", data: fogFeatureCollection() });
       map.addLayer({ id:"fog-fill", type:"fill", source:"fog",
         paint:{ "fill-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "fill-opacity":0.5 } });
