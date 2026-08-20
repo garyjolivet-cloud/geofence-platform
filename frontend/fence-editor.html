@@ -2300,6 +2300,12 @@ function openShapePicker(anchorBtn){
     // SimFencer, it just had no authoring UI until now. Draws like Path
     // (multi-click, Finish button) with an added width.
     mkItem("➰ Corridor",()=>setTool("corridor"));
+    // Ridge Quest (R9) — hand-clicking a corridor point-by-point works for a
+    // short chute but doesn't scale to a real resort's full run network.
+    // Reuses the exact same parseGPX() a recorded track already goes
+    // through for Walking Paths — GPX's <trkpt> maps directly onto a
+    // corridor's [lon,lat] coords, no separate parser needed.
+    mkItem("⬆ Import GPX as Corridor",()=>importCorridorFromGPX());
   });
 }
 document.getElementById("shapePickerBtn").onclick=e=>{ e.stopPropagation(); openShapePicker(e.currentTarget); };
@@ -4090,6 +4096,44 @@ async function importWpFromGPX(file){
     if(!r.ok) throw new Error(j.error||r.statusText);
     openWalkingPathPicker(_wpPickerAnchor);
   }catch(e){ alert("Import failed: "+e.message); }
+}
+
+// R9 — bulk-author a Ridge Quest corridor (run/chute/trail) straight from a
+// recorded GPX track instead of clicking every point down the run by hand.
+// A raw recorded track is typically hundreds of points at ~1s GPS intervals
+// (this app's own recorded walking paths run 200-400+ points for a short
+// walk) — far denser than a corridor needs (QGeo.corridorCoverage resamples
+// at 25m steps regardless, see ridge-quest.html), and that many map-drag
+// vertex handles would be unusable. Subsampled to a manageable point count
+// via a plain stride, always keeping the true last point so the run's real
+// endpoint (used for direction classification) isn't cut off.
+const CORRIDOR_GPX_MAX_PTS=150;
+function importCorridorFromGPX(){
+  const input=document.createElement("input");
+  input.type="file"; input.accept=".gpx,application/gpx+xml";
+  input.onchange=async()=>{
+    const f=input.files[0];
+    if(!f) return;
+    try{
+      const text=await f.text();
+      const {points,name:gpxName}=parseGPX(text);
+      const defaultName=gpxName||f.name.replace(/\.gpx$/i,"");
+      const name=(prompt("Name this run/chute/trail:",defaultName)||"").trim();
+      if(!name) return;
+      const stride = points.length>CORRIDOR_GPX_MAX_PTS ? Math.ceil(points.length/CORRIDOR_GPX_MAX_PTS) : 1;
+      const coords=[];
+      for(let i=0;i<points.length;i+=stride) coords.push([points[i][0],points[i][1]]);
+      const lastPt=points[points.length-1];
+      const lastKept=coords[coords.length-1];
+      if(lastKept[0]!==lastPt[0]||lastKept[1]!==lastPt[1]) coords.push([lastPt[0],lastPt[1]]);
+      const widthM=+document.getElementById("newCorridorWidth").value||10;
+      const z=makeZone(name,{type:"corridor",coords,widthM});
+      z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as a manually-drawn corridor
+      zones.push(z);
+      selectZone(zones.length-1); // render()->autoSave(), same as finishShape()
+    }catch(e){ alert("Import failed: "+e.message); }
+  };
+  input.click();
 }
 
 /* ============================================================
