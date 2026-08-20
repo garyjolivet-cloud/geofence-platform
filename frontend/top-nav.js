@@ -678,6 +678,20 @@
           const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,fogEnabled:next})});
           if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
         });
+        // Sixth toggle (Ridge Quest R7, 2026-08-20): whether this workspace
+        // appears at all in the new PUBLIC workspace picker (GET
+        // /api/quest-workspaces, no staff token needed). Separate from
+        // fogEnabled — a workspace can be publicly listed with fog visuals
+        // off, or vice versa. Turning this on does NOT expose every project
+        // inside it — each project also needs its own "Public" toggle
+        // (below, per-project) before it shows up in the picker.
+        mkBtn(app.questEnabled ? "Ridge Quest: Public" : "Ridge Quest: Hidden", async () => {
+          const next = !app.questEnabled;
+          if(!confirm((next?"List":"Hide")+' "'+(app.name||app.id)+'" in Ridge Quest\'s public workspace picker? Individual projects still need their own "Public" toggle before they actually show up.')) return;
+          const token = askToken(); if(!token) return;
+          const r = await fetch("/api/apps/"+encodeURIComponent(app.id),{method:"PUT",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({name:app.name,questEnabled:next})});
+          if(r.ok) openManagePanel(); else alert("Toggle failed: "+r.status);
+        });
         if(apps.length > 1) mkBtn("Merge into…", async () => {
           const others = apps.filter(a => a.id!==app.id);
           const names = others.map((a,i)=>(i+1)+". "+(a.name||a.id)).join("\n");
@@ -697,6 +711,21 @@
             const pr = document.createElement("div");
             pr.style.cssText = "display:flex;align-items:center;gap:6px;font-size:12px";
             pr.innerHTML = '<span style="flex:1">'+esc(p.name||p.id)+(p.is_template?' <i style="color:var(--fog,#5b7088)">(template)</i>':'')+'</span>';
+            // Ridge Quest R7 (2026-08-20) — per-project half of the two-level
+            // public-picker opt-in (the app-level "Ridge Quest: Public/Hidden"
+            // toggle above is the other half). A project only appears in
+            // GET /api/quest-projects once BOTH are on.
+            const pub = document.createElement("button");
+            pub.textContent = p.questPublic ? "Public" : "Not public";
+            pub.title = "Toggle whether this project shows in Ridge Quest's public project picker";
+            pub.style.cssText = "background:none;border:1px solid var(--rim,#26344a);color:"+(p.questPublic?"var(--go,#38e0a6)":"var(--fog,#5b7088)")+";border-radius:6px;padding:2px 6px;cursor:pointer;font-size:11px";
+            pub.addEventListener("click", async () => {
+              const next = !p.questPublic;
+              const token = askToken(); if(!token) return;
+              const r = await fetch("/api/projects/"+encodeURIComponent(p.id),{method:"PATCH",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({questPublic:next})});
+              if(r.ok){ await loadProjects(); openManagePanel(); } else alert("Toggle failed: "+r.status);
+            });
+            pr.appendChild(pub);
             const del = document.createElement("button");
             del.textContent = "✕"; del.title = "Delete project";
             del.style.cssText = "background:none;border:none;color:var(--fog,#5b7088);cursor:pointer;font-size:12px";

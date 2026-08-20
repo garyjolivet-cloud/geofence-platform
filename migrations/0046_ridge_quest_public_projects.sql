@@ -1,0 +1,15 @@
+-- Ridge Quest (R7): per-PROJECT visibility flag, the second of two layers
+-- gating the public workspace/project picker (added per explicit follow-up
+-- request during planning: staff need to greenlight WHICH projects inside
+-- an already quest_enabled workspace are actually ready, not just the
+-- workspace as a whole).
+--
+-- GET /api/quest-projects requires BOTH the owning app's quest_enabled=1
+-- AND the project's own quest_public=1 before a project appears — so
+-- turning a workspace on doesn't blanket-expose every project inside it.
+-- e.g. ridge-quest-test stays hidden from the public picker even after
+-- golden-nordic itself is enabled, until someone explicitly flips this
+-- flag on that one project. DEFAULT 0 for the same reason as quest_enabled
+-- (0045): no project becomes publicly listable just because this
+-- migration ran.
+ALTER TABLE project ADD COLUMN quest_public INTEGER NOT NULL DEFAULT 0;

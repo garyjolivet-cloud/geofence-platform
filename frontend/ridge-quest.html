@@ -96,7 +96,11 @@
 <script>
 "use strict";
 const API = location.origin;
-const RQ_APP_ID = new URLSearchParams(location.search).get("app") || "golden-nordic";
+// R7 — resolved at boot() now, not fixed: explicit URL params always win
+// (staff test links / QR codes keep working unchanged); else a remembered
+// rq.workspace pick; else derived from an existing session; else null,
+// which is boot()'s own signal to show the public workspace/project picker.
+let RQ_APP_ID = new URLSearchParams(location.search).get("app") || null;
 // Public by design (Google's own docs) — safe to ship in frontend JS, not
 // a secret. Must match backend's GOOGLE_OAUTH_CLIENT_ID (worker.js) exactly.
 const RQ_GOOGLE_CLIENT_ID = "228254697293-80gino7h5nfbbth1tlui3ndided7bjr8.apps.googleusercontent.com";
@@ -111,6 +115,11 @@ function getSession(){ try{ return JSON.parse(localStorage.getItem("rq.session")
 function setSession(token, player){ localStorage.setItem("rq.session", JSON.stringify({token, player})); }
 function clearSession(){ localStorage.removeItem("rq.session"); }
 
+/* R7 — the last resort+project a player picked, so a return visit to bare
+   /quest (no URL params) doesn't re-show the picker every time. */
+function getWorkspace(){ try{ return JSON.parse(localStorage.getItem("rq.workspace")||"null"); }catch(e){ return null; } }
+function setWorkspace(appId, appName, projectId, projectName){ localStorage.setItem("rq.workspace", JSON.stringify({appId, appName, projectId, projectName})); }
+
 async function api(path, opts){
   const s = getSession();
   const headers = Object.assign({"Content-Type":"application/json"}, (opts&&opts.headers)||{});
@@ -119,6 +128,52 @@ async function api(path, opts){
   const j = await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.error || ("request failed ("+r.status+")"));
   return j;
+}
+
+/* ===================== WORKSPACE/PROJECT PICKER (R7) =====================
+   Shown when boot() can't resolve both RQ_APP_ID and RQ_PROJECT_ID from the
+   URL/localStorage/an existing session. Calls the two PUBLIC discovery
+   routes (no staff token, no player auth needed) — deliberately separate
+   endpoints from the staff-gated /api/apps and /api/projects, gated by the
+   two-level quest_enabled(app)+quest_public(project) opt-in. */
+async function renderWorkspacePicker(){
+  app.innerHTML = '<div class="card"><h2>Choose your resort</h2><p class="lead">Pick where you’re playing Ridge Quest.</p><div id="wpList"><div class="empty">Loading…</div></div></div>';
+  const listEl = document.getElementById("wpList");
+  try{
+    const j = await (await fetch(API+"/api/quest-workspaces")).json();
+    const workspaces = j.workspaces||[];
+    listEl.innerHTML = workspaces.length
+      ? workspaces.map(w=>'<button class="ghost" data-id="'+esc(w.id)+'" data-name="'+esc(w.name)+'" style="display:block;width:100%;text-align:left">'+esc(w.name)+'</button>').join("")
+      : '<div class="empty">No resorts are open for Ridge Quest right now.</div>';
+    listEl.querySelectorAll("button[data-id]").forEach(btn=>{
+      btn.onclick=()=>renderProjectPicker(btn.dataset.id, btn.dataset.name);
+    });
+  }catch(e){ listEl.innerHTML = '<div class="empty">Couldn’t load resorts — check your connection.</div>'; }
+}
+async function renderProjectPicker(appId, appName){
+  app.innerHTML = '<div class="card"><h2>'+esc(appName||appId)+'</h2><p class="lead">Which map?</p><div id="ppList"><div class="empty">Loading…</div></div><button class="ghost" id="ppBack">← Back</button></div>';
+  document.getElementById("ppBack").onclick=renderWorkspacePicker;
+  const listEl = document.getElementById("ppList");
+  try{
+    const j = await (await fetch(API+"/api/quest-projects?app="+encodeURIComponent(appId))).json();
+    const projects = j.projects||[];
+    listEl.innerHTML = projects.length
+      ? projects.map(p=>'<button class="ghost" data-id="'+esc(p.id)+'" data-name="'+esc(p.name)+'" style="display:block;width:100%;text-align:left">'+esc(p.name)+'</button>').join("")
+      : '<div class="empty">This resort has no maps open yet.</div>';
+    listEl.querySelectorAll("button[data-id]").forEach(btn=>{
+      btn.onclick=()=>{
+        // Switching workspace means switching ACCOUNT: player_account is
+        // unique per (app_id,email), not globally, so there's no cross-app
+        // account linking — if a session already exists under a different
+        // app, it has to be cleared and re-authed under the new one.
+        const s = getSession();
+        if(s && s.player && s.player.appId !== appId) clearSession();
+        RQ_APP_ID = appId; RQ_PROJECT_ID = btn.dataset.id;
+        setWorkspace(appId, appName, btn.dataset.id, btn.dataset.name);
+        boot();
+      };
+    });
+  }catch(e){ listEl.innerHTML = '<div class="empty">Couldn’t load maps — check your connection.</div>'; }
 }
 
 /* ============================= AUTH VIEW ============================= */
@@ -790,6 +845,7 @@ function renderHome(){
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<button class="ghost" id="btnConditions">Check conditions again</button>'
+    +'<button class="ghost" id="btnSwitchResort">Switch resort</button>'
     +'<button class="ghost" id="btnLogout">Log out</button>'
     +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
     +'</div>';
@@ -834,6 +890,7 @@ function renderHome(){
   document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
   document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
+  document.getElementById("btnSwitchResort").onclick=()=>{ Quest.stop(); renderWorkspacePicker(); };
   document.getElementById("btnLogout").onclick=async()=>{
     Quest.stop();
     try{ await api("/api/players/logout",{method:"POST"}); }catch(e){}
@@ -1009,6 +1066,30 @@ function renderFogMap(){
 
 /* ============================== BOOT ============================== */
 async function boot(){
+  // R7 resolution, in order: explicit URL params always win (unchanged from
+  // before this phase) > a remembered rq.workspace pick > an existing
+  // session's own appId (so a player who's already active before this
+  // phase shipped isn't dropped back to a picker on their next visit — it
+  // only needs to ask for a PROJECT, not force a fresh login). A
+  // project-only URL (?project= with no ?app=) — the exact shape of every
+  // link handed out earlier this session — keeps resolving to
+  // "golden-nordic" as a narrow backward-compat default, so those links
+  // don't break; a truly bare /quest with NEITHER param falls through to
+  // the full picker instead, which is the actual point of this phase.
+  if(!RQ_APP_ID || !RQ_PROJECT_ID){
+    const w = getWorkspace();
+    if(w){
+      if(!RQ_APP_ID && w.appId) RQ_APP_ID = w.appId;
+      if(!RQ_PROJECT_ID && w.projectId) RQ_PROJECT_ID = w.projectId;
+    }
+  }
+  if(!RQ_APP_ID){
+    const existing = getSession();
+    if(existing && existing.token && existing.player && existing.player.appId) RQ_APP_ID = existing.player.appId;
+  }
+  if(!RQ_APP_ID && RQ_PROJECT_ID) RQ_APP_ID = "golden-nordic";
+  if(!RQ_APP_ID || !RQ_PROJECT_ID){ renderWorkspacePicker(); return; }
+
   const s=getSession();
   if(!s || !s.token){ renderAuth("login"); return; }
   app.innerHTML = '<div class="msg">Loading…</div>';
@@ -1019,6 +1100,12 @@ async function boot(){
     clearSession(); renderAuth("login"); return;
   }
   RQ_FOG_ENABLED = me.fogEnabled !== false;
+  // Session/reconciliation: player_account is unique per (app_id,email),
+  // not globally — switching workspace means switching account. If the
+  // session's own appId no longer matches the currently-resolved
+  // RQ_APP_ID (e.g. just picked a different resort), there's no cross-app
+  // account linking by design — force fresh login/signup under the new app.
+  if(me.appId !== RQ_APP_ID){ clearSession(); renderAuth("login"); return; }
   const gateOk = await runGate();
   if(!gateOk) return; // runGate's own screens handle re-entry
   renderConditions(renderHome);

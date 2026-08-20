@@ -245,9 +245,14 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | GET | `/api/health` | public |
 | GET/POST | `/api/projects` | GET public, POST master |
 | GET/PUT | `/api/projects/:id/bundle` | GET public, PUT scoped (`publish`) |
+| PATCH | `/api/projects/:id` | scoped (`publish`); partial update — `record_retention_days` and/or `questPublic` (Ridge Quest R7 public-picker opt-in, second of two levels alongside `app.questEnabled`) |
 | PUT | `/api/projects/:id/app` | master |
 | GET/POST | `/api/apps` | GET public, POST master |
+| PUT | `/api/apps/:id` | master; partial update of name/description and six boolean flags (`threeDEnabled`/`terrainAltitudeEnabled`/`visitorsFly`/`hazardAwareEnabled`/`fogEnabled`/`questEnabled`) |
 | DELETE | `/api/apps/:id` | master (`?cascade=true` deletes all projects too) |
+| GET | `/api/quest-workspaces` | public; Ridge Quest's in-app resort picker — only apps with `questEnabled=1`, returns `id`+`name` only |
+| GET | `/api/quest-projects?app=` | public; only projects under a `questEnabled` app that are themselves `questPublic=1`, returns `id`+`name` only |
+| POST | `/api/quest-backfill-activity-stats` | master; idempotent rebuild of `player_day_activity_stats` from `quest_run` history |
 | GET/POST/DELETE | `/api/keys` | master |
 | GET | `/api/audit` | master |
 | GET | `/api/auth-check` | any valid token |

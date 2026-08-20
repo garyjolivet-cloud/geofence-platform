@@ -1,0 +1,14 @@
+-- Ridge Quest (R7): per-app visibility flag for the new PUBLIC workspace
+-- picker (GET /api/quest-workspaces) — separate from fog_enabled (0043)
+-- and unrelated to it. DEFAULT 0, matching this platform's usual
+-- new-capability-off-by-default convention (0033-0035) — UNLIKE
+-- fog_enabled's deliberate DEFAULT 1, an app must not suddenly become
+-- publicly listable just because this migration ran; an operator must
+-- explicitly opt each resort in via top-nav.js's Manage Workspaces panel.
+--
+-- The already-live golden-nordic app will NOT appear in the public picker
+-- until an admin flips this on — until then, the existing
+-- ?app=golden-nordic&project=<id> URL-driven flow keeps working exactly
+-- as before (ridge-quest.html's boot() resolves explicit URL params
+-- before ever falling back to the picker).
+ALTER TABLE app ADD COLUMN quest_enabled INTEGER NOT NULL DEFAULT 0;

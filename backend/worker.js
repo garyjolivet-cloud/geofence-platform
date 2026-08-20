@@ -1634,6 +1634,7 @@ async function api(request, env, url) {
     const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt,a.three_d_enabled AS threeDEnabled, " +
       "a.terrain_altitude_enabled AS terrainAltitudeEnabled, a.visitors_fly AS visitorsFly, " +
       "a.hazard_aware_enabled AS hazardAwareEnabled, a.fog_enabled AS fogEnabled, " +
+      "a.quest_enabled AS questEnabled, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
@@ -1701,10 +1702,15 @@ async function api(request, env, url) {
     // column DEFAULT is 1 (see migrations/0043); omitting this field here
     // leaves it unchanged, same COALESCE convention as the others.
     const fogEnabled = b.fogEnabled === undefined ? null : (b.fogEnabled ? 1 : 0);
-    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), fog_enabled=COALESCE(?,fog_enabled), updatedAt=? WHERE id=?")
-      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, fogEnabled, now, aid).run();
+    // questEnabled (Ridge Quest R7, 2026-08-20) — a sixth flag, gating
+    // whether this app appears at all in the new PUBLIC workspace picker
+    // (GET /api/quest-workspaces). Separate from fogEnabled — an app can be
+    // quest-enabled (publicly listed) with fog visuals off, or vice versa.
+    const questEnabled = b.questEnabled === undefined ? null : (b.questEnabled ? 1 : 0);
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), fog_enabled=COALESCE(?,fog_enabled), quest_enabled=COALESCE(?,quest_enabled), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, fogEnabled, questEnabled, now, aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
-    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware, fogEnabled }, 200, AC);
+    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware, fogEnabled, questEnabled }, 200, AC);
   }
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
@@ -1814,11 +1820,42 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days,quest_public AS questPublic FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
     return json({ projects: results || [] });
+  }
+
+  // --- Ridge Quest (R7): public workspace/project discovery for the
+  // in-app picker. Deliberately SEPARATE routes from /api/apps and
+  // /api/projects above — never touch their staff auth() gate — since
+  // players have no staff token at all. Exposes ONLY id+name, nothing
+  // else (no orgId, no flags, no counts): this is the one place on the
+  // platform anonymous internet traffic can enumerate app/project names,
+  // so the field list is deliberately minimal. Gated by the two-level
+  // opt-in (app.quest_enabled AND project.quest_public) — see
+  // migrations/0045 and 0046 for why this needs both, not just one.
+  if (path === "/api/quest-workspaces" && method === "GET") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const { results } = await env.DB.prepare(
+      "SELECT id,name FROM app WHERE quest_enabled=1 ORDER BY name ASC"
+    ).all();
+    return json({ workspaces: results || [] }, 200, AC);
+  }
+  if (path === "/api/quest-projects" && method === "GET") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const appId = url.searchParams.get("app");
+    if (!appId) return json({ error: "app is required" }, 400, AC);
+    // Empty result either way (app disabled, app nonexistent, or just no
+    // public projects) — never reveal WHICH reason via status code, so an
+    // anonymous caller can't use this to enumerate real-but-disabled app ids.
+    const appRow = await env.DB.prepare("SELECT id FROM app WHERE id=? AND quest_enabled=1").bind(appId).first();
+    if (!appRow) return json({ projects: [] }, 200, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,name FROM project WHERE appId=? AND quest_public=1 AND (archived IS NULL OR archived=0) ORDER BY name ASC"
+    ).bind(appId).all();
+    return json({ projects: results || [] }, 200, AC);
   }
 
   // --- create a project (admin) ---
@@ -1861,13 +1898,29 @@ async function api(request, env, url) {
     if (!proj) return json({ error: "project not found" }, 404, AC);
     if (!scopeOk(A, "publish", proj.appId)) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json().catch(() => ({}));
-    if (!("record_retention_days" in b)) return json({ error: "record_retention_days required" }, 400, AC);
-    const days = b.record_retention_days === null ? null : Number(b.record_retention_days);
-    if (days !== null && (!Number.isFinite(days) || days < 0)) return json({ error: "invalid record_retention_days" }, 400, AC);
-    await env.DB.prepare("UPDATE project SET record_retention_days=?, updatedAt=? WHERE id=?")
-      .bind(days, new Date().toISOString(), pid).run();
-    await logAudit(env, request, A, "project.retention.update", pid + " -> " + days);
-    return json({ ok: true, id: pid, record_retention_days: days }, 200, AC);
+    if (!("record_retention_days" in b) && !("questPublic" in b))
+      return json({ error: "record_retention_days or questPublic required" }, 400, AC);
+    const now = new Date().toISOString();
+    const resp = { ok: true, id: pid };
+    if ("record_retention_days" in b) {
+      const days = b.record_retention_days === null ? null : Number(b.record_retention_days);
+      if (days !== null && (!Number.isFinite(days) || days < 0)) return json({ error: "invalid record_retention_days" }, 400, AC);
+      await env.DB.prepare("UPDATE project SET record_retention_days=?, updatedAt=? WHERE id=?").bind(days, now, pid).run();
+      await logAudit(env, request, A, "project.retention.update", pid + " -> " + days);
+      resp.record_retention_days = days;
+    }
+    // Ridge Quest R7 (2026-08-20) — questPublic, the per-PROJECT half of the
+    // two-level public-picker opt-in (quest_enabled lives on `app`, set via
+    // PUT /api/apps/:id; this is its project-level sibling). A project only
+    // shows up in GET /api/quest-projects when BOTH its app is
+    // quest_enabled AND the project itself is quest_public.
+    if ("questPublic" in b) {
+      const questPublic = b.questPublic ? 1 : 0;
+      await env.DB.prepare("UPDATE project SET quest_public=?, updatedAt=? WHERE id=?").bind(questPublic, now, pid).run();
+      await logAudit(env, request, A, "project.questPublic.update", pid + " -> " + questPublic);
+      resp.questPublic = !!questPublic;
+    }
+    return json(resp, 200, AC);
   }
 
   // --- edit a scheduled tour's booking details (name/time/guide/visitor);
