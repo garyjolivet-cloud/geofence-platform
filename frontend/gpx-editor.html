@@ -552,6 +552,18 @@ document.getElementById("saveAsCorridorBtn").onclick=async()=>{
 function showGpxScreen(){
   document.getElementById("noProjectHint").style.display="none";
   document.getElementById("gpxScreen").classList.add("show");
+  // The map is constructed at page-load time (see `const map=new
+  // maplibregl.Map(...)` above), while #gpxScreen — its container's
+  // ancestor — is still display:none by default. MapLibre reads the
+  // container's box at construction time, so it initializes against a 0x0
+  // element; tiles still paint on a later redraw, but the internal
+  // pan/zoom transform stays wrong until an explicit resize() runs against
+  // the now-visible box. Without this, drag-to-pan and scroll-wheel zoom
+  // silently compute against the stale 0x0 transform — confirmed live
+  // (2026-08-21): map tiles rendered fine, but neither gesture worked.
+  // requestAnimationFrame so the .show class's layout change has actually
+  // reflowed before resize() reads the container's real size.
+  requestAnimationFrame(()=>map.resize());
 }
 function showNoProject(){
   document.getElementById("noProjectHint").style.display="block";
