@@ -4930,6 +4930,12 @@ function validateZoneGeometry(zs){
     if(s.type==="circle" && !(s.radiusM>0)) problems.push('"'+z.name+'" — circle radius must be greater than 0');
     else if(s.type==="polygon" && (!s.coords || s.coords.length<3)) problems.push('"'+z.name+'" — polygon needs at least 3 points');
     else if(s.type==="tripline" && !(haversineM(s.from,s.to)>0.5)) problems.push('"'+z.name+'" — tripline endpoints are the same point (or nearly so)');
+    // corridor/path were added after this check was written and never got
+    // their own rule — same failure mode as the others (a degenerate <2-point
+    // line reaches the live engine unfireable, e.g. a bad GPX import that
+    // collapsed to one point) with nothing here to catch it before publish.
+    else if(s.type==="corridor" && (!s.coords || s.coords.length<2)) problems.push('"'+z.name+'" — corridor needs at least 2 points');
+    else if(s.type==="path" && (!s.coords || s.coords.length<2)) problems.push('"'+z.name+'" — path needs at least 2 points');
   });
   return problems;
 }
@@ -5549,6 +5555,21 @@ const SimFencer={state:{},onEvent:null,
     }
     const g=layer.geometry;if(!g)return null;
     if(g.type==="polygon")return SimGeo.sdPolygon(PT,g.coords,simBundle.ref);
+    // Mirrors geofence-engine.html's Geofencer.sd() corridor branch — this
+    // was missing here (real gap found in a "check all three engine-core
+    // copies agree" audit, 2026-08-21): Test Mode could never fire a
+    // pipeline trigger (speak/webhook/guide) attached to a corridor-shaped
+    // stop, silently falling through to `return null` below and never
+    // firing — indistinguishable from a broken pipeline unless you knew to
+    // check the shape type specifically. Corridor stops fire correctly in
+    // production (geofence-engine.html) and in geofence-sim.html; only
+    // this third copy lacked the branch.
+    if(g.type==="corridor"){
+      const P=SimGeo.toXY(PT,simBundle.ref);let best=Infinity;
+      const pts=g.path.map(c=>SimGeo.toXY(c,simBundle.ref));
+      for(let i=1;i<pts.length;i++)best=Math.min(best,SimGeo.segDist(P,pts[i-1],pts[i]));
+      return best-(g.widthM||10)/2;
+    }
     return null;},
   _step(zone,layer,i,sd,now,kpfx,subj){
     const k=kpfx+":"+this.key(zone,layer,i);
