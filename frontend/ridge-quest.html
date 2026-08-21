@@ -1123,12 +1123,26 @@ function renderHome(){
 }
 
 /* ========================= LEADERBOARD (R3-core) ========================= */
-function leaderboardRowHtml(row, meId, rank){
+// activityFilter drives which stat shows next to points — the API always
+// returns both verticalM and distanceM on a per-activity board (never on
+// the combined "All" board, which has no distanceM at all), but a per-
+// activity row's OTHER field isn't necessarily zero (a ski run's own
+// distanceM is real ground covered, just not what scored it) — so which
+// one to show is a property of the ACTIVITY, not of which field happens
+// to be nonzero. "All" shows points only, same as before this existed.
+function leaderboardRowHtml(row, meId, rank, activityFilter){
   const mine = row.playerId===meId;
+  const parts = [Math.round(row.points)+' pts'];
+  if(activityFilter){
+    const usesDistance = activityFilter==="bike"||activityFilter==="drive"||activityFilter==="xcski";
+    if(usesDistance && row.distanceM!=null) parts.push((Math.round(row.distanceM/100)/10)+'km');
+    else if(!usesDistance && row.verticalM!=null) parts.push(Math.abs(Math.round(row.verticalM))+'m vert');
+    if(row.runsCount!=null) parts.push(row.runsCount+(row.runsCount===1?' run':' runs'));
+  }
   return '<div class="runrow"'+(mine?' style="border-color:var(--coral)"':'')+'>'
     +'<span class="badge" style="background:var(--rim)">#'+rank+'</span>'
     +'<span class="name">'+esc(row.name)+(mine?' (you)':'')+'</span>'
-    +'<span class="meta">'+Math.round(row.points)+' pts</span></div>';
+    +'<span class="meta">'+esc(parts.join(' · '))+'</span></div>';
 }
 async function renderLeaderboard(mode, activityFilter){
   mode = mode || "daily";
@@ -1164,7 +1178,7 @@ async function renderLeaderboard(mode, activityFilter){
     const j = await api(activityFilter ? base+"?activity="+encodeURIComponent(activityFilter) : base);
     const board = j.board||[];
     listEl.innerHTML = board.length
-      ? board.map((row,i)=>leaderboardRowHtml(row, s.player.id, i+1)).join("")
+      ? board.map((row,i)=>leaderboardRowHtml(row, s.player.id, i+1, activityFilter)).join("")
       : '<div class="empty">No runs logged yet '+(mode==="daily"?"today":"this season")+'.</div>';
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load the leaderboard.</div>';
