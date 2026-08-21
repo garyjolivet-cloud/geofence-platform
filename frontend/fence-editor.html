@@ -101,6 +101,31 @@
   #assetPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #assetPaletteHead button{flex:0 0 auto;padding:3px 8px;font-size:13px}
   #assetPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
+  /* Paths & Corridors palette — same floating-panel shape as #assetPalette
+     (drag header, resize corner, minimize), but deliberately NOT chained
+     into the mainPanel/assetPalette/audioPalette/codeObjects mutual-dock
+     system (dockMainPanel/dockAssetPalette/dockAudioPalette/
+     dockCollapsedRow below) — that chain has already been the site of
+     several real overlap bugs (see project history) precisely because it
+     anchors every panel off every other panel's live rect. Defaulting to
+     the bottom-left corner instead sidesteps needing to join that chain at
+     all: every other panel's default position anchors somewhere along the
+     top of the screen, so a bottom-left default can't collide with any of
+     them without the user first dragging something there themselves —
+     same as any two panels can already be dragged into overlap today. */
+  #gpxPalette{position:absolute;bottom:10px;left:10px;width:280px;height:320px;min-width:220px;min-height:160px;
+                max-width:92vw;max-height:calc(100vh - 20px);resize:both;overflow:auto;
+                background:rgba(10,16,24,.93);border:1px solid var(--rim);border-radius:14px;z-index:60;
+                backdrop-filter:blur(6px);display:flex;flex-direction:column}
+  #gpxPalette.mini{width:auto!important;height:auto!important;min-width:0;min-height:0;resize:none;overflow:hidden}
+  #gpxPalette.mini #gpxPaletteBody{display:none}
+  #gpxPalette.mini #gpxPaletteHead .ttl{flex:0 0 auto;overflow:visible;text-overflow:clip}
+  #gpxPaletteHead{display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:move;user-select:none;
+                    border-bottom:1px solid var(--rim);flex:0 0 auto;font-family:"Barlow Condensed";font-size:12px;
+                    font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ice)}
+  #gpxPaletteHead .ttl{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #gpxPaletteHead button{flex:0 0 auto;padding:3px 8px;font-size:13px}
+  #gpxPaletteBody{padding:8px 10px;overflow-y:auto;flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-height:0}
   /* .ttl's normal overflow:hidden;text-overflow:ellipsis (needed so a long
      project name doesn't blow out the expanded header's fixed width)
      fights auto-width sizing when mini: a shrink-to-fit flex container
@@ -410,6 +435,7 @@
 <script src="/code-objects.js"></script>
 <script src="/audio-tree.js"></script>
 <script src="/asset-tree.js"></script>
+<script src="/gpx-tree.js"></script>
 </head>
 <body>
 <div id="crossToolNav"></div>
@@ -1073,6 +1099,27 @@
   </div>
 </div>
 <input type="file" id="asUploadInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" style="display:none">
+
+<!-- Paths & Corridors palette: drag-source browser for the app-scoped
+     library the GPX Editor tab saves into (walking_path/corridor tables).
+     Dragging a path onto the map activates it for stop-snapping (same
+     effect as picking it in the existing Walking Path picker); dragging a
+     corridor creates a new corridor stop from its recorded geometry (same
+     effect as "Import GPX as Corridor", just sourced from a saved library
+     entry instead of a fresh file). Read-only here — all editing (import,
+     trim, reverse, filter) lives in the GPX Editor tab, reachable via
+     TopNav, same division of labor as Audio Palette vs Audio Studio. -->
+<div id="gpxPalette">
+  <div id="gpxPaletteHead">
+    <span class="ttl">&#129485; Paths &amp; Corridors</span>
+    <button id="gpxRefresh" class="ghost" title="Refresh">&#8635;</button>
+    <button id="gpxPaletteMin" class="ghost" title="Minimize">&#8722;</button>
+  </div>
+  <div id="gpxPaletteBody">
+    <div id="gpxTreeHost"></div>
+    <div class="hint">drag a path onto the map to activate it for stop-snapping, or a corridor to create a new corridor stop from it</div>
+  </div>
+</div>
 
 <div id="trimOverlay">
   <div id="trimBox">
@@ -2665,10 +2712,21 @@ function renderGlobalCodeObjectsChips(){
   function setupMapDrop(){
     const canvas=map.getCanvas();
     canvas.addEventListener("dragover",e=>{
-      if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")||e.dataTransfer.types.includes("application/x-asset-object-json"))e.preventDefault();
+      if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")||e.dataTransfer.types.includes("application/x-asset-object-json")
+         ||e.dataTransfer.types.includes("application/x-gpxitem-path")||e.dataTransfer.types.includes("application/x-gpxitem-corridor"))e.preventDefault();
     });
     canvas.addEventListener("drop",e=>{
       e.preventDefault();
+      // Drag a saved path/corridor from the Paths & Corridors palette onto
+      // the map — same gpx-tree.js MIME types its item rows set on
+      // dragstart. Neither needs a target zone/drop position: a path just
+      // gets activated project-wide (same as picking it in the existing
+      // Walking Path picker), and a corridor renders at its own recorded
+      // coordinates (same as importCorridorFromGPX/importCorridorFromLibrary).
+      const gpxPathId=e.dataTransfer.getData("application/x-gpxitem-path");
+      if(gpxPathId){ toggleWalkingPath(gpxPathId,true); return; }
+      const gpxCorridorId=e.dataTransfer.getData("application/x-gpxitem-corridor");
+      if(gpxCorridorId){ importCorridorFromLibrary(gpxCorridorId); return; }
       // Drag a 3D asset from the AR Objects palette directly onto a stop on
       // the map — same MIME type asset-tree.js's drag source already sets,
       // same pattern the stop-list-row drop target already handles
@@ -3390,6 +3448,35 @@ document.getElementById("audioPaletteMin").onclick=e=>{
     document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
   });
 })();
+// Paths & Corridors palette — same minimize/drag pattern as Audio Palette,
+// deliberately NOT chained into dockMainPanel/dockAssetPalette/
+// dockAudioPalette/dockCollapsedRow (see its CSS comment above for why) —
+// its default bottom-left position never needs re-anchoring off another
+// panel's rect, so there's no dock*() function for it to call here.
+document.getElementById("gpxPaletteMin").onclick=e=>{
+  e.stopPropagation();
+  const p=document.getElementById("gpxPalette");
+  const wasMini=p.classList.contains("mini");
+  p.classList.toggle("mini");
+  document.getElementById("gpxPaletteMin").innerHTML=wasMini?"&#8722;":"&#43;";
+  if(wasMini) gpxTree.refresh({appId:afAppId()});
+};
+(function(){
+  const head=document.getElementById("gpxPaletteHead"), pal=document.getElementById("gpxPalette");
+  head.addEventListener("mousedown",e=>{
+    if(e.target.closest("button")) return;
+    const rect=pal.getBoundingClientRect();
+    pal.style.bottom="auto"; pal.style.left=rect.left+"px"; pal.style.top=rect.top+"px";
+    const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
+    const onMove=me=>{
+      const maxLeft=window.innerWidth-40, maxTop=window.innerHeight-40;
+      pal.style.left=Math.min(maxLeft,Math.max(0,startLeft+(me.clientX-startX)))+"px";
+      pal.style.top=Math.min(maxTop,Math.max(0,startTop+(me.clientY-startY)))+"px";
+    };
+    const onUp=()=>{ document.removeEventListener("mousemove",onMove); document.removeEventListener("mouseup",onUp); };
+    document.addEventListener("mousemove",onMove); document.addEventListener("mouseup",onUp);
+  });
+})();
 // Single toggle button (2026-08-08) — same −/+ glyph-swap pattern as
 // audioPaletteMin below, replacing the old two-separate-buttons
 // (panelExpandBtn shown only when mini, panelMinBtn shown only when not)
@@ -3424,12 +3511,36 @@ const audioTree=AudioTree.mount(document.getElementById("afTreeHost"),{
   onError: ()=>{} // drag-source only — nothing here can fail loudly enough to need a popup
 });
 document.getElementById("afRefresh").onclick=doAudioRefresh;
+// References the gpxTree const defined below — safe because nothing calls
+// doAudioRefresh() before that const initializes at page load, but if a
+// future change adds an earlier call site, this line needs gpxTree to
+// already exist.
 function doAudioRefresh(){
   document.getElementById("afNoOrg").style.display = afOrgId()?"none":"block";
   audioTree.refresh({ projectId: afProjectId(), projectLabel: projName()||afProjectId(), orgId: afOrgId() });
   loadStopFolders();
   loadWalkingPaths().then(updateWalkingPathBtnLabel);
+  gpxTree.refresh({ appId: afAppId() });
 }
+
+// Drag-source-only browser for the app-scoped Paths/Corridors library the
+// GPX Editor tab saves into — walking_path/corridor, not project-scoped, so
+// this uses afAppId() (same scope loadWalkingPaths() above already reads),
+// not afOrgId()/afProjectId() like the Audio/AR trees above. Picking a path
+// activates it exactly like the existing Walking Path picker (toggleWalkingPath);
+// picking a corridor imports it as a new corridor stop, mirroring
+// importCorridorFromGPX but sourced from a saved library entry.
+const gpxTree=GpxTree.mount(document.getElementById("gpxTreeHost"),{
+  appId: afAppId(),
+  getToken,
+  readOnly:true,
+  onError: ()=>{}, // drag-source only — nothing here can fail loudly enough to need a popup
+  onPick: item=>{
+    if(item.kind==="path") toggleWalkingPath(item.id,true);
+    else importCorridorFromLibrary(item.id);
+  }
+});
+document.getElementById("gpxRefresh").onclick=()=>gpxTree.refresh({appId:afAppId()});
 
 /* ---- AR/3D Asset Palette: same floating-panel behavior as Audio Palette
    (drag header, resize corner, minimize, shrink/grow-to-fit), full CRUD
@@ -4143,6 +4254,30 @@ function importCorridorFromGPX(){
     }catch(e){ alert("Import failed: "+e.message); }
   };
   input.click();
+}
+// Same subsample-then-makeZone flow as importCorridorFromGPX above, but
+// sourced from a saved library corridor (Paths & Corridors palette drag/pick)
+// instead of a freshly-parsed GPX file — the corridor already carries its
+// own name/widthM from when it was saved in the GPX Editor, so there's no
+// name/width prompt here.
+async function importCorridorFromLibrary(corridorId){
+  try{
+    const r=await fetch("/api/corridor/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+    const j=await r.json();
+    const points=j.points||[];
+    if(points.length<2) throw new Error("this corridor has too few points");
+    const stride = points.length>CORRIDOR_GPX_MAX_PTS ? Math.ceil(points.length/CORRIDOR_GPX_MAX_PTS) : 1;
+    const coords=[];
+    for(let i=0;i<points.length;i+=stride) coords.push([points[i][0],points[i][1]]);
+    const lastPt=points[points.length-1];
+    const lastKept=coords[coords.length-1];
+    if(lastKept[0]!==lastPt[0]||lastKept[1]!==lastPt[1]) coords.push([lastPt[0],lastPt[1]]);
+    const z=makeZone(j.name||"Corridor",{type:"corridor",coords,widthM:j.widthM||10});
+    z.folderId=focusedStopFolderId||null;
+    zones.push(z);
+    selectZone(zones.length-1);
+  }catch(e){ alert("Import failed: "+e.message); }
 }
 
 /* ============================================================

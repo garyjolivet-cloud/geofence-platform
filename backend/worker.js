@@ -638,6 +638,7 @@ export default {
       "/pipeline": "/pipeline-editor.html",
       "/code-library": "/pipeline-editor.html", // retired standalone page — the library is now an inline sidebar on /pipeline
       "/record": "/record.html",
+      "/gpx-editor": "/gpx-editor.html",
       "/login": "/login.html",
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
@@ -1748,6 +1749,8 @@ async function api(request, env, url) {
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM walking_path WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM walking_path_folder WHERE app_id=?").bind(aid).run();
+    await env.DB.prepare("DELETE FROM corridor WHERE app_id=?").bind(aid).run();
+    await env.DB.prepare("DELETE FROM corridor_folder WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
     return json({ ok: true, deleted: aid }, 200, AC);
@@ -4031,6 +4034,7 @@ async function api(request, env, url) {
 
     const b = await request.json().catch(() => ({}));
     let name = row.name, folderId = row.folderId;
+    let pointsJson = row.pointsJson, distanceM = row.distanceM, elevGainM = row.elevGainM, elevLossM = row.elevLossM;
     if (b.name !== undefined) {
       if (!b.name.trim()) return json({ error: "invalid name" }, 400, AC);
       name = b.name.trim();
@@ -4043,8 +4047,18 @@ async function api(request, env, url) {
       }
       folderId = newFolderId;
     }
-    await env.DB.prepare("UPDATE walking_path SET name=?, folder_id=?, updated_at=? WHERE id=?")
-      .bind(name, folderId, new Date().toISOString(), pathId).run();
+    // GPX Editor in-place save — points/distanceM/elevGainM/elevLossM are all
+    // optional so the pre-existing rename/move call sites (which only ever
+    // send {name} or {folderId}) keep working unchanged.
+    if (b.points !== undefined) {
+      if (!Array.isArray(b.points) || b.points.length < 2) return json({ error: "points (array of [lon,lat]) required" }, 400, AC);
+      pointsJson = JSON.stringify(b.points);
+      if (b.distanceM != null) distanceM = b.distanceM;
+      if (b.elevGainM != null) elevGainM = b.elevGainM;
+      if (b.elevLossM != null) elevLossM = b.elevLossM;
+    }
+    await env.DB.prepare("UPDATE walking_path SET name=?, folder_id=?, points_json=?, distance_m=?, elev_gain_m=?, elev_loss_m=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, pointsJson, distanceM, elevGainM, elevLossM, new Date().toISOString(), pathId).run();
     await logAudit(env, request, A, "walkingpath.update", pathId);
     return json({ id: pathId, name, folderId }, 200, AC);
   }
@@ -4138,6 +4152,184 @@ async function api(request, env, url) {
     await env.DB.prepare("UPDATE walking_path_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
       .bind(name, parentId, new Date().toISOString(), folderId).run();
     await logAudit(env, request, A, "walkingpathfolder.update", folderId);
+    return json({ id: folderId, name, parentId }, 200, AC);
+  }
+
+  // --- Corridors: app-scoped library of trigger-zone-shaped tracks saved
+  // from the GPX Editor. Exact structural mirror of walking_path (above) —
+  // same points_json shape, same folder-tree pattern — plus widthM. Distinct
+  // from the inline zone shape {type:"corridor", coords, widthM} that
+  // importCorridorFromGPX() writes directly into a project's
+  // published_bundle.json; this is a re-editable library entity, not a zone.
+  // Unlike walking_path's GET-by-id (public — the anonymous visitor engine
+  // map-matches against a published path), nothing public consumes a
+  // library corridor today, so GET-by-id here is authed. ---
+  if (path === "/api/corridor" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const appId = (b.appId || "").trim(), name = (b.name || "").trim();
+    const folderId = b.folderId || null;
+    if (!appId || !name) return json({ error: "appId and name required" }, 400, AC);
+    if (!Array.isArray(b.points) || b.points.length < 2) return json({ error: "points (array of [lon,lat]) required" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    if (folderId) {
+      const folder = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(folderId, appId).first();
+      if (!folder) return json({ error: "folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO corridor (id,app_id,folder_id,name,points_json,width_m,distance_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+    ).bind(id, appId, folderId, name, JSON.stringify(b.points), b.widthM || 10, b.distanceM || 0, now, now).run();
+    await logAudit(env, request, A, "corridor.create", appId + "/" + name);
+    return json({ id, name, folderId }, 201, AC);
+  }
+
+  if (path === "/api/corridor" && method === "GET") {
+    const A = await auth(request, env);
+    const appId = (url.searchParams.get("appId") || "").trim();
+    if (!appId) return json({ error: "appId required" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,folder_id AS folderId,name,width_m AS widthM,distance_m AS distanceM,updated_at AS updatedAt FROM corridor WHERE app_id=? ORDER BY name"
+    ).bind(appId).all();
+    return json({ corridors: results || [] }, 200, AC);
+  }
+
+  const mCorridor = path.match(/^\/api\/corridor\/([^/]+)$/);
+  if (mCorridor && (method === "GET" || method === "PATCH" || method === "DELETE")) {
+    const corridorId = decodeURIComponent(mCorridor[1]);
+    const row = await env.DB.prepare(
+      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,width_m AS widthM,distance_m AS distanceM FROM corridor WHERE id=?"
+    ).bind(corridorId).first();
+    if (!row) return json({ error: "corridor not found" }, 404, AC);
+
+    const A = await auth(request, env);
+    if (!(await appScopeAuthOk(env, A, row.appId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "GET") {
+      let points;
+      try { points = JSON.parse(row.pointsJson); } catch (e) { return json({ error: "stored corridor is corrupt" }, 500, AC); }
+      return json({ id: corridorId, name: row.name, appId: row.appId, folderId: row.folderId, widthM: row.widthM, distanceM: row.distanceM, points }, 200, AC);
+    }
+
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM corridor WHERE id=?").bind(corridorId).run();
+      await logAudit(env, request, A, "corridor.delete", corridorId);
+      return json({ ok: true, deleted: corridorId }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, folderId = row.folderId;
+    let pointsJson = row.pointsJson, widthM = row.widthM, distanceM = row.distanceM;
+    if (b.name !== undefined) {
+      if (!b.name.trim()) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.folderId !== undefined) {
+      const newFolderId = b.folderId || null;
+      if (newFolderId) {
+        const folder = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(newFolderId, row.appId).first();
+        if (!folder) return json({ error: "folder not found" }, 404, AC);
+      }
+      folderId = newFolderId;
+    }
+    if (b.widthM != null) widthM = b.widthM;
+    if (b.points !== undefined) {
+      if (!Array.isArray(b.points) || b.points.length < 2) return json({ error: "points (array of [lon,lat]) required" }, 400, AC);
+      pointsJson = JSON.stringify(b.points);
+      if (b.distanceM != null) distanceM = b.distanceM;
+    }
+    await env.DB.prepare("UPDATE corridor SET name=?, folder_id=?, points_json=?, width_m=?, distance_m=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, pointsJson, widthM, distanceM, new Date().toISOString(), corridorId).run();
+    await logAudit(env, request, A, "corridor.update", corridorId);
+    return json({ id: corridorId, name, folderId }, 200, AC);
+  }
+
+  async function collectCorridorFolderSubtreeIds(env, rootId) {
+    const ids = [rootId]; let frontier = [rootId];
+    while (frontier.length) {
+      const ph = frontier.map(() => "?").join(",");
+      const { results } = await env.DB.prepare(`SELECT id FROM corridor_folder WHERE parent_id IN (${ph})`).bind(...frontier).all();
+      frontier = (results || []).map(r => r.id);
+      ids.push(...frontier);
+    }
+    return ids;
+  }
+
+  if (path === "/api/corridor-folder" && method === "GET") {
+    const A = await auth(request, env);
+    const appId = (url.searchParams.get("appId") || "").trim();
+    if (!appId) return json({ error: "appId required" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    const { results } = await env.DB.prepare(
+      "SELECT id,parent_id AS parentId,name FROM corridor_folder WHERE app_id=? ORDER BY name"
+    ).bind(appId).all();
+    return json({ folders: results || [] }, 200, AC);
+  }
+
+  if (path === "/api/corridor-folder" && method === "POST") {
+    const A = await auth(request, env);
+    const b = await request.json().catch(() => ({}));
+    const appId = (b.appId || "").trim(), name = (b.name || "").trim();
+    const parentId = b.parentId || null;
+    if (!appId || !name) return json({ error: "appId and name required" }, 400, AC);
+    if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
+    if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    if (parentId) {
+      const parent = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(parentId, appId).first();
+      if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare("INSERT INTO corridor_folder (id,app_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+      .bind(id, appId, parentId, name, now, now).run();
+    await logAudit(env, request, A, "corridorfolder.create", appId + "/" + name);
+    return json({ id, appId, parentId, name }, 201, AC);
+  }
+
+  const mCorridorFolder = path.match(/^\/api\/corridor-folder\/([^/]+)$/);
+  if (mCorridorFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mCorridorFolder[1]);
+    const A = await auth(request, env);
+    const row = await env.DB.prepare("SELECT app_id AS appId,parent_id AS parentId,name FROM corridor_folder WHERE id=?").bind(folderId).first();
+    if (!row) return json({ error: "folder not found" }, 404, AC);
+    if (!(await appScopeAuthOk(env, A, row.appId))) return json({ error: "unauthorized" }, 401, AC);
+
+    if (method === "DELETE") {
+      // Same reasoning as walking_path_folder delete — a corridor derived
+      // from a recorded track is expensive to redo, so move corridors in the
+      // deleted subtree up to this folder's own parent instead of destroying
+      // them.
+      const folderIds = await collectCorridorFolderSubtreeIds(env, folderId);
+      const fph = folderIds.map(() => "?").join(",");
+      const { meta } = await env.DB.prepare(
+        `UPDATE corridor SET folder_id=?, updated_at=? WHERE app_id=? AND folder_id IN (${fph})`
+      ).bind(row.parentId, new Date().toISOString(), row.appId, ...folderIds).run();
+      await env.DB.prepare(`DELETE FROM corridor_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "corridorfolder.delete", folderId + " (" + (meta.changes || 0) + " corridors moved up)");
+      return json({ ok: true, deletedFolders: folderIds.length, movedCorridors: meta.changes || 0 }, 200, AC);
+    }
+
+    const b = await request.json().catch(() => ({}));
+    let name = row.name, parentId = row.parentId;
+    if (b.name !== undefined) {
+      if (!b.name.trim() || b.name.includes("/")) return json({ error: "invalid name" }, 400, AC);
+      name = b.name.trim();
+    }
+    if (b.parentId !== undefined) {
+      const newParentId = b.parentId || null;
+      if (newParentId) {
+        const parent = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(newParentId, row.appId).first();
+        if (!parent) return json({ error: "parent folder not found" }, 404, AC);
+        const subtreeIds = await collectCorridorFolderSubtreeIds(env, folderId);
+        if (subtreeIds.includes(newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
+      }
+      parentId = newParentId;
+    }
+    await env.DB.prepare("UPDATE corridor_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+      .bind(name, parentId, new Date().toISOString(), folderId).run();
+    await logAudit(env, request, A, "corridorfolder.update", folderId);
     return json({ id: folderId, name, parentId }, 200, AC);
   }
 
