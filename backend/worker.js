@@ -1110,7 +1110,16 @@ async function api(request, env, url) {
   // rate is roughly a third of bike's — a drive covers far more ground per
   // minute of actual player engagement, so per-metre needs to be lower to
   // land in the same ballpark.
-  const QUEST_ACTIVITY_DISTANCE_POINTS_PER_M = { bike: 0.18, drive: 0.06 };
+  // R12 (2026-08-20) — xcski (cross-country/Nordic skiing), a genuinely NEW
+  // 5th activity distinct from downhill "ski", added alongside the
+  // per-project activity-relevance filter (see quest_activities). Scored
+  // like bike/drive (distance-based), NOT like ski/hike (vertical-based):
+  // real Nordic terrain is flat/rolling, so "vertical descended" doesn't
+  // mean anything for it. Rate sized to land near ski's ~400-600pt range
+  // for a typical 8-12km outing (10km blue-rated loop: 10000*0.065*1.15
+  // ≈ 748) — tunable, not measured, same as every other QUEST_TUNING/
+  // scoring constant here.
+  const QUEST_ACTIVITY_DISTANCE_POINTS_PER_M = { bike: 0.18, drive: 0.06, xcski: 0.065 };
   // Bike reuses ski's exact green/blue/black/double-black corridor field —
   // real MTB trail systems are rated on this identical scale — but with its
   // OWN multiplier values (ski's own table above stays locked/tuned as
@@ -1123,7 +1132,14 @@ async function api(request, env, url) {
   // an incidental runType/difficulty value on a bike/drive corridor is
   // harmless no-op metadata, same as it already is for lift corridors today.
   const QUEST_BIKE_DIFFICULTY_MULTIPLIER = { green: 1, blue: 1.4, black: 1.8, "double-black": 2.4 };
-  const QUEST_LEADERBOARD_ACTIVITIES = ["ski", "hike", "bike", "drive"];
+  // xcski DOES get its own difficulty multiplier, unlike drive — real Nordic
+  // centres genuinely grade their trail network green/blue/black (novice/
+  // intermediate/advanced classic-or-skate terrain), so an incidental
+  // difficulty value here is real signal, not no-op metadata. Spread is
+  // gentler than bike's — trail-to-trail difficulty variance at a Nordic
+  // centre is grade/grooming, not the technical-hazard spread of MTB.
+  const QUEST_XCSKI_DIFFICULTY_MULTIPLIER = { green: 1, blue: 1.15, black: 1.3 };
+  const QUEST_LEADERBOARD_ACTIVITIES = ["ski", "hike", "bike", "drive", "xcski"];
   function questPoints(activity, difficulty, runType, verticalM, distanceM, snowBonus) {
     if (activity === "lift") return 0;
     if (activity === "ski" || activity === "hike") {
@@ -1131,10 +1147,12 @@ async function api(request, env, url) {
       const w = (QUEST_DIFFICULTY_POINTS_PER_VERT_M[difficulty] || 1) * (QUEST_RUNTYPE_POINTS_MULTIPLIER[runType] || 1) * (snowBonus || 1);
       return Math.round(Math.abs(verticalM) * w);
     }
-    if (activity === "bike" || activity === "drive") {
+    if (activity === "bike" || activity === "drive" || activity === "xcski") {
       if (distanceM == null) return 0;
       const perM = QUEST_ACTIVITY_DISTANCE_POINTS_PER_M[activity] || 0;
-      const diffMult = activity === "bike" ? (QUEST_BIKE_DIFFICULTY_MULTIPLIER[difficulty] || 1) : 1;
+      const diffMult = activity === "bike" ? (QUEST_BIKE_DIFFICULTY_MULTIPLIER[difficulty] || 1)
+        : activity === "xcski" ? (QUEST_XCSKI_DIFFICULTY_MULTIPLIER[difficulty] || 1)
+        : 1;
       return Math.round(Math.abs(distanceM) * perM * diffMult);
     }
     return 0;
@@ -1156,8 +1174,8 @@ async function api(request, env, url) {
     const b = await request.json().catch(() => ({}));
     if (!b.zoneId || !b.activity || !b.startedAt || !b.endedAt)
       return json({ error: "zoneId, activity, startedAt and endedAt are required" }, 400, AC);
-    if (!["ski", "lift", "hike", "bike", "drive"].includes(b.activity))
-      return json({ error: "activity must be ski, lift, hike, bike, or drive" }, 400, AC);
+    if (!["ski", "lift", "hike", "bike", "drive", "xcski"].includes(b.activity))
+      return json({ error: "activity must be ski, lift, hike, bike, drive, or xcski" }, 400, AC);
     const id = crypto.randomUUID();
     const verticalM = b.verticalM != null ? b.verticalM : null;
     const distanceM = b.distanceM != null ? b.distanceM : null;
@@ -1820,7 +1838,7 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days,quest_public AS questPublic FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days,quest_public AS questPublic,quest_activities AS questActivities FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
@@ -1898,8 +1916,8 @@ async function api(request, env, url) {
     if (!proj) return json({ error: "project not found" }, 404, AC);
     if (!scopeOk(A, "publish", proj.appId)) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json().catch(() => ({}));
-    if (!("record_retention_days" in b) && !("questPublic" in b))
-      return json({ error: "record_retention_days or questPublic required" }, 400, AC);
+    if (!("record_retention_days" in b) && !("questPublic" in b) && !("questActivities" in b))
+      return json({ error: "record_retention_days, questPublic, or questActivities required" }, 400, AC);
     const now = new Date().toISOString();
     const resp = { ok: true, id: pid };
     if ("record_retention_days" in b) {
@@ -1919,6 +1937,26 @@ async function api(request, env, url) {
       await env.DB.prepare("UPDATE project SET quest_public=?, updatedAt=? WHERE id=?").bind(questPublic, now, pid).run();
       await logAudit(env, request, A, "project.questPublic.update", pid + " -> " + questPublic);
       resp.questPublic = !!questPublic;
+    }
+    // R12 (2026-08-20) — questActivities: the per-project "which activities
+    // are relevant here" filter (Nordic centre offers Hike/XC-Ski, a bike
+    // park offers Bike, etc). null clears it back to "show all activities"
+    // (backward compat — this is what every project already has today).
+    // Stored as a JSON array TEXT column; validated against the same
+    // QUEST_LEADERBOARD_ACTIVITIES list the leaderboard's own ?activity=
+    // filter already validates against, so an invalid value can never be
+    // stored and later silently filter a player's activity picker to
+    // nothing.
+    if ("questActivities" in b) {
+      let questActivities = null;
+      if (b.questActivities !== null) {
+        if (!Array.isArray(b.questActivities) || !b.questActivities.length || !b.questActivities.every(a => QUEST_LEADERBOARD_ACTIVITIES.includes(a)))
+          return json({ error: "questActivities must be a non-empty array of ski/hike/bike/drive/xcski, or null for all" }, 400, AC);
+        questActivities = JSON.stringify(b.questActivities);
+      }
+      await env.DB.prepare("UPDATE project SET quest_activities=?, updatedAt=? WHERE id=?").bind(questActivities, now, pid).run();
+      await logAudit(env, request, A, "project.questActivities.update", pid + " -> " + (questActivities || "null(all)"));
+      resp.questActivities = b.questActivities;
     }
     return json(resp, 200, AC);
   }
@@ -2266,8 +2304,15 @@ async function api(request, env, url) {
       bundle.bundleVersion = row.version;
       // Reflect the live owner — a project may have moved clients since this
       // bundle was published, and the stored JSON would otherwise be stale.
-      const ownerRow = await env.DB.prepare("SELECT orgId FROM project WHERE id=?").bind(pid).first();
+      const ownerRow = await env.DB.prepare("SELECT orgId, quest_activities FROM project WHERE id=?").bind(pid).first();
       if (ownerRow) bundle.orgId = ownerRow.orgId;
+      // R12 — the per-project activity-relevance filter isn't part of the
+      // published bundle JSON (it's a project-row column, set via the
+      // separate PATCH endpoint, not the Fence Editor's Publish button) —
+      // injected here at read time, same live-owner-injection pattern as
+      // orgId just above. null = every activity allowed (backward compat).
+      try { bundle.questActivities = ownerRow && ownerRow.quest_activities ? JSON.parse(ownerRow.quest_activities) : null; }
+      catch (e) { bundle.questActivities = null; }
       // Merge active live zones — filtered by guide when visitor arrived via a guide's walk link
       const liveGuide = url.searchParams.get("guide");
       const liveRows = liveGuide

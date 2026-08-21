@@ -738,6 +738,37 @@
               if(r.ok){ await loadProjects(); openManagePanel(); } else alert("Toggle failed: "+r.status);
             });
             pr.appendChild(pub);
+            // Ridge Quest R12 (2026-08-20) — which activities THIS project
+            // offers (a Nordic centre shows Hike/XC-Ski, a bike park shows
+            // Bike, etc), filtering both Home's activity picker and the
+            // leaderboard's tabs in ridge-quest.html. p.questActivities is
+            // the raw quest_activities TEXT column — null/unparsable means
+            // "all activities" (backward compat default). Clicking a chip
+            // always sends an explicit array (converting null->explicit on
+            // first click), never a partial/ambiguous state.
+            let currentActs = null;
+            try { currentActs = p.questActivities ? JSON.parse(p.questActivities) : null; } catch(e) { currentActs = null; }
+            const ACT_LABELS = { ski:"Ski", hike:"Hike", xcski:"XC Ski", bike:"Bike", drive:"Drive" };
+            const allActs = Object.keys(ACT_LABELS);
+            const actRow = document.createElement("div");
+            actRow.style.cssText = "display:flex;gap:3px";
+            allActs.forEach(act => {
+              const on = currentActs ? currentActs.includes(act) : true;
+              const chip = document.createElement("button");
+              chip.textContent = ACT_LABELS[act];
+              chip.title = "Toggle whether "+ACT_LABELS[act]+" is offered in Ridge Quest for this project";
+              chip.style.cssText = "background:none;border:1px solid var(--rim,#26344a);color:"+(on?"var(--go,#38e0a6)":"var(--fog,#5b7088)")+";border-radius:6px;padding:1px 5px;cursor:pointer;font-size:10px";
+              chip.addEventListener("click", async () => {
+                const base = currentActs || allActs.slice();
+                const next = on ? base.filter(a=>a!==act) : base.concat([act]);
+                if(!next.length){ alert("At least one activity must stay enabled."); return; }
+                const token = askToken(); if(!token) return;
+                const r = await fetch("/api/projects/"+encodeURIComponent(p.id),{method:"PATCH",headers:{"content-type":"application/json",authorization:"Bearer "+token},body:JSON.stringify({questActivities:next})});
+                if(r.ok){ await loadProjects(); openManagePanel(); } else alert("Toggle failed: "+r.status);
+              });
+              actRow.appendChild(chip);
+            });
+            pr.appendChild(actRow);
             const del = document.createElement("button");
             del.textContent = "✕"; del.title = "Delete project";
             del.style.cssText = "background:none;border:none;color:var(--fog,#5b7088);cursor:pointer;font-size:12px";

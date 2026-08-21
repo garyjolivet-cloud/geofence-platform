@@ -245,7 +245,7 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | GET | `/api/health` | public |
 | GET/POST | `/api/projects` | GET public, POST master |
 | GET/PUT | `/api/projects/:id/bundle` | GET public, PUT scoped (`publish`) |
-| PATCH | `/api/projects/:id` | scoped (`publish`); partial update — `record_retention_days` and/or `questPublic` (Ridge Quest R7 public-picker opt-in, second of two levels alongside `app.questEnabled`) |
+| PATCH | `/api/projects/:id` | scoped (`publish`); partial update — `record_retention_days`, `questPublic` (Ridge Quest R7 public-picker opt-in, second of two levels alongside `app.questEnabled`), and/or `questActivities` (array of `ski`/`hike`/`bike`/`drive`/`xcski`, or `null` for all — which activities this project's picker/leaderboard offer) |
 | PUT | `/api/projects/:id/app` | master |
 | GET/POST | `/api/apps` | GET public, POST master |
 | PUT | `/api/apps/:id` | master; partial update of name/description and six boolean flags (`threeDEnabled`/`terrainAltitudeEnabled`/`visitorsFly`/`hazardAwareEnabled`/`fogEnabled`/`questEnabled`) |

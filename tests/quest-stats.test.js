@@ -39,8 +39,9 @@ function questSeasonId(iso) {
 }
 const QUEST_DIFFICULTY_POINTS_PER_VERT_M = { green: 1, blue: 1.5, black: 2, "double-black": 3 };
 const QUEST_RUNTYPE_POINTS_MULTIPLIER = { run: 1, chute: 1.4, bowl: 1.2, ridge: 1.3, hike: 1.1 };
-const QUEST_ACTIVITY_DISTANCE_POINTS_PER_M = { bike: 0.18, drive: 0.06 };
+const QUEST_ACTIVITY_DISTANCE_POINTS_PER_M = { bike: 0.18, drive: 0.06, xcski: 0.065 };
 const QUEST_BIKE_DIFFICULTY_MULTIPLIER = { green: 1, blue: 1.4, black: 1.8, "double-black": 2.4 };
+const QUEST_XCSKI_DIFFICULTY_MULTIPLIER = { green: 1, blue: 1.15, black: 1.3 };
 function questPoints(activity, difficulty, runType, verticalM, distanceM, snowBonus) {
   if (activity === "lift") return 0;
   if (activity === "ski" || activity === "hike") {
@@ -48,10 +49,12 @@ function questPoints(activity, difficulty, runType, verticalM, distanceM, snowBo
     const w = (QUEST_DIFFICULTY_POINTS_PER_VERT_M[difficulty] || 1) * (QUEST_RUNTYPE_POINTS_MULTIPLIER[runType] || 1) * (snowBonus || 1);
     return Math.round(Math.abs(verticalM) * w);
   }
-  if (activity === "bike" || activity === "drive") {
+  if (activity === "bike" || activity === "drive" || activity === "xcski") {
     if (distanceM == null) return 0;
     const perM = QUEST_ACTIVITY_DISTANCE_POINTS_PER_M[activity] || 0;
-    const diffMult = activity === "bike" ? (QUEST_BIKE_DIFFICULTY_MULTIPLIER[difficulty] || 1) : 1;
+    const diffMult = activity === "bike" ? (QUEST_BIKE_DIFFICULTY_MULTIPLIER[difficulty] || 1)
+      : activity === "xcski" ? (QUEST_XCSKI_DIFFICULTY_MULTIPLIER[difficulty] || 1)
+      : 1;
     return Math.round(Math.abs(distanceM) * perM * diffMult);
   }
   return 0;
@@ -160,6 +163,39 @@ const questDateBucketClient = new Function("date", bucketM[0].slice(bucketM[0].i
 
 (function testLiftZeroRegardlessOfDistance() {
   assert(questPoints("lift", "black", "run", null, 5000, 1) === 0, "a lift ride earns 0 points even with a distance reading present");
+})();
+
+/* ---- questPoints: xcski (R12, distance-based like bike/drive, but with
+   its own difficulty multiplier — real Nordic centres genuinely grade
+   trails green/blue/black, unlike a road) ---- */
+
+(function testXcskiWeightedByDistanceAndDifficulty() {
+  const p = questPoints("xcski", "blue", null, null, 10000, 1);
+  assert(p === Math.round(10000 * 0.065 * 1.15), "blue 10km xc loop: 10000m * 0.065 (per-m) * 1.15 (blue), got " + p);
+})();
+
+(function testXcskiUnknownDifficultyDefaultsToWeight1() {
+  const p = questPoints("xcski", "unknown-difficulty", null, null, 1000, 1);
+  assert(p === Math.round(1000 * 0.065), "an unrecognized difficulty defaults to a 1x multiplier, got " + p);
+})();
+
+(function testXcskiNoDistanceZeroPoints() {
+  assert(questPoints("xcski", "green", null, null, null, 1) === 0, "an xcski outing with no distance reading earns 0 points");
+})();
+
+(function testXcskiIgnoresVerticalAndSnowBonus() {
+  const a = questPoints("xcski", "green", null, 300, 5000, 1.5);
+  const b = questPoints("xcski", "green", null, null, 5000, 1);
+  assert(a === b, "vertical/snowBonus don't affect xcski scoring at all, got a=" + a + " b=" + b);
+})();
+
+(function testXcskiDoesNotUseBikeDifficultyScale() {
+  // xcski and bike must each look up difficulty in their OWN multiplier
+  // table — same distance/difficulty inputs must NOT produce the same
+  // points, since bike's black is 1.8x but xcski's black is 1.3x.
+  const bike = questPoints("bike", "black", null, null, 4000, 1);
+  const xc = questPoints("xcski", "black", null, null, 4000, 1);
+  assert(bike !== xc, "bike and xcski use distinct difficulty scales, so identical inputs must score differently, got bike=" + bike + " xc=" + xc);
 })();
 
 /* ---- questSnowBonus ---- */

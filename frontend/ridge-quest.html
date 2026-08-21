@@ -76,6 +76,7 @@
   .runrow .badge.hike{background:var(--go);color:#052018}
   .runrow .badge.bike{background:var(--go);color:#052018}
   .runrow .badge.drive{background:var(--fog);color:#0b1420}
+  .runrow .badge.xcski{background:#c9a4ff;color:#1a0d3d}
   .runrow .name{flex:1;color:var(--snow)}
   .runrow .meta{color:var(--fog);font-size:12px;white-space:nowrap}
   .empty{color:var(--fog);font-size:13px;text-align:center;padding:10px 0}
@@ -523,6 +524,17 @@ const QUEST_TUNING = {
   CORRIDOR_GPS_TOLERANCE_M: 15
 };
 
+// R12 — the single source of truth for activity key->label, shared by
+// Home's activity picker and the Leaderboard's activity tabs, so adding a
+// 6th activity later only ever means editing this one list.
+const QUEST_ACTIVITIES = [
+  { key: "ski", label: "Ski" },
+  { key: "hike", label: "Hike" },
+  { key: "xcski", label: "XC Ski" },
+  { key: "bike", label: "Bike" },
+  { key: "drive", label: "Drive" }
+];
+
 const QGeo = {
   R: 6371000,
   mPerDegLat: 111320,
@@ -589,8 +601,9 @@ const QGeo = {
 };
 
 const Quest = {
-  corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,ref}]
+  corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,lengthM,ref}]
   ref: null,            // [lat,lon] project reference point (R2 map center) — set by loadCorridors() regardless of whether any corridor exists
+  allowedActivities: null, // R12: this project's activity-relevance filter — null=all, else array of activity strings — set by loadCorridors()
   states: {},           // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
   fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
   viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
@@ -607,11 +620,20 @@ const Quest = {
       if(bundle.error){ this.corridors=[]; this.viewpoints=[]; return; }
       const ref = bundle.ref || [0,0];
       this.ref = ref;
+      // R12 — the per-project "relevant activities" filter, injected
+      // server-side into the bundle at read time (it's a project-row
+      // column, not part of the published JSON — see worker.js's
+      // GET /bundle handler). null = every activity allowed (backward
+      // compat default, matches every project that predates this filter).
+      this.allowedActivities = bundle.questActivities || null;
       this.corridors = (bundle.zones||[]).map(z=>{
         const target = (z.layers||[]).find(l=>l.kind==="target" && l.geometry && l.geometry.type==="corridor");
         if(!target) return null;
+        const path = target.geometry.path;
+        let lengthM=0;
+        for(let i=1;i<path.length;i++) lengthM += QGeo.haversineM(path[i-1], path[i]);
         return { zoneId:z.id, name:z.name||"Run", difficulty:z.difficulty||null, runType:z.runType||"run",
-                 widthM:target.geometry.widthM||10, path:target.geometry.path, ref };
+                 widthM:target.geometry.widthM||10, path, lengthM, ref };
       }).filter(Boolean);
       // R4 — Viewpoint zones: a plain circle stop flagged isViewpoint, with
       // a precomputed viewshedCells list (staff-computed in Fence Editor,
@@ -796,7 +818,17 @@ const Quest = {
     if(buffer.length<2) return;
     const first=buffer[0], last=buffer[buffer.length-1];
     const durationS = (last.t-first.t)/1000;
-    if(durationS < QUEST_TUNING.MIN_DURATION_S || durationS > QUEST_TUNING.MAX_DURATION_S) return;
+    // R12 — MAX_DURATION_S alone (90 min) silently discarded real long
+    // corridor crossings: a genuinely long trail confirmed to take longer
+    // than 90 min at a plausible pace (demonstrated live, 2026-08-19, on a
+    // ~9.9km corridor at ski pace) would exceed it and vanish with no
+    // feedback, indistinguishable from a real GPS-stuck failure. Scale the
+    // cap by the corridor's OWN length instead of discarding on a fixed
+    // ceiling — 0.5 m/s (~1.8 km/h) is an implausibly slow floor pace, so
+    // this only ever RAISES the cap for long corridors, never lowers it for
+    // short ones (Math.max keeps the original 90-min floor).
+    const maxDurationS = Math.max(QUEST_TUNING.MAX_DURATION_S, (corridor.lengthM||0) / 0.5);
+    if(durationS < QUEST_TUNING.MIN_DURATION_S || durationS > maxDurationS) return;
 
     // R9 — tripline fix: gate on how much of THIS corridor's own length the
     // crossing actually covered, not just whether the band was entered and
@@ -839,7 +871,11 @@ const Quest = {
       activity="lift";
     } else if(corridor.runType==="hike"){
       activity="hike";
-    } else if(selectedActivity==="hike" || selectedActivity==="drive"){
+    } else if(selectedActivity==="hike" || selectedActivity==="drive" || selectedActivity==="xcski"){
+      // xcski (Nordic/cross-country) goes here, not in the ski branch below:
+      // Nordic terrain is flat/rolling, so the ski branch's `descending &&`
+      // speed-gate would misclassify a real xc outing as hike almost every
+      // time — like hike/drive, it's a manual selection with no auto-detect.
       activity=selectedActivity; // manual override, no speed check
     } else if(selectedActivity==="bike"){
       activity = (descending && avgSpeedMps >= QUEST_TUNING.BIKE_SPEED_MIN_MPS) ? "bike" : "hike";
@@ -883,7 +919,8 @@ function runRowHtml(r){
   ].filter(Boolean).join(" · ");
   const points = r.points!=null ? r.points : null;
   const powder = (r.snow_bonus!=null?r.snow_bonus:1) > 1;
-  return '<div class="runrow"><span class="badge '+esc(activity)+'">'+esc(activity)+'</span>'
+  const activityLabel = (QUEST_ACTIVITIES.find(a=>a.key===activity)||{}).label || activity;
+  return '<div class="runrow"><span class="badge '+esc(activity)+'">'+esc(activityLabel)+'</span>'
     +'<span class="name">'+esc(r.run_name||r.runName||"Run")+(powder?' ❄':'')+'</span>'
     +'<span class="meta">'+esc(meta)+(points?' · +'+points+' pts':'')+'</span></div>';
 }
@@ -940,8 +977,8 @@ function renderHome(){
     +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Track runs, reveal the mountain, and climb the leaderboard.</p>'
     +'<div id="statsTiles"></div>'
     +'<p class="scrollhint" id="statsStreak" style="margin-bottom:14px"></p>'
-    +'<div class="activityPicker" id="activityPicker" style="display:flex;gap:6px;margin-bottom:10px">'
-      +['ski','hike','bike','drive'].map(a=>'<button class="ghost" data-activity="'+a+'" style="flex:1;margin:0;text-transform:capitalize">'+a+'</button>').join('')
+    +'<div class="activityPicker" id="activityPicker" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'
+      +QUEST_ACTIVITIES.map(a=>'<button class="ghost" data-activity="'+a.key+'" style="flex:1;margin:0">'+a.label+'</button>').join('')
     +'</div>'
     +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
     +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0"></p>'
@@ -968,6 +1005,11 @@ function renderHome(){
     if(!el) return; // navigated away before this resolved
     const pct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
     el.textContent = pct==null ? "" : Math.round(pct*100)+"% of this map explored (lifetime)";
+    // R12 — corridors just (re)loaded, so Quest.allowedActivities now
+    // reflects THIS project. Re-apply the filter now that it's fresh (the
+    // earlier synchronous call below used whatever was cached from a
+    // previous project, if any — harmless flash, corrected here).
+    if(typeof applyActivityFilter==="function") applyActivityFilter();
   })();
   const trackBtn=document.getElementById("btnTrack");
   const statusEl=document.getElementById("gpsStatus");
@@ -1001,7 +1043,22 @@ function renderHome(){
   function paintActivityButtons(){
     activityBtns.forEach(b=>{ b.style.borderColor = (b.dataset.activity===selectedActivity) ? "var(--coral)" : ""; });
   }
-  paintActivityButtons();
+  // R12 — hides activity buttons this project's staff-set quest_activities
+  // filter excludes (null = show all, unchanged default). If the player's
+  // REMEMBERED choice (localStorage, could've been set at a different
+  // project) isn't in this project's allowed list, fall back to the first
+  // allowed one — otherwise the picker would show no selected button at
+  // all, and tracking would silently classify under a hidden activity.
+  function applyActivityFilter(){
+    const allowed = Quest.allowedActivities;
+    activityBtns.forEach(b=>{ b.style.display = (!allowed || allowed.includes(b.dataset.activity)) ? "" : "none"; });
+    if(allowed && allowed.length && !allowed.includes(selectedActivity)){
+      selectedActivity = allowed[0];
+      localStorage.setItem("rq.activity", selectedActivity);
+    }
+    paintActivityButtons();
+  }
+  applyActivityFilter();
   activityBtns.forEach(b=>{
     b.onclick=()=>{
       if(Quest.active()) return; // disabled while tracking, see comment above
@@ -1084,9 +1141,13 @@ async function renderLeaderboard(mode, activityFilter){
       +'<button class="ghost" id="lbSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
     +'</div>'
     // R8 — optional per-activity view, reusing R6's ?activity= filter.
-    // "All" (no filter) stays the default, unchanged combined board.
+    // "All" (no filter) stays the default, unchanged combined board. R12 —
+    // tabs are filtered by this project's quest_activities the same way
+    // Home's picker is (null=all); "All" itself always shows regardless,
+    // since it's the combined board, not a single activity.
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
-      +["","ski","hike","bike","drive"].map(a=>'<button class="ghost" data-act="'+a+'" style="margin:0;font-size:12px;padding:6px 10px;'+((activityFilter||"")===a?"border-color:var(--coral)":"")+'">'+(a||"All")+'</button>').join('')
+      +[{key:"",label:"All"}].concat(QUEST_ACTIVITIES.filter(a=>!Quest.allowedActivities || Quest.allowedActivities.includes(a.key)))
+        .map(a=>'<button class="ghost" data-act="'+a.key+'" style="margin:0;font-size:12px;padding:6px 10px;'+((activityFilter||"")===a.key?"border-color:var(--coral)":"")+'">'+a.label+'</button>').join('')
     +'</div>'
     +'<div id="lbList"><div class="empty">Loading…</div></div>'
     +'<button class="ghost" id="lbBack">← Back</button>'

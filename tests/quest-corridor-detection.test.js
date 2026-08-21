@@ -268,6 +268,75 @@ function mkFix(lat, lon, tOffsetS, extra) {
   assert(run && run.activity === "hike", "a runType:hike corridor stays hike regardless of selectedActivity, got " + (run && run.activity));
 })();
 
+// ---- R12: xcski (cross-country/Nordic ski) — a manual-selection activity
+// like hike/drive, NOT the auto-detected ski branch: Nordic terrain is
+// flat/rolling, so it must never be speed/descent-gated the way ski/bike
+// are, or a real xc outing would misclassify as hike almost every time. ----
+
+(function testXcskiSelectedAnySpeed() {
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 1 }),
+    mkFix(51.300, -117.05, 40, { speed: 1 })
+  ];
+  const run = classify(straightRun, buffer, "xcski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "xcski", "xcski selected classifies as xcski regardless of speed, got " + (run && run.activity));
+})();
+
+(function testXcskiSelectedEvenAscending() {
+  // Manual override, no direction check — Nordic trails are often skied as
+  // out-and-back loops, so ascending must classify the same as descending.
+  const buffer = [
+    mkFix(51.300, -117.05, 0, { speed: 2 }),
+    mkFix(51.310, -117.05, 40, { speed: 2 })
+  ];
+  const run = classify(straightRun, buffer, "xcski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "xcski", "xcski selected classifies as xcski even ascending, got " + (run && run.activity));
+})();
+
+(function testXcskiCrossingLiftCorridorStillLift() {
+  const buffer = [
+    mkFix(51.300, -117.05, 0, { speed: 4 }),
+    mkFix(51.310, -117.05, 300, { speed: 4 })
+  ];
+  const run = classify(liftLine, buffer, "xcski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "lift", "ascending a lift corridor is still a lift ride regardless of xcski selection, got " + (run && run.activity));
+})();
+
+(function testXcskiCrossingHikeRuntypeStillHike() {
+  const buffer = [
+    mkFix(51.300, -117.05, 0, { speed: 2 }),
+    mkFix(51.310, -117.05, 60, { speed: 2 })
+  ];
+  const run = classify(hikeRoute, buffer, "xcski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "a runType:hike corridor stays hike regardless of xcski selection, got " + (run && run.activity));
+})();
+
+// ---- R12: length-scaled MAX_DURATION_S — a fixed 90-minute cap silently
+// discarded real long corridor crossings (demonstrated live on a ~9.9km
+// corridor at ski pace, 2026-08-19). The cap now scales with the
+// corridor's OWN length (corridor.lengthM), floored at the original 90min
+// so short corridors are unaffected. ----
+
+(function testLongCorridorRaisesDurationCapAllowsLongCrossing() {
+  const longCorridor = Object.assign({}, straightRun, { lengthM: 10000 }); // 10km -> cap = 10000/0.5 = 20000s
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 6 }),
+    mkFix(51.300, -117.05, 6600, { speed: 6 }) // 110min — above the fixed 90min cap, below the scaled one
+  ];
+  const run = classify(longCorridor, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "ski", "a 110min crossing of a 10km corridor is NOT discarded once the cap scales with length, got " + JSON.stringify(run));
+})();
+
+(function testShortCorridorKeepsOriginalDurationCap() {
+  const shortCorridor = Object.assign({}, straightRun, { lengthM: 500 }); // 500m -> 500/0.5=1000s, floor (5400s) wins
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 6 }),
+    mkFix(51.300, -117.05, 6000, { speed: 6 }) // 100min — above the original 90min floor either way
+  ];
+  const run = classify(shortCorridor, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(run === undefined, "a short corridor keeps the original 90min floor (scaling only ever raises the cap, never lowers it), got " + JSON.stringify(run));
+})();
+
 // ---- R9: coverage-percentage gate — fixes the "traverse clips multiple
 // nearby corridors" over-crediting bug by requiring the crossing to have
 // actually covered most of THIS corridor's own length, not just entered
