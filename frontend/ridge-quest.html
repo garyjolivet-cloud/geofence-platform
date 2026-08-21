@@ -489,7 +489,17 @@ async function renderConditions(onContinue){
 // the first of the two assignments on that line) but RQ_PROJECT_ID never
 // updated, and boot() was never reached. From the outside this looked like
 // the button doing nothing at all.
-let RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || "REPLACE_WITH_QUEST_PROJECT_ID";
+// Real bug found in a 2026-08-21 QA pass: this used to default to the
+// literal placeholder string "REPLACE_WITH_QUEST_PROJECT_ID" (a leftover
+// from before R7's public picker existed, when a developer had to
+// hand-edit this file per deployment). That string is truthy, so boot()'s
+// `if(!RQ_APP_ID || !RQ_PROJECT_ID){ renderWorkspacePicker(); return; }`
+// check never fired for a genuinely fresh visitor (no URL params, no
+// localStorage) — they'd skip the picker entirely and silently try to
+// load corridors for a project id that doesn't exist. null matches
+// RQ_APP_ID's own default one line above and lets that check work as
+// R7 intended.
+let RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || null;
 // ?sim=1 reveals the dev-only "Simulate walk" button on Home (Quest.simulateWalk) —
 // never shown to a real player by default, opt-in via URL only.
 const IS_SIM_MODE = new URLSearchParams(location.search).get("sim") === "1";
