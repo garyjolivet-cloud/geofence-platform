@@ -948,6 +948,7 @@ function renderHome(){
     +'<p class="scrollhint" id="coverageStatus" style="margin:0 0 14px"></p>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
     +'<button class="ghost" id="btnMap">My map</button>'
+    +'<p class="scrollhint" id="exploredPct" style="margin:6px 0 10px"></p>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<button class="ghost" id="btnConditions">Check conditions again</button>'
@@ -957,8 +958,17 @@ function renderHome(){
     +'</div>';
   refreshRuns(s.player.id);
   refreshStats(s.player.id);
-  Quest.loadCorridors();
-  Quest.loadFogCells(s.player.id);
+  // R11 — completion % needs BOTH corridors (the denominator) and fog
+  // cells (the numerator) actually loaded, not just fired off — awaited
+  // here instead of the old fire-and-forget pair so the stat has real data
+  // by the time it paints, without fetching either one twice.
+  (async ()=>{
+    await Promise.all([Quest.loadCorridors(), Quest.loadFogCells(s.player.id)]);
+    const el = document.getElementById("exploredPct");
+    if(!el) return; // navigated away before this resolved
+    const pct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
+    el.textContent = pct==null ? "" : Math.round(pct*100)+"% of this map explored (lifetime)";
+  })();
   const trackBtn=document.getElementById("btnTrack");
   const statusEl=document.getElementById("gpsStatus");
   const coverageEl=document.getElementById("coverageStatus");
@@ -1164,6 +1174,26 @@ function corridorPreviewFeatureCollection(){
   });
   return { type:"FeatureCollection", features };
 }
+// R11 — "complete %": what fraction of THIS project's own corridor network
+// (previewCells — same set corridorPreviewCells() above already computes)
+// has this player actually skied/walked (state===2), not just seen from a
+// viewpoint (state===1, R4) — a viewpoint grant must never let someone
+// "complete" a swath they never set foot on. previewCells IS the
+// denominator deliberately (not a looser/tighter buffer): it's the exact
+// same k=1-disk shape _revealFog() paints when you actually walk a
+// corridor, so 100% is genuinely reachable (a real GPS track is denser
+// than the 25m sampling that builds previewCells) without being trivially
+// overshootable. Returns null (not 0) for an empty set — a project with no
+// corridors, or a bundle that hasn't loaded yet, has no meaningful
+// percentage, and null lets the caller hide the stat instead of showing a
+// misleading "0%". Pure/no h3 dependency — takes the already-built sets as
+// plain arguments so this needs no stubbing to unit-test.
+function questCompletionPct(previewCells, fogCells){
+  if(!previewCells.size) return null;
+  let revealed=0;
+  previewCells.forEach(cell=>{ if((fogCells.get(cell)||0)===2) revealed++; });
+  return revealed/previewCells.size;
+}
 // A revealed patch can be a handful of ~66m hexes — easy to miss entirely
 // against a fixed zoom:13 view of the whole resort. Fits the initial view to
 // the UNION of the corridor network's full extent (so the whole project is
@@ -1193,9 +1223,17 @@ function renderFogMap(){
     document.getElementById("fogBack").onclick=renderHome;
     return;
   }
+  // R11 — completion % is a number derived from tracking (Quest.fogCells),
+  // not a fog VISUAL — deliberately NOT gated behind RQ_FOG_ENABLED the way
+  // the legend below is, matching R5's own contract that fog tracking never
+  // stops, only the shroud/hex drawing does. Both sets are already loaded
+  // by the time this screen can even be reached (Home awaits them before
+  // "My map" is clickable), so this is a plain sync call, no fetch needed.
+  const completionPct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
+    +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
   // Bind Back FIRST, before anything that can throw (maplibregl failing to
