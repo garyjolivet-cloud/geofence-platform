@@ -2157,13 +2157,22 @@ function _zoneMousedown(e){
   const feat=e.features&&e.features[0]; if(!feat) return;
   const zIdx=feat.properties.zIdx; if(zIdx==null||!zones[zIdx]) return;
   e.preventDefault();
-  map.dragPan.disable();
   const z=zones[zIdx];
-  // snapshot geometry for delta offset
+  // Snapshot geometry for delta offset BEFORE disabling dragPan — a shape
+  // type this branch doesn't recognize (real bug, 2026-08-20: corridor
+  // zones fell through to the tripline branch here, which reads
+  // z.shape.from/.to — corridors have neither, only .coords — throwing
+  // TypeError on the very first click-drag of a corridor's line). If this
+  // throws, dragPan was never touched and the map stays pannable; if it
+  // ran AFTER disable() instead, the throw would skip past setting
+  // _zoneDrag, and mouseup's `if(!_zoneDrag) return` guard would then skip
+  // the matching enable() too — permanently freezing map panning until a
+  // page reload, with no error visible anywhere in the UI.
   let snap;
   if(z.shape.type==="circle")    snap={center:[...z.shape.center]};
-  else if(z.shape.type==="polygon"||z.shape.type==="path") snap={coords:z.shape.coords.map(c=>[...c])};
+  else if(z.shape.type==="polygon"||z.shape.type==="path"||z.shape.type==="corridor") snap={coords:z.shape.coords.map(c=>[...c])};
   else                           snap={from:[...z.shape.from],to:[...z.shape.to]};
+  map.dragPan.disable();
   _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false};
   map.getCanvas().style.cursor="grabbing";
 }
@@ -2195,7 +2204,7 @@ map.on("mousemove",e=>{
       z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
     }
   }
-  else if(z.shape.type==="polygon"||z.shape.type==="path") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
+  else if(z.shape.type==="polygon"||z.shape.type==="path"||z.shape.type==="corridor") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
   else { z.shape.from=[s.from[0]+dLng,s.from[1]+dLat]; z.shape.to=[s.to[0]+dLng,s.to[1]+dLat]; }
   // select this zone if not already selected
   if(sel!==_zoneDrag.zIdx){ sel=_zoneDrag.zIdx; refreshProps(); }
