@@ -373,16 +373,19 @@ function renderMapLine(){
     playheadMarker.remove(); playheadMarker=null;
   }
   if(bounds && isFinite(bounds.minLon) && (bounds.minLon!==bounds.maxLon || bounds.minLat!==bounds.maxLat)){
-    // duration:0 (instant jump, not animated) — a big recorded track (this
-    // app's own paths commonly run several thousand points) needs a burst
-    // of NEW tiles for the newly-framed area at the same moment; animating
-    // the camera while that burst is in flight visibly freezes the tab for
-    // a few seconds. Confirmed live (2026-08-21): a 5,989-point track
-    // "locked up" the page immediately on load — replaying the same data
-    // through this file's pure JS (map.fitBounds/tile-loading aside) ran in
-    // under 100ms with no errors, pointing at this animation/tile-burst
-    // contention rather than anything in the point-processing code itself.
-    map.fitBounds([[bounds.minLon,bounds.minLat],[bounds.maxLon,bounds.maxLat]],{padding:50,duration:0});
+    // animate:false, NOT duration:0 — confirmed live (2026-08-21) that
+    // duration:0 still routes through MapLibre's async easing machinery
+    // with a zero-length timer, and calling fitBounds again (e.g. the next
+    // recompute()) before that timer's internal state fully settles threw
+    // a flood of "Attempting to run(), but is already running" (map.ts) and
+    // "Cannot read properties of undefined (reading 'lng')" (smart_wrap.ts)
+    // errors — a real MapLibre reentrancy bug, not anything in this file's
+    // own point-processing (a Node replay of the actual failing 5,989-point
+    // track through this file's pure math completed in <100ms, no errors).
+    // animate:false skips the easing machinery entirely — an immediate,
+    // fully synchronous camera jump (equivalent to jumpTo), so there's no
+    // half-finished transition state left for a later call to collide with.
+    map.fitBounds([[bounds.minLon,bounds.minLat],[bounds.maxLon,bounds.maxLat]],{padding:50,animate:false});
   } else if(coords.length===1){
     map.flyTo({center:coords[0],zoom:15});
   }
