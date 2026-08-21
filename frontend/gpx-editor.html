@@ -242,7 +242,7 @@ let filterOn=true, filterAvailable=false;
 let cumLens=[0], cumGain=[0], cumLoss=[0];
 let bounds=null;
 let loadedFrom=null; // {kind:'path'|'corridor', id, name, widthM} once opened from/saved to the tree
-let mapReady=false, playheadMarker=null;
+let mapReady=false, playheadMarker=null, resizePending=false;
 const MAX_SPEED_MPS=8;
 
 function setBase(newPoints){
@@ -351,7 +351,14 @@ const map=new maplibregl.Map({
   center:[-117.0547,51.3027], zoom:12
 });
 map.addControl(new maplibregl.NavigationControl());
-map.on("load",()=>{ mapReady=true; renderMapLine(); });
+map.on("load",()=>{
+  mapReady=true;
+  // A resize() requested while the map was still mid-initialization (style/
+  // sprite/glyphs not yet loaded) is deferred here rather than dropped —
+  // see showGpxScreen()'s comment for why resize() is needed at all.
+  if(resizePending){ resizePending=false; map.resize(); }
+  renderMapLine();
+});
 
 function renderMapLine(){
   if(!mapReady) return;
@@ -586,7 +593,17 @@ function showGpxScreen(){
   // (2026-08-21): map tiles rendered fine, but neither gesture worked.
   // requestAnimationFrame so the .show class's layout change has actually
   // reflowed before resize() reads the container's real size.
-  requestAnimationFrame(()=>map.resize());
+  //
+  // Confirmed live (2026-08-21): calling resize() before the map's own
+  // "load" event has fired (style/sprite/glyphs still initializing) was
+  // triggering an internal MapLibre reentrancy error ("Attempting to run(),
+  // but is already running", task_queue.ts) that left the map blank and
+  // uninteractive — resize() collided with the map's own in-flight init
+  // work. If the map isn't ready yet, defer the resize itself to the
+  // "load" handler (see map.on("load",...) above) instead of firing it
+  // early.
+  if(mapReady) requestAnimationFrame(()=>map.resize());
+  else resizePending=true;
 }
 function showNoProject(){
   document.getElementById("noProjectHint").style.display="block";
