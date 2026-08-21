@@ -242,7 +242,20 @@ let filterOn=true, filterAvailable=false;
 let cumLens=[0], cumGain=[0], cumLoss=[0];
 let bounds=null;
 let loadedFrom=null; // {kind:'path'|'corridor', id, name, widthM} once opened from/saved to the tree
-let mapReady=false, playheadMarker=null, resizePending=false;
+let mapReady=false, playheadMarker=null, resizePending=false, renderQueued=false;
+// setBase()->recompute() and map's own "load" handler can each independently
+// want to call renderMapLine() around the same moment (a track opened right
+// as the map finishes initializing). Two back-to-back fitBounds() calls —
+// even with animate:false — hit a real MapLibre reentrancy bug (confirmed
+// live 2026-08-21: "Attempting to run(), but is already running"/undefined
+// .lng flood, map goes blank). Route every trigger through this single-flight
+// scheduler so at most one renderMapLine() runs per frame, however many
+// callers asked for one.
+function scheduleRenderMapLine(){
+  if(renderQueued) return;
+  renderQueued=true;
+  requestAnimationFrame(()=>{ renderQueued=false; renderMapLine(); });
+}
 const MAX_SPEED_MPS=8;
 
 function setBase(newPoints){
@@ -279,7 +292,7 @@ function recompute(){
   // synchronous call stack unwinds. requestAnimationFrame actually yields
   // first, so the panel updates above get on screen before the heavier
   // map/tile work below has a chance to occupy the main thread.
-  requestAnimationFrame(renderMapLine);
+  scheduleRenderMapLine();
 }
 
 /* ---- noise filter UI ---- */
@@ -357,7 +370,7 @@ map.on("load",()=>{
   // sprite/glyphs not yet loaded) is deferred here rather than dropped —
   // see showGpxScreen()'s comment for why resize() is needed at all.
   if(resizePending){ resizePending=false; map.resize(); }
-  renderMapLine();
+  scheduleRenderMapLine();
 });
 
 function renderMapLine(){
