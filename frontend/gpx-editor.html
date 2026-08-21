@@ -262,13 +262,24 @@ function recompute(){
   const ge = pathCumElev(points.map(p=>p[2]));
   cumGain = ge.gain; cumLoss = ge.loss;
   bounds = points.length ? computeBounds(points) : null;
-  renderMapLine();
+  // Side-panel updates first (cheap, pure DOM) — renderMapLine() below can
+  // trigger a burst of new tile fetches + GL buffer rebuild for a large
+  // track, which can occupy the main thread for a couple of seconds.
+  // Updating the chart/labels/trim UI before that starts means the browser
+  // gets a chance to paint the correct panel state even if the map itself
+  // stays visibly busy for a moment.
   renderChart();
   updateLabels();
   updateTrimUI();
   positionScrubberFromIdx(0);
   document.getElementById("scrubBar").classList.toggle("show", points.length>1);
   document.getElementById("saveBtn").disabled = !loadedFrom;
+  // Deferred a frame (not called inline) — reordering alone doesn't force
+  // an intermediate paint, since the browser only paints after the whole
+  // synchronous call stack unwinds. requestAnimationFrame actually yields
+  // first, so the panel updates above get on screen before the heavier
+  // map/tile work below has a chance to occupy the main thread.
+  requestAnimationFrame(renderMapLine);
 }
 
 /* ---- noise filter UI ---- */
@@ -362,7 +373,16 @@ function renderMapLine(){
     playheadMarker.remove(); playheadMarker=null;
   }
   if(bounds && isFinite(bounds.minLon) && (bounds.minLon!==bounds.maxLon || bounds.minLat!==bounds.maxLat)){
-    map.fitBounds([[bounds.minLon,bounds.minLat],[bounds.maxLon,bounds.maxLat]],{padding:50,duration:300});
+    // duration:0 (instant jump, not animated) — a big recorded track (this
+    // app's own paths commonly run several thousand points) needs a burst
+    // of NEW tiles for the newly-framed area at the same moment; animating
+    // the camera while that burst is in flight visibly freezes the tab for
+    // a few seconds. Confirmed live (2026-08-21): a 5,989-point track
+    // "locked up" the page immediately on load — replaying the same data
+    // through this file's pure JS (map.fitBounds/tile-loading aside) ran in
+    // under 100ms with no errors, pointing at this animation/tile-burst
+    // contention rather than anything in the point-processing code itself.
+    map.fitBounds([[bounds.minLon,bounds.minLat],[bounds.maxLon,bounds.maxLat]],{padding:50,duration:0});
   } else if(coords.length===1){
     map.flyTo({center:coords[0],zoom:15});
   }
