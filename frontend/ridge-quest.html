@@ -888,9 +888,15 @@ const Quest = {
       activity, startedAt: new Date(first.t).toISOString(), endedAt: new Date(last.t).toISOString(),
       durationS, verticalM, distanceM: Math.round(distanceM), avgSpeedMps, maxSpeedMps
     };
+    // A failed save here used to vanish silently (bare .catch(()=>{})) — the
+    // ONLY feedback a player got about this crossing was onCoverage firing
+    // moments ago with passed:true, which is now misleading if the save
+    // itself then fails (network blip, server error). onSaveError lets Home
+    // correct that with a visible message instead of a run just disappearing
+    // with no explanation.
     api("/api/quest-runs", { method:"POST", body: JSON.stringify(run) })
       .then(()=>{ if(this.onRunLogged) this.onRunLogged(run); })
-      .catch(()=>{});
+      .catch(()=>{ if(this.onSaveError) this.onSaveError(corridor.name); });
   }
 };
 
@@ -1032,6 +1038,15 @@ function renderHome(){
     coverageEl.textContent = passed
       ? name+" — "+pctStr+" ✓ logged"
       : name+" — "+pctStr+" (not enough of it covered to count)";
+  };
+  // Debug audit, 2026-08-21 — POST /api/quest-runs failing used to be a
+  // silent no-op (bare .catch(()=>{})): a real crossing (real vertical/
+  // distance/points) would just never appear in Today's list or the
+  // leaderboard, with onCoverage having already told the player "✓ logged"
+  // moments earlier. Corrects that message rather than leaving it wrong.
+  Quest.onSaveError = (name)=>{
+    if(!coverageEl) return;
+    coverageEl.textContent = name+" — couldn't save to the server (check your connection); this run may not count.";
   };
   // R8 — manual activity choice, remembered across visits so re-selecting
   // "Bike" every session isn't required. Buttons are disabled while
@@ -1241,9 +1256,14 @@ function corridorPreviewCells(){
   });
   return cells;
 }
-function corridorPreviewFeatureCollection(){
+// cells is optional — pass the already-computed Set when a caller (like
+// renderFogMap()) needs both this and questCompletionPct() in the same
+// pass, so a project's whole corridor network (every corridor resampled +
+// h3'd) isn't walked twice per map open. Falls back to computing it fresh
+// so this still works as a standalone call.
+function corridorPreviewFeatureCollection(cells){
   const features=[];
-  corridorPreviewCells().forEach(cell=>{
+  (cells || corridorPreviewCells()).forEach(cell=>{
     const ring = h3.cellToBoundary(cell, true);
     features.push({ type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[ring] } });
   });
@@ -1304,7 +1324,8 @@ function renderFogMap(){
   // stops, only the shroud/hex drawing does. Both sets are already loaded
   // by the time this screen can even be reached (Home awaits them before
   // "My map" is clickable), so this is a plain sync call, no fetch needed.
-  const completionPct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
+  const previewCells = corridorPreviewCells();
+  const completionPct = questCompletionPct(previewCells, Quest.fogCells);
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
@@ -1352,7 +1373,7 @@ function renderFogMap(){
       // prominent thing on screen). Static for the life of this map screen —
       // Quest.corridors doesn't change mid-session, so unlike shroud/fog
       // this never needs a place in syncSource()'s live-redraw.
-      map.addSource("corridorPreview", { type:"geojson", data: corridorPreviewFeatureCollection() });
+      map.addSource("corridorPreview", { type:"geojson", data: corridorPreviewFeatureCollection(previewCells) });
       map.addLayer({ id:"corridorPreview-fill", type:"fill", source:"corridorPreview",
         paint:{ "fill-color":"#8fb6d4", "fill-opacity":0.14 } });
       map.addLayer({ id:"corridorPreview-line", type:"line", source:"corridorPreview",
