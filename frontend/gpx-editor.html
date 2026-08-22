@@ -115,6 +115,9 @@
       <button id="trimBtn">Trim to Selection</button>
       <button id="deleteBtn">Delete Selection</button>
     </div>
+    <div class="row">
+      <button id="undoBtn" class="ghost" disabled title="Undo the last Trim/Delete/Reverse">&#8617; Undo Last Edit</button>
+    </div>
 
     <div class="row">
       <button id="reverseBtn">&#8645; Reverse Direction</button>
@@ -242,6 +245,7 @@ let filterOn=true, filterAvailable=false;
 let cumLens=[0], cumGain=[0], cumLoss=[0];
 let bounds=null;
 let loadedFrom=null; // {kind:'path'|'corridor', id, name, widthM} once opened from/saved to the tree
+let undoStack=[];    // snapshots of basePoints from before each structural edit (Trim/Delete/Reverse) — lets Undo reverse one if the result isn't liked; cleared whenever a different track is opened, since undoing across tracks makes no sense
 let mapReady=false, playheadMarker=null, resizePending=false, renderQueued=false;
 // setBase()->recompute() and map's own "load" handler can each independently
 // want to call renderMapLine() around the same moment (a track opened right
@@ -258,9 +262,27 @@ function scheduleRenderMapLine(){
 }
 const MAX_SPEED_MPS=8;
 
-function setBase(newPoints){
+function setBase(newPoints, opts){
+  opts = opts||{};
+  // resetHistory:true is for opening a *different* track (import, tree pick,
+  // enterProject) — undoing across tracks makes no sense, so history starts
+  // clean. Otherwise (Trim/Delete/Reverse) this is a structural edit of the
+  // *same* track, so snapshot the pre-edit points onto the undo stack first.
+  if(opts.resetHistory) undoStack=[];
+  else undoStack.push(basePoints);
   basePoints = newPoints;
   refreshActive();
+  updateUndoUI();
+}
+function undoEdit(){
+  if(!undoStack.length) return;
+  basePoints = undoStack.pop();
+  refreshActive();
+  updateUndoUI();
+}
+function updateUndoUI(){
+  const btn=document.getElementById("undoBtn");
+  if(btn) btn.disabled = !undoStack.length;
 }
 function refreshActive(){
   const withTime = basePoints.filter(p=>p[3]!=null).length;
@@ -507,6 +529,9 @@ document.getElementById("reverseBtn").onclick=()=>{
   setBase(points.slice().reverse().map(p=>[p[0],p[1],p[2],null]));
 };
 
+/* ---- undo last structural edit (Trim/Delete/Reverse) ---- */
+document.getElementById("undoBtn").onclick=undoEdit;
+
 /* ---- import from Downloads ---- */
 document.getElementById("importBtn").onclick=()=>document.getElementById("importInput").click();
 document.getElementById("importInput").onchange=async()=>{
@@ -517,7 +542,7 @@ document.getElementById("importInput").onchange=async()=>{
     const text=await f.text();
     const {points:parsed}=parseGPX(text);
     loadedFrom=null;
-    setBase(parsed);
+    setBase(parsed, {resetHistory:true});
   }catch(e){ alert("Import failed: "+e.message); }
 };
 
@@ -532,7 +557,7 @@ async function openTreeItem(item){
     if(pts.length<2){ alert("This "+item.kind+" doesn't have enough points."); return; }
     loadedFrom={kind:item.kind, id:item.id, name:j.name, widthM:j.widthM};
     document.getElementById("hdrCrumb").textContent = j.name+(item.kind==="path"?".p":".c");
-    setBase(pts);
+    setBase(pts, {resetHistory:true});
   }catch(e){ alert("Open failed: "+e.message); }
 }
 
@@ -657,7 +682,7 @@ async function enterProject(id, proj){
   if(!appId) appId = await resolveAppIdFallback(id);
   document.getElementById("hdrCrumb").textContent = (proj&&proj.name)||id;
   loadedFrom=null;
-  setBase([]);
+  setBase([], {resetHistory:true});
   showGpxScreen();
   if(!appId){ document.getElementById("gpxTreeHost").innerHTML='<div class="hint">couldn\'t determine this project\'s workspace</div>'; return; }
   gpxTree.refresh({appId});
