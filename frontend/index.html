@@ -197,6 +197,27 @@
   </div>
 </div>
 
+<!-- Walk QR modal — the ▶ Walk button used to navigate straight into
+     /engine on whatever device you clicked it from, which is almost always
+     this laptop, not the phone you'd actually walk the tour with. Scanning
+     a QR code to continue on a phone is the same pattern share.html and
+     Field Recorder's in-project QR sheet already use for exactly this
+     "pick project on a laptop, continue on phone" handoff. -->
+<div id="walkQrModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:center;justify-content:center;padding:20px">
+  <div style="width:100%;max-width:360px;background:#141d2b;border:1px solid #2e3f58;border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center">
+    <div style="display:flex;align-items:center;justify-content:space-between;width:100%">
+      <h2 style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:0">Scan to walk</h2>
+      <button onclick="closeWalkQr()" style="background:none;border:none;color:#8aa5bf;font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <p id="walkQrName" style="font-family:'Barlow Condensed';font-size:13px;color:#8aa5bf;margin:0"></p>
+    <img id="walkQrImg" width="220" height="220" style="border-radius:10px;background:#fff;padding:8px" alt="QR code to open this walk on your phone">
+    <!-- real tappable link, not just display text — same fallback-to-tap
+         reasoning as share.html's URL text, for a camera app that decodes
+         but doesn't auto-open. -->
+    <a id="walkQrUrl" href="#" style="font-family:'Barlow Condensed';font-size:12px;color:var(--coral);word-break:break-all;text-decoration:none">/engine?project=…</a>
+  </div>
+</div>
+
 <script>
 "use strict";
 const mainEl=document.getElementById("main");
@@ -253,7 +274,7 @@ function projectRow(p, clientId){
     ${badge}
     <span class="p-name" onclick="location.href='/editor?project=${id}'" title="Edit">${esc(p.name||p.id)}</span>
     <span class="p-meta">${meta}</span>
-    <a class="p-btn go" href="/engine?project=${id}" title="Walk">▶</a>
+    <button class="p-btn go" onclick="event.stopPropagation();openWalkQr('${escJs(p.id)}','${escJs(p.name||p.id)}')" title="Walk (scan QR on your phone)">▶</button>
     <a class="p-btn" href="/field?project=${id}" title="Field Recorder">🎙</a>
     <button class="p-more" onclick="event.stopPropagation();openProjectMenu(this,'${escJs(p.id)}','${escJs(clientId||"")}')" title="Share, merge, copy, rename, delete">⋯</button>
   </div>`;
@@ -565,6 +586,17 @@ async function submitMerge(){
   }catch(e){ msg.textContent="Failed: "+e.message; }
 }
 document.getElementById("mergeModal").addEventListener("click",e=>{ if(e.target===document.getElementById("mergeModal")) closeMergeModal(); });
+
+// ---- Walk QR modal ----
+function openWalkQr(pid, name){
+  const url=location.origin+"/engine?project="+encodeURIComponent(pid);
+  document.getElementById("walkQrName").textContent=name||pid;
+  document.getElementById("walkQrImg").src="https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=12&ecc=L&data="+encodeURIComponent(url);
+  const a=document.getElementById("walkQrUrl"); a.href=url; a.textContent=url;
+  document.getElementById("walkQrModal").style.display="flex";
+}
+function closeWalkQr(){ document.getElementById("walkQrModal").style.display="none"; }
+document.getElementById("walkQrModal").addEventListener("click",e=>{ if(e.target===document.getElementById("walkQrModal")) closeWalkQr(); });
 
 function setApi(ok,text){
   document.getElementById("apidot").className="dot "+(ok?"ok":"bad");
