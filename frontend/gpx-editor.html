@@ -55,7 +55,7 @@
   #totalGain{text-align:center;font-family:"Barlow Condensed";font-size:15px;color:var(--go);margin-bottom:6px}
   #chartWrap{position:relative;border:1px solid var(--rim);border-radius:8px;background:var(--slate-2);overflow:hidden}
   #chartSvg{display:block;width:100%;height:140px}
-  #chartEmpty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:var(--fog);font-size:12px;text-align:center;padding:10px}
+  #chartEmpty{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--fog);font-size:12px;text-align:center;padding:10px}
   .row{display:flex;gap:6px;margin:8px 0}
   .row button{flex:1}
   #filterRow{display:flex;align-items:center;gap:8px;margin:10px 0 2px}
@@ -97,7 +97,10 @@
     <div id="totalGain">—</div>
     <div id="chartWrap">
       <svg id="chartSvg" viewBox="0 0 1000 140" preserveAspectRatio="none"></svg>
-      <div id="chartEmpty">no elevation data in this track</div>
+      <div id="chartEmpty">
+        <span>no elevation data in this track</span>
+        <button id="backfillElevBtn" class="ghost">Backfill Elevation from Terrain</button>
+      </div>
     </div>
     <div class="elevLabels"><span>start<br><b id="startElev">—</b></span><span style="text-align:right">end<br><b id="endElev">—</b></span></div>
 
@@ -335,6 +338,49 @@ document.getElementById("filterToggle").onclick=()=>{
   refreshActive();
 };
 
+/* ---- backfill elevation from terrain DEM — for tracks with no elevation
+   at all. Field Recorder recordings almost always end up this way: they
+   only carry phone GPS altitude unless a BLE barometer was connected, and
+   field-recorder.html's smoothElevation() wipes elevation for the *entire*
+   track (not just the gaps) whenever fewer than half the points got a real
+   altitude reading — which is the common case without a barometer. This
+   queries the same free Terrarium DEM (elevation-tiles-prod) already used
+   elsewhere in this app for ground elevation, via MapLibre's own
+   queryTerrainElevation() — briefly turns terrain on just long enough for
+   the relevant DEM tiles (covering the current view, already fit to the
+   whole track) to load, queries every point, then turns terrain back off
+   since this file has no 3D/tilt mode of its own. Goes through setBase()
+   like any other structural edit, so it's undoable via "Undo Last Edit" if
+   the result isn't wanted. ---- */
+document.getElementById("backfillElevBtn").onclick=()=>{
+  if(basePoints.length<2){ alert("Load a track first."); return; }
+  if(!mapReady){ alert("Map isn't ready yet — try again in a moment."); return; }
+  const btn=document.getElementById("backfillElevBtn");
+  btn.disabled=true; btn.textContent="Looking up elevation…";
+  map.setTerrain({source:"terrain-dem",exaggeration:1});
+  map.once("idle",()=>{
+    let got=0;
+    const withElev=basePoints.map(p=>{
+      const e=map.queryTerrainElevation([p[0],p[1]]);
+      if(e!=null) got++;
+      return [p[0],p[1],e!=null?Math.round(e):null,p[3]];
+    });
+    map.setTerrain(null);
+    btn.disabled=false; btn.textContent="Backfill Elevation from Terrain";
+    if(!got){ alert("Couldn't look up elevation for this track — the terrain tiles may not have finished loading. Try again."); return; }
+    // Hold-nearest-known fill (forward then back) for any point the DEM
+    // couldn't cover — usually just the edge of the loaded tile set — same
+    // gap-holding idea as field-recorder.html's smoothElevation(), so the
+    // chart never shows a sudden drop to "no data" mid-track.
+    let lastKnown=null;
+    for(const p of withElev){ if(p[2]!=null) lastKnown=p[2]; else if(lastKnown!=null) p[2]=lastKnown; }
+    lastKnown=null;
+    for(let i=withElev.length-1;i>=0;i--){ const p=withElev[i]; if(p[2]!=null) lastKnown=p[2]; else if(lastKnown!=null) p[2]=lastKnown; }
+    setBase(withElev);
+    alert("Backfilled elevation for "+got+" of "+withElev.length+" points.");
+  });
+};
+
 /* ---- labels ---- */
 function fmtElev(v){ return v==null ? "—" : Math.round(v)+" m"; }
 function updateLabels(){
@@ -408,6 +454,15 @@ map.on("load",()=>{
   // sprite/glyphs not yet loaded) is deferred here rather than dropped —
   // see showGpxScreen()'s comment for why resize() is needed at all.
   if(resizePending){ resizePending=false; map.resize(); }
+  // Terrain DEM source for the Backfill Elevation button below — same free
+  // Terrarium tile convention already used in fence-editor.html/
+  // geofence-sim.html/geofence-engine.html/field-recorder.html/record.html.
+  // Not set as the active terrain by default (setTerrain() below is only
+  // called for the duration of a backfill query, then cleared right after)
+  // — this file has no 3D/tilt mode, so the map should never visibly tilt.
+  map.addSource("terrain-dem",{type:"raster-dem",
+    tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+    tileSize:256,encoding:"terrarium",maxzoom:15});
   scheduleRenderMapLine();
 });
 
