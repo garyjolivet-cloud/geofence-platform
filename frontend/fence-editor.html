@@ -3416,15 +3416,23 @@ function dockCollapsedRow(){
 /* ---- Hamburger panel-visibility menu: one checklist for the 5 floating
    windows (Region Editor, Paths, Audio Palette, AR Objects, Code Objects),
    in the same top-to-bottom order they stack in by default. Hiding a panel
-   only sets .userHidden (visibility, not display) so the dock*() chain
-   above keeps measuring a real rect for it — see the CSS comment on
-   .userHidden for why. AR Objects already has its own display gate
-   (#assetPalette.on, tied to the app's 3D-mode flag) — .userHidden layers
-   on top of that via visibility rather than fighting the .on class, so
-   unchecking it here still shows nothing if 3D mode is off for this app,
-   same as today. Panels are never moved/re-docked by this menu — each one
-   stays exactly wherever the existing dock/drag system already put it;
-   this only ever flips visibility. */
+   only sets .userHidden (visibility, not display) so a hidden panel keeps
+   a real layout rect (see the CSS comment on .userHidden). AR Objects
+   already has its own display gate (#assetPalette.on, tied to the app's
+   3D-mode flag) — .userHidden layers on top of that via visibility rather
+   than fighting the .on class, so unchecking it here still shows nothing
+   if 3D mode is off for this app, same as today.
+
+   applyPanelVisibility() also lays out every currently-visible panel in one
+   left-to-right row below the nav bar, in hamburger order — replacing the
+   old per-panel dock*() chain for these 5 elements (that chain anchored
+   Region Editor/Audio Palette/Code Objects off each OTHER's live rects,
+   which is what left a mini Region Editor stuck unable to dock left: its
+   own dock target was itself mid-chain). Hidden panels are skipped (both
+   from rendering and from the running left offset), so unchecking one lets
+   the rest pack left with no gap. Only runs on boot and on a hamburger
+   checkbox change — a panel dragged or resized afterward stays exactly
+   where the user left it, same as before. */
 const PANEL_MENU_ITEMS=[
   {key:"region",label:"Region Editor",el:()=>document.getElementById("mainPanel")},
   {key:"paths", label:"Paths",         el:()=>document.getElementById("gpxPalette")},
@@ -3438,9 +3446,17 @@ function loadPanelVis(){
 }
 let _panelVis=loadPanelVis();
 function applyPanelVisibility(){
+  const navH=navBarHeight(), gap=10;
+  let left=10;
   PANEL_MENU_ITEMS.forEach(item=>{
     const el=item.el(); if(!el) return;
-    el.classList.toggle("userHidden", _panelVis[item.key]===false);
+    const hidden=_panelVis[item.key]===false;
+    el.classList.toggle("userHidden", hidden);
+    if(hidden) return;
+    el.style.left=left+"px";
+    el.style.right="auto";
+    el.style.top=(navH+10)+"px";
+    left += Math.round(el.getBoundingClientRect().width) + gap;
   });
 }
 function initPanelMenu(){
