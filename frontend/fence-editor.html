@@ -3205,6 +3205,16 @@ function updateAssetPaletteVisibility(){
   _visitorsFlyOn=!!(app&&app.visitorsFly);
   _hazardAwareOn=!!(app&&app.hazardAwareEnabled);
   document.getElementById("assetPalette").classList.toggle("on", _threeDOn);
+  // applyPanelVisibility()'s left-to-right row-packing runs once at boot,
+  // before this (async, project-load-dependent) function has resolved
+  // whether AR Objects is even going to render — at that point #assetPalette
+  // is still display:none (no .on yet) and measures 0px wide, so Code
+  // Objects gets packed into the slot AR Objects should have occupied. When
+  // .on lands a moment later the panel appears at its already-assigned
+  // coordinates — same spot, underneath Code Objects, both z-index:60 — so
+  // it's technically visible but hidden behind another panel. Re-run the
+  // packing here, now that #assetPalette's real display/width is known.
+  if(typeof applyPanelVisibility==="function") applyPanelVisibility();
   updateTerrain();
   if(sel>=0){
     document.getElementById("pAltSection").style.display=(_threeDOn && zones[sel].shape.type==="circle")?"block":"none";
