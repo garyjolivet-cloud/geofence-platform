@@ -393,19 +393,26 @@ function renderMapLine(){
     playheadMarker.remove(); playheadMarker=null;
   }
   if(bounds && isFinite(bounds.minLon) && (bounds.minLon!==bounds.maxLon || bounds.minLat!==bounds.maxLat)){
-    // animate:false, NOT duration:0 — confirmed live (2026-08-21) that
-    // duration:0 still routes through MapLibre's async easing machinery
-    // with a zero-length timer, and calling fitBounds again (e.g. the next
-    // recompute()) before that timer's internal state fully settles threw
-    // a flood of "Attempting to run(), but is already running" (map.ts) and
+    // animate:false alone does NOT make fitBounds synchronous — confirmed by
+    // reading MapLibre 5.24.0's own source (camera.ts): fitBounds()'s
+    // internal _fitInternal() picks easeTo() vs flyTo() based on
+    // options.linear, NOT options.animate — without linear:true it always
+    // calls flyTo(), and flyTo() ignores the animate option entirely (it
+    // only special-cases prefers-reduced-motion). So every "instant" jump
+    // here was actually a real multi-frame flyTo animation with a nonzero
+    // duration computed from its van-Wijk flight-curve math. Opening a
+    // second track (or the same one again) before that flight finished
+    // started an overlapping flyTo on the same camera/render-task-queue
+    // state — that collision is the actual source of the
+    // "Attempting to run(), but is already running" (map.ts) /
     // "Cannot read properties of undefined (reading 'lng')" (smart_wrap.ts)
-    // errors — a real MapLibre reentrancy bug, not anything in this file's
-    // own point-processing (a Node replay of the actual failing 5,989-point
-    // track through this file's pure math completed in <100ms, no errors).
-    // animate:false skips the easing machinery entirely — an immediate,
-    // fully synchronous camera jump (equivalent to jumpTo), so there's no
-    // half-finished transition state left for a later call to collide with.
-    map.fitBounds([[bounds.minLon,bounds.minLat],[bounds.maxLon,bounds.maxLat]],{padding:50,animate:false});
+    // flood, and since that internal task queue's "currently running" flag
+    // never resets once it throws mid-run, every frame after that first
+    // collision throws too — permanently freezing the map until reload.
+    // linear:true forces the easeTo() path instead, where animate:false
+    // genuinely sets duration=0 (a true single-frame jump, no flight-curve
+    // math, nothing left in flight for a later call to collide with).
+    map.fitBounds([[bounds.minLon,bounds.minLat],[bounds.maxLon,bounds.maxLat]],{padding:50,animate:false,linear:true});
   } else if(coords.length===1){
     map.flyTo({center:coords[0],zoom:15});
   }
