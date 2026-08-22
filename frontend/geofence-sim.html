@@ -1145,7 +1145,7 @@ function feed(lat,lon,acc,t,bleFix){
     ARView.fadeOutAndClose();
     _arOpenZoneId=null;
   }
-  if(typeof ARView!=="undefined" && ARView.isOpen()) ARView.onFix([p.lat,p.lon], p.alt);
+  if(typeof ARView!=="undefined" && ARView.isOpen()) ARView.onFix([p.lat,p.lon], p.alt, p.acc);
   prevP=p; fixCount++;
   AmbientClip.update(p, t);
   let pick=null,best=Infinity;

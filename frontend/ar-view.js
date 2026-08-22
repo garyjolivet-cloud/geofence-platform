@@ -45,9 +45,15 @@
  *     switch. The host's DOM restoration (hide the AR overlay, show the
  *     map back) belongs in onClosed, not duplicated in a close-button
  *     handler — otherwise an auto-close strands the overlay on screen.
- *   ARView.onFix(visitorLatLon, visitorAltM)   — call once per GPS tick
- *     while open. visitorAltM (optional) keeps a vertical-extent cylinder's
- *     height tracking the visitor's real altitude — see onFix()'s comment.
+ *   ARView.onFix(visitorLatLon, visitorAltM, accM)   — call once per GPS
+ *     tick while open. visitorAltM (optional) keeps a vertical-extent
+ *     cylinder's height tracking the visitor's real altitude — see onFix()'s
+ *     comment. accM (optional, 2026-08-22) is the fix's reported GPS
+ *     accuracy in metres, shown live in the `label` debug readout (see
+ *     updateDebugLabel()) — at AR-relevant scale a stop's radius can be
+ *     single-digit metres, comparable to or smaller than ordinary GPS
+ *     error, so surfacing the actual number is what turns "the object
+ *     won't hold still" into a diagnosable field report.
  *   ARView.close()
  *   ARView.isOpen()
  *   ARView.requestOrientationPermission()  — iOS gate; call as the FIRST
@@ -236,6 +242,7 @@ let stream=null, rafId=null, clock=null;
 let mixers=[];        // active THREE.AnimationMixer instances, ticked every frame
 let active=[];         // [{mesh, zoneCenter:[lat,lon], anchor:{latOffsetM,lonOffsetM,altM}}]
 let lastVisitorLatLon=null;   // most recent onFix() position, for the debug readout below
+let lastAccM=null;   // most recent GPS accuracy (metres), for the debug readout — see updateDebugLabel()
 const modelCache=new Map();   // url -> loaded GLTF (template; clone before adding to scene)
 // Phase 5b (AR occlusion) — snapshot of nearby hazard cylinders, taken
 // once at open() (see open()'s own comment on why snapshotting is
@@ -479,8 +486,18 @@ function updateDebugLabel(){
       extra=' | obj brg '+brg+'° Δ'+delta+'° dist '+dist+'m';
     }
   }
+  // GPS accuracy readout (2026-08-22 field report: "the object isn't fixed
+  // to one point, it orbits with me") — at AR-relevant scale (a stop's
+  // trigger radius can be single-digit metres), ordinary smartphone GPS
+  // error is often comparable to or larger than the whole zone, so the
+  // visitor's own position estimate can swing by an amount that dwarfs the
+  // true geometry — placeMesh() is doing the right math with a noisy input.
+  // Showing acc live next to dist lets a field report distinguish "GPS
+  // accuracy is bad right now" (acc ~= or > dist) from an actual placement
+  // bug (acc tight, object still swims) instead of guessing after the fact.
+  const accTxt=lastAccM!=null?' acc ±'+Math.round(lastAccM)+'m':'';
   labelEl.textContent='hdg '+displayHeading+'° ('+(AROrient.source||'none')+') '+
-    'β'+Math.round(AROrient.betaS)+' γ'+Math.round(AROrient.gammaS)+extra;
+    'β'+Math.round(AROrient.betaS)+' γ'+Math.round(AROrient.gammaS)+accTxt+extra;
 }
 
 // Phase 3 (trigger-based show/hide): set by fadeOutAndClose() below when
@@ -633,9 +650,10 @@ async function open({videoEl:videoElArg, canvas, label, zoneCenter, arObjects, v
 // tolerance thickness), just not true absolute height until one is.
 // Ordinary placed arObjects are untouched — their anchor.altM is an
 // author-configured relative nudge, not vertical-extent tracking.
-function onFix(visitorLatLon, visitorAltM){
+function onFix(visitorLatLon, visitorAltM, accM){
   if(rafId==null) return;
   lastVisitorLatLon=visitorLatLon;
+  lastAccM=accM!=null?accM:null;
   active.forEach(a=>{
     if(!a.zoneCenter) return;
     if(a.isVext) a.anchor.altM = (visitorAltM!=null) ? (a.vextAltM-visitorAltM) : 0;
@@ -695,7 +713,7 @@ function close(){
   if(scene) scene.clear();
   if(renderer){ renderer.dispose(); renderer=null; }
   scene=null; camera=null; clock=null; mixers=[]; active=[];
-  labelEl=null; lastVisitorLatLon=null; _closing=null; hazardCylinders=[];
+  labelEl=null; lastVisitorLatLon=null; lastAccM=null; _closing=null; hazardCylinders=[];
   distFarM=64; distClearM=8; simulated=false;
   if(_onClosed){ const cb=_onClosed; _onClosed=null; cb(); }
 }

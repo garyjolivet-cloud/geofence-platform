@@ -1687,8 +1687,11 @@ const HUD = {
     // and keep a vertical-extent cylinder's height correct as it changes —
     // the whole point of that feature (paraglider/drone, altitude always
     // moving) — see ARView.onFix()'s own comment on the eye-level fallback
-    // when no trustworthy altitude is available yet.
-    if(typeof ARView!=='undefined' && ARView.isOpen()) ARView.onFix([p.lat,p.lon], p.alt);
+    // when no trustworthy altitude is available yet. p.acc (2026-08-22)
+    // surfaces live in ARView's on-screen debug label so a "the object
+    // won't hold still" field report can be checked against the actual
+    // reported GPS accuracy instead of guessed at.
+    if(typeof ARView!=='undefined' && ARView.isOpen()) ARView.onFix([p.lat,p.lon], p.alt, p.acc);
 
     // proximity synth cue: only for stops WITHOUT a recorded clip (voice replaces it).
     // Path stops participate too now (using their current live position) so a
