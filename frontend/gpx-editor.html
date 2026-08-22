@@ -387,8 +387,21 @@ function renderMapLine(){
     map.addLayer({id:"track-line",type:"line",source:"track",paint:{"line-color":"#ff6a3d","line-width":4}});
   }
   if(coords.length){
-    if(!playheadMarker) playheadMarker=new maplibregl.Marker({color:"#38e0a6"}).addTo(map);
-    playheadMarker.setLngLat(coords[0]);
+    // setLngLat() before addTo(), not after — a fresh Marker's _lngLat is
+    // undefined until setLngLat() is called (MapLibre never defaults it in
+    // the constructor), but addTo() synchronously runs its own internal
+    // _update() immediately (marker.ts) to position the DOM element, which
+    // calls smartWrap(this._lngLat, ...) — with _lngLat still undefined at
+    // that point, smartWrap's very first line (`new LngLat(lngLat.lng,
+    // lngLat.lat)`) threw "Cannot read properties of undefined (reading
+    // 'lng')" (smart_wrap.ts), uncaught, aborting the rest of this function
+    // — which is why fitBounds() below never ran and the view never fit the
+    // track. Confirmed against the actual v5.24.0 source (marker.ts:358
+    // calls _update() at the end of addTo(), before this file's own
+    // setLngLat() call ever got a chance to run). MapLibre's own docs show
+    // the correct order: new Marker().setLngLat(...).addTo(map).
+    if(!playheadMarker) playheadMarker=new maplibregl.Marker({color:"#38e0a6"}).setLngLat(coords[0]).addTo(map);
+    else playheadMarker.setLngLat(coords[0]);
   } else if(playheadMarker){
     playheadMarker.remove(); playheadMarker=null;
   }
