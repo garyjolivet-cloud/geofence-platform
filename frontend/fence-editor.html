@@ -159,6 +159,26 @@
   label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:11px;letter-spacing:.6px;color:var(--fog);display:block;margin:6px 0 2px}
   label.chk{display:flex;align-items:center;gap:8px;font-family:"Barlow Condensed";font-size:13px;color:var(--snow);text-transform:none;letter-spacing:0;margin:8px 0 4px;cursor:pointer}
   label.chk input{width:auto}
+  /* Hamburger panel-visibility menu — one checklist (instead of 5 separate
+     minimize buttons) to declutter the Region Editor/Paths/Audio Palette/
+     AR Objects/Code Objects windows. .userHidden uses visibility (not
+     display) so a hidden panel keeps its real layout rect — the dock*()
+     functions below measure other panels' live getBoundingClientRect() to
+     position each other (e.g. Code Objects docks off Audio Palette's left
+     edge), and display:none would collapse a hidden panel to a zero rect
+     and throw that chain off. #panelMenuBtn sits inline in #crossToolNav's
+     own flex row (flex:0 0 auto, same override gearBtn needs against this
+     file's global button{flex:1 1 auto} rule) so it can never land under a
+     floating panel docked to the map's top-left corner. */
+  #panelMenuBtn{background:transparent;border:1px solid var(--rim);color:var(--fog);
+                border-radius:8px;padding:6px 10px;font-size:15px;line-height:1;
+                cursor:pointer;flex:0 0 auto}
+  #panelMenuBtn:hover{border-color:var(--ice);color:var(--snow)}
+  #panelMenuPopover{display:none;position:fixed;z-index:600;min-width:190px;
+                background:var(--slate-2);border:1px solid var(--rim);border-radius:10px;
+                box-shadow:0 8px 20px rgba(0,0,0,.45);padding:10px}
+  #panelMenuPopover label.chk{margin:6px 2px}
+  .userHidden{visibility:hidden!important}
   /* AR object edit panel: slider+number pairs for every model-transform
      field (scale/rotation/fade/position offsets) — plain number inputs
      alone don't give a human any real sense of what a value like "rotate Y
@@ -1111,7 +1131,7 @@
      TopNav, same division of labor as Audio Palette vs Audio Studio. -->
 <div id="gpxPalette">
   <div id="gpxPaletteHead">
-    <span class="ttl">&#129485; Paths &amp; Corridors</span>
+    <span class="ttl">&#129485; Paths</span>
     <button id="gpxRefresh" class="ghost" title="Refresh">&#8635;</button>
     <button id="gpxPaletteMin" class="ghost" title="Minimize">&#8722;</button>
   </div>
@@ -3393,6 +3413,78 @@ function dockCollapsedRow(){
   if(zoomCtrl) zoomCtrl.style.marginTop=Math.max(0,Math.round(keyRect.bottom-mapRect.top)+10)+"px";
 }
 
+/* ---- Hamburger panel-visibility menu: one checklist for the 5 floating
+   windows (Region Editor, Paths, Audio Palette, AR Objects, Code Objects),
+   in the same top-to-bottom order they stack in by default. Hiding a panel
+   only sets .userHidden (visibility, not display) so the dock*() chain
+   above keeps measuring a real rect for it — see the CSS comment on
+   .userHidden for why. AR Objects already has its own display gate
+   (#assetPalette.on, tied to the app's 3D-mode flag) — .userHidden layers
+   on top of that via visibility rather than fighting the .on class, so
+   unchecking it here still shows nothing if 3D mode is off for this app,
+   same as today. Panels are never moved/re-docked by this menu — each one
+   stays exactly wherever the existing dock/drag system already put it;
+   this only ever flips visibility. */
+const PANEL_MENU_ITEMS=[
+  {key:"region",label:"Region Editor",el:()=>document.getElementById("mainPanel")},
+  {key:"paths", label:"Paths",         el:()=>document.getElementById("gpxPalette")},
+  {key:"audio", label:"Audio Palette", el:()=>document.getElementById("audioPalette")},
+  {key:"ar",    label:"AR Objects",    el:()=>document.getElementById("assetPalette")},
+  {key:"code",  label:"Code Objects",  el:()=>document.querySelector(".co-float")}
+];
+const PANEL_VIS_KEY="gp.fenceEditorPanelVisibility";
+function loadPanelVis(){
+  try{ return JSON.parse(localStorage.getItem(PANEL_VIS_KEY)||"{}"); }catch(e){ return {}; }
+}
+let _panelVis=loadPanelVis();
+function applyPanelVisibility(){
+  PANEL_MENU_ITEMS.forEach(item=>{
+    const el=item.el(); if(!el) return;
+    el.classList.toggle("userHidden", _panelVis[item.key]===false);
+  });
+}
+function initPanelMenu(){
+  if(document.getElementById("panelMenuBtn")) return; // don't double-init if this ever runs twice
+  const btn=document.createElement("button");
+  btn.id="panelMenuBtn"; btn.type="button"; btn.title="Show/hide windows"; btn.textContent="☰";
+  document.getElementById("crossToolNav").prepend(btn);
+
+  const pop=document.createElement("div");
+  pop.id="panelMenuPopover";
+  PANEL_MENU_ITEMS.forEach(item=>{
+    const row=document.createElement("label"); row.className="chk";
+    const cb=document.createElement("input"); cb.type="checkbox";
+    cb.checked=_panelVis[item.key]!==false;
+    cb.onchange=()=>{
+      _panelVis[item.key]=cb.checked;
+      localStorage.setItem(PANEL_VIS_KEY, JSON.stringify(_panelVis));
+      applyPanelVisibility();
+    };
+    row.appendChild(cb); row.appendChild(document.createTextNode(item.label));
+    pop.appendChild(row);
+  });
+  document.body.appendChild(pop); // top-level sibling of <body>'s children — same containing-block reason as
+                                   // #topNavSettingsPopover/#projSettingsPopover: a position:fixed popover must
+                                   // never nest inside a backdrop-filter panel.
+  function closePanelMenu(){ pop.style.display="none"; }
+  function togglePanelMenu(){
+    if(pop.style.display!=="none"){ closePanelMenu(); return; }
+    pop.style.display="block"; pop.style.visibility="hidden";
+    const ar=btn.getBoundingClientRect(), mr=pop.getBoundingClientRect();
+    let top=ar.bottom+4;
+    if(top+mr.height>window.innerHeight) top=Math.max(4, ar.top-mr.height-4);
+    const left=Math.max(4, Math.min(ar.left, window.innerWidth-mr.width-4));
+    pop.style.top=top+"px"; pop.style.left=left+"px"; pop.style.visibility="visible";
+  }
+  btn.onclick=e=>{ e.stopPropagation(); togglePanelMenu(); };
+  document.addEventListener("click", e=>{
+    if(pop.style.display!=="none" && !pop.contains(e.target) && e.target!==btn) closePanelMenu();
+  });
+  document.addEventListener("keydown", e=>{ if(e.key==="Escape") closePanelMenu(); });
+
+  applyPanelVisibility();
+}
+
 /* ---- Audio palette: floating panel (drag header to move, resize from the
    bottom-right corner via native CSS resize, minimize via the header button) ---- */
 function unminimizeAudioPalette(){
@@ -3523,20 +3615,24 @@ function doAudioRefresh(){
   gpxTree.refresh({ appId: afAppId() });
 }
 
-// Drag-source-only browser for the app-scoped Paths/Corridors library the
-// GPX Editor tab saves into — walking_path/corridor, not project-scoped, so
-// this uses afAppId() (same scope loadWalkingPaths() above already reads),
-// not afOrgId()/afProjectId() like the Audio/AR trees above. Picking a path
-// activates it exactly like the existing Walking Path picker (toggleWalkingPath);
-// picking a corridor imports it as a new corridor stop, mirroring
-// importCorridorFromGPX but sourced from a saved library entry.
+// Drag-source-only browser for the app-scoped Paths library the GPX Editor
+// tab saves into — walking_path, not project-scoped, so this uses afAppId()
+// (same scope loadWalkingPaths() above already reads), not
+// afOrgId()/afProjectId() like the Audio/AR trees above. Corridors used to
+// be a separate table/kind here (branched on item.kind==="corridor"); since
+// migration 0049 merged them into walking_path as an optional widthM field,
+// the same branch now reads widthM instead — a plain path (no width)
+// activates it exactly like the existing Walking Path picker
+// (toggleWalkingPath); a path *with* a width imports it as a new corridor
+// stop, mirroring importCorridorFromGPX but sourced from a saved library
+// entry.
 const gpxTree=GpxTree.mount(document.getElementById("gpxTreeHost"),{
   appId: afAppId(),
   getToken,
   readOnly:true,
   onError: ()=>{}, // drag-source only — nothing here can fail loudly enough to need a popup
   onPick: item=>{
-    if(item.kind==="path") toggleWalkingPath(item.id,true);
+    if(item.widthM==null) toggleWalkingPath(item.id,true);
     else importCorridorFromLibrary(item.id);
   }
 });
@@ -4256,13 +4352,14 @@ function importCorridorFromGPX(){
   input.click();
 }
 // Same subsample-then-makeZone flow as importCorridorFromGPX above, but
-// sourced from a saved library corridor (Paths & Corridors palette drag/pick)
-// instead of a freshly-parsed GPX file — the corridor already carries its
-// own name/widthM from when it was saved in the GPX Editor, so there's no
-// name/width prompt here.
+// sourced from a saved library path-with-a-width (Paths palette drag/pick)
+// instead of a freshly-parsed GPX file — it already carries its own
+// name/widthM from when it was saved in the GPX Editor, so there's no
+// name/width prompt here. Was /api/corridor/:id before migration 0049
+// merged the Corridor library into walking_path.
 async function importCorridorFromLibrary(corridorId){
   try{
-    const r=await fetch("/api/corridor/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
+    const r=await fetch("/api/walking-path/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
     const j=await r.json();
     const points=j.points||[];
@@ -6869,6 +6966,7 @@ if(window.TopNav){
     dockAssetPalette(); // chains off #mainPanel's just-docked rect
     if(window.CodeObjects) CodeObjects.dock(); // its onDock (dockCollapsedRow) also docks .base and pushes the map's zoom control clear of the row
     map.resize();
+    initPanelMenu();
   });
 }
 </script>
