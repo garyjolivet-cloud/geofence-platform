@@ -5766,6 +5766,11 @@ function simAmbientCenterNow(zone,nowMs){
 // SimFencer.update(), so SimFencer.onEvent (fired synchronously from inside that
 // update() call) can read it for pipeline data.position blocks.
 let simLastSmoothed=null;
+// Phase 3 AR-object visibility, per-zone-object "is the visitor within
+// audible/visible range right now" flag — see the real distance-based
+// show/hide block in feedSim() below for why this exists instead of
+// driving AR objects off SimFencer's "target"-layer enter/exit events.
+let _arNearState={};
 // Shared by both the legacy bot-guidance trigger and the new action.guide_to_zone
 // pipeline block, so the two produce identical GuidanceBot.start() calls.
 function simStartGuidance(targetZone){
@@ -6434,6 +6439,34 @@ function feedSim(lat,lon,acc,t,bleFix){
   // it for the one SimVoice channel. Raw position too, same reason as the
   // nearest-zone pick above.
   SimAmbient.update(raw, t, simBundle.zones);
+  // Real bug fixed 2026-08-22: AR-object show/hide used to be driven
+  // entirely by SimFencer.onEvent's "target" layer enter/exit (see below) —
+  // but that layer's *exit* only fires once signed-distance exceeds the
+  // physical trigger shape's own radius PLUS SIM_TUNING.EXIT_BUFFER_M
+  // (20m, the same hysteresis every zone-exit uses to avoid flicker). For a
+  // small stop (confirmed live: a 9m circle with a 9m audioM range) that's
+  // a 29m exit distance — the 3D model stayed fully visible more than 3x
+  // past the audio fade ring the visitor could actually see it line up
+  // with. Fade-IN looked fine because entering the target layer has no
+  // such buffer. Fixed by driving AR visibility off the exact same
+  // continuous distance-vs-range check spatial audio already uses
+  // (simZoneNearestDistM/simZoneRangeClear, just above) instead of the
+  // trigger shape's own geometry+hysteresis — edge-triggered via
+  // _arNearState so showTriggered()/hideTriggered() (each of which resets
+  // an elapsed-time fade ramp) only fire on the near/far transition, not
+  // every tick.
+  simBundle.zones.forEach(z=>{
+    if(!z.center || !z.arObjects || !z.arObjects.length || !window.AssetPreviewLayer) return;
+    const d=simZoneNearestDistM(z,raw);
+    const {range}=simZoneRangeClear(z);
+    const near=d<range;
+    z.arObjects.forEach(o=>{
+      if(_arNearState[o.id]===near) return;
+      _arNearState[o.id]=near;
+      if(near) window.AssetPreviewLayer.showTriggered(o.id);
+      else window.AssetPreviewLayer.hideTriggered(o.id);
+    });
+  });
   refreshSimAmbientMarker(t);
   refreshSimChips();
   // feed guidance module
@@ -6591,9 +6624,6 @@ SimFencer.onEvent=async e=>{
         if(typeof TourState!=='undefined') TourState.markVisited(e.zone.id);
         PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { entered:true });
       }
-      // Phase 3 (trigger-based show/hide) — same "visitor, target layer"
-      // gate PipelineRuntime already uses above.
-      if(window.AssetPreviewLayer && e.zone.arObjects) e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.showTriggered(o.id));
     }
   } else if(e.kind==="exit"){
     simLogEv("sev-exit","EXIT   "+who+e.zone.name+"  "+e.info.dur.toFixed(0)+"s");
@@ -6601,7 +6631,11 @@ SimFencer.onEvent=async e=>{
       PipelineRuntime.tick(e.zone.id, null, simLastSmoothed, { exited:true });
       PipelineRuntime.unload(e.zone.id);
     }
-    if(!who&&e.layer&&e.layer.kind==="target"&&window.AssetPreviewLayer&&e.zone.arObjects) e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.hideTriggered(o.id));
+    // AR-object show/hide moved off this "target" layer event entirely
+    // (2026-08-22) — its exit only fires target-radius+EXIT_BUFFER_M (20m)
+    // outside the stop, which for a small stop badly overshot the audio
+    // fade range the object is supposed to track. See the continuous
+    // distance-vs-audioM check in feedSim(), right after SimAmbient.update().
   } else if(e.kind==="say"){
     simLogEv("sev-say","SAY    "+who+"\""+e.text+"\"");
   }
@@ -6676,6 +6710,7 @@ function enterTestMode(){
   // objects again as the simulated avatar actually crosses zone boundaries.
   refreshArPreview();
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
+  _arNearState={}; // everything just got forced hidden above — forget any stale near/far state so the first tick re-evaluates cleanly
   refreshSimChips();
   simLogEv("sev-sys","test loaded — "+simBundle.zones.length+" stop"+(simBundle.zones.length===1?"":"s")
     +" — click map or drag dot.");
@@ -6838,6 +6873,8 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();
+  if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
+  _arNearState={};
   // Visited-stops/flags/counters are per-session tracking state just like
   // SimFencer's own — Reset must clear it too, or a stop that "unlocked"
   // earlier in this test session stays unlocked on the next simulated walk,

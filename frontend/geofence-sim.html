@@ -1073,6 +1073,12 @@ let _arZone=null, _arOpenZoneId=null;
 /* =========================== ENGINE PIPELINE =========================== */
 /* mirrors HUD.onFix: smooth -> geofence -> needle pick */
 let prevP=null, fixCount=0;
+// Phase 3 AR-object visibility, per-object "is the visitor within
+// audible/visible range right now" flag — see the distance-based show/hide
+// block in feed() below for why this exists instead of driving AR objects
+// off Geofencer's "target"-layer enter/exit events (same fix as
+// fence-editor.html's Test Mode, 2026-08-22).
+let _arNearStateSim={};
 function feed(lat,lon,acc,t,bleFix){
   window.__lastAcc=acc;
   // Altitude priority (3D-mode plan, item D rescoped 2026-08-14): a real
@@ -1105,6 +1111,26 @@ function feed(lat,lon,acc,t,bleFix){
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:effAlt};
   checkHazardAhead(p, TravelHeading.heading, sm.speed, t);
   const active=Geofencer.update(p,prevP,t);
+  // AR-object visibility — continuous distance-vs-audioM check, same range
+  // spatial audio would use (zoneAudioFadeRadii), edge-triggered via
+  // _arNearStateSim so showTriggered()/hideTriggered() (each resets an
+  // elapsed-time fade ramp) only fire on the near/far transition, not every
+  // tick. See Geofencer.onEvent's comment above for why this replaced the
+  // old "target" layer enter/exit trigger.
+  if(window.AssetPreviewLayer){
+    BUNDLE.zones.forEach(z=>{
+      if(!z.center || !z.arObjects || !z.arObjects.length) return;
+      const d=zoneNearestDistM(z,p,t);
+      const {farM}=zoneAudioFadeRadii(z);
+      const near=d<farM;
+      z.arObjects.forEach(o=>{
+        if(_arNearStateSim[o.id]===near) return;
+        _arNearStateSim[o.id]=near;
+        if(near) window.AssetPreviewLayer.showTriggered(o.id);
+        else window.AssetPreviewLayer.hideTriggered(o.id);
+      });
+    });
+  }
   // Simulated AR view (2026-08-18) — same #arBtn pattern as
   // geofence-engine.html's HUD.onFix() (button visibility off the
   // continuous active array, not a hand-tracked enter/exit flag; Phase 3
@@ -1231,13 +1257,12 @@ Geofencer.onEvent=(e)=>{
        if(e.info.flick) log("ev-flick","       ^ flicker (barely moved) — would be ignored"); }
   else if(e.kind==="say") log(e.warn?"ev-warn":"ev-say",'SAY    "'+e.text+'"'+(e.warn?" [approx]":""));
   else if(e.kind==="suppressed") log("ev-flick","HOLD   reveal suppressed (fix too loose)");
-  // Phase 3 (trigger-based show/hide) — same "target layer" gate the
-  // production engine's Geofencer.onEvent and Fence Editor's
-  // SimFencer.onEvent both use.
-  if(window.AssetPreviewLayer && e.layer && e.layer.kind==="target" && e.zone.arObjects){
-    if(e.kind==="enter") e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.showTriggered(o.id));
-    else if(e.kind==="exit") e.zone.arObjects.forEach(o=>window.AssetPreviewLayer.hideTriggered(o.id));
-  }
+  // AR-object show/hide is NOT driven off this "target" layer event
+  // (2026-08-22 fix, same bug/fix as fence-editor.html's Test Mode) — its
+  // exit only fires TUNING.EXIT_BUFFER_M (20m) past the trigger shape's own
+  // radius, which for a small stop badly overshoots the audio fade range
+  // the object is supposed to track. See the continuous distance-vs-
+  // audioM check in feed(), right after Geofencer.update().
 };
 
 // Live 3D AR-object preview (Phase 3) — unlike fence-editor.html's live-
@@ -1279,7 +1304,7 @@ function loadBundle(b,srcLabel){
   BUNDLE = b;
   if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
   loadWalkingPaths(b);
-  GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+  GPSFilter.reset(); Geofencer.reset(); prevP=null; _arNearStateSim={}; fixCount=0;
   AmbientClip.stop();
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);
   refreshZones(); fitToData();
@@ -1372,7 +1397,7 @@ function play(){
     else { log("ev-warn","load a bundle with stops, or draw a path first"); return; } }
   if(playing){ pause(); return; }
   Audio.unlock();
-  if(sDist>=pathTotal()){ sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones(); }
+  if(sDist>=pathTotal()){ sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; _arNearStateSim={}; fixCount=0; refreshZones(); }
   playing=true; document.getElementById("btnPlay").textContent="⏸ Pause"; document.getElementById("btnPlay").classList.add("on");
   vT=Date.now();
   timer=setInterval(()=>{
@@ -1385,7 +1410,7 @@ function play(){
     avatar.setLngLat([jLon,jLat]);
     feed(jLat,jLon,Math.max(3,jitV||5),vT);
     if(ended){ if(document.getElementById("btnLoop").classList.contains("on")){
-        sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; log("ev-sys","loop — restarting path"); }
+        sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; _arNearStateSim={}; log("ev-sys","loop — restarting path"); }
       else { pause(); log("ev-sys","path complete"); } }
   },250);
 }
@@ -1484,13 +1509,13 @@ document.getElementById("btnClearPath").onclick=()=>{ PATH=[]; sDist=0; drawPath
 document.getElementById("btnPlay").onclick=play;
 document.getElementById("btnStops").onclick=()=>{ if(playing) pause();
   if(!buildStopsPath()){ log("ev-warn","no stops with a center to route through"); return; }
-  sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0; refreshZones();
+  sDist=0; GPSFilter.reset(); Geofencer.reset(); prevP=null; _arNearStateSim={}; fixCount=0; refreshZones();
   fitToData(); play(); };
 document.getElementById("btnLoop").onclick=(e)=>{ e.target.classList.toggle("on");
   e.target.textContent=e.target.classList.contains("on")?"Loop ▣":"Loop ▢"; };
 document.getElementById("btnMute").onclick=(e)=>{ Audio.on=!Audio.on;
   e.target.classList.toggle("on",Audio.on); e.target.textContent=Audio.on?"Sound ◼":"Muted ◻"; };
-document.getElementById("btnReset").onclick=()=>{ GPSFilter.reset(); Geofencer.reset(); prevP=null; fixCount=0;
+document.getElementById("btnReset").onclick=()=>{ GPSFilter.reset(); Geofencer.reset(); prevP=null; _arNearStateSim={}; fixCount=0;
   document.getElementById("sFix").textContent="0"; refreshZones(); log("ev-sys","engine reset — state cleared"); };
 
 log("ev-sys","simulator ready — sample walk loaded. Drag the dot, or Draw path → Play.");
