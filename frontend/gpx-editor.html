@@ -367,7 +367,10 @@ function renderChart(){
     lastY=y;
   });
   svg.innerHTML =
+    '<rect id="chartSelBand" x="0" y="0" width="0" height="'+H+'" fill="#ffd23d" opacity="0.15"></rect>'+
     '<path d="'+d+'" fill="none" stroke="#ff6a3d" stroke-width="2"></path>'+
+    '<line id="chartSelStart" x1="0" y1="0" x2="0" y2="'+H+'" stroke="#ffd23d" stroke-width="2" stroke-dasharray="4,3"></line>'+
+    '<line id="chartSelEnd" x1="0" y1="0" x2="0" y2="'+H+'" stroke="#ff3b30" stroke-width="2" stroke-dasharray="4,3"></line>'+
     '<line id="chartPlayhead" x1="0" y1="0" x2="0" y2="'+H+'" stroke="#38e0a6" stroke-width="2"></line>';
 }
 function moveChartPlayhead(idx){
@@ -375,6 +378,19 @@ function moveChartPlayhead(idx){
   const total=cumLens[cumLens.length-1]||1;
   const x=6+(cumLens[idx]/total)*(1000-12);
   line.setAttribute("x1",x); line.setAttribute("x2",x);
+}
+// Trim/Delete selection playhead — mirrors moveChartPlayhead()'s x-mapping so
+// the dashed start/end lines + shaded band line up exactly with the main
+// elevation curve regardless of window width (viewBox is a fixed 1000x140).
+function moveChartSel(i0,i1){
+  const s0=document.getElementById("chartSelStart"), s1=document.getElementById("chartSelEnd"), band=document.getElementById("chartSelBand");
+  if(!s0||!s1||!band) return;
+  const total=cumLens[cumLens.length-1]||1;
+  const xAt=idx=>6+(cumLens[idx]/total)*(1000-12);
+  const x0=xAt(i0), x1=xAt(i1);
+  s0.setAttribute("x1",x0); s0.setAttribute("x2",x0);
+  s1.setAttribute("x1",x1); s1.setAttribute("x2",x1);
+  band.setAttribute("x",Math.min(x0,x1)); band.setAttribute("width",Math.max(1,Math.abs(x1-x0)));
 }
 
 /* ---- map ---- */
@@ -451,6 +467,42 @@ function renderMapLine(){
   } else if(coords.length===1){
     map.flyTo({center:coords[0],zoom:15});
   }
+  updateSelVisuals();
+}
+
+/* ---- trim/delete selection playhead (map side) — a highlighted sub-line
+   plus start/end markers so dragging the Trim/Delete range sliders shows
+   exactly which points are selected, instead of editing blind. Mirrors the
+   chart-side moveChartSel() above. ---- */
+let selStartMarker=null, selEndMarker=null;
+function ensureSelLayer(){
+  if(!mapReady || map.getSource("trimSel")) return;
+  map.addSource("trimSel",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+  // Draw below the main track line (thicker + translucent) so it reads as a
+  // highlighted stretch of the same line rather than a separate track.
+  const before = map.getLayer("track-line") ? "track-line" : undefined;
+  map.addLayer({id:"trimSel-line",type:"line",source:"trimSel",paint:{"line-color":"#ffd23d","line-width":9,"line-opacity":0.45}}, before);
+}
+function moveMapSel(i0,i1){
+  if(!mapReady) return;
+  if(points.length<2){
+    if(map.getSource("trimSel")) map.getSource("trimSel").setData({type:"FeatureCollection",features:[]});
+    if(selStartMarker){ selStartMarker.remove(); selStartMarker=null; }
+    if(selEndMarker){ selEndMarker.remove(); selEndMarker=null; }
+    return;
+  }
+  ensureSelLayer();
+  const seg=points.slice(i0,i1+1).map(p=>[p[0],p[1]]);
+  const geojson = seg.length>=2 ? {type:"Feature",geometry:{type:"LineString",coordinates:seg}} : {type:"FeatureCollection",features:[]};
+  map.getSource("trimSel").setData(geojson);
+  const p0=points[i0], p1=points[i1];
+  if(!p0||!p1) return;
+  // setLngLat() before addTo() — see the identical comment above on
+  // playheadMarker for why the order matters (uninitialized _lngLat crash).
+  if(!selStartMarker) selStartMarker=new maplibregl.Marker({color:"#ffd23d"}).setLngLat([p0[0],p0[1]]).addTo(map);
+  else selStartMarker.setLngLat([p0[0],p0[1]]);
+  if(!selEndMarker) selEndMarker=new maplibregl.Marker({color:"#ff3b30"}).setLngLat([p1[0],p1[1]]).addTo(map);
+  else selEndMarker.setLngLat([p1[0],p1[1]]);
 }
 
 /* ---- scrubber ---- */
@@ -489,7 +541,7 @@ function updateTrimUI(){
   const maxIdx=Math.max(0,points.length-1);
   s0.max=maxIdx; s1.max=maxIdx;
   s0.value=0; s1.value=maxIdx;
-  updateSelStats();
+  updateSelVisuals();
 }
 function selRange(){
   const s0=document.getElementById("selStart"), s1=document.getElementById("selEnd");
@@ -502,8 +554,19 @@ function updateSelStats(){
   const distKm = points.length ? ((cumLens[i1]-cumLens[i0])/1000).toFixed(2) : "0.00";
   document.getElementById("selStats").textContent = (i1-i0+1)+" pts selected · "+distKm+" km";
 }
-document.getElementById("selStart").oninput=updateSelStats;
-document.getElementById("selEnd").oninput=updateSelStats;
+// The Trim/Delete range sliders had no visual feedback at all — dragging
+// them gave no indication of where those points actually are. This ties the
+// stats text, the chart's dashed start/end lines + shaded band, and a
+// highlighted map sub-line + two colored markers all to the same selection,
+// same pattern as the main scrubber's updateScrubberUI().
+function updateSelVisuals(){
+  updateSelStats();
+  const {i0,i1}=selRange();
+  moveChartSel(i0,i1);
+  moveMapSel(i0,i1);
+}
+document.getElementById("selStart").oninput=updateSelVisuals;
+document.getElementById("selEnd").oninput=updateSelVisuals;
 document.getElementById("trimBtn").onclick=()=>{
   const {i0,i1}=selRange();
   if(i0<=0 && i1>=points.length-1) return; // nothing outside the selection to trim
