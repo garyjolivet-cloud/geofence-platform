@@ -706,15 +706,23 @@ document.getElementById("btnMergeObj").onclick = async () => {
   }
 };
 
-window.ObjectStudioViewer.onSelectionChange(name => {
-  const bar = document.getElementById("selectionBar");
-  if(name){
-    bar.style.display = "flex";
-    document.getElementById("selectionName").textContent = name;
-    document.getElementById("selectionScale").value = 1;
-  }else{
-    bar.style.display = "none";
-  }
+// window.ObjectStudioViewer is defined by the type="module" script above,
+// which — being a module — is deferred and only runs after the whole
+// document has parsed. This plain script runs immediately as the parser
+// reaches it, which is BEFORE that, so referencing ObjectStudioViewer at
+// top level here must wait for DOMContentLoaded (which fires only after
+// all deferred/module scripts have completed) rather than call it eagerly.
+document.addEventListener("DOMContentLoaded", () => {
+  window.ObjectStudioViewer.onSelectionChange(name => {
+    const bar = document.getElementById("selectionBar");
+    if(name){
+      bar.style.display = "flex";
+      document.getElementById("selectionName").textContent = name;
+      document.getElementById("selectionScale").value = 1;
+    }else{
+      bar.style.display = "none";
+    }
+  });
 });
 document.getElementById("btnDeselect").onclick = () => window.ObjectStudioViewer.selectByName(null);
 
