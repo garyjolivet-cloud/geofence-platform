@@ -183,7 +183,11 @@ def _ensure_material(obj):
 
 
 def cmd_set_material_color(args):
-    """args: {object: name, color:[r,g,b,a], roughness: 0-1, metallic: 0-1}"""
+    """args: {object: name, color:[r,g,b,a], roughness: 0-1, metallic: 0-1,
+    transmission: 0-1, ior: float, emission_color:[r,g,b,a],
+    emission_strength: float}. The last four are optional and only set when
+    present — used for material presets like glass (transmission) and neon
+    glow (emission) on top of the base cube/sphere/text/etc. handlers."""
     obj = bpy.data.objects.get(args["object"])
     if obj is None:
         raise ValueError("no such object: " + str(args.get("object")))
@@ -197,6 +201,14 @@ def cmd_set_material_color(args):
         bsdf.inputs["Roughness"].default_value = args["roughness"]
     if "metallic" in args:
         bsdf.inputs["Metallic"].default_value = args["metallic"]
+    if "transmission" in args:
+        bsdf.inputs["Transmission Weight"].default_value = args["transmission"]
+    if "ior" in args:
+        bsdf.inputs["IOR"].default_value = args["ior"]
+    if "emission_color" in args:
+        bsdf.inputs["Emission Color"].default_value = args["emission_color"]
+    if "emission_strength" in args:
+        bsdf.inputs["Emission Strength"].default_value = args["emission_strength"]
     return {"object": obj.name, "material": mat.name}
 
 

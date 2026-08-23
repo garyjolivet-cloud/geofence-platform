@@ -136,6 +136,60 @@ async function writeUploadedFile(dir, upload) {
   return filePath;
 }
 
+// Shader-based material presets — pure Principled BSDF parameters, no image
+// needed. `tint` is the user's color-picker value (defaults per-preset).
+const MATERIAL_PRESETS = {
+  metallic: (tint) => ({ color: tint || [0.8, 0.82, 0.85, 1.0], metallic: 1.0, roughness: 0.25 }),
+  glass: (tint) => ({ color: tint || [0.9, 0.95, 1.0, 1.0], metallic: 0.0, roughness: 0.02, transmission: 1.0, ior: 1.45 }),
+  neon: (tint) => ({
+    color: tint || [1.0, 0.3, 0.6, 1.0], metallic: 0.0, roughness: 0.4,
+    emission_color: tint || [1.0, 0.3, 0.6, 1.0], emission_strength: 8.0,
+  }),
+};
+
+// Image-based presets — an AI-generated texture (via the existing
+// /api/texture-gen endpoint, same one the free-text Generate flow uses)
+// applied the same way an uploaded texture would be.
+const AI_TEXTURE_PRESETS = {
+  rusty: "heavily rusted corroded metal surface texture, seamless, weathered orange-brown rust, pitted, high detail",
+  worn_wood: "old worn weathered wood plank texture, seamless, cracked grain, faded, high detail",
+};
+
+async function generateAiTexture(prompt, workerBaseUrl) {
+  const base = (workerBaseUrl || "http://127.0.0.1:8787").replace(/\/$/, "");
+  const res = await fetch(base + "/api/texture-gen", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+  if (!res.ok) throw new Error(`texture-gen failed: ${res.status} ${await res.text().catch(() => "")}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const imagePath = path.join(TEXTURES_DIR, crypto.randomUUID() + ".png");
+  await fs.writeFile(imagePath, buf);
+  return imagePath;
+}
+
+// Applies one of: flat color ("color", the default), a user-uploaded image
+// ("upload"), a shader preset (MATERIAL_PRESETS key), or an AI-generated
+// texture preset (AI_TEXTURE_PRESETS key) to `objectName`. `uploadPath` is
+// the already-disk-written path for an "upload" surface (or null otherwise).
+async function applySurface(objectName, surface, { color, roughness, metallic, uploadPath, workerBaseUrl }) {
+  if (surface === "upload") {
+    if (!uploadPath) throw new Error(`${objectName}: surface "upload" selected but no file was provided`);
+    await blenderSend("apply_image_texture", { object: objectName, image_path: uploadPath });
+  } else if (surface in MATERIAL_PRESETS) {
+    await blenderSend("set_material_color", { object: objectName, ...MATERIAL_PRESETS[surface](color) });
+  } else if (surface in AI_TEXTURE_PRESETS) {
+    const imagePath = await generateAiTexture(AI_TEXTURE_PRESETS[surface], workerBaseUrl);
+    await blenderSend("apply_image_texture", { object: objectName, image_path: imagePath });
+  } else {
+    const args = { object: objectName, color: color || [0.8, 0.8, 0.8, 1.0] };
+    if (roughness !== undefined) args.roughness = roughness;
+    if (metallic !== undefined) args.metallic = metallic;
+    await blenderSend("set_material_color", args);
+  }
+}
+
 async function handleCreateTextSign(req, res, origin) {
   let body = "";
   for await (const chunk of req) body += chunk;
@@ -152,6 +206,8 @@ async function handleCreateTextSign(req, res, origin) {
     return res.end(JSON.stringify({ error: "text required" }));
   }
   const board = data.board || {};
+  const boardSurface = board.surface || "color";
+  const textSurface = data.textSurface || "color";
   for (const [label, upload, max] of [
     ["font", data.font, MAX_FONT_BYTES],
     ["board texture", board.texture, MAX_TEXTURE_BYTES],
@@ -169,8 +225,10 @@ async function handleCreateTextSign(req, res, origin) {
 
   try {
     const fontPath = data.font ? await writeUploadedFile(FONTS_DIR, data.font) : null;
-    const boardTexPath = board.enabled && board.texture ? await writeUploadedFile(TEXTURES_DIR, board.texture) : null;
-    const textTexPath = !board.enabled && data.textTexture ? await writeUploadedFile(TEXTURES_DIR, data.textTexture) : null;
+    const boardTexPath = board.enabled && boardSurface === "upload" && board.texture
+      ? await writeUploadedFile(TEXTURES_DIR, board.texture) : null;
+    const textTexPath = !board.enabled && textSurface === "upload" && data.textTexture
+      ? await writeUploadedFile(TEXTURES_DIR, data.textTexture) : null;
 
     await blenderSend("clear_scene", {});
     const t = await blenderSend("create_text", {
@@ -187,15 +245,18 @@ async function handleCreateTextSign(req, res, origin) {
       align_y: data.alignY || "CENTER",
       name: "sign_text",
     });
-    await blenderSend("set_material_color", {
-      object: "sign_text",
-      color: data.textColor || [0.9, 0.9, 0.85, 1.0],
-      roughness: data.textRoughness ?? 0.6,
-      metallic: data.textMetallic ?? 0.0,
-    });
 
     const exportObjects = ["sign_text"];
     if (board.enabled) {
+      // Board on: text is always a plain flat color; the board carries
+      // whichever surface (color/upload/preset) was selected.
+      await blenderSend("set_material_color", {
+        object: "sign_text",
+        color: data.textColor || [0.9, 0.9, 0.85, 1.0],
+        roughness: data.textRoughness ?? 0.6,
+        metallic: data.textMetallic ?? 0.0,
+      });
+
       const paddingPct = board.paddingPct ?? 0.2;
       const thickness = board.thickness ?? 0.03;
       const offset = board.offset ?? 0.01;
@@ -213,14 +274,21 @@ async function handleCreateTextSign(req, res, origin) {
         name: "sign_board",
       });
       await blenderSend("modifier_add", { object: "sign_board", type: "SOLIDIFY", params: { thickness }, apply: true });
-      if (boardTexPath) {
-        await blenderSend("apply_image_texture", { object: "sign_board", image_path: boardTexPath });
-      } else {
-        await blenderSend("set_material_color", { object: "sign_board", color: board.color || [0.45, 0.3, 0.18, 1.0] });
-      }
+      await applySurface("sign_board", boardSurface, {
+        color: board.color || [0.45, 0.3, 0.18, 1.0],
+        uploadPath: boardTexPath,
+        workerBaseUrl: data.workerBaseUrl,
+      });
       exportObjects.push("sign_board");
-    } else if (textTexPath) {
-      await blenderSend("apply_image_texture", { object: "sign_text", image_path: textTexPath });
+    } else {
+      // Board off: text itself carries whichever surface was selected.
+      await applySurface("sign_text", textSurface, {
+        color: data.textColor || [0.9, 0.9, 0.85, 1.0],
+        roughness: data.textRoughness ?? 0.6,
+        metallic: data.textMetallic ?? 0.0,
+        uploadPath: textTexPath,
+        workerBaseUrl: data.workerBaseUrl,
+      });
     }
 
     await blenderSend("export_glb", { path: CURRENT_GLB, objects: exportObjects });

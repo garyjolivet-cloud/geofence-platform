@@ -131,11 +131,33 @@
       <div id="signBoardFields" class="signRow">
         <label>Padding % <input type="number" id="signBoardPadding" value="20" min="0" max="200" step="5"></label>
         <label>Thickness <input type="number" id="signBoardThickness" value="0.03" min="0.005" step="0.005"></label>
-        <label>Board color <input type="color" id="signBoardColor" value="#734c2e"></label>
-        <label>Board texture (optional) <input type="file" id="signBoardTextureFile" accept="image/*"></label>
+        <label>Board surface
+          <select id="signBoardSurface">
+            <option value="color">Flat Color</option>
+            <option value="upload">Custom Image Upload</option>
+            <option value="metallic">Metallic</option>
+            <option value="glass">Glass</option>
+            <option value="neon">Neon Glow</option>
+            <option value="rusty">Rusty Metal</option>
+            <option value="worn_wood">Worn Wood</option>
+          </select>
+        </label>
+        <label id="signBoardColorWrap">Board color <input type="color" id="signBoardColor" value="#734c2e"></label>
+        <label id="signBoardTextureFileWrap" style="display:none">Board image <input type="file" id="signBoardTextureFile" accept="image/*"></label>
       </div>
-      <div class="signRow" id="signTextTextureWrap" style="display:none">
-        <label>Text texture (optional) <input type="file" id="signTextTextureFile" accept="image/*"></label>
+      <div class="signRow" id="signTextSurfaceWrap" style="display:none">
+        <label>Text surface
+          <select id="signTextSurface">
+            <option value="color">Flat Color</option>
+            <option value="upload">Custom Image Upload</option>
+            <option value="metallic">Metallic</option>
+            <option value="glass">Glass</option>
+            <option value="neon">Neon Glow</option>
+            <option value="rusty">Rusty Metal</option>
+            <option value="worn_wood">Worn Wood</option>
+          </select>
+        </label>
+        <label id="signTextTextureFileWrap" style="display:none">Text image <input type="file" id="signTextTextureFile" accept="image/*"></label>
       </div>
       <div class="signRow">
         <button id="btnGenerateSign" class="on" type="button">Generate Sign</button>
@@ -343,8 +365,31 @@ document.getElementById("signFontSelect").onchange = () => {
 document.getElementById("signBoardToggle").onchange = () => {
   const on = document.getElementById("signBoardToggle").checked;
   document.getElementById("signBoardFields").style.display = on ? "flex" : "none";
-  document.getElementById("signTextTextureWrap").style.display = on ? "none" : "flex";
+  document.getElementById("signTextSurfaceWrap").style.display = on ? "none" : "flex";
 };
+const PRESET_DEFAULT_COLORS = { metallic:"#ccd2d8", glass:"#e6f5ff", neon:"#ff4d99" };
+function wireSurfaceSelect(selectId, colorWrapId, colorInputId, fileWrapId){
+  const sel = document.getElementById(selectId);
+  const colorWrap = colorWrapId && document.getElementById(colorWrapId);
+  const colorInput = colorInputId && document.getElementById(colorInputId);
+  const fileWrap = document.getElementById(fileWrapId);
+  let lastPreset = null;
+  const update = () => {
+    const v = sel.value;
+    if(colorWrap) colorWrap.style.display = (v==="upload"||v==="rusty"||v==="worn_wood") ? "none" : "flex";
+    fileWrap.style.display = v==="upload" ? "flex" : "none";
+    // Give each preset a sensible starting tint (still user-editable after) —
+    // otherwise every preset would silently inherit the plain default color.
+    if(colorInput && PRESET_DEFAULT_COLORS[v] && v !== lastPreset){
+      colorInput.value = PRESET_DEFAULT_COLORS[v];
+    }
+    lastPreset = v;
+  };
+  sel.onchange = update;
+  update();
+}
+wireSurfaceSelect("signBoardSurface", "signBoardColorWrap", "signBoardColor", "signBoardTextureFileWrap");
+wireSurfaceSelect("signTextSurface", null, "signTextColor", "signTextTextureFileWrap");
 
 async function fileToBase64(file){
   const buf = new Uint8Array(await file.arrayBuffer());
@@ -377,8 +422,12 @@ document.getElementById("btnGenerateSign").onclick = async () => {
     const boardOn = document.getElementById("signBoardToggle").checked;
     const useCustomFont = document.getElementById("signFontSelect").value === "custom";
     const fontFile = useCustomFont ? document.getElementById("signFontFile").files[0] : null;
-    const boardTexFile = boardOn ? document.getElementById("signBoardTextureFile").files[0] : null;
-    const textTexFile = !boardOn ? document.getElementById("signTextTextureFile").files[0] : null;
+    const boardSurface = document.getElementById("signBoardSurface").value;
+    const textSurface = document.getElementById("signTextSurface").value;
+    const boardTexFile = boardOn && boardSurface === "upload" ? document.getElementById("signBoardTextureFile").files[0] : null;
+    const textTexFile = !boardOn && textSurface === "upload" ? document.getElementById("signTextTextureFile").files[0] : null;
+    if(boardOn && boardSurface === "upload" && !boardTexFile){ throw new Error("pick a board image, or choose a different board surface"); }
+    if(!boardOn && textSurface === "upload" && !textTexFile){ throw new Error("pick a text image, or choose a different text surface"); }
 
     const payload = {
       text,
@@ -393,8 +442,11 @@ document.getElementById("btnGenerateSign").onclick = async () => {
       alignX: document.getElementById("signAlignX").value,
       alignY: document.getElementById("signAlignY").value,
       textColor: hexToRgba(document.getElementById("signTextColor").value),
+      textSurface,
+      workerBaseUrl: location.origin,
       board: {
         enabled: boardOn,
+        surface: boardSurface,
         paddingPct: (parseFloat(document.getElementById("signBoardPadding").value)||20)/100,
         thickness: parseFloat(document.getElementById("signBoardThickness").value)||0.03,
         color: hexToRgba(document.getElementById("signBoardColor").value),
