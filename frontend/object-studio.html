@@ -9,7 +9,7 @@
 <script src="top-nav.js"></script>
 <script src="asset-tree.js"></script>
 <script>RoleGate.require(['admin']);</script>
-<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&family=Rye&family=Sancreek&family=Ranchers&family=Alfa+Slab+One&family=Anton&family=Bebas+Neue&display=swap" rel="stylesheet">
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
          --snow:#ffffff;--ice:#c8dff2;--fog:#8aa5bf;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
@@ -103,15 +103,16 @@
         <label>Font
           <select id="signFontSelect">
             <option value="default">Default</option>
-            <option value="rye">Rye (rustic)</option>
-            <option value="sancreek">Sancreek (rustic)</option>
-            <option value="ranchers">Ranchers (bold)</option>
-            <option value="alfaslabone">Alfa Slab One (bold)</option>
-            <option value="anton">Anton (condensed)</option>
-            <option value="bebasneue">Bebas Neue (condensed)</option>
+            <option value="rye" style="font-family:'Rye',cursive">Rye</option>
+            <option value="sancreek" style="font-family:'Sancreek',cursive">Sancreek</option>
+            <option value="ranchers" style="font-family:'Ranchers',cursive">Ranchers</option>
+            <option value="alfaslabone" style="font-family:'Alfa Slab One',cursive">Alfa Slab One</option>
+            <option value="anton" style="font-family:'Anton',sans-serif">Anton</option>
+            <option value="bebasneue" style="font-family:'Bebas Neue',sans-serif">Bebas Neue</option>
             <option value="custom">Custom upload…</option>
           </select>
         </label>
+        <span id="signFontPreview" style="font-size:20px;color:var(--snow);padding:4px 2px;min-width:90px">Aa</span>
         <label id="signFontFileWrap" style="display:none">Font file (.ttf/.otf)
           <input type="file" id="signFontFile" accept=".ttf,.otf">
         </label>
@@ -367,9 +368,39 @@ function setMode(mode){
 document.getElementById("modeAiPrompt").onclick = () => setMode("prompt");
 document.getElementById("modeTextSign").onclick = () => setMode("text");
 
+const FONT_CSS_FAMILIES = {
+  rye:"Rye", sancreek:"Sancreek", ranchers:"Ranchers",
+  alfaslabone:"Alfa Slab One", anton:"Anton", bebasneue:"Bebas Neue"
+};
 document.getElementById("signFontSelect").onchange = () => {
-  document.getElementById("signFontFileWrap").style.display =
-    document.getElementById("signFontSelect").value === "custom" ? "flex" : "none";
+  const v = document.getElementById("signFontSelect").value;
+  document.getElementById("signFontFileWrap").style.display = v === "custom" ? "flex" : "none";
+  const preview = document.getElementById("signFontPreview");
+  if(FONT_CSS_FAMILIES[v]){
+    preview.style.fontFamily = `'${FONT_CSS_FAMILIES[v]}',cursive`;
+    preview.textContent = "Aa";
+  }else if(v === "default"){
+    preview.style.fontFamily = "";
+    preview.textContent = "Aa";
+  }else{
+    preview.style.fontFamily = "";
+    preview.textContent = "…";
+  }
+};
+document.getElementById("signFontFile").onchange = async () => {
+  const preview = document.getElementById("signFontPreview");
+  const file = document.getElementById("signFontFile").files[0];
+  if(!file){ preview.textContent = "…"; preview.style.fontFamily = ""; return; }
+  try{
+    const face = new FontFace("signCustomFontPreview", await file.arrayBuffer());
+    await face.load();
+    document.fonts.add(face);
+    preview.style.fontFamily = "signCustomFontPreview";
+    preview.textContent = "Aa";
+  }catch(e){
+    preview.style.fontFamily = "";
+    preview.textContent = "?";
+  }
 };
 document.getElementById("signBoardToggle").onchange = () => {
   const on = document.getElementById("signBoardToggle").checked;
