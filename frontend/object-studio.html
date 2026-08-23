@@ -88,6 +88,10 @@
     <div class="modeBar">
       <button id="modeAiPrompt" class="on" type="button">AI Prompt</button>
       <button id="modeTextSign" class="ghost" type="button">Text Sign</button>
+      <span style="flex:1"></span>
+      <label style="display:flex;align-items:center;gap:6px;font-family:'Barlow Condensed';font-size:12px;color:var(--fog);text-transform:uppercase;letter-spacing:.3px">
+        <input type="checkbox" id="keepSceneToggle"> Keep adding to scene
+      </label>
     </div>
     <div id="panelPrompt" class="toolbar">
       <input type="text" id="promptInput" placeholder="Describe an object, e.g. &quot;a weathered wooden trail signpost&quot;">
@@ -176,6 +180,8 @@
     <div class="toolbar" style="border-top:none">
       <span id="genStatus"></span>
       <span style="flex:1"></span>
+      <button id="btnClearScene" class="ghost" type="button">Clear Scene</button>
+      <button id="btnMergeObj" class="ghost" type="button">Merge &amp; Export OBJ</button>
       <button id="btnDiscard" class="ghost" type="button" disabled>Discard</button>
       <button id="btnSaveAs" type="button" disabled>💾 Save As…</button>
     </div>
@@ -183,9 +189,19 @@
       <div id="previewEmpty">Type a prompt above and click Generate to build an object with Blender.<br>Requires the local Object Studio bridge (blender-bridge/http-bridge.js) and Blender both running.</div>
       <canvas id="previewCanvas"></canvas>
       <div id="previewSpinner">Generating in Blender… this can take a minute or two.</div>
-      <div id="previewOverlayHint">drag to rotate · scroll to zoom · right-drag to pan</div>
+      <div id="previewOverlayHint">drag to rotate · scroll to zoom · right-drag to pan · click an object to select it</div>
       <div id="previewControls">
         <button id="btnResetView" class="ghost" type="button" title="Reset camera">⟲ Reset View</button>
+      </div>
+      <div id="selectionBar" style="position:absolute;top:12px;left:12px;display:none;align-items:center;gap:10px;
+           background:rgba(10,16,24,.8);border:1px solid var(--rim);border-radius:8px;padding:8px 10px;
+           font-family:'Barlow Condensed';font-size:12px;color:var(--snow)">
+        <span id="selectionName" style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+        <label style="display:flex;align-items:center;gap:4px;text-transform:none">Scale
+          <input type="range" id="selectionScale" min="0.3" max="2.5" step="0.05" value="1" style="width:100px">
+        </label>
+        <button id="btnDeleteSelected" class="danger ghost" type="button" style="padding:4px 8px">Delete</button>
+        <button id="btnDeselect" class="ghost" type="button" style="padding:4px 8px">✕</button>
       </div>
     </div>
   </div>
@@ -194,13 +210,17 @@
 <script type="importmap">
 {"imports":{
   "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
-  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/",
+  "jszip":"https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm"
 }}
 </script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import JSZip from 'jszip';
 
 const canvas = document.getElementById('previewCanvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -267,16 +287,108 @@ function loadModelUrl(url) {
 }
 function clearPreview() {
   if (currentModel) { scene.remove(currentModel); currentModel = null; }
+  selectObject(null);
   document.getElementById('previewEmpty').style.display = 'flex';
+}
+
+// ---- Object selection (click-to-pick in the viewer) ----
+let selectedObject = null;
+let selectionHelper = null;
+let onSelectionChangeCb = null;
+function selectObject(obj) {
+  if (selectionHelper) { scene.remove(selectionHelper); selectionHelper = null; }
+  selectedObject = obj;
+  if (obj) {
+    selectionHelper = new THREE.BoxHelper(obj, 0xff6a3d);
+    scene.add(selectionHelper);
+  }
+  if (onSelectionChangeCb) onSelectionChangeCb(obj ? obj.name : null);
+}
+function selectByName(name) {
+  if (!currentModel || !name) { selectObject(null); return; }
+  selectObject(currentModel.children.find(c => c.name === name) || null);
+}
+// Each direct child of currentModel is one Blender object (glTF exports one
+// node per object) — walk up from whatever mesh the raycast actually hit
+// until its immediate parent is currentModel itself.
+function findTopLevelChild(obj) {
+  let node = obj;
+  while (node.parent && node.parent !== currentModel) node = node.parent;
+  return node;
+}
+let pointerDownPos = null;
+canvas.addEventListener('pointerdown', e => { pointerDownPos = [e.clientX, e.clientY]; });
+canvas.addEventListener('pointerup', e => {
+  if (!pointerDownPos) return;
+  const dx = e.clientX - pointerDownPos[0], dy = e.clientY - pointerDownPos[1];
+  pointerDownPos = null;
+  if (Math.hypot(dx, dy) > 4) return; // was a camera drag, not a click
+  if (!currentModel) return;
+  const rect = canvas.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((e.clientX - rect.left) / rect.width) * 2 - 1,
+    -((e.clientY - rect.top) / rect.height) * 2 + 1
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObject(currentModel, true);
+  selectObject(hits.length ? findTopLevelChild(hits[0].object) : null);
+});
+
+// ---- Merged-OBJ preview (unzips the bridge's .obj+.mtl+textures bundle
+// and loads it via OBJLoader/MTLLoader instead of GLTFLoader) ----
+async function loadObjZipBlob(blob) {
+  const zip = await JSZip.loadAsync(blob);
+  let objEntry = null, mtlEntry = null;
+  const textureEntries = [];
+  zip.forEach((relPath, entry) => {
+    if (entry.dir) return;
+    const lower = relPath.toLowerCase();
+    if (lower.endsWith('.obj')) objEntry = relPath;
+    else if (lower.endsWith('.mtl')) mtlEntry = relPath;
+    else textureEntries.push(relPath);
+  });
+  if (!objEntry) throw new Error('exported bundle has no .obj file');
+  const objUrl = URL.createObjectURL(await zip.file(objEntry).async('blob'));
+  const textureMap = {};
+  for (const rel of textureEntries) {
+    textureMap[rel.split('/').pop()] = URL.createObjectURL(await zip.file(rel).async('blob'));
+  }
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier(url => {
+    const filename = decodeURIComponent(url.split('/').pop());
+    return textureMap[filename] || url;
+  });
+  let materials = null;
+  if (mtlEntry) {
+    const mtlUrl = URL.createObjectURL(await zip.file(mtlEntry).async('blob'));
+    materials = await new MTLLoader(manager).loadAsync(mtlUrl);
+    materials.preload();
+  }
+  const objLoader = new OBJLoader(manager);
+  if (materials) objLoader.setMaterials(materials);
+  const obj = await objLoader.loadAsync(objUrl);
+  document.getElementById('previewEmpty').style.display = 'none';
+  if (currentModel) scene.remove(currentModel);
+  currentModel = obj;
+  selectObject(null);
+  scene.add(currentModel);
+  frameObject(currentModel);
+  return obj;
 }
 
 (function animate() {
   requestAnimationFrame(animate);
   controls.update();
+  if (selectionHelper) selectionHelper.update();
   renderer.render(scene, camera);
 })();
 
-window.ObjectStudioViewer = { loadModelUrl, clearPreview };
+window.ObjectStudioViewer = {
+  loadModelUrl, loadObjZipBlob, clearPreview, selectByName,
+  getSelectedName: () => selectedObject ? selectedObject.name : null,
+  onSelectionChange: cb => { onSelectionChangeCb = cb; },
+};
 </script>
 
 <script>
@@ -285,7 +397,9 @@ function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) ||
 const BRIDGE = "http://127.0.0.1:8791";
 
 const studio = { projectId:null, projectName:null };
-let lastGeneratedBlob = null; // Blob of the not-yet-saved current.glb, or null
+let lastGeneratedBlob = null; // Blob of the not-yet-saved current.glb (or merged .zip), or null
+let lastGeneratedFormat = "glb"; // "glb" | "obj-zip" — which of the two lastGeneratedBlob is
+function keepScene(){ return document.getElementById("keepSceneToggle").checked; }
 
 function setGenStatus(msg){ document.getElementById("genStatus").textContent = msg||""; }
 function setPreviewButtons(){
@@ -322,9 +436,17 @@ const assetTree = AssetTree.mount(document.getElementById("railBody"), {
   orgId: currentOrg(),
   getToken,
   readOnly: false,
-  onPick: asset => {
+  onPick: async asset => {
     // Clicking "+" on a saved object previews it, same as generating one.
-    window.ObjectStudioViewer.loadModelUrl(asset.url).catch(e=>setGenStatus("preview failed: "+e.message));
+    try{
+      if(asset.format === "obj-zip"){
+        const r = await fetch(asset.url);
+        if(!r.ok) throw new Error("fetch failed: "+r.status);
+        await window.ObjectStudioViewer.loadObjZipBlob(await r.blob());
+      }else{
+        await window.ObjectStudioViewer.loadModelUrl(asset.url);
+      }
+    }catch(e){ setGenStatus("preview failed: "+e.message); }
     lastGeneratedBlob = null; // already-saved, nothing new to Save As/Discard
     setPreviewButtons();
   },
@@ -341,11 +463,12 @@ document.getElementById("btnGenerate").onclick = async () => {
   try{
     const r = await fetch(BRIDGE+"/generate", {
       method:"POST", headers:{"content-type":"application/json"},
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ prompt, keepScene: keepScene() })
     });
     if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
     const blob = await r.blob();
     lastGeneratedBlob = blob;
+    lastGeneratedFormat = "glb";
     const url = URL.createObjectURL(blob);
     await window.ObjectStudioViewer.loadModelUrl(url);
     setGenStatus("done");
@@ -487,6 +610,7 @@ document.getElementById("btnGenerateSign").onclick = async () => {
       textColor: hexToRgba(document.getElementById("signTextColor").value),
       textSurface,
       workerBaseUrl: location.origin,
+      keepScene: keepScene(),
       board: {
         enabled: boardOn,
         surface: boardSurface,
@@ -506,6 +630,7 @@ document.getElementById("btnGenerateSign").onclick = async () => {
     const fontWarning = r.headers.get("x-font-warning");
     const blob = await r.blob();
     lastGeneratedBlob = blob;
+    lastGeneratedFormat = "glb";
     const url = URL.createObjectURL(blob);
     await window.ObjectStudioViewer.loadModelUrl(url);
     setGenStatus(fontWarning ? "done — custom font failed to load, used default ("+decodeURIComponent(fontWarning)+")" : "done");
@@ -531,13 +656,15 @@ document.getElementById("btnSaveAs").onclick = async () => {
   if(!lastGeneratedBlob) return;
   const target = assetTree.getUploadTarget();
   if(!target){ alert("pick a folder (or the project/library root) in the Saved Objects list first"); return; }
-  const name = (prompt("Save as (filename, .glb added automatically if omitted):", "object.glb")||"").trim();
+  const isObj = lastGeneratedFormat === "obj-zip";
+  const ext = isObj ? ".zip" : ".glb";
+  const name = (prompt("Save as (filename, "+ext+" added automatically if omitted):", isObj?"merged.zip":"object.glb")||"").trim();
   if(!name) return;
-  const finalName = /\.glb$/i.test(name) ? name : name+".glb";
+  const finalName = name.toLowerCase().endsWith(ext) ? name : name+ext;
   try{
     await AssetTree.upload(lastGeneratedBlob, {
       scope: target.scope, scopeId: target.scopeId, folderId: target.folderId,
-      name: finalName, mimeType: "model/gltf-binary", getToken
+      name: finalName, mimeType: isObj ? "application/zip" : "model/gltf-binary", getToken
     });
     assetTree.refresh();
     lastGeneratedBlob = null;
@@ -546,6 +673,98 @@ document.getElementById("btnSaveAs").onclick = async () => {
   }catch(e){
     setGenStatus("✕ save failed: "+e.message);
   }
+};
+
+document.getElementById("btnClearScene").onclick = async () => {
+  if(!confirm("Clear the entire Blender scene? This removes everything, including any earlier additions.")) return;
+  try{ await fetch(BRIDGE+"/clear-scene", { method:"POST" }); }catch(e){}
+  lastGeneratedBlob = null;
+  window.ObjectStudioViewer.clearPreview();
+  setPreviewButtons();
+  setGenStatus("scene cleared");
+};
+
+document.getElementById("btnMergeObj").onclick = async () => {
+  const btn = document.getElementById("btnMergeObj");
+  btn.disabled = true;
+  document.getElementById("previewSpinner").classList.add("show");
+  setGenStatus("merging & exporting OBJ…");
+  try{
+    const r = await fetch(BRIDGE+"/export-merged-obj", { method:"POST" });
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    const blob = await r.blob();
+    lastGeneratedBlob = blob;
+    lastGeneratedFormat = "obj-zip";
+    await window.ObjectStudioViewer.loadObjZipBlob(blob);
+    setGenStatus("merged — ready to Save As (a .zip containing .obj + .mtl + textures)");
+  }catch(e){
+    setGenStatus("✕ "+e.message);
+  }finally{
+    btn.disabled = false;
+    document.getElementById("previewSpinner").classList.remove("show");
+    setPreviewButtons();
+  }
+};
+
+window.ObjectStudioViewer.onSelectionChange(name => {
+  const bar = document.getElementById("selectionBar");
+  if(name){
+    bar.style.display = "flex";
+    document.getElementById("selectionName").textContent = name;
+    document.getElementById("selectionScale").value = 1;
+  }else{
+    bar.style.display = "none";
+  }
+});
+document.getElementById("btnDeselect").onclick = () => window.ObjectStudioViewer.selectByName(null);
+
+document.getElementById("btnDeleteSelected").onclick = async () => {
+  const name = window.ObjectStudioViewer.getSelectedName();
+  if(!name) return;
+  if(!confirm(`Delete "${name}" from the scene?`)) return;
+  try{
+    const r = await fetch(BRIDGE+"/delete-object", {
+      method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify({ object: name })
+    });
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    const blob = await r.blob();
+    lastGeneratedBlob = blob;
+    lastGeneratedFormat = "glb";
+    await window.ObjectStudioViewer.loadModelUrl(URL.createObjectURL(blob));
+    window.ObjectStudioViewer.selectByName(null);
+    setGenStatus("deleted "+name);
+  }catch(e){
+    setGenStatus("✕ delete failed: "+e.message);
+  }
+  setPreviewButtons();
+};
+
+let scaleDebounceTimer = null;
+document.getElementById("selectionScale").oninput = () => {
+  clearTimeout(scaleDebounceTimer);
+  scaleDebounceTimer = setTimeout(async () => {
+    const name = window.ObjectStudioViewer.getSelectedName();
+    if(!name) return;
+    const factor = parseFloat(document.getElementById("selectionScale").value) || 1;
+    try{
+      const r = await fetch(BRIDGE+"/transform-object", {
+        method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({ object: name, scaleFactor: factor })
+      });
+      if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+      const blob = await r.blob();
+      lastGeneratedBlob = blob;
+      lastGeneratedFormat = "glb";
+      await window.ObjectStudioViewer.loadModelUrl(URL.createObjectURL(blob));
+      window.ObjectStudioViewer.selectByName(name);
+      document.getElementById("selectionScale").value = 1;
+      setGenStatus(`scaled ${name} ×${factor.toFixed(2)}`);
+    }catch(e){
+      setGenStatus("✕ scale failed: "+e.message);
+    }
+    setPreviewButtons();
+  }, 250);
 };
 
 if(window.TopNav){

@@ -14,8 +14,9 @@ Protocol: one JSON object per line in both directions.
          or {"id": "<uuid>", "ok": false, "error": "<message>"}
 
 Commands implemented: clear_scene, create_primitive, create_text, modifier_add,
-set_material_color, apply_image_texture, export_glb, viewport_screenshot,
-get_scene_info. See each handler's docstring below for its args shape.
+set_material_color, apply_image_texture, export_glb, delete_object,
+transform_object, export_obj, viewport_screenshot, get_scene_info. See each
+handler's docstring below for its args shape.
 """
 
 import bpy
@@ -257,6 +258,97 @@ def cmd_export_glb(args):
     return {"path": path, "objects": [o.name for o in targets]}
 
 
+def cmd_delete_object(args):
+    """args: {object: name}. Removes one named mesh object (and its mesh/
+    material datablocks if now unused) without touching the rest of the
+    scene — used by the multi-object scene editor's per-object Delete."""
+    obj = bpy.data.objects.get(args["object"])
+    if obj is None:
+        raise ValueError("no such object: " + str(args.get("object")))
+    mesh = obj.data
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if mesh is not None and mesh.users == 0:
+        bpy.data.meshes.remove(mesh)
+    for block in list(bpy.data.materials):
+        if block.users == 0:
+            bpy.data.materials.remove(block)
+    return {"deleted": args["object"]}
+
+
+def cmd_transform_object(args):
+    """args: {object: name, location: optional [x,y,z] (absolute),
+    rotation_deg: optional [x,y,z] (absolute), scale: optional [x,y,z]
+    (absolute), scale_factor: optional float (multiplies current scale
+    uniformly on all 3 axes — used by the scene editor's per-object scale
+    slider so resizing preserves whatever anisotropic scale the object was
+    created with, e.g. a sign board's width/height/thickness ratio)}."""
+    obj = bpy.data.objects.get(args["object"])
+    if obj is None:
+        raise ValueError("no such object: " + str(args.get("object")))
+    if "location" in args:
+        obj.location = args["location"]
+    if "rotation_deg" in args:
+        obj.rotation_euler = [math.radians(d) for d in args["rotation_deg"]]
+    if "scale" in args:
+        obj.scale = args["scale"]
+    if "scale_factor" in args:
+        f = args["scale_factor"]
+        obj.scale = [obj.scale[0] * f, obj.scale[1] * f, obj.scale[2] * f]
+    return {"object": obj.name, "location": list(obj.location),
+            "rotation_deg": [math.degrees(r) for r in obj.rotation_euler],
+            "scale": list(obj.scale), "dimensions": list(obj.dimensions)}
+
+
+def cmd_export_obj(args):
+    """args: {path: str, objects: optional [names] (default: all mesh
+    objects), join: bool default True}. Joins the selected objects into a
+    single mesh (preserving each source object's material as a separate
+    material slot on the result — bpy.ops.object.join does this natively)
+    before exporting to Wavefront OBJ, so multiple separately-generated
+    objects come out as one merged file. join=False exports them as
+    separate objects within the same .obj instead. Always writes a
+    matching .mtl next to the .obj, and copies any referenced texture
+    images alongside it (path_mode='COPY') so the whole result is a
+    self-contained folder the caller can zip up.
+
+    join=True operates on TEMPORARY DUPLICATES of the target objects, not
+    the live ones — joining is destructive (bpy.ops.object.join deletes the
+    non-active source objects), and this command must never mutate the
+    scene the user is still interactively editing (select/scale/delete).
+    The duplicates are removed again after export."""
+    path = args["path"]
+    names = args.get("objects")
+    join = args.get("join", True)
+    bpy.ops.object.select_all(action="DESELECT")
+    targets = [o for o in bpy.data.objects if o.type == "MESH" and (names is None or o.name in names)]
+    if not targets:
+        raise ValueError("no mesh objects to export")
+    for o in targets:
+        o.select_set(True)
+    exported_names = [o.name for o in targets]
+    temp_objs = []
+    if join and len(targets) > 1:
+        bpy.context.view_layer.objects.active = targets[0]
+        bpy.ops.object.duplicate()  # duplicates inherit the source selection + become newly selected/active
+        temp_objs = list(bpy.context.selected_objects)
+        bpy.ops.object.join()
+        exported_names = [bpy.context.view_layer.objects.active.name]
+        temp_objs = [bpy.context.view_layer.objects.active]
+    try:
+        bpy.ops.wm.obj_export(
+            filepath=path,
+            export_selected_objects=True,
+            export_materials=True,
+            path_mode="COPY",
+            forward_axis="NEGATIVE_Z",
+            up_axis="Y",
+        )
+    finally:
+        for o in temp_objs:
+            bpy.data.objects.remove(o, do_unlink=True)
+    return {"path": path, "objects": exported_names, "joined": join and len(targets) > 1}
+
+
 def cmd_viewport_screenshot(args):
     """args: {path: str}. Renders the current 3D viewport to a PNG so the
     driving agent can look at intermediate results and adjust course."""
@@ -292,6 +384,9 @@ _HANDLERS = {
     "set_material_color": cmd_set_material_color,
     "apply_image_texture": cmd_apply_image_texture,
     "export_glb": cmd_export_glb,
+    "delete_object": cmd_delete_object,
+    "transform_object": cmd_transform_object,
+    "export_obj": cmd_export_obj,
     "viewport_screenshot": cmd_viewport_screenshot,
     "get_scene_info": cmd_get_scene_info,
 }

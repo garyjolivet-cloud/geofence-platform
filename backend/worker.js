@@ -3693,9 +3693,10 @@ async function api(request, env, url) {
       if (!folder) return json({ error: "folder not found in this scope" }, 404, AC);
     }
     const ext = (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
-    const format = ext === ".gltf" ? "gltf" : "glb";
+    const format = ext === ".gltf" ? "gltf" : ext === ".zip" ? "obj-zip" : "glb";
     const r2Key = "model/" + crypto.randomUUID() + (ext || ".glb");
-    const ct = request.headers.get("content-type") || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+    const ct = request.headers.get("content-type") ||
+      (format === "gltf" ? "model/gltf+json" : format === "obj-zip" ? "application/zip" : "model/gltf-binary");
     const buf = await request.arrayBuffer();
     await env.MODELS.put(r2Key, buf, { httpMetadata: { contentType: ct } });
     const id = crypto.randomUUID();

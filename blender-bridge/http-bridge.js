@@ -16,6 +16,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { send as blenderSend } from "./blender-client.js";
+import JSZip from "jszip";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
@@ -61,25 +62,33 @@ function corsHeaders(origin) {
   return h;
 }
 
-function buildPrompt(userPrompt) {
+function buildPrompt(userPrompt, keepScene) {
+  const steps = [];
+  if (keepScene) {
+    steps.push(`Call blender_get_scene_info first to see what's already in the scene. Do NOT call blender_clear_scene — the user is adding this as an additional object alongside what's already there. Give your new object(s) distinct names that won't collide with existing ones.`);
+  } else {
+    steps.push(`Call blender_clear_scene first.`);
+  }
+  steps.push(
+    `Compose the object from primitives (blender_create_primitive) plus modifiers (blender_modifier_add) as needed. Keep it a single coherent object roughly 0.2-3 meters in size, centered near the origin.`,
+    `Give it a real surface using blender_generate_and_apply_texture (preferred) or blender_set_material_color if a flat color is more appropriate.`,
+    `Optionally call blender_viewport_screenshot to check your work and adjust.`,
+    `Call blender_export_glb with no arguments (so it exports every mesh object currently in the scene, and writes to the default current.glb path) as your LAST action.`,
+  );
   return [
     `You are driving Blender through the blender_* MCP tools to build a single low-poly, stylized 3D prop for an outdoor geofence tour app.`,
     `Requested object: "${userPrompt}"`,
     ``,
     `Steps:`,
-    `1. Call blender_clear_scene first.`,
-    `2. Compose the object from primitives (blender_create_primitive) plus modifiers (blender_modifier_add) as needed. Keep it a single coherent object roughly 0.2-3 meters in size, centered near the origin.`,
-    `3. Give it a real surface using blender_generate_and_apply_texture (preferred) or blender_set_material_color if a flat color is more appropriate.`,
-    `4. Optionally call blender_viewport_screenshot to check your work and adjust.`,
-    `5. Call blender_export_glb with no filename argument (so it writes to the default current.glb path) as your LAST action.`,
+    ...steps.map((s, i) => `${i + 1}. ${s}`),
     `Do not ask any clarifying questions — make reasonable choices and proceed autonomously.`,
   ].join("\n");
 }
 
-function runClaudeHeadless(userPrompt) {
+function runClaudeHeadless(userPrompt, keepScene) {
   return new Promise((resolve, reject) => {
     const args = [
-      "-p", buildPrompt(userPrompt),
+      "-p", buildPrompt(userPrompt, keepScene),
       "--mcp-config", path.join(REPO_ROOT, ".mcp.json"),
       "--allowedTools", "mcp__object-studio-blender__*",
       "--permission-mode", "acceptEdits",
@@ -115,20 +124,21 @@ async function sendCurrentGlb(res, origin, extraHeaders) {
 async function handleGenerate(req, res, origin) {
   let body = "";
   for await (const chunk of req) body += chunk;
-  let prompt;
+  let parsed;
   try {
-    prompt = (JSON.parse(body || "{}").prompt || "").trim();
+    parsed = JSON.parse(body || "{}");
   } catch (e) {
     res.writeHead(400, corsHeaders(origin));
     return res.end(JSON.stringify({ error: "invalid JSON body" }));
   }
+  const prompt = (parsed.prompt || "").trim();
   if (!prompt) {
     res.writeHead(400, corsHeaders(origin));
     return res.end(JSON.stringify({ error: "prompt required" }));
   }
   await fs.mkdir(EXPORTS_DIR, { recursive: true });
   try {
-    await runClaudeHeadless(prompt);
+    await runClaudeHeadless(prompt, !!parsed.keepScene);
   } catch (err) {
     res.writeHead(502, corsHeaders(origin));
     return res.end(JSON.stringify({ error: String(err.message || err) }));
@@ -246,7 +256,12 @@ async function handleCreateTextSign(req, res, origin) {
     const textTexPath = !board.enabled && textSurface === "upload" && data.textTexture
       ? await writeUploadedFile(TEXTURES_DIR, data.textTexture) : null;
 
-    await blenderSend("clear_scene", {});
+    if (!data.keepScene) await blenderSend("clear_scene", {});
+    // Suffix each generation's object names so repeated additions in
+    // keepScene mode never collide with a prior generation's objects.
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const textName = `sign_text_${suffix}`;
+    const boardName = `sign_board_${suffix}`;
     const t = await blenderSend("create_text", {
       text,
       font_path: fontPath,
@@ -259,15 +274,14 @@ async function handleCreateTextSign(req, res, origin) {
       space_line: data.spaceLine ?? 1.0,
       align_x: data.alignX || "CENTER",
       align_y: data.alignY || "CENTER",
-      name: "sign_text",
+      name: textName,
     });
 
-    const exportObjects = ["sign_text"];
     if (board.enabled) {
       // Board on: text is always a plain flat color; the board carries
       // whichever surface (color/upload/preset) was selected.
       await blenderSend("set_material_color", {
-        object: "sign_text",
+        object: textName,
         color: data.textColor || [0.9, 0.9, 0.85, 1.0],
         roughness: data.textRoughness ?? 0.6,
         metallic: data.textMetallic ?? 0.0,
@@ -287,18 +301,17 @@ async function handleCreateTextSign(req, res, origin) {
         size: 1,
         scale: [boardWidth, boardHeight, 1],
         location: [t.bbox_center[0], t.bbox_center[1], boardZ],
-        name: "sign_board",
+        name: boardName,
       });
-      await blenderSend("modifier_add", { object: "sign_board", type: "SOLIDIFY", params: { thickness }, apply: true });
-      await applySurface("sign_board", boardSurface, {
+      await blenderSend("modifier_add", { object: boardName, type: "SOLIDIFY", params: { thickness }, apply: true });
+      await applySurface(boardName, boardSurface, {
         color: board.color || [0.45, 0.3, 0.18, 1.0],
         uploadPath: boardTexPath,
         workerBaseUrl: data.workerBaseUrl,
       });
-      exportObjects.push("sign_board");
     } else {
       // Board off: text itself carries whichever surface was selected.
-      await applySurface("sign_text", textSurface, {
+      await applySurface(textName, textSurface, {
         color: data.textColor || [0.9, 0.9, 0.85, 1.0],
         roughness: data.textRoughness ?? 0.6,
         metallic: data.textMetallic ?? 0.0,
@@ -307,7 +320,9 @@ async function handleCreateTextSign(req, res, origin) {
       });
     }
 
-    await blenderSend("export_glb", { path: CURRENT_GLB, objects: exportObjects });
+    // Export everything currently in the scene, not just this generation's
+    // objects — in keepScene mode that includes earlier additions too.
+    await blenderSend("export_glb", { path: CURRENT_GLB });
 
     const extraHeaders = {};
     if (t.font_warning) extraHeaders["x-font-warning"] = encodeURIComponent(t.font_warning);
@@ -315,6 +330,94 @@ async function handleCreateTextSign(req, res, origin) {
   } catch (err) {
     res.writeHead(502, corsHeaders(origin));
     res.end(JSON.stringify({ error: String(err.message || err) }));
+  }
+}
+
+async function handleDeleteObject(req, res, origin) {
+  let body = "";
+  for await (const chunk of req) body += chunk;
+  let data;
+  try {
+    data = JSON.parse(body || "{}");
+  } catch (e) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "invalid JSON body" }));
+  }
+  if (!data.object) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "object required" }));
+  }
+  try {
+    await blenderSend("delete_object", { object: data.object });
+    await blenderSend("export_glb", { path: CURRENT_GLB });
+    await sendCurrentGlb(res, origin);
+  } catch (err) {
+    res.writeHead(502, corsHeaders(origin));
+    res.end(JSON.stringify({ error: String(err.message || err) }));
+  }
+}
+
+async function handleTransformObject(req, res, origin) {
+  let body = "";
+  for await (const chunk of req) body += chunk;
+  let data;
+  try {
+    data = JSON.parse(body || "{}");
+  } catch (e) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "invalid JSON body" }));
+  }
+  if (!data.object) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "object required" }));
+  }
+  try {
+    const args = { object: data.object };
+    if (data.scaleFactor !== undefined) args.scale_factor = data.scaleFactor;
+    if (data.scale !== undefined) args.scale = data.scale;
+    if (data.location !== undefined) args.location = data.location;
+    if (data.rotationDeg !== undefined) args.rotation_deg = data.rotationDeg;
+    await blenderSend("transform_object", args);
+    await blenderSend("export_glb", { path: CURRENT_GLB });
+    await sendCurrentGlb(res, origin);
+  } catch (err) {
+    res.writeHead(502, corsHeaders(origin));
+    res.end(JSON.stringify({ error: String(err.message || err) }));
+  }
+}
+
+async function handleClearScene(req, res, origin) {
+  try {
+    await blenderSend("clear_scene", {});
+    try { await fs.unlink(CURRENT_GLB); } catch (e) { /* already gone, fine */ }
+    res.writeHead(204, corsHeaders(origin));
+    res.end();
+  } catch (err) {
+    res.writeHead(502, corsHeaders(origin));
+    res.end(JSON.stringify({ error: String(err.message || err) }));
+  }
+}
+
+async function handleExportMergedObj(req, res, origin) {
+  const objDir = path.join(EXPORTS_DIR, "obj-" + crypto.randomUUID());
+  try {
+    await fs.mkdir(objDir, { recursive: true });
+    const objPath = path.join(objDir, "merged.obj");
+    await blenderSend("export_obj", { path: objPath, join: true });
+    const files = await fs.readdir(objDir);
+    if (!files.length) throw new Error("export finished but no files were produced");
+    const zip = new JSZip();
+    for (const f of files) {
+      zip.file(f, await fs.readFile(path.join(objDir, f)));
+    }
+    const zipBuf = await zip.generateAsync({ type: "nodebuffer" });
+    res.writeHead(200, { ...corsHeaders(origin), "content-type": "application/zip" });
+    res.end(zipBuf);
+  } catch (err) {
+    res.writeHead(502, corsHeaders(origin));
+    res.end(JSON.stringify({ error: String(err.message || err) }));
+  } finally {
+    await fs.rm(objDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -348,6 +451,10 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "POST" && req.url === "/generate") return await handleGenerate(req, res, origin);
     if (req.method === "POST" && req.url === "/create-text-sign") return await handleCreateTextSign(req, res, origin);
+    if (req.method === "POST" && req.url === "/delete-object") return await handleDeleteObject(req, res, origin);
+    if (req.method === "POST" && req.url === "/transform-object") return await handleTransformObject(req, res, origin);
+    if (req.method === "POST" && req.url === "/clear-scene") return await handleClearScene(req, res, origin);
+    if (req.method === "POST" && req.url === "/export-merged-obj") return await handleExportMergedObj(req, res, origin);
     if (req.method === "GET" && req.url === "/exports/current.glb") return await handleGetCurrent(req, res, origin);
     if (req.method === "DELETE" && req.url === "/exports/current") return await handleDeleteCurrent(req, res, origin);
     res.writeHead(404, corsHeaders(origin));
