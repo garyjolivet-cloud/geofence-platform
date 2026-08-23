@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "object-studio-blender": {
+      "command": "node",
+      "args": ["blender-bridge/mcp-server.js"]
+    }
+  }
+}

@@ -4,3 +4,5 @@ Plaintext
 .env
 node_modules/
 dist/
+blender-bridge/exports/
+blender-bridge/textures/

@@ -111,6 +111,7 @@
     { key:"audio",        label:"Audio Studio",  href:"/studio",       needsStops:true },
     { key:"chatterbox",   label:"Chatterbox",    href:"/chatterbox",   needsStops:true },
     { key:"code-library", label:"Code Library",  href:"/code-library", needsStops:true },
+    { key:"object-studio",label:"Object Studio", href:"/objects",      needsStops:true },
     { key:"record",       label:"Record",        href:"/record",       needsStops:true },
     { key:"dashboard",    label:"Dashboard",     href:"/dashboard" },
     { key:"clients",      label:"Clients",       href:"/clients" }

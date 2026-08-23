@@ -637,6 +637,7 @@ export default {
       "/field": "/field-recorder.html",
       "/pipeline": "/pipeline-editor.html",
       "/code-library": "/pipeline-editor.html", // retired standalone page — the library is now an inline sidebar on /pipeline
+      "/objects": "/object-studio.html",
       "/record": "/record.html",
       "/gpx-editor": "/gpx-editor.html",
       "/login": "/login.html",
@@ -4454,6 +4455,33 @@ async function api(request, env, url) {
         headers: { "content-type": "audio/mpeg", ...CORS_PUBLIC }
       });
     } catch(e) {
+      return json({ error: e.message }, 502, CORS_PUBLIC);
+    }
+  }
+
+  // --- Object Studio: text-to-image texture generation for Blender-composed
+  // objects. Staff-only local tool (see blender-bridge/) — no new auth model,
+  // same public-Workers-AI-proxy pattern as /api/tts above. The Blender-side
+  // agent (blender-bridge/mcp-server.js's blender_generate_and_apply_texture
+  // tool) calls this, saves the PNG locally, then UV-wraps it onto the
+  // in-progress object.
+  if (path === "/api/texture-gen" && method === "POST") {
+    if (!env.AI) return json({ error: "AI binding not configured" }, 503, CORS_PUBLIC);
+    try {
+      const { prompt } = await request.json();
+      if (!prompt || typeof prompt !== "string") return json({ error: "prompt required" }, 400, CORS_PUBLIC);
+      const result = await env.AI.run("@cf/black-forest-labs/flux-1-schnell", { prompt: prompt.slice(0, 800) });
+      // flux-1-schnell returns { image: <base64 PNG> } rather than raw bytes.
+      if (result && typeof result.image === "string") {
+        const bytes = Uint8Array.from(atob(result.image), c => c.charCodeAt(0));
+        return new Response(bytes, { status: 200, headers: { "content-type": "image/png", ...CORS_PUBLIC } });
+      }
+      // Fallback for any texture model that instead streams raw image bytes.
+      if (result && result.body) {
+        return new Response(result.body, { status: 200, headers: { "content-type": "image/png", ...CORS_PUBLIC } });
+      }
+      return json({ error: "unexpected texture-gen response shape" }, 502, CORS_PUBLIC);
+    } catch (e) {
       return json({ error: e.message }, 502, CORS_PUBLIC);
     }
   }
