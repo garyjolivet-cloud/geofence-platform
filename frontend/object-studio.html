@@ -43,6 +43,17 @@
   .toolbar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--rim);flex-wrap:wrap;flex:0 0 auto}
   .toolbar input[type=text]{flex:1;min-width:220px}
   #genStatus{font-family:"Barlow Condensed";font-size:12px;color:var(--fog);flex:0 0 auto;white-space:nowrap}
+  .modeBar{display:flex;gap:6px;padding:8px 12px 0 12px;flex:0 0 auto}
+  textarea{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);color:var(--snow);
+         border:1px solid var(--rim);border-radius:8px;padding:6px 9px;resize:vertical}
+  .signForm{padding:10px 12px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;flex:0 0 auto;
+         max-height:42vh;border-bottom:1px solid var(--rim)}
+  .signRow{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+  .signRow label{font-family:"Barlow Condensed";font-size:11px;color:var(--fog);text-transform:uppercase;
+         letter-spacing:.3px;display:flex;flex-direction:column;gap:3px}
+  .signRow input[type=number]{width:76px}
+  .signRow input[type=color]{width:38px;height:30px;padding:2px;background:var(--slate-2);border:1px solid var(--rim);border-radius:6px}
+  #signText{width:100%;min-height:52px}
 
   /* ---- 3D Preview Window — the centerpiece of this page ---- */
   #previewWrap{flex:1;position:relative;min-height:0;background:radial-gradient(circle at 50% 40%,#1a2536 0%,var(--night) 75%)}
@@ -74,9 +85,63 @@
   </div>
 
   <div class="studio-main">
-    <div class="toolbar">
+    <div class="modeBar">
+      <button id="modeAiPrompt" class="on" type="button">AI Prompt</button>
+      <button id="modeTextSign" class="ghost" type="button">Text Sign</button>
+    </div>
+    <div id="panelPrompt" class="toolbar">
       <input type="text" id="promptInput" placeholder="Describe an object, e.g. &quot;a weathered wooden trail signpost&quot;">
       <button id="btnGenerate" class="on" type="button">Generate</button>
+    </div>
+    <div id="panelTextSign" class="signForm" style="display:none">
+      <div class="signRow">
+        <label style="flex:1;min-width:260px">Text (line breaks = new lines, no auto-wrap)
+          <textarea id="signText" rows="2" placeholder="TUNNEL VIEW"></textarea>
+        </label>
+      </div>
+      <div class="signRow">
+        <label>Font
+          <select id="signFontSelect"><option value="default">Default</option><option value="custom">Custom upload…</option></select>
+        </label>
+        <label id="signFontFileWrap" style="display:none">Font file (.ttf/.otf)
+          <input type="file" id="signFontFile" accept=".ttf,.otf">
+        </label>
+        <label>Size <input type="number" id="signSize" value="1" min="0.05" step="0.05"></label>
+        <label>Extrude <input type="number" id="signExtrude" value="0.06" min="0" step="0.01"></label>
+        <label>Bevel depth <input type="number" id="signBevelDepth" value="0.01" min="0" step="0.005"></label>
+        <label>Bevel res <input type="number" id="signBevelRes" value="2" min="0" max="32" step="1"></label>
+      </div>
+      <div class="signRow">
+        <label>Letter spacing <input type="number" id="signSpaceChar" value="1" min="0.1" step="0.05"></label>
+        <label>Word spacing <input type="number" id="signSpaceWord" value="1" min="0.1" step="0.05"></label>
+        <label>Line spacing <input type="number" id="signSpaceLine" value="1" min="0.1" step="0.05"></label>
+        <label>Align H
+          <select id="signAlignX"><option value="LEFT">Left</option><option value="CENTER" selected>Center</option><option value="RIGHT">Right</option></select>
+        </label>
+        <label>Align V
+          <select id="signAlignY"><option value="TOP">Top</option><option value="CENTER" selected>Center</option><option value="BOTTOM">Bottom</option></select>
+        </label>
+        <label>Text color <input type="color" id="signTextColor" value="#e6e6d9"></label>
+      </div>
+      <div class="signRow">
+        <label style="flex-direction:row;align-items:center;gap:6px;text-transform:none;font-size:13px;color:var(--snow)">
+          <input type="checkbox" id="signBoardToggle" checked> Add backing board
+        </label>
+      </div>
+      <div id="signBoardFields" class="signRow">
+        <label>Padding % <input type="number" id="signBoardPadding" value="20" min="0" max="200" step="5"></label>
+        <label>Thickness <input type="number" id="signBoardThickness" value="0.03" min="0.005" step="0.005"></label>
+        <label>Board color <input type="color" id="signBoardColor" value="#734c2e"></label>
+        <label>Board texture (optional) <input type="file" id="signBoardTextureFile" accept="image/*"></label>
+      </div>
+      <div class="signRow" id="signTextTextureWrap" style="display:none">
+        <label>Text texture (optional) <input type="file" id="signTextTextureFile" accept="image/*"></label>
+      </div>
+      <div class="signRow">
+        <button id="btnGenerateSign" class="on" type="button">Generate Sign</button>
+      </div>
+    </div>
+    <div class="toolbar" style="border-top:none">
       <span id="genStatus"></span>
       <span style="flex:1"></span>
       <button id="btnDiscard" class="ghost" type="button" disabled>Discard</button>
@@ -252,6 +317,103 @@ document.getElementById("btnGenerate").onclick = async () => {
     const url = URL.createObjectURL(blob);
     await window.ObjectStudioViewer.loadModelUrl(url);
     setGenStatus("done");
+  }catch(e){
+    setGenStatus("✕ "+e.message+" — is the local bridge running? (blender-bridge/http-bridge.js)");
+  }finally{
+    btn.disabled = false;
+    document.getElementById("previewSpinner").classList.remove("show");
+    setPreviewButtons();
+  }
+};
+
+function setMode(mode){
+  const isPrompt = mode === "prompt";
+  document.getElementById("panelPrompt").style.display = isPrompt ? "flex" : "none";
+  document.getElementById("panelTextSign").style.display = isPrompt ? "none" : "flex";
+  document.getElementById("modeAiPrompt").className = isPrompt ? "on" : "ghost";
+  document.getElementById("modeTextSign").className = isPrompt ? "ghost" : "on";
+}
+document.getElementById("modeAiPrompt").onclick = () => setMode("prompt");
+document.getElementById("modeTextSign").onclick = () => setMode("text");
+
+document.getElementById("signFontSelect").onchange = () => {
+  document.getElementById("signFontFileWrap").style.display =
+    document.getElementById("signFontSelect").value === "custom" ? "flex" : "none";
+};
+document.getElementById("signBoardToggle").onchange = () => {
+  const on = document.getElementById("signBoardToggle").checked;
+  document.getElementById("signBoardFields").style.display = on ? "flex" : "none";
+  document.getElementById("signTextTextureWrap").style.display = on ? "none" : "flex";
+};
+
+async function fileToBase64(file){
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for(let i=0;i<buf.length;i+=chunkSize){
+    binary += String.fromCharCode.apply(null, buf.subarray(i, i+chunkSize));
+  }
+  return btoa(binary);
+}
+function hexToRgba(hex){
+  const n = parseInt(hex.replace("#",""), 16);
+  return [((n>>16)&255)/255, ((n>>8)&255)/255, (n&255)/255, 1.0];
+}
+const MAX_FONT_MB = 5, MAX_TEXTURE_MB = 15;
+async function fileUpload(file, maxMb, label){
+  if(!file) return null;
+  if(file.size > maxMb*1024*1024) throw new Error(`${label} exceeds ${maxMb}MB limit`);
+  return { filename: file.name, dataBase64: await fileToBase64(file) };
+}
+
+document.getElementById("btnGenerateSign").onclick = async () => {
+  const text = document.getElementById("signText").value.trim();
+  if(!text){ setGenStatus("✕ enter some text first"); return; }
+  const btn = document.getElementById("btnGenerateSign");
+  btn.disabled = true;
+  document.getElementById("previewSpinner").classList.add("show");
+  setGenStatus("generating sign…");
+  try{
+    const boardOn = document.getElementById("signBoardToggle").checked;
+    const useCustomFont = document.getElementById("signFontSelect").value === "custom";
+    const fontFile = useCustomFont ? document.getElementById("signFontFile").files[0] : null;
+    const boardTexFile = boardOn ? document.getElementById("signBoardTextureFile").files[0] : null;
+    const textTexFile = !boardOn ? document.getElementById("signTextTextureFile").files[0] : null;
+
+    const payload = {
+      text,
+      font: await fileUpload(fontFile, MAX_FONT_MB, "font"),
+      size: parseFloat(document.getElementById("signSize").value)||1,
+      extrude: parseFloat(document.getElementById("signExtrude").value)||0,
+      bevelDepth: parseFloat(document.getElementById("signBevelDepth").value)||0,
+      bevelResolution: parseInt(document.getElementById("signBevelRes").value)||0,
+      spaceCharacter: parseFloat(document.getElementById("signSpaceChar").value)||1,
+      spaceWord: parseFloat(document.getElementById("signSpaceWord").value)||1,
+      spaceLine: parseFloat(document.getElementById("signSpaceLine").value)||1,
+      alignX: document.getElementById("signAlignX").value,
+      alignY: document.getElementById("signAlignY").value,
+      textColor: hexToRgba(document.getElementById("signTextColor").value),
+      board: {
+        enabled: boardOn,
+        paddingPct: (parseFloat(document.getElementById("signBoardPadding").value)||20)/100,
+        thickness: parseFloat(document.getElementById("signBoardThickness").value)||0.03,
+        color: hexToRgba(document.getElementById("signBoardColor").value),
+        texture: await fileUpload(boardTexFile, MAX_TEXTURE_MB, "board texture"),
+      },
+      textTexture: await fileUpload(textTexFile, MAX_TEXTURE_MB, "text texture"),
+    };
+
+    const r = await fetch(BRIDGE+"/create-text-sign", {
+      method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    const fontWarning = r.headers.get("x-font-warning");
+    const blob = await r.blob();
+    lastGeneratedBlob = blob;
+    const url = URL.createObjectURL(blob);
+    await window.ObjectStudioViewer.loadModelUrl(url);
+    setGenStatus(fontWarning ? "done — custom font failed to load, used default ("+decodeURIComponent(fontWarning)+")" : "done");
   }catch(e){
     setGenStatus("✕ "+e.message+" — is the local bridge running? (blender-bridge/http-bridge.js)");
   }finally{

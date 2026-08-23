@@ -12,15 +12,21 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { send as blenderSend } from "./blender-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 const EXPORTS_DIR = path.join(__dirname, "exports");
+const FONTS_DIR = path.join(__dirname, "fonts");
+const TEXTURES_DIR = path.join(__dirname, "textures");
 const CURRENT_GLB = path.join(EXPORTS_DIR, "current.glb");
 const PORT = 8791;
 const GENERATE_TIMEOUT_MS = 5 * 60 * 1000; // headless agent run, generous
+const MAX_FONT_BYTES = 5 * 1024 * 1024;
+const MAX_TEXTURE_BYTES = 15 * 1024 * 1024;
 
 // wrangler dev's port bumps between restarts (confirmed repo habit — see
 // CLAUDE.md/project memory), so this can't be a fixed-port allowlist: any
@@ -80,6 +86,18 @@ function runClaudeHeadless(userPrompt) {
   });
 }
 
+async function sendCurrentGlb(res, origin, extraHeaders) {
+  let glb;
+  try {
+    glb = await fs.readFile(CURRENT_GLB);
+  } catch (err) {
+    res.writeHead(502, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "generation finished but current.glb was not produced" }));
+  }
+  res.writeHead(200, { ...corsHeaders(origin), "content-type": "model/gltf-binary", ...(extraHeaders || {}) });
+  res.end(glb);
+}
+
 async function handleGenerate(req, res, origin) {
   let body = "";
   for await (const chunk of req) body += chunk;
@@ -101,15 +119,119 @@ async function handleGenerate(req, res, origin) {
     res.writeHead(502, corsHeaders(origin));
     return res.end(JSON.stringify({ error: String(err.message || err) }));
   }
-  let glb;
+  await sendCurrentGlb(res, origin);
+}
+
+// base64 byte-length without decoding: 4 chars encode 3 bytes, minus padding.
+function base64ByteLength(b64) {
+  const len = b64.length;
+  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return Math.floor((len * 3) / 4) - padding;
+}
+
+async function writeUploadedFile(dir, upload) {
+  const ext = path.extname(upload.filename || "") || "";
+  const filePath = path.join(dir, crypto.randomUUID() + ext);
+  await fs.writeFile(filePath, Buffer.from(upload.dataBase64, "base64"));
+  return filePath;
+}
+
+async function handleCreateTextSign(req, res, origin) {
+  let body = "";
+  for await (const chunk of req) body += chunk;
+  let data;
   try {
-    glb = await fs.readFile(CURRENT_GLB);
+    data = JSON.parse(body || "{}");
+  } catch (e) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "invalid JSON body" }));
+  }
+  const text = (data.text || "").trim();
+  if (!text) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "text required" }));
+  }
+  const board = data.board || {};
+  for (const [label, upload, max] of [
+    ["font", data.font, MAX_FONT_BYTES],
+    ["board texture", board.texture, MAX_TEXTURE_BYTES],
+    ["text texture", data.textTexture, MAX_TEXTURE_BYTES],
+  ]) {
+    if (upload && base64ByteLength(upload.dataBase64 || "") > max) {
+      res.writeHead(400, corsHeaders(origin));
+      return res.end(JSON.stringify({ error: `${label} exceeds ${Math.round(max / 1024 / 1024)}MB limit` }));
+    }
+  }
+
+  await fs.mkdir(EXPORTS_DIR, { recursive: true });
+  await fs.mkdir(FONTS_DIR, { recursive: true });
+  await fs.mkdir(TEXTURES_DIR, { recursive: true });
+
+  try {
+    const fontPath = data.font ? await writeUploadedFile(FONTS_DIR, data.font) : null;
+    const boardTexPath = board.enabled && board.texture ? await writeUploadedFile(TEXTURES_DIR, board.texture) : null;
+    const textTexPath = !board.enabled && data.textTexture ? await writeUploadedFile(TEXTURES_DIR, data.textTexture) : null;
+
+    await blenderSend("clear_scene", {});
+    const t = await blenderSend("create_text", {
+      text,
+      font_path: fontPath,
+      size: data.size ?? 1.0,
+      extrude: data.extrude ?? 0.0,
+      bevel_depth: data.bevelDepth ?? 0.0,
+      bevel_resolution: data.bevelResolution ?? 0,
+      space_character: data.spaceCharacter ?? 1.0,
+      space_word: data.spaceWord ?? 1.0,
+      space_line: data.spaceLine ?? 1.0,
+      align_x: data.alignX || "CENTER",
+      align_y: data.alignY || "CENTER",
+      name: "sign_text",
+    });
+    await blenderSend("set_material_color", {
+      object: "sign_text",
+      color: data.textColor || [0.9, 0.9, 0.85, 1.0],
+      roughness: data.textRoughness ?? 0.6,
+      metallic: data.textMetallic ?? 0.0,
+    });
+
+    const exportObjects = ["sign_text"];
+    if (board.enabled) {
+      const paddingPct = board.paddingPct ?? 0.2;
+      const thickness = board.thickness ?? 0.03;
+      const offset = board.offset ?? 0.01;
+      const boardWidth = t.dimensions[0] * (1 + paddingPct);
+      const boardHeight = t.dimensions[1] * (1 + paddingPct);
+      // Board is placed with its FRONT face at this Z, then SOLIDIFY's
+      // default offset=-1 recedes the added thickness behind that point
+      // (confirmed empirically — see the plan's verification step 1).
+      const boardZ = t.bbox_center[2] - (data.extrude ?? 0.0) - offset;
+      await blenderSend("create_primitive", {
+        type: "plane",
+        size: 1,
+        scale: [boardWidth, boardHeight, 1],
+        location: [t.bbox_center[0], t.bbox_center[1], boardZ],
+        name: "sign_board",
+      });
+      await blenderSend("modifier_add", { object: "sign_board", type: "SOLIDIFY", params: { thickness }, apply: true });
+      if (boardTexPath) {
+        await blenderSend("apply_image_texture", { object: "sign_board", image_path: boardTexPath });
+      } else {
+        await blenderSend("set_material_color", { object: "sign_board", color: board.color || [0.45, 0.3, 0.18, 1.0] });
+      }
+      exportObjects.push("sign_board");
+    } else if (textTexPath) {
+      await blenderSend("apply_image_texture", { object: "sign_text", image_path: textTexPath });
+    }
+
+    await blenderSend("export_glb", { path: CURRENT_GLB, objects: exportObjects });
+
+    const extraHeaders = {};
+    if (t.font_warning) extraHeaders["x-font-warning"] = encodeURIComponent(t.font_warning);
+    await sendCurrentGlb(res, origin, extraHeaders);
   } catch (err) {
     res.writeHead(502, corsHeaders(origin));
-    return res.end(JSON.stringify({ error: "generation finished but current.glb was not produced" }));
+    res.end(JSON.stringify({ error: String(err.message || err) }));
   }
-  res.writeHead(200, { ...corsHeaders(origin), "content-type": "model/gltf-binary" });
-  res.end(glb);
 }
 
 async function handleGetCurrent(req, res, origin) {
@@ -141,6 +263,7 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     if (req.method === "POST" && req.url === "/generate") return await handleGenerate(req, res, origin);
+    if (req.method === "POST" && req.url === "/create-text-sign") return await handleCreateTextSign(req, res, origin);
     if (req.method === "GET" && req.url === "/exports/current.glb") return await handleGetCurrent(req, res, origin);
     if (req.method === "DELETE" && req.url === "/exports/current") return await handleDeleteCurrent(req, res, origin);
     res.writeHead(404, corsHeaders(origin));

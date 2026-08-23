@@ -13,7 +13,7 @@ Protocol: one JSON object per line in both directions.
   Response: {"id": "<uuid>", "ok": true, "result": {...}}
          or {"id": "<uuid>", "ok": false, "error": "<message>"}
 
-Commands implemented: clear_scene, create_primitive, modifier_add,
+Commands implemented: clear_scene, create_primitive, create_text, modifier_add,
 set_material_color, apply_image_texture, export_glb, viewport_screenshot,
 get_scene_info. See each handler's docstring below for its args shape.
 """
@@ -21,6 +21,7 @@ get_scene_info. See each handler's docstring below for its args shape.
 import bpy
 import json
 import math
+import mathutils
 import queue
 import socket
 import threading
@@ -83,6 +84,58 @@ def cmd_create_primitive(args):
         obj.name = args["name"]
     bpy.ops.object.shade_smooth() if args.get("smooth") else None
     return {"name": obj.name, "type": ptype}
+
+
+def cmd_create_text(args):
+    """args: {text: str, font_path: str|None (None = Blender's built-in
+    default font), size, extrude, bevel_depth, bevel_resolution,
+    space_character, space_word, space_line,
+    align_x: LEFT|CENTER|RIGHT|JUSTIFY|FLUSH,
+    align_y: TOP_BASELINE|TOP|CENTER|BOTTOM_BASELINE|BOTTOM,
+    location, rotation_deg, name}. Builds a Blender TextCurve object, then
+    converts it to a normal MESH object so every other handler's
+    `obj.type == "MESH"` filter (clear_scene, export_glb, get_scene_info,
+    apply_image_texture's UV-unwrap) keeps working on it unchanged."""
+    text = args.get("text", "")
+    if not text.strip():
+        raise ValueError("text cannot be empty")
+    bpy.ops.object.text_add(location=args.get("location", [0, 0, 0]))
+    obj = bpy.context.active_object
+    curve = obj.data
+    curve.body = text
+    font_warning = None
+    font_path = args.get("font_path")
+    if font_path:
+        try:
+            curve.font = bpy.data.fonts.load(font_path, check_existing=True)
+        except Exception as e:
+            font_warning = str(e)
+    curve.size = args.get("size", 1.0)
+    curve.extrude = args.get("extrude", 0.0)
+    curve.bevel_depth = args.get("bevel_depth", 0.0)
+    curve.bevel_resolution = args.get("bevel_resolution", 0)
+    curve.space_character = args.get("space_character", 1.0)
+    curve.space_word = args.get("space_word", 1.0)
+    curve.space_line = args.get("space_line", 1.0)
+    curve.align_x = args.get("align_x", "CENTER")
+    curve.align_y = args.get("align_y", "CENTER")
+    obj.rotation_euler = [math.radians(d) for d in args.get("rotation_deg", [0, 0, 0])]
+    if args.get("name"):
+        obj.name = args["name"]
+    bpy.ops.object.convert(target="MESH")
+    # World-space bounding-box center — used by callers (e.g. the text-sign
+    # bridge endpoint) to auto-size/position a backing board behind the text.
+    corners = [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box]
+    xs = [c.x for c in corners]
+    ys = [c.y for c in corners]
+    zs = [c.z for c in corners]
+    bbox_center = [(min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, (min(zs) + max(zs)) / 2]
+    return {
+        "name": obj.name,
+        "dimensions": list(obj.dimensions),
+        "bbox_center": bbox_center,
+        "font_warning": font_warning,
+    }
 
 
 _MODIFIER_KEYS = {
@@ -222,6 +275,7 @@ def cmd_get_scene_info(args):
 _HANDLERS = {
     "clear_scene": cmd_clear_scene,
     "create_primitive": cmd_create_primitive,
+    "create_text": cmd_create_text,
     "modifier_add": cmd_modifier_add,
     "set_material_color": cmd_set_material_color,
     "apply_image_texture": cmd_apply_image_texture,
