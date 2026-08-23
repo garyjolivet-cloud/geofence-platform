@@ -187,7 +187,7 @@
       <div id="previewEmpty">Type a prompt above and click Generate to build an object with Blender.<br>Requires the local Object Studio bridge (blender-bridge/http-bridge.js) and Blender both running.</div>
       <canvas id="previewCanvas"></canvas>
       <div id="previewSpinner">Generating in Blender… this can take a minute or two.</div>
-      <div id="previewOverlayHint">drag to rotate · scroll to zoom · right-drag to pan · click an object to select it</div>
+      <div id="previewOverlayHint">drag to rotate · scroll to zoom · right-drag to pan · click an object to select it, then drag its gizmo to move/scale</div>
       <div id="previewControls">
         <button id="btnResetView" class="ghost" type="button" title="Reset camera">⟲ Reset View</button>
       </div>
@@ -195,9 +195,8 @@
            background:rgba(10,16,24,.8);border:1px solid var(--rim);border-radius:8px;padding:8px 10px;
            font-family:'Barlow Condensed';font-size:12px;color:var(--snow)">
         <span id="selectionName" style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-        <label style="display:flex;align-items:center;gap:4px;text-transform:none">Scale
-          <input type="range" id="selectionScale" min="0.3" max="2.5" step="0.05" value="1" style="width:100px">
-        </label>
+        <button id="btnModeMove" class="on" type="button" style="padding:4px 8px">⊹ Move</button>
+        <button id="btnModeScale" class="ghost" type="button" style="padding:4px 8px">⤡ Scale</button>
         <button id="btnDeleteSelected" class="danger ghost" type="button" style="padding:4px 8px">Delete</button>
         <button id="btnDeselect" class="ghost" type="button" style="padding:4px 8px">✕</button>
       </div>
@@ -218,6 +217,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import JSZip from 'jszip';
 
 const canvas = document.getElementById('previewCanvas');
@@ -234,6 +234,16 @@ controls.dampingFactor = 0.08;
 controls.enableZoom = true;
 controls.enablePan = true;
 controls.screenSpacePanning = true;
+
+// Move/scale gizmo for the currently-selected object. Scale mode hides the
+// Z handle (see setTransformMode below) so dragging only ever affects X/Y —
+// the Z (depth/extrude) axis is controlled by the Text Sign form instead.
+const transformControls = new TransformControls(camera, renderer.domElement);
+scene.add(transformControls.getHelper());
+transformControls.addEventListener('dragging-changed', event => {
+  controls.enabled = !event.value;
+  if (!event.value) commitTransform();
+});
 
 scene.add(new THREE.HemisphereLight(0xdfeaff, 0x1a1410, 1.1));
 const key = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -291,20 +301,36 @@ function clearPreview() {
 
 // ---- Object selection (click-to-pick in the viewer) ----
 let selectedObject = null;
-let selectionHelper = null;
 let onSelectionChangeCb = null;
+let onTransformCommitCb = null;
 function selectObject(obj) {
-  if (selectionHelper) { scene.remove(selectionHelper); selectionHelper = null; }
   selectedObject = obj;
-  if (obj) {
-    selectionHelper = new THREE.BoxHelper(obj, 0xff6a3d);
-    scene.add(selectionHelper);
-  }
+  if (obj) transformControls.attach(obj);
+  else transformControls.detach();
   if (onSelectionChangeCb) onSelectionChangeCb(obj ? obj.name : null);
 }
 function selectByName(name) {
   if (!currentModel || !name) { selectObject(null); return; }
   selectObject(currentModel.children.find(c => c.name === name) || null);
+}
+function setTransformMode(mode) {
+  transformControls.setMode(mode);
+  // Scale mode only exposes X/Y (plus the XY corner handle, which scales
+  // both together) — Z (depth/extrude) is controlled by the Text Sign
+  // form's own field, not something to casually drag in the viewport.
+  transformControls.showZ = mode !== 'scale';
+}
+// glTF/Three.js is Y-up; Blender is Z-up. The exporter's export_yup=True
+// mapping is glTF(x,y,z) = Blender(x,z,-y) — invert it here before sending
+// a transform back to the bridge/Blender. Scale has no sign flip (it's a
+// magnitude), just the same axis reorder.
+function commitTransform() {
+  if (!selectedObject || !onTransformCommitCb) return;
+  const p = selectedObject.position, s = selectedObject.scale;
+  onTransformCommitCb(selectedObject.name, {
+    location: [p.x, -p.z, p.y],
+    scale: [s.x, s.z, s.y],
+  });
 }
 // Each direct child of currentModel is one Blender object (glTF exports one
 // node per object) — walk up from whatever mesh the raycast actually hit
@@ -317,6 +343,7 @@ function findTopLevelChild(obj) {
 let pointerDownPos = null;
 canvas.addEventListener('pointerdown', e => { pointerDownPos = [e.clientX, e.clientY]; });
 canvas.addEventListener('pointerup', e => {
+  if (transformControls.dragging) return; // was a gizmo drag, not a selection click
   if (!pointerDownPos) return;
   const dx = e.clientX - pointerDownPos[0], dy = e.clientY - pointerDownPos[1];
   pointerDownPos = null;
@@ -378,13 +405,13 @@ async function loadObjZipBlob(blob) {
 (function animate() {
   requestAnimationFrame(animate);
   controls.update();
-  if (selectionHelper) selectionHelper.update();
   renderer.render(scene, camera);
 })();
 
 window.ObjectStudioViewer = {
-  loadModelUrl, loadObjZipBlob, clearPreview, selectByName,
+  loadModelUrl, loadObjZipBlob, clearPreview, selectByName, setTransformMode,
   getSelectedName: () => selectedObject ? selectedObject.name : null,
+  onTransformCommit: cb => { onTransformCommitCb = cb; },
   onSelectionChange: cb => { onSelectionChangeCb = cb; },
 };
 </script>
@@ -726,16 +753,38 @@ document.getElementById("btnMergeObj").onclick = async () => {
 // all deferred/module scripts have completed) rather than call it eagerly.
 document.addEventListener("DOMContentLoaded", () => {
   window.ObjectStudioViewer.onSelectionChange(name => {
-    const bar = document.getElementById("selectionBar");
-    if(name){
-      bar.style.display = "flex";
-      document.getElementById("selectionName").textContent = name;
-      document.getElementById("selectionScale").value = 1;
-    }else{
-      bar.style.display = "none";
+    document.getElementById("selectionBar").style.display = name ? "flex" : "none";
+    if(name) document.getElementById("selectionName").textContent = name;
+  });
+
+  // Committed by the module script on gizmo-drag release (mouse-up), not
+  // on every drag frame — one request per move/scale gesture. The object
+  // has already moved locally in the viewer by this point (the gizmo drives
+  // it live), so this just keeps Blender's live scene in sync; no reload
+  // needed, which avoids a jarring re-fetch/flicker after every drag.
+  window.ObjectStudioViewer.onTransformCommit(async (name, transform) => {
+    try{
+      const r = await fetch(BRIDGE+"/transform-object", {
+        method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({ object: name, location: transform.location, scale: transform.scale })
+      });
+      if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+      await r.blob(); // drain the response body; the local viewer already reflects the change
+      setGenStatus("moved/scaled "+name);
+    }catch(e){
+      setGenStatus("✕ sync failed: "+e.message+" (viewer and Blender's scene may now be out of sync — consider deleting and regenerating)");
     }
   });
 });
+
+function setTransformModeButtons(mode){
+  document.getElementById("btnModeMove").className = mode === "translate" ? "on" : "ghost";
+  document.getElementById("btnModeScale").className = mode === "scale" ? "on" : "ghost";
+  window.ObjectStudioViewer.setTransformMode(mode);
+}
+document.getElementById("btnModeMove").onclick = () => setTransformModeButtons("translate");
+document.getElementById("btnModeScale").onclick = () => setTransformModeButtons("scale");
+
 document.getElementById("btnDeselect").onclick = () => window.ObjectStudioViewer.selectByName(null);
 
 document.getElementById("btnDeleteSelected").onclick = async () => {
@@ -758,33 +807,6 @@ document.getElementById("btnDeleteSelected").onclick = async () => {
     setGenStatus("✕ delete failed: "+e.message);
   }
   setPreviewButtons();
-};
-
-let scaleDebounceTimer = null;
-document.getElementById("selectionScale").oninput = () => {
-  clearTimeout(scaleDebounceTimer);
-  scaleDebounceTimer = setTimeout(async () => {
-    const name = window.ObjectStudioViewer.getSelectedName();
-    if(!name) return;
-    const factor = parseFloat(document.getElementById("selectionScale").value) || 1;
-    try{
-      const r = await fetch(BRIDGE+"/transform-object", {
-        method:"POST", headers:{"content-type":"application/json"},
-        body: JSON.stringify({ object: name, scaleFactor: factor })
-      });
-      if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
-      const blob = await r.blob();
-      lastGeneratedBlob = blob;
-      lastGeneratedFormat = "glb";
-      await window.ObjectStudioViewer.loadModelUrl(URL.createObjectURL(blob));
-      window.ObjectStudioViewer.selectByName(name);
-      document.getElementById("selectionScale").value = 1;
-      setGenStatus(`scaled ${name} ×${factor.toFixed(2)}`);
-    }catch(e){
-      setGenStatus("✕ scale failed: "+e.message);
-    }
-    setPreviewButtons();
-  }, 250);
 };
 
 if(window.TopNav){

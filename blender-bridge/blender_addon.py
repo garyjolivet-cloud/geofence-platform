@@ -213,22 +213,52 @@ def cmd_set_material_color(args):
     return {"object": obj.name, "material": mat.name}
 
 
+def _uv_planar_z(obj):
+    """Assigns UVs straight from each vertex's local X/Y position, normalized
+    against the mesh's own X/Y bounding box — every face gets the same UV
+    space regardless of which way it faces, so front faces (+Z normal) and
+    back faces (-Z normal) end up sampling the SAME region of the texture.
+    Smart UV Project can never do this for a solid extruded shape: front and
+    back normals are 180 degrees apart, always exceeding any angle_limit,
+    so they always land in separate, arbitrarily-packed islands — which is
+    why a texture previously showed an unrelated crop on each side."""
+    mesh = obj.data
+    xs = [v.co.x for v in mesh.vertices]
+    ys = [v.co.y for v in mesh.vertices]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span_x = max(max_x - min_x, 1e-6)
+    span_y = max(max_y - min_y, 1e-6)
+    if not mesh.uv_layers:
+        mesh.uv_layers.new(name="UVMap")
+    uv_data = mesh.uv_layers.active.data
+    for loop in mesh.loops:
+        v = mesh.vertices[loop.vertex_index]
+        uv_data[loop.index].uv = ((v.co.x - min_x) / span_x, (v.co.y - min_y) / span_y)
+
+
 def cmd_apply_image_texture(args):
-    """args: {object: name, image_path: str}. Smart-UV-unwraps the object
-    (fine for primitive-derived geometry) and wires the image into the
-    material's Base Color."""
+    """args: {object: name, image_path: str, projection: "smart"|"planar_z"
+    (default "smart")}. "smart" runs Smart UV Project (good for arbitrary
+    primitive shapes from the AI Prompt flow). "planar_z" uses _uv_planar_z
+    instead — use this for flat/extruded objects like sign text and boards
+    so the texture reads consistently on both the front and back rather
+    than showing an unrelated crop on each side."""
     obj = bpy.data.objects.get(args["object"])
     if obj is None:
         raise ValueError("no such object: " + str(args.get("object")))
-    prev_active = bpy.context.view_layer.objects.active
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.select_all(action="DESELECT")
-    obj.select_set(True)
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(66))
-    bpy.ops.object.mode_set(mode="OBJECT")
-    bpy.context.view_layer.objects.active = prev_active
+    if args.get("projection") == "planar_z":
+        _uv_planar_z(obj)
+    else:
+        prev_active = bpy.context.view_layer.objects.active
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.smart_project(angle_limit=math.radians(66))
+        bpy.ops.object.mode_set(mode="OBJECT")
+        bpy.context.view_layer.objects.active = prev_active
 
     mat = _ensure_material(obj)
     nodes = mat.node_tree.nodes

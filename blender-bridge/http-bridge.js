@@ -190,15 +190,19 @@ async function generateAiTexture(prompt, workerBaseUrl) {
 // ("upload"), a shader preset (MATERIAL_PRESETS key), or an AI-generated
 // texture preset (AI_TEXTURE_PRESETS key) to `objectName`. `uploadPath` is
 // the already-disk-written path for an "upload" surface (or null otherwise).
+// Always requests "planar_z" UV projection — every caller of this function
+// is a sign_text/sign_board object (flat, Z-extruded), where that gives a
+// consistent texture on both front and back instead of Smart UV Project's
+// unrelated crop on each side (see _uv_planar_z's docstring).
 async function applySurface(objectName, surface, { color, roughness, metallic, uploadPath, workerBaseUrl }) {
   if (surface === "upload") {
     if (!uploadPath) throw new Error(`${objectName}: surface "upload" selected but no file was provided`);
-    await blenderSend("apply_image_texture", { object: objectName, image_path: uploadPath });
+    await blenderSend("apply_image_texture", { object: objectName, image_path: uploadPath, projection: "planar_z" });
   } else if (surface in MATERIAL_PRESETS) {
     await blenderSend("set_material_color", { object: objectName, ...MATERIAL_PRESETS[surface](color) });
   } else if (surface in AI_TEXTURE_PRESETS) {
     const imagePath = await generateAiTexture(AI_TEXTURE_PRESETS[surface], workerBaseUrl);
-    await blenderSend("apply_image_texture", { object: objectName, image_path: imagePath });
+    await blenderSend("apply_image_texture", { object: objectName, image_path: imagePath, projection: "planar_z" });
   } else {
     const args = { object: objectName, color: color || [0.8, 0.8, 0.8, 1.0] };
     if (roughness !== undefined) args.roughness = roughness;
