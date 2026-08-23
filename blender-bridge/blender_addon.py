@@ -14,7 +14,7 @@ Protocol: one JSON object per line in both directions.
          or {"id": "<uuid>", "ok": false, "error": "<message>"}
 
 Commands implemented: clear_scene, create_primitive, create_text, modifier_add,
-set_material_color, apply_image_texture, export_glb, delete_object,
+set_material_color, apply_image_texture, export_glb, import_glb, delete_object,
 transform_object, export_obj, viewport_screenshot, get_scene_info. See each
 handler's docstring below for its args shape.
 """
@@ -258,6 +258,21 @@ def cmd_export_glb(args):
     return {"path": path, "objects": [o.name for o in targets]}
 
 
+def cmd_import_glb(args):
+    """args: {path: str}. Imports a .glb into the LIVE scene (via Blender's
+    glTF importer) and returns the names of the newly-created mesh objects.
+    Used when the user picks a previously-saved asset from the Saved
+    Objects tree — without this, that asset only ever existed as a
+    preview in the browser's Three.js viewer, never as a real object in
+    Blender, so selecting/scaling/deleting it (which all operate on the
+    live scene) would silently fail with 'no such object'."""
+    path = args["path"]
+    before = set(o.name for o in bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=path)
+    imported = [o for o in bpy.data.objects if o.name not in before and o.type == "MESH"]
+    return {"objects": [o.name for o in imported]}
+
+
 def cmd_delete_object(args):
     """args: {object: name}. Removes one named mesh object (and its mesh/
     material datablocks if now unused) without touching the rest of the
@@ -384,6 +399,7 @@ _HANDLERS = {
     "set_material_color": cmd_set_material_color,
     "apply_image_texture": cmd_apply_image_texture,
     "export_glb": cmd_export_glb,
+    "import_glb": cmd_import_glb,
     "delete_object": cmd_delete_object,
     "transform_object": cmd_transform_object,
     "export_obj": cmd_export_obj,

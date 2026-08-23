@@ -21,6 +21,7 @@ import JSZip from "jszip";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 const EXPORTS_DIR = path.join(__dirname, "exports");
+const IMPORTS_DIR = path.join(__dirname, "imports"); // temp downloads for /import-model, gitignored
 const FONTS_DIR = path.join(__dirname, "fonts"); // ephemeral per-upload files (gitignored)
 const FONT_PRESETS_DIR = path.join(__dirname, "font-presets"); // committed, permanent
 const TEXTURES_DIR = path.join(__dirname, "textures");
@@ -62,33 +63,25 @@ function corsHeaders(origin) {
   return h;
 }
 
-function buildPrompt(userPrompt, keepScene) {
-  const steps = [];
-  if (keepScene) {
-    steps.push(`Call blender_get_scene_info first to see what's already in the scene. Do NOT call blender_clear_scene — the user is adding this as an additional object alongside what's already there. Give your new object(s) distinct names that won't collide with existing ones.`);
-  } else {
-    steps.push(`Call blender_clear_scene first.`);
-  }
-  steps.push(
-    `Compose the object from primitives (blender_create_primitive) plus modifiers (blender_modifier_add) as needed. Keep it a single coherent object roughly 0.2-3 meters in size, centered near the origin.`,
-    `Give it a real surface using blender_generate_and_apply_texture (preferred) or blender_set_material_color if a flat color is more appropriate.`,
-    `Optionally call blender_viewport_screenshot to check your work and adjust.`,
-    `Call blender_export_glb with no arguments (so it exports every mesh object currently in the scene, and writes to the default current.glb path) as your LAST action.`,
-  );
+function buildPrompt(userPrompt) {
   return [
     `You are driving Blender through the blender_* MCP tools to build a single low-poly, stylized 3D prop for an outdoor geofence tour app.`,
     `Requested object: "${userPrompt}"`,
     ``,
     `Steps:`,
-    ...steps.map((s, i) => `${i + 1}. ${s}`),
+    `1. Call blender_get_scene_info to see what's already in the scene. Do NOT call blender_clear_scene under any circumstances — the scene may already contain other objects the user is deliberately building up together, and clearing it would destroy their work. Only ever ADD to the scene, never remove or replace what's already there.`,
+    `2. Compose the new object from primitives (blender_create_primitive) plus modifiers (blender_modifier_add) as needed, using a "name" that doesn't collide with anything already in the scene. Keep it a single coherent object roughly 0.2-3 meters in size, centered near the origin.`,
+    `3. Give it a real surface using blender_generate_and_apply_texture (preferred) or blender_set_material_color if a flat color is more appropriate.`,
+    `4. Optionally call blender_viewport_screenshot to check your work and adjust.`,
+    `5. Call blender_export_glb with no arguments (so it exports every mesh object currently in the scene — including anything that was already there before this request — and writes to the default current.glb path) as your LAST action.`,
     `Do not ask any clarifying questions — make reasonable choices and proceed autonomously.`,
   ].join("\n");
 }
 
-function runClaudeHeadless(userPrompt, keepScene) {
+function runClaudeHeadless(userPrompt) {
   return new Promise((resolve, reject) => {
     const args = [
-      "-p", buildPrompt(userPrompt, keepScene),
+      "-p", buildPrompt(userPrompt),
       "--mcp-config", path.join(REPO_ROOT, ".mcp.json"),
       "--allowedTools", "mcp__object-studio-blender__*",
       "--permission-mode", "acceptEdits",
@@ -138,7 +131,7 @@ async function handleGenerate(req, res, origin) {
   }
   await fs.mkdir(EXPORTS_DIR, { recursive: true });
   try {
-    await runClaudeHeadless(prompt, !!parsed.keepScene);
+    await runClaudeHeadless(prompt);
   } catch (err) {
     res.writeHead(502, corsHeaders(origin));
     return res.end(JSON.stringify({ error: String(err.message || err) }));
@@ -256,9 +249,9 @@ async function handleCreateTextSign(req, res, origin) {
     const textTexPath = !board.enabled && textSurface === "upload" && data.textTexture
       ? await writeUploadedFile(TEXTURES_DIR, data.textTexture) : null;
 
-    if (!data.keepScene) await blenderSend("clear_scene", {});
-    // Suffix each generation's object names so repeated additions in
-    // keepScene mode never collide with a prior generation's objects.
+    // Never auto-clear — objects always accumulate in the scene; the only
+    // way to reset is the explicit /clear-scene route. Suffix each
+    // generation's object names so repeated additions never collide.
     const suffix = crypto.randomUUID().slice(0, 8);
     const textName = `sign_text_${suffix}`;
     const boardName = `sign_board_${suffix}`;
@@ -321,12 +314,43 @@ async function handleCreateTextSign(req, res, origin) {
     }
 
     // Export everything currently in the scene, not just this generation's
-    // objects — in keepScene mode that includes earlier additions too.
+    // objects — objects always accumulate, so this includes earlier
+    // additions too (see the "Never auto-clear" comment above).
     await blenderSend("export_glb", { path: CURRENT_GLB });
 
     const extraHeaders = {};
     if (t.font_warning) extraHeaders["x-font-warning"] = encodeURIComponent(t.font_warning);
     await sendCurrentGlb(res, origin, extraHeaders);
+  } catch (err) {
+    res.writeHead(502, corsHeaders(origin));
+    res.end(JSON.stringify({ error: String(err.message || err) }));
+  }
+}
+
+async function handleImportModel(req, res, origin) {
+  let body = "";
+  for await (const chunk of req) body += chunk;
+  let data;
+  try {
+    data = JSON.parse(body || "{}");
+  } catch (e) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "invalid JSON body" }));
+  }
+  if (!data.url) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "url required" }));
+  }
+  try {
+    await fs.mkdir(IMPORTS_DIR, { recursive: true });
+    const r = await fetch(data.url);
+    if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    const glbPath = path.join(IMPORTS_DIR, crypto.randomUUID() + ".glb");
+    await fs.writeFile(glbPath, buf);
+    await blenderSend("import_glb", { path: glbPath });
+    await blenderSend("export_glb", { path: CURRENT_GLB });
+    await sendCurrentGlb(res, origin);
   } catch (err) {
     res.writeHead(502, corsHeaders(origin));
     res.end(JSON.stringify({ error: String(err.message || err) }));
@@ -451,6 +475,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "POST" && req.url === "/generate") return await handleGenerate(req, res, origin);
     if (req.method === "POST" && req.url === "/create-text-sign") return await handleCreateTextSign(req, res, origin);
+    if (req.method === "POST" && req.url === "/import-model") return await handleImportModel(req, res, origin);
     if (req.method === "POST" && req.url === "/delete-object") return await handleDeleteObject(req, res, origin);
     if (req.method === "POST" && req.url === "/transform-object") return await handleTransformObject(req, res, origin);
     if (req.method === "POST" && req.url === "/clear-scene") return await handleClearScene(req, res, origin);
