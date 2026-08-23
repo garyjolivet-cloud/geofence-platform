@@ -295,11 +295,11 @@ def _drain_timer():
 
 
 def start():
+    global _server_thread
     if _server_thread and _server_thread.is_alive():
         print("[object-studio] bridge already running")
         return
     _stop_flag.clear()
-    global _server_thread
     _server_thread = threading.Thread(target=_accept_loop, daemon=True)
     _server_thread.start()
     if not bpy.app.timers.is_registered(_drain_timer):
