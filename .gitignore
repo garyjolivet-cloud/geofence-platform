@@ -6,3 +6,4 @@ node_modules/
 dist/
 blender-bridge/exports/
 blender-bridge/textures/
+blender-bridge/fonts/

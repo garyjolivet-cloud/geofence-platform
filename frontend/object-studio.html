@@ -101,7 +101,16 @@
       </div>
       <div class="signRow">
         <label>Font
-          <select id="signFontSelect"><option value="default">Default</option><option value="custom">Custom upload…</option></select>
+          <select id="signFontSelect">
+            <option value="default">Default</option>
+            <option value="rye">Rye (rustic)</option>
+            <option value="sancreek">Sancreek (rustic)</option>
+            <option value="ranchers">Ranchers (bold)</option>
+            <option value="alfaslabone">Alfa Slab One (bold)</option>
+            <option value="anton">Anton (condensed)</option>
+            <option value="bebasneue">Bebas Neue (condensed)</option>
+            <option value="custom">Custom upload…</option>
+          </select>
         </label>
         <label id="signFontFileWrap" style="display:none">Font file (.ttf/.otf)
           <input type="file" id="signFontFile" accept=".ttf,.otf">
@@ -420,7 +429,9 @@ document.getElementById("btnGenerateSign").onclick = async () => {
   setGenStatus("generating sign…");
   try{
     const boardOn = document.getElementById("signBoardToggle").checked;
-    const useCustomFont = document.getElementById("signFontSelect").value === "custom";
+    const fontChoice = document.getElementById("signFontSelect").value;
+    const useCustomFont = fontChoice === "custom";
+    const fontPreset = (fontChoice !== "default" && !useCustomFont) ? fontChoice : null;
     const fontFile = useCustomFont ? document.getElementById("signFontFile").files[0] : null;
     const boardSurface = document.getElementById("signBoardSurface").value;
     const textSurface = document.getElementById("signTextSurface").value;
@@ -431,6 +442,7 @@ document.getElementById("btnGenerateSign").onclick = async () => {
 
     const payload = {
       text,
+      fontPreset,
       font: await fileUpload(fontFile, MAX_FONT_MB, "font"),
       size: parseFloat(document.getElementById("signSize").value)||1,
       extrude: parseFloat(document.getElementById("signExtrude").value)||0,

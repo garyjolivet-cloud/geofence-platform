@@ -20,13 +20,27 @@ import { send as blenderSend } from "./blender-client.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 const EXPORTS_DIR = path.join(__dirname, "exports");
-const FONTS_DIR = path.join(__dirname, "fonts");
+const FONTS_DIR = path.join(__dirname, "fonts"); // ephemeral per-upload files (gitignored)
+const FONT_PRESETS_DIR = path.join(__dirname, "font-presets"); // committed, permanent
 const TEXTURES_DIR = path.join(__dirname, "textures");
 const CURRENT_GLB = path.join(EXPORTS_DIR, "current.glb");
 const PORT = 8791;
 const GENERATE_TIMEOUT_MS = 5 * 60 * 1000; // headless agent run, generous
 const MAX_FONT_BYTES = 5 * 1024 * 1024;
 const MAX_TEXTURE_BYTES = 15 * 1024 * 1024;
+
+// Bundled trail-sign-style fonts (Google Fonts, OFL-licensed — see the
+// matching *-OFL.txt next to each file) selectable straight from the
+// dropdown, no upload needed. Add more by dropping a .ttf/.otf into
+// font-presets/ and adding a line here.
+const FONT_PRESETS = {
+  rye: "Rye-Regular.ttf",
+  sancreek: "Sancreek-Regular.ttf",
+  ranchers: "Ranchers-Regular.ttf",
+  alfaslabone: "AlfaSlabOne-Regular.ttf",
+  anton: "Anton-Regular.ttf",
+  bebasneue: "BebasNeue-Regular.ttf",
+};
 
 // wrangler dev's port bumps between restarts (confirmed repo habit — see
 // CLAUDE.md/project memory), so this can't be a fixed-port allowlist: any
@@ -224,7 +238,9 @@ async function handleCreateTextSign(req, res, origin) {
   await fs.mkdir(TEXTURES_DIR, { recursive: true });
 
   try {
-    const fontPath = data.font ? await writeUploadedFile(FONTS_DIR, data.font) : null;
+    const fontPath = data.fontPreset && FONT_PRESETS[data.fontPreset]
+      ? path.join(FONT_PRESETS_DIR, FONT_PRESETS[data.fontPreset])
+      : data.font ? await writeUploadedFile(FONTS_DIR, data.font) : null;
     const boardTexPath = board.enabled && boardSurface === "upload" && board.texture
       ? await writeUploadedFile(TEXTURES_DIR, board.texture) : null;
     const textTexPath = !board.enabled && textSurface === "upload" && data.textTexture
