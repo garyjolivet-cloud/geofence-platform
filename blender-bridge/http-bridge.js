@@ -64,7 +64,7 @@ function runClaudeHeadless(userPrompt) {
       "--allowedTools", "mcp__object-studio-blender__*",
       "--permission-mode", "acceptEdits",
     ];
-    const child = spawn("claude", args, { cwd: REPO_ROOT, shell: true });
+    const child = spawn("claude", args, { cwd: REPO_ROOT });
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill();
