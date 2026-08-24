@@ -280,6 +280,7 @@ async function handleCreateTextSign(req, res, origin) {
       name: textName,
     });
 
+    let boardZLocal = 0;
     if (board.enabled) {
       // Board on: text is always a plain flat color; the board carries
       // whichever surface (color/upload/preset) was selected.
@@ -298,12 +299,15 @@ async function handleCreateTextSign(req, res, origin) {
       // Board is placed with its FRONT face at this Z, then SOLIDIFY's
       // default offset=-1 recedes the added thickness behind that point
       // (confirmed empirically — see the plan's verification step 1).
-      const boardZ = t.bbox_center[2] - (data.extrude ?? 0.0) - offset;
+      // "Local" because this is in the pre-upright-rotation flat frame —
+      // see boardZLocal's use below, after the whole assembly gets tipped
+      // upright.
+      boardZLocal = t.bbox_center[2] - (data.extrude ?? 0.0) - offset;
       await blenderSend("create_primitive", {
         type: "plane",
         size: 1,
         scale: [boardWidth, boardHeight, 1],
-        location: [t.bbox_center[0], t.bbox_center[1], boardZ],
+        location: [t.bbox_center[0], t.bbox_center[1], boardZLocal],
         name: boardName,
       });
       await blenderSend("modifier_add", { object: boardName, type: "SOLIDIFY", params: { thickness }, apply: true });
@@ -321,6 +325,25 @@ async function handleCreateTextSign(req, res, origin) {
         uploadPath: textTexPath,
         workerBaseUrl: data.workerBaseUrl,
       });
+    }
+
+    // Text (and a plane primitive like the board) is built lying flat —
+    // local Y is the reading-up direction, local Z is the extrude/normal
+    // direction — like text lying on a tabletop rather than standing as a
+    // real sign. Tip the whole assembly up: +90deg about X maps local Y to
+    // world Z (gravity-up) and local Z to a horizontal facing direction.
+    // Text is always created at the world origin (see cmd_create_text's
+    // default location), so it's the natural pivot for this rigid rotation
+    // — rotating each object's own orientation by the same amount keeps
+    // them level with each other, but the board's LOCATION (computed
+    // relative to that same origin, in the pre-rotation flat frame) must
+    // be rotated by the identical transform too, or it ends up floating
+    // in the wrong place relative to the now-upright text.
+    const rotX90 = (v) => [v[0], -v[2], v[1]];
+    await blenderSend("transform_object", { object: textName, rotation_deg: [90, 0, 0] });
+    if (board.enabled) {
+      const boardLoc = rotX90([t.bbox_center[0], t.bbox_center[1], boardZLocal]);
+      await blenderSend("transform_object", { object: boardName, location: boardLoc, rotation_deg: [90, 0, 0] });
     }
 
     // Export everything currently in the scene, not just this generation's

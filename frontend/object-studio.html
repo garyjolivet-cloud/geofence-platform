@@ -198,6 +198,7 @@
         <button id="btnModeMove" class="on" type="button" style="padding:4px 8px">⊹ Move</button>
         <button id="btnModeScale" class="ghost" type="button" style="padding:4px 8px">⤡ Scale</button>
         <button id="btnModeRotate" class="ghost" type="button" style="padding:4px 8px">↻ Rotate</button>
+        <button id="btnStandUpright" class="ghost" type="button" style="padding:4px 8px" title="Snap this object back to level/vertical (fixes accidental tilt from dragging the rotate gizmo)">⬆ Level</button>
         <button id="btnTextureSelected" class="ghost" type="button" style="padding:4px 8px">🎨 Texture</button>
         <button id="btnCopyStyle" class="ghost" type="button" style="padding:4px 8px" title="Copy this object's font/size/bevel/color/surface settings into the Text Sign form">📋 Copy Style</button>
         <button id="btnDeleteSelected" class="danger ghost" type="button" style="padding:4px 8px">Delete</button>
@@ -930,6 +931,31 @@ document.getElementById("btnCopyStyle").onclick = () => {
 
   setGenStatus("style copied from "+name+" — enter new text and click Generate Sign");
 };
+
+document.getElementById("btnStandUpright").onclick = async () => {
+  const name = window.ObjectStudioViewer.getSelectedName();
+  if(!name){ setGenStatus("✕ select an object first"); return; }
+  try{
+    // [90,0,0] is the same "stand upright" rotation newly-generated signs
+    // get by default (see http-bridge.js's handleCreateTextSign) — snaps
+    // this object back to level/vertical regardless of how it got tilted.
+    const r = await fetch(BRIDGE+"/transform-object", {
+      method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify({ object: name, rotationDeg: [90, 0, 0] })
+    });
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    const blob = await r.blob();
+    lastGeneratedBlob = blob;
+    lastGeneratedFormat = "glb";
+    await window.ObjectStudioViewer.loadModelUrl(URL.createObjectURL(blob));
+    window.ObjectStudioViewer.selectByName(name);
+    setGenStatus("leveled "+name);
+  }catch(e){
+    setGenStatus("✕ level failed: "+e.message);
+  }
+  setPreviewButtons();
+};
+
 document.getElementById("btnCancelTexture").onclick = () => {
   document.getElementById("textureBar").style.display = "none";
 };
