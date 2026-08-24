@@ -58,7 +58,13 @@ function isAllowedOrigin(origin) {
 }
 
 function corsHeaders(origin) {
-  const h = { "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type" };
+  const h = {
+    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type",
+    // Custom response headers (x-font-warning, x-text-object, x-board-object)
+    // are otherwise invisible to fetch()'s response.headers.get(...) in the
+    // browser — only the CORS-safelisted headers are readable by default.
+    "access-control-expose-headers": "x-font-warning, x-text-object, x-board-object",
+  };
   if (isAllowedOrigin(origin)) h["access-control-allow-origin"] = origin;
   return h;
 }
@@ -322,7 +328,11 @@ async function handleCreateTextSign(req, res, origin) {
     // additions too (see the "Never auto-clear" comment above).
     await blenderSend("export_glb", { path: CURRENT_GLB });
 
-    const extraHeaders = {};
+    // Report which real (possibly de-collided) object name(s) this
+    // generation actually created, so the caller can later look up "what
+    // style made this object" for a Copy Style action.
+    const extraHeaders = { "x-text-object": textName };
+    if (board.enabled) extraHeaders["x-board-object"] = boardName;
     if (t.font_warning) extraHeaders["x-font-warning"] = encodeURIComponent(t.font_warning);
     await sendCurrentGlb(res, origin, extraHeaders);
   } catch (err) {

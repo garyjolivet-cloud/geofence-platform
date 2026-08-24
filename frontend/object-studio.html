@@ -187,7 +187,7 @@
       <div id="previewEmpty">Type a prompt above and click Generate to build an object with Blender.<br>Requires the local Object Studio bridge (blender-bridge/http-bridge.js) and Blender both running.</div>
       <canvas id="previewCanvas"></canvas>
       <div id="previewSpinner">Generating in Blender… this can take a minute or two.</div>
-      <div id="previewOverlayHint">drag to rotate · scroll to zoom · right-drag to pan · click an object to select it, then drag its gizmo to move/scale</div>
+      <div id="previewOverlayHint">drag to orbit camera · scroll to zoom · right-drag to pan · click an object to select it, then Move/Scale/Rotate + drag its gizmo</div>
       <div id="previewControls">
         <button id="btnResetView" class="ghost" type="button" title="Reset camera">⟲ Reset View</button>
       </div>
@@ -197,7 +197,9 @@
         <span id="selectionName" style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
         <button id="btnModeMove" class="on" type="button" style="padding:4px 8px">⊹ Move</button>
         <button id="btnModeScale" class="ghost" type="button" style="padding:4px 8px">⤡ Scale</button>
+        <button id="btnModeRotate" class="ghost" type="button" style="padding:4px 8px">↻ Rotate</button>
         <button id="btnTextureSelected" class="ghost" type="button" style="padding:4px 8px">🎨 Texture</button>
+        <button id="btnCopyStyle" class="ghost" type="button" style="padding:4px 8px" title="Copy this object's font/size/bevel/color/surface settings into the Text Sign form">📋 Copy Style</button>
         <button id="btnDeleteSelected" class="danger ghost" type="button" style="padding:4px 8px">Delete</button>
         <button id="btnDeselect" class="ghost" type="button" style="padding:4px 8px">✕</button>
       </div>
@@ -340,22 +342,28 @@ function selectByName(name) {
   selectObject(currentModel.children.find(c => c.name === name) || null);
 }
 function setTransformMode(mode) {
-  transformControls.setMode(mode);
-  // Scale mode only exposes X/Y (plus the XY corner handle, which scales
-  // both together) — Z (depth/extrude) is controlled by the Text Sign
-  // form's own field, not something to casually drag in the viewport.
-  transformControls.showZ = mode !== 'scale';
+  transformControls.setMode(mode); // 'translate' | 'scale' | 'rotate' — all 3 axes shown in every mode
 }
 // glTF/Three.js is Y-up; Blender is Z-up. The exporter's export_yup=True
-// mapping is glTF(x,y,z) = Blender(x,z,-y) — invert it here before sending
-// a transform back to the bridge/Blender. Scale has no sign flip (it's a
-// magnitude), just the same axis reorder.
+// mapping is glTF(x,y,z) = Blender(x,z,-y) — invert it here (toBlenderVec)
+// before sending a transform back to the bridge/Blender. Scale has no sign
+// flip (it's a magnitude along the object's own local axes, not a vector
+// in world space), just the same axis reorder.
+function toBlenderVec(v) { return [v.x, -v.z, v.y]; }
 function commitTransform() {
   if (!selectedObject || !onTransformCommitCb) return;
-  const p = selectedObject.position, s = selectedObject.scale;
+  const p = selectedObject.position, s = selectedObject.scale, q = selectedObject.quaternion;
+  // Full 3D rotation: convert the object's three local axis directions
+  // (true vectors, so they use the same toBlenderVec as position) rather
+  // than hand-deriving Euler-angle composition here — see
+  // cmd_transform_object's "basis" docstring for why.
+  const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+  const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+  const axisZ = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
   onTransformCommitCb(selectedObject.name, {
-    location: [p.x, -p.z, p.y],
+    location: toBlenderVec(p),
     scale: [s.x, s.z, s.y],
+    basis: { x: toBlenderVec(axisX), y: toBlenderVec(axisY), z: toBlenderVec(axisZ) },
   });
 }
 // Each direct child of currentModel is one Blender object (glTF exports one
@@ -450,6 +458,13 @@ const BRIDGE = "http://127.0.0.1:8791";
 const studio = { projectId:null, projectName:null };
 let lastGeneratedBlob = null; // Blob of the not-yet-saved current.glb (or merged .zip), or null
 let lastGeneratedFormat = "glb"; // "glb" | "obj-zip" — which of the two lastGeneratedBlob is
+// Style capture for "Copy Style": every successful Text Sign generation
+// records its full form payload (minus the actual text content) here,
+// keyed by the real object name(s) the bridge reports back (x-text-object/
+// x-board-object headers) — lets a later selection recall exactly how a
+// given object was styled and re-apply it to a new generation.
+const objectStyles = {};
+let pendingFontUpload = null, pendingBoardTexUpload = null, pendingTextTexUpload = null;
 
 function setGenStatus(msg){ document.getElementById("genStatus").textContent = msg||""; }
 function setPreviewButtons(){
@@ -634,6 +649,11 @@ function hexToRgba(hex){
   const n = parseInt(hex.replace("#",""), 16);
   return [((n>>16)&255)/255, ((n>>8)&255)/255, (n&255)/255, 1.0];
 }
+function rgbaToHex(rgba){
+  if(!rgba) return "#e6e6d9";
+  const toHex = c => Math.round(Math.max(0,Math.min(1,c))*255).toString(16).padStart(2,"0");
+  return "#"+toHex(rgba[0])+toHex(rgba[1])+toHex(rgba[2]);
+}
 const MAX_FONT_MB = 5, MAX_TEXTURE_MB = 15;
 async function fileUpload(file, maxMb, label){
   if(!file) return null;
@@ -658,13 +678,21 @@ document.getElementById("btnGenerateSign").onclick = async () => {
     const textSurface = document.getElementById("signTextSurface").value;
     const boardTexFile = boardOn && boardSurface === "upload" ? document.getElementById("signBoardTextureFile").files[0] : null;
     const textTexFile = !boardOn && textSurface === "upload" ? document.getElementById("signTextTextureFile").files[0] : null;
-    if(boardOn && boardSurface === "upload" && !boardTexFile){ throw new Error("pick a board image, or choose a different board surface"); }
-    if(!boardOn && textSurface === "upload" && !textTexFile){ throw new Error("pick a text image, or choose a different text surface"); }
+    // Fall back to a copied-style's remembered upload when no fresh file
+    // was picked in this session — lets "Copy Style" faithfully reuse a
+    // previous custom font/texture without needing to re-pick the file.
+    const fontUpload = fontFile ? await fileUpload(fontFile, MAX_FONT_MB, "font") : (useCustomFont ? pendingFontUpload : null);
+    const boardTexUpload = boardTexFile ? await fileUpload(boardTexFile, MAX_TEXTURE_MB, "board texture")
+      : (boardOn && boardSurface === "upload" ? pendingBoardTexUpload : null);
+    const textTexUpload = textTexFile ? await fileUpload(textTexFile, MAX_TEXTURE_MB, "text texture")
+      : (!boardOn && textSurface === "upload" ? pendingTextTexUpload : null);
+    if(boardOn && boardSurface === "upload" && !boardTexUpload){ throw new Error("pick a board image, or choose a different board surface"); }
+    if(!boardOn && textSurface === "upload" && !textTexUpload){ throw new Error("pick a text image, or choose a different text surface"); }
 
     const payload = {
       text,
       fontPreset,
-      font: await fileUpload(fontFile, MAX_FONT_MB, "font"),
+      font: fontUpload,
       size: parseFloat(document.getElementById("signSize").value)||1,
       extrude: parseFloat(document.getElementById("signExtrude").value)||0,
       bevelDepth: parseFloat(document.getElementById("signBevelDepth").value)||0,
@@ -683,9 +711,9 @@ document.getElementById("btnGenerateSign").onclick = async () => {
         paddingPct: (parseFloat(document.getElementById("signBoardPadding").value)||20)/100,
         thickness: parseFloat(document.getElementById("signBoardThickness").value)||0.03,
         color: hexToRgba(document.getElementById("signBoardColor").value),
-        texture: await fileUpload(boardTexFile, MAX_TEXTURE_MB, "board texture"),
+        texture: boardTexUpload,
       },
-      textTexture: await fileUpload(textTexFile, MAX_TEXTURE_MB, "text texture"),
+      textTexture: textTexUpload,
     };
 
     const r = await fetch(BRIDGE+"/create-text-sign", {
@@ -694,9 +722,16 @@ document.getElementById("btnGenerateSign").onclick = async () => {
     });
     if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
     const fontWarning = r.headers.get("x-font-warning");
+    const textObjName = r.headers.get("x-text-object");
+    const boardObjName = r.headers.get("x-board-object");
     const blob = await r.blob();
     lastGeneratedBlob = blob;
     lastGeneratedFormat = "glb";
+    // Record the style (everything but the text itself) under whichever
+    // real object name(s) this generation produced, for a later Copy Style.
+    const { text: _unused, ...style } = payload;
+    if(textObjName) objectStyles[textObjName] = style;
+    if(boardObjName) objectStyles[boardObjName] = style;
     const url = URL.createObjectURL(blob);
     await window.ObjectStudioViewer.loadModelUrl(url);
     setGenStatus(fontWarning ? "done — custom font failed to load, used default ("+decodeURIComponent(fontWarning)+")" : "done");
@@ -794,11 +829,11 @@ document.addEventListener("DOMContentLoaded", () => {
     try{
       const r = await fetch(BRIDGE+"/transform-object", {
         method:"POST", headers:{"content-type":"application/json"},
-        body: JSON.stringify({ object: name, location: transform.location, scale: transform.scale })
+        body: JSON.stringify({ object: name, location: transform.location, scale: transform.scale, basis: transform.basis })
       });
       if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
       await r.blob(); // drain the response body; the local viewer already reflects the change
-      setGenStatus("moved/scaled "+name);
+      setGenStatus("updated "+name);
     }catch(e){
       setGenStatus("✕ sync failed: "+e.message+" (viewer and Blender's scene may now be out of sync — consider deleting and regenerating)");
     }
@@ -808,10 +843,12 @@ document.addEventListener("DOMContentLoaded", () => {
 function setTransformModeButtons(mode){
   document.getElementById("btnModeMove").className = mode === "translate" ? "on" : "ghost";
   document.getElementById("btnModeScale").className = mode === "scale" ? "on" : "ghost";
+  document.getElementById("btnModeRotate").className = mode === "rotate" ? "on" : "ghost";
   window.ObjectStudioViewer.setTransformMode(mode);
 }
 document.getElementById("btnModeMove").onclick = () => setTransformModeButtons("translate");
 document.getElementById("btnModeScale").onclick = () => setTransformModeButtons("scale");
+document.getElementById("btnModeRotate").onclick = () => setTransformModeButtons("rotate");
 
 document.getElementById("btnDeselect").onclick = () => window.ObjectStudioViewer.selectByName(null);
 
@@ -842,6 +879,56 @@ document.getElementById("btnTextureSelected").onclick = () => {
   if(!name){ setGenStatus("✕ select an object first"); return; }
   const bar = document.getElementById("textureBar");
   bar.style.display = bar.style.display === "flex" ? "none" : "flex";
+};
+
+document.getElementById("btnCopyStyle").onclick = () => {
+  const name = window.ObjectStudioViewer.getSelectedName();
+  if(!name){ setGenStatus("✕ select an object first"); return; }
+  const style = objectStyles[name];
+  if(!style){ setGenStatus("✕ no recorded style for \""+name+"\" — only Text Sign generations made this session are remembered"); return; }
+
+  setMode("text");
+
+  const fontSelect = document.getElementById("signFontSelect");
+  fontSelect.value = style.fontPreset ? style.fontPreset : (style.font ? "custom" : "default");
+  fontSelect.dispatchEvent(new Event("change"));
+  pendingFontUpload = style.font || null;
+
+  document.getElementById("signSize").value = style.size;
+  document.getElementById("signExtrude").value = style.extrude;
+  document.getElementById("signBevelDepth").value = style.bevelDepth;
+  document.getElementById("signBevelRes").value = style.bevelResolution;
+  document.getElementById("signSpaceChar").value = style.spaceCharacter;
+  document.getElementById("signSpaceWord").value = style.spaceWord;
+  document.getElementById("signSpaceLine").value = style.spaceLine;
+  document.getElementById("signAlignX").value = style.alignX;
+  document.getElementById("signAlignY").value = style.alignY;
+
+  const boardToggle = document.getElementById("signBoardToggle");
+  boardToggle.checked = !!(style.board && style.board.enabled);
+  boardToggle.dispatchEvent(new Event("change"));
+
+  const board = style.board || {};
+  document.getElementById("signBoardPadding").value = Math.round((board.paddingPct ?? 0.2)*100);
+  document.getElementById("signBoardThickness").value = board.thickness ?? 0.03;
+  // Surface selects first — wireSurfaceSelect's change handler auto-sets a
+  // generic starting tint for preset surfaces as a side effect, so the
+  // copied colors are set AFTER, last, to make sure they're what actually
+  // sticks rather than being clobbered by that generic default.
+  const boardSurfaceSel = document.getElementById("signBoardSurface");
+  boardSurfaceSel.value = board.surface || "color";
+  boardSurfaceSel.dispatchEvent(new Event("change"));
+  pendingBoardTexUpload = board.texture || null;
+
+  const textSurfaceSel = document.getElementById("signTextSurface");
+  textSurfaceSel.value = style.textSurface || "color";
+  textSurfaceSel.dispatchEvent(new Event("change"));
+  pendingTextTexUpload = style.textTexture || null;
+
+  document.getElementById("signTextColor").value = rgbaToHex(style.textColor);
+  document.getElementById("signBoardColor").value = rgbaToHex(board.color);
+
+  setGenStatus("style copied from "+name+" — enter new text and click Generate Sign");
 };
 document.getElementById("btnCancelTexture").onclick = () => {
   document.getElementById("textureBar").style.display = "none";

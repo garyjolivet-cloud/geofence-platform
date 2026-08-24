@@ -322,17 +322,41 @@ def cmd_delete_object(args):
 
 def cmd_transform_object(args):
     """args: {object: name, location: optional [x,y,z] (absolute),
-    rotation_deg: optional [x,y,z] (absolute), scale: optional [x,y,z]
+    rotation_deg: optional [x,y,z] (absolute Euler XYZ, degrees),
+    basis: optional {x:[3],y:[3],z:[3]} (three orthonormal axis vectors,
+    already in Blender space — see below), scale: optional [x,y,z]
     (absolute), scale_factor: optional float (multiplies current scale
     uniformly on all 3 axes — used by the scene editor's per-object scale
     slider so resizing preserves whatever anisotropic scale the object was
-    created with, e.g. a sign board's width/height/thickness ratio)}."""
+    created with, e.g. a sign board's width/height/thickness ratio)}.
+
+    `basis` exists because the viewer's rotate gizmo operates in glTF/
+    Three.js's Y-up space, not Blender's Z-up space. Converting a full 3D
+    orientation between the two by hand-deriving Euler-angle composition
+    in JS is exactly the kind of math that's easy to get subtly wrong
+    (axis order, sign, gimbal ambiguity) with no way to visually catch it
+    from the browser. Instead the caller does only the same simple,
+    already-verified linear conversion used for location (swap Y/Z, negate
+    the new Y) applied to each of the object's three local axis vectors,
+    and sends the resulting orthonormal basis here — this function builds
+    a rotation matrix from it and lets mathutils (Blender's own, trusted
+    math library) do the matrix-to-Euler decomposition, guaranteeing the
+    result matches obj.rotation_euler's semantics exactly. Takes priority
+    over rotation_deg if both are present."""
     obj = bpy.data.objects.get(args["object"])
     if obj is None:
         raise ValueError("no such object: " + str(args.get("object")))
     if "location" in args:
         obj.location = args["location"]
-    if "rotation_deg" in args:
+    if "basis" in args:
+        b = args["basis"]
+        mat = mathutils.Matrix((
+            (b["x"][0], b["y"][0], b["z"][0]),
+            (b["x"][1], b["y"][1], b["z"][1]),
+            (b["x"][2], b["y"][2], b["z"][2]),
+        ))
+        obj.rotation_euler = mat.to_euler()
+    elif "rotation_deg" in args:
         obj.rotation_euler = [math.radians(d) for d in args["rotation_deg"]]
     if "scale" in args:
         obj.scale = args["scale"]
