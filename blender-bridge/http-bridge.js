@@ -361,6 +361,41 @@ async function handleImportModel(req, res, origin) {
   }
 }
 
+async function handleApplySurface(req, res, origin) {
+  let body = "";
+  for await (const chunk of req) body += chunk;
+  let data;
+  try {
+    data = JSON.parse(body || "{}");
+  } catch (e) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "invalid JSON body" }));
+  }
+  if (!data.object) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: "object required" }));
+  }
+  const surface = data.surface || "color";
+  if (data.texture && base64ByteLength(data.texture.dataBase64 || "") > MAX_TEXTURE_BYTES) {
+    res.writeHead(400, corsHeaders(origin));
+    return res.end(JSON.stringify({ error: `texture exceeds ${Math.round(MAX_TEXTURE_BYTES / 1024 / 1024)}MB limit` }));
+  }
+  try {
+    await fs.mkdir(TEXTURES_DIR, { recursive: true });
+    const uploadPath = surface === "upload" && data.texture ? await writeUploadedFile(TEXTURES_DIR, data.texture) : null;
+    await applySurface(data.object, surface, {
+      color: data.color,
+      uploadPath,
+      workerBaseUrl: data.workerBaseUrl,
+    });
+    await blenderSend("export_glb", { path: CURRENT_GLB });
+    await sendCurrentGlb(res, origin);
+  } catch (err) {
+    res.writeHead(502, corsHeaders(origin));
+    res.end(JSON.stringify({ error: String(err.message || err) }));
+  }
+}
+
 async function handleDeleteObject(req, res, origin) {
   let body = "";
   for await (const chunk of req) body += chunk;
@@ -480,6 +515,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/generate") return await handleGenerate(req, res, origin);
     if (req.method === "POST" && req.url === "/create-text-sign") return await handleCreateTextSign(req, res, origin);
     if (req.method === "POST" && req.url === "/import-model") return await handleImportModel(req, res, origin);
+    if (req.method === "POST" && req.url === "/apply-surface") return await handleApplySurface(req, res, origin);
     if (req.method === "POST" && req.url === "/delete-object") return await handleDeleteObject(req, res, origin);
     if (req.method === "POST" && req.url === "/transform-object") return await handleTransformObject(req, res, origin);
     if (req.method === "POST" && req.url === "/clear-scene") return await handleClearScene(req, res, origin);

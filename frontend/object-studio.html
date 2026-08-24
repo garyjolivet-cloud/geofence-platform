@@ -197,8 +197,34 @@
         <span id="selectionName" style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
         <button id="btnModeMove" class="on" type="button" style="padding:4px 8px">⊹ Move</button>
         <button id="btnModeScale" class="ghost" type="button" style="padding:4px 8px">⤡ Scale</button>
+        <button id="btnTextureSelected" class="ghost" type="button" style="padding:4px 8px">🎨 Texture</button>
         <button id="btnDeleteSelected" class="danger ghost" type="button" style="padding:4px 8px">Delete</button>
         <button id="btnDeselect" class="ghost" type="button" style="padding:4px 8px">✕</button>
+      </div>
+      <div id="textureBar" style="position:absolute;top:56px;left:12px;display:none;flex-direction:column;gap:8px;
+           background:rgba(10,16,24,.9);border:1px solid var(--rim);border-radius:8px;padding:12px;
+           font-family:'Barlow Condensed';font-size:12px;color:var(--snow);width:240px">
+        <label style="display:flex;flex-direction:column;gap:3px;text-transform:uppercase;letter-spacing:.3px;color:var(--fog);font-size:11px">Surface
+          <select id="selTexSurface">
+            <option value="color">Flat Color</option>
+            <option value="upload">Custom Image Upload</option>
+            <option value="metallic">Metallic</option>
+            <option value="glass">Glass</option>
+            <option value="neon">Neon Glow</option>
+            <option value="rusty">Rusty Metal</option>
+            <option value="worn_wood">Worn Wood</option>
+          </select>
+        </label>
+        <label id="selTexColorWrap" style="display:flex;flex-direction:column;gap:3px;text-transform:uppercase;letter-spacing:.3px;color:var(--fog);font-size:11px">Color
+          <input type="color" id="selTexColor" value="#e6e6d9">
+        </label>
+        <label id="selTexFileWrap" style="display:none;flex-direction:column;gap:3px;text-transform:uppercase;letter-spacing:.3px;color:var(--fog);font-size:11px">Image
+          <input type="file" id="selTexFile" accept="image/*">
+        </label>
+        <div style="display:flex;gap:6px;justify-content:flex-end">
+          <button id="btnCancelTexture" class="ghost" type="button" style="padding:4px 10px">Cancel</button>
+          <button id="btnApplyTexture" class="on" type="button" style="padding:4px 10px">Apply</button>
+        </div>
       </div>
     </div>
   </div>
@@ -593,6 +619,7 @@ function wireSurfaceSelect(selectId, colorWrapId, colorInputId, fileWrapId){
 }
 wireSurfaceSelect("signBoardSurface", "signBoardColorWrap", "signBoardColor", "signBoardTextureFileWrap");
 wireSurfaceSelect("signTextSurface", null, "signTextColor", "signTextTextureFileWrap");
+wireSurfaceSelect("selTexSurface", "selTexColorWrap", "selTexColor", "selTexFileWrap");
 
 async function fileToBase64(file){
   const buf = new Uint8Array(await file.arrayBuffer());
@@ -754,6 +781,7 @@ document.getElementById("btnMergeObj").onclick = async () => {
 document.addEventListener("DOMContentLoaded", () => {
   window.ObjectStudioViewer.onSelectionChange(name => {
     document.getElementById("selectionBar").style.display = name ? "flex" : "none";
+    document.getElementById("textureBar").style.display = "none";
     if(name) document.getElementById("selectionName").textContent = name;
   });
 
@@ -807,6 +835,55 @@ document.getElementById("btnDeleteSelected").onclick = async () => {
     setGenStatus("✕ delete failed: "+e.message);
   }
   setPreviewButtons();
+};
+
+document.getElementById("btnTextureSelected").onclick = () => {
+  const name = window.ObjectStudioViewer.getSelectedName();
+  if(!name){ setGenStatus("✕ select an object first"); return; }
+  const bar = document.getElementById("textureBar");
+  bar.style.display = bar.style.display === "flex" ? "none" : "flex";
+};
+document.getElementById("btnCancelTexture").onclick = () => {
+  document.getElementById("textureBar").style.display = "none";
+};
+
+document.getElementById("btnApplyTexture").onclick = async () => {
+  const name = window.ObjectStudioViewer.getSelectedName();
+  if(!name){ setGenStatus("✕ select an object first"); return; }
+  const surface = document.getElementById("selTexSurface").value;
+  const file = surface === "upload" ? document.getElementById("selTexFile").files[0] : null;
+  if(surface === "upload" && !file){ setGenStatus("✕ pick an image, or choose a different surface"); return; }
+  const btn = document.getElementById("btnApplyTexture");
+  btn.disabled = true;
+  document.getElementById("previewSpinner").classList.add("show");
+  setGenStatus("applying texture…");
+  try{
+    const payload = {
+      object: name,
+      surface,
+      color: hexToRgba(document.getElementById("selTexColor").value),
+      texture: await fileUpload(file, MAX_TEXTURE_MB, "texture"),
+      workerBaseUrl: location.origin,
+    };
+    const r = await fetch(BRIDGE+"/apply-surface", {
+      method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+    const blob = await r.blob();
+    lastGeneratedBlob = blob;
+    lastGeneratedFormat = "glb";
+    await window.ObjectStudioViewer.loadModelUrl(URL.createObjectURL(blob));
+    window.ObjectStudioViewer.selectByName(name);
+    document.getElementById("textureBar").style.display = "none";
+    setGenStatus("texture applied to "+name);
+  }catch(e){
+    setGenStatus("✕ apply texture failed: "+e.message);
+  }finally{
+    btn.disabled = false;
+    document.getElementById("previewSpinner").classList.remove("show");
+    setPreviewButtons();
+  }
 };
 
 if(window.TopNav){
