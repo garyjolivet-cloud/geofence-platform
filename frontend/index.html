@@ -197,6 +197,25 @@
   </div>
 </div>
 
+<!-- Workspace settings modal — per-app feature flags. None of these seven
+     boolean flags (threeDEnabled, fogEnabled, questEnabled, tileArtEnabled,
+     etc.) had ANY admin UI before this — all were master-token-only via
+     direct PUT /api/apps/:id calls. Only tileArtEnabled is exposed here for
+     now, added on direct request; the others stay API-only until someone
+     actually needs them in this UI too, rather than building out all seven
+     speculatively. -->
+<div id="wsSettingsModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:center;justify-content:center;padding:20px">
+  <div style="width:100%;max-width:420px;background:#141d2b;border:1px solid #2e3f58;border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h2 style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:0">Workspace settings</h2>
+      <button onclick="closeWsSettings()" style="background:none;border:none;color:#8aa5bf;font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <p style="font-family:'Barlow Condensed';font-size:13px;color:#8aa5bf;margin:0" id="wsSettingsClientName"></p>
+    <div id="wsSettingsList" style="display:flex;flex-direction:column;gap:10px"></div>
+    <p class="hint" id="wsSettingsMsg" style="font-family:'Barlow Condensed';font-size:12px;color:#8aa5bf;margin:0"></p>
+  </div>
+</div>
+
 <!-- Walk QR modal — the ▶ Walk button used to navigate straight into
      /engine on whatever device you clicked it from, which is almost always
      this laptop, not the phone you'd actually walk the tour with. Scanning
@@ -304,6 +323,7 @@ function clientNode(client, overrideProjects){
       <span class="c-icon">${icon}</span>
       <span class="c-name">${esc(client.name)}</span>
       <span class="c-count">${count}</span>
+      ${client.id!=null?`<button class="p-more" onclick="event.stopPropagation();openWsSettings('${escJs(client.id)}','${escJs(client.name)}')" title="Workspace settings">⚙</button>`:""}
     </div>
     ${inner}
   </div>`;
@@ -586,6 +606,44 @@ async function submitMerge(){
   }catch(e){ msg.textContent="Failed: "+e.message; }
 }
 document.getElementById("mergeModal").addEventListener("click",e=>{ if(e.target===document.getElementById("mergeModal")) closeMergeModal(); });
+
+// ---- Workspace settings: per-app feature-flag toggles (currently just
+// tileArtEnabled — see the modal's own HTML comment for why the other six
+// flags aren't exposed here yet). A client can have more than one
+// workspace (appsForClient already exists for exactly this), so this lists
+// every workspace under the clicked client, not just a single default one. ----
+function openWsSettings(clientId, clientName){
+  document.getElementById("wsSettingsClientName").textContent=clientName;
+  document.getElementById("wsSettingsMsg").textContent="";
+  const apps=appsForClient(clientId);
+  const list=document.getElementById("wsSettingsList");
+  list.innerHTML=apps.length?apps.map(a=>`
+    <label style="display:flex;align-items:center;gap:10px;font-family:'Barlow Condensed';font-size:14px;cursor:pointer">
+      <input type="checkbox" data-app-id="${esc(a.id)}" ${a.tileArtEnabled?"checked":""} onchange="toggleWsTileArt(this)" style="width:18px;height:18px;accent-color:var(--coral)">
+      <span style="flex:1">${esc(a.name)} <span style="color:#8aa5bf;font-size:12px">— Tile Art (Artistic Fog-of-War)</span></span>
+    </label>`).join("")
+    : '<p class="hint" style="font-family:\'Barlow Condensed\';font-size:13px;color:#8aa5bf;margin:0">No workspaces under this customer yet.</p>';
+  document.getElementById("wsSettingsModal").style.display="flex";
+}
+function closeWsSettings(){ document.getElementById("wsSettingsModal").style.display="none"; }
+async function toggleWsTileArt(checkbox){
+  const appId=checkbox.dataset.appId;
+  const app=_apps.find(a=>a.id===appId);
+  const msg=document.getElementById("wsSettingsMsg");
+  const token=await askToken();
+  if(!token){ checkbox.checked=!checkbox.checked; return; }
+  msg.textContent="Saving…";
+  try{
+    const r=await fetch("/api/apps/"+encodeURIComponent(appId),{method:"PUT",
+      headers:{"content-type":"application/json",authorization:"Bearer "+token},
+      body:JSON.stringify({name:app?app.name:appId, tileArtEnabled:checkbox.checked})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ checkbox.checked=!checkbox.checked; msg.textContent="Failed: "+(j.error||r.status); return; }
+    if(app) app.tileArtEnabled=checkbox.checked;
+    msg.textContent="Saved.";
+  }catch(e){ checkbox.checked=!checkbox.checked; msg.textContent="Failed: "+e.message; }
+}
+document.getElementById("wsSettingsModal").addEventListener("click",e=>{ if(e.target===document.getElementById("wsSettingsModal")) closeWsSettings(); });
 
 // ---- Walk QR modal ----
 function openWalkQr(pid, name){
