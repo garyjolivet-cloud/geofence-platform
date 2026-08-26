@@ -26,6 +26,10 @@
     {
       "binding": "MODELS",
       "bucket_name": "geofence-models"
+    },
+    {
+      "binding": "TILES",
+      "bucket_name": "geofence-tiles"
     }
   ],
   "ai": {

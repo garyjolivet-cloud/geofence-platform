@@ -1,0 +1,16 @@
+{
+  "name": "geofence-platform",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@turf/turf": "^7.1.0",
+    "fast-png": "^8.0.0",
+    "h3-js": "^4.1.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

@@ -9,6 +9,8 @@
 <script src="/kalman-filter.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
+<script src="/tile-fog.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <!-- Live 3D AR-object preview (Phase 3, trigger-based show/hide) — same
      module fence-editor.html already uses, ported here so a simulated walk
@@ -1105,6 +1107,7 @@ function feed(lat,lon,acc,t,bleFix){
   if(effAlt!=null){ fix.alt=effAlt; fix.altAcc=(bleFix&&bleFix.altAcc!=null)?bleFix.altAcc:5; fix.altSource="baro"; }
   const sm=GPSFilter.push(fix);
   TravelHeading.update(sm.speed, sm.headingTravel);
+  if(BUNDLE.tileArtEnabled&&typeof TileFog!=='undefined') TileFog.reveal(sm.lat,sm.lon,sm.acc,60);
   // p.alt uses the immediate sample, not the EKF-smoothed sm.alt — same
   // reasoning as feedSim(): avoids lag behind a fast simulated
   // teleport/drag between stops at different elevations.
@@ -1299,11 +1302,44 @@ function centroidOf(zones){ let la=0,lo=0,n=0;
   zones.forEach(z=>{ if(z.center){la+=z.center[0];lo+=z.center[1];n++;} });
   return n?[la/n,lo/n]:[0,0]; }
 
-function loadBundle(b,srcLabel){
+// Artistic Fog-of-War Tiles Phase D — same extraction/init pair as
+// geofence-engine.html's own copy (there's no shared "bundle helpers"
+// module for this app, so this one small function is mirrored verbatim by
+// design, same as the rest of this file's Geofencer trigger engine per
+// CLAUDE.md's documented mirror convention — the actual fog/rendering logic
+// itself lives once in the real shared tile-fog.js).
+function extractTileCorridorsFromBundle(b){
+  const out=[];
+  (b.zones||[]).forEach(z=>{
+    if(Array.isArray(z.path)&&z.path.length>=2){
+      out.push({coords:z.path.map(p=>[p[1],p[0]]),activityType:z.activityType||"hike"});
+      return;
+    }
+    const tgt=(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
+    if(tgt) out.push({coords:tgt.geometry.path.map(p=>[p[1],p[0]]),activityType:z.activityType||"hike"});
+  });
+  return out;
+}
+async function initTileArt(b,pid){
+  // pid comes from the caller's own known project id, not b.project --
+  // confirmed live (2026-08-25) that the published bundle JSON never
+  // embeds a project id (it's known from the route, not the bundle), so
+  // b.project is always undefined and silently no-ops TileFog.load().
+  // Bundles loaded by paste/file/sample have no real project id at all,
+  // which is fine -- there's no classified terrain to fetch for those either.
+  if(!b.tileArtEnabled||!pid||typeof TileFog==='undefined') return;
+  try{
+    await TileFog.load({projectId:pid,deviceId:null,season:b.season});
+    await TileFog.attachToMap(map);
+    TileFog.renderCorridors(extractTileCorridorsFromBundle(b));
+  }catch(e){}
+}
+function loadBundle(b,srcLabel,pid){
   if(!b || !Array.isArray(b.zones)){ log("ev-warn","that doesn't look like a bundle (need a zones array)"); return; }
   BUNDLE = b;
   if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
   loadWalkingPaths(b);
+  initTileArt(b,pid);
   GPSFilter.reset(); Geofencer.reset(); prevP=null; _arNearStateSim={}; fixCount=0;
   AmbientClip.stop();
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);
@@ -1433,7 +1469,7 @@ async function loadProjectFromPlatform(pid){
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/bundle");
     if(!r.ok){ const e=await r.json().catch(()=>({})); log("ev-warn","platform: "+(e.error||("HTTP "+r.status))); return; }
-    const b=await r.json(); loadBundle(b,"platform · "+pid);
+    const b=await r.json(); loadBundle(b,"platform · "+pid,pid);
   }catch(e){ log("ev-warn","platform load failed: "+e.message); }
 }
 document.getElementById("btnPlatform").onclick=()=>{

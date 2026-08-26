@@ -18,6 +18,10 @@
                         Omit (or set to *) to allow all origins.  (var)
    ===================================================================== */
 
+import * as h3 from "h3-js";
+import * as turf from "@turf/turf";
+import { decode as decodePNG } from "fast-png";
+
 // Public endpoints allow any browser origin.
 const CORS_PUBLIC = {
   "access-control-allow-origin": "*",
@@ -482,6 +486,130 @@ async function codeObjectScopeOk(env, A, orgId) {
     return !!(row && row.orgId === orgId);
   } catch (e) { return false; }
 }
+
+// --- Artistic Fog-of-War Tiles, Phase B: terrain classification helpers.
+// Priority order matters -- first matching rule wins, tried area tags
+// (natural/landuse/building) before linear tags (waterway/highway, which get
+// buffered into polygons at parse time so classification is one consistent
+// point-in-polygon test either way). ---
+const TILE_REVEAL_MARGIN_M = 60; // ~one H3 k=1 ring beyond the corridor's own width
+const TERRAIN_TAXONOMY = [
+  { type: "water_lake",  test: t => t.natural === "water" || t.landuse === "reservoir" },
+  { type: "wetland",     test: t => t.natural === "wetland" },
+  { type: "urban_block", test: t => !!t.building },
+  { type: "plaza",       test: t => t.highway === "pedestrian" || t.landuse === "plaza" || t.landuse === "square" },
+  { type: "sand",        test: t => t.natural === "beach" || t.natural === "sand" },
+  { type: "farmland",    test: t => t.landuse === "farmland" || t.landuse === "orchard" },
+  { type: "forest",      test: t => t.natural === "wood" || t.landuse === "forest" },
+  { type: "scrub",       test: t => t.natural === "scrub" },
+  { type: "rock_face",   test: t => t.natural === "bare_rock" || t.natural === "cliff" },
+  { type: "scree",       test: t => t.natural === "scree" || t.natural === "shingle" },
+  { type: "snow",        test: t => t.natural === "glacier" },
+  { type: "meadow",      test: t => t.natural === "grassland" || t.landuse === "meadow" },
+];
+const TERRAIN_LINE_TYPES = [
+  { type: "water_river", halfWidthM: 8, test: t => t.waterway === "river" || t.waterway === "stream" },
+  { type: "trail",       halfWidthM: 4, test: t => ["path", "footway", "track"].includes(t.highway) || !!t["piste:type"] },
+];
+// Only consulted when a cell has no OSM tag match at all -- a single
+// per-project setting, not per-cell painting, so classification stays fully
+// automatic while still having a sane default for OSM-sparse backcountry.
+const BIOME_FALLBACK = { alpine: "meadow", forest: "forest", coastal: "sand", urban: "plaza", farmland: "farmland" };
+
+function hashCellToVariant(h3Cell) {
+  let h = 0;
+  for (let i = 0; i < h3Cell.length; i++) h = (h * 31 + h3Cell.charCodeAt(i)) | 0;
+  return Math.abs(h) % 3;
+}
+
+async function fetchOverpassFeatures(bboxSWNE) {
+  const [south, west, north, east] = bboxSWNE;
+  const bbox = `${south},${west},${north},${east}`;
+  const q = `[out:json][timeout:25];(way["natural"](${bbox});way["landuse"](${bbox});way["building"](${bbox});way["waterway"](${bbox});way["highway"](${bbox}););out geom;`;
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST", body: "data=" + encodeURIComponent(q),
+    // Overpass rejects requests with no User-Agent (406) -- confirmed live,
+    // this silently degraded every classify-terrain call to elevation+biome
+    // fallback only, since the caller treats a thrown error as
+    // offline/unreachable and moves on rather than surfacing it.
+    headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "geofence-platform (github.com/gary-jolivet/geofence-platform)" }
+  });
+  if (!res.ok) throw new Error("overpass query failed: " + res.status);
+  const j = await res.json();
+  return j.elements || [];
+}
+function overpassElementToPolygon(el) {
+  if (!el.geometry || el.geometry.length < 3) return null;
+  const coords = el.geometry.filter(Boolean).map(p => [p.lon, p.lat]);
+  if (coords.length < 3) return null;
+  if (coords[0][0] !== coords[coords.length - 1][0] || coords[0][1] !== coords[coords.length - 1][1]) coords.push(coords[0]);
+  try { return turf.polygon([coords]); } catch (e) { return null; }
+}
+function overpassElementToLine(el) {
+  if (!el.geometry || el.geometry.length < 2) return null;
+  const coords = el.geometry.filter(Boolean).map(p => [p.lon, p.lat]);
+  if (coords.length < 2) return null;
+  try { return turf.lineString(coords); } catch (e) { return null; }
+}
+function classifyFromOsm(lon, lat, areaFeatures, lineFeatures) {
+  const pt = turf.point([lon, lat]);
+  for (const f of areaFeatures) { try { if (turf.booleanPointInPolygon(pt, f.poly)) return f.type; } catch (e) {} }
+  for (const f of lineFeatures) { try { if (turf.booleanPointInPolygon(pt, f.poly)) return f.type; } catch (e) {} }
+  return null;
+}
+
+// Terrarium DEM tiles (same source geofence-engine.html/fence-editor.html
+// already load client-side for 3D terrain) fetched+decoded server-side for
+// elevation/slope sampling — z12 balances tile-fetch count against
+// precision for this secondary/fallback classification signal.
+function tileForLngLat(lon, lat, z) {
+  const n = Math.pow(2, z);
+  const latRad = lat * Math.PI / 180;
+  const xf = (lon + 180) / 360 * n;
+  const yf = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+  const x = Math.floor(xf), y = Math.floor(yf);
+  return { z, x, y, px: Math.min(255, Math.max(0, Math.floor((xf - x) * 256))), py: Math.min(255, Math.max(0, Math.floor((yf - y) * 256))) };
+}
+async function sampleElevation(lon, lat, tileCache) {
+  const t = tileForLngLat(lon, lat, 12);
+  const key = `${t.z}/${t.x}/${t.y}`;
+  let img = tileCache.get(key);
+  if (img === undefined) {
+    try {
+      const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${t.z}/${t.x}/${t.y}.png`);
+      img = res.ok ? decodePNG(new Uint8Array(await res.arrayBuffer())) : null;
+    } catch (e) { img = null; }
+    tileCache.set(key, img);
+  }
+  if (!img) return null;
+  const idx = (t.py * img.width + t.px) * img.channels;
+  return (img.data[idx] * 256 + img.data[idx + 1] + img.data[idx + 2] / 256) - 32768;
+}
+// Pure decision logic, factored out of classifyFromElevation() so it's
+// testable without mocking the Terrarium DEM fetch (same "_internal" spirit
+// as kalman-filter.js's f()/jacobianF() split) -- thresholds tuned against
+// Kicking Horse alpine terrain (see CLAUDE.md's Artistic Fog-of-War Tiles
+// section), not yet validated against other mountain ranges' real slope
+// distributions.
+function classifyElevationSlope(elevationM, slopeDeg) {
+  if (slopeDeg > 35) return "rock_face";
+  if (slopeDeg > 20 && elevationM > 2200) return "scree";
+  if (elevationM > 2800) return "snow";
+  return null;
+}
+async function classifyFromElevation(lon, lat, tileCache) {
+  const center = await sampleElevation(lon, lat, tileCache);
+  if (center == null) return { type: null, elevation: null, slope: null };
+  const D = 0.0004; // ~40m offset at mid-latitudes, for a simple two-axis slope estimate
+  const [east, north] = await Promise.all([sampleElevation(lon + D, lat, tileCache), sampleElevation(lon, lat + D, tileCache)]);
+  let slopeDeg = 0;
+  if (east != null && north != null) {
+    const distM = 40, dzdx = (east - center) / distM, dzdy = (north - center) / distM;
+    slopeDeg = Math.atan(Math.sqrt(dzdx * dzdx + dzdy * dzdy)) * 180 / Math.PI;
+  }
+  return { type: classifyElevationSlope(center, slopeDeg), elevation: center, slope: slopeDeg };
+}
+
 function scopesForRole(role) {
   if (role === "admin") return "*";
   if (role === "operator") return "analytics";
@@ -615,6 +743,16 @@ async function sendEmail(env, { to, subject, html }) {
   if (!r.ok) throw new Error("Resend " + r.status + ": " + await r.text());
   return { sent: true };
 }
+
+// Artistic Fog-of-War Tiles classifier internals, exported for
+// tests/terrain-classifier.test.js -- same "_internal exports for a
+// standalone Node test file" pattern as frontend/kalman-filter.js's
+// GPSFilter._internal, adapted to this file's real ESM export syntax.
+export {
+  TERRAIN_TAXONOMY, TERRAIN_LINE_TYPES, BIOME_FALLBACK,
+  hashCellToVariant, classifyFromOsm, classifyElevationSlope,
+  overpassElementToPolygon, overpassElementToLine
+};
 
 export default {
   async fetch(request, env) {
@@ -1654,7 +1792,7 @@ async function api(request, env, url) {
     const sql = "SELECT a.id,a.orgId,a.name,a.slug,a.description,a.updatedAt,a.three_d_enabled AS threeDEnabled, " +
       "a.terrain_altitude_enabled AS terrainAltitudeEnabled, a.visitors_fly AS visitorsFly, " +
       "a.hazard_aware_enabled AS hazardAwareEnabled, a.fog_enabled AS fogEnabled, " +
-      "a.quest_enabled AS questEnabled, " +
+      "a.quest_enabled AS questEnabled, a.tile_art_enabled AS tileArtEnabled, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
@@ -1727,10 +1865,16 @@ async function api(request, env, url) {
     // (GET /api/quest-workspaces). Separate from fogEnabled — an app can be
     // quest-enabled (publicly listed) with fog visuals off, or vice versa.
     const questEnabled = b.questEnabled === undefined ? null : (b.questEnabled ? 1 : 0);
-    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), fog_enabled=COALESCE(?,fog_enabled), quest_enabled=COALESCE(?,quest_enabled), updatedAt=? WHERE id=?")
-      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, fogEnabled, questEnabled, now, aid).run();
+    // tileArtEnabled (Artistic Fog-of-War Tiles Phase C) — a seventh flag,
+    // gating the whole board-game-tile map feature. Unlike fogEnabled/
+    // questEnabled, this is platform-wide (any project type), not tied to
+    // Ridge Quest — DEFAULT 0 (see migrations/0052), an app must explicitly
+    // opt in, same "own explicit opt-in" reasoning as threeDEnabled etc.
+    const tileArtEnabled = b.tileArtEnabled === undefined ? null : (b.tileArtEnabled ? 1 : 0);
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), fog_enabled=COALESCE(?,fog_enabled), quest_enabled=COALESCE(?,quest_enabled), tile_art_enabled=COALESCE(?,tile_art_enabled), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, fogEnabled, questEnabled, tileArtEnabled, now, aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
-    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware, fogEnabled, questEnabled }, 200, AC);
+    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware, fogEnabled, questEnabled, tileArtEnabled }, 200, AC);
   }
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
@@ -1840,7 +1984,7 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days,quest_public AS questPublic,quest_activities AS questActivities FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days,quest_public AS questPublic,quest_activities AS questActivities,terrain_biome AS terrainBiome,season FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
@@ -1918,8 +2062,8 @@ async function api(request, env, url) {
     if (!proj) return json({ error: "project not found" }, 404, AC);
     if (!scopeOk(A, "publish", proj.appId)) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json().catch(() => ({}));
-    if (!("record_retention_days" in b) && !("questPublic" in b) && !("questActivities" in b))
-      return json({ error: "record_retention_days, questPublic, or questActivities required" }, 400, AC);
+    if (!("record_retention_days" in b) && !("questPublic" in b) && !("questActivities" in b) && !("terrainBiome" in b) && !("season" in b))
+      return json({ error: "record_retention_days, questPublic, questActivities, terrainBiome, or season required" }, 400, AC);
     const now = new Date().toISOString();
     const resp = { ok: true, id: pid };
     if ("record_retention_days" in b) {
@@ -1959,6 +2103,31 @@ async function api(request, env, url) {
       await env.DB.prepare("UPDATE project SET quest_activities=?, updatedAt=? WHERE id=?").bind(questActivities, now, pid).run();
       await logAudit(env, request, A, "project.questActivities.update", pid + " -> " + (questActivities || "null(all)"));
       resp.questActivities = b.questActivities;
+    }
+    // Artistic Fog-of-War Tiles Phase C — terrainBiome, the single
+    // per-project classification fallback (used only when a cell has no OSM
+    // tag match and the elevation/slope heuristic is inconclusive; see
+    // BIOME_FALLBACK). null clears it back to the generic default.
+    if ("terrainBiome" in b) {
+      const terrainBiome = b.terrainBiome === null ? null : String(b.terrainBiome);
+      if (terrainBiome !== null && !(terrainBiome in BIOME_FALLBACK))
+        return json({ error: "terrainBiome must be one of " + Object.keys(BIOME_FALLBACK).join("/") + ", or null" }, 400, AC);
+      await env.DB.prepare("UPDATE project SET terrain_biome=?, updatedAt=? WHERE id=?").bind(terrainBiome, now, pid).run();
+      await logAudit(env, request, A, "project.terrainBiome.update", pid + " -> " + (terrainBiome || "null"));
+      resp.terrainBiome = terrainBiome;
+    }
+    // Artistic Fog-of-War Tiles — season, which of a season-aware tile's
+    // two rows (see migrations/0054) the engine/sim/Test Mode actually load.
+    // null means "no season set yet" -- GET /api/tile-assets with no
+    // ?season= returns every row unfiltered, so an unset project just shows
+    // both seasons' tiles mixed rather than erroring.
+    if ("season" in b) {
+      const season = b.season === null ? null : String(b.season);
+      if (season !== null && season !== "summer" && season !== "winter")
+        return json({ error: "season must be 'summer', 'winter', or null" }, 400, AC);
+      await env.DB.prepare("UPDATE project SET season=?, updatedAt=? WHERE id=?").bind(season, now, pid).run();
+      await logAudit(env, request, A, "project.season.update", pid + " -> " + (season || "null"));
+      resp.season = season;
     }
     return json(resp, 200, AC);
   }
@@ -2306,14 +2475,23 @@ async function api(request, env, url) {
       bundle.bundleVersion = row.version;
       // Reflect the live owner — a project may have moved clients since this
       // bundle was published, and the stored JSON would otherwise be stale.
-      const ownerRow = await env.DB.prepare("SELECT orgId, quest_activities FROM project WHERE id=?").bind(pid).first();
+      const ownerRow = await env.DB.prepare(
+        "SELECT p.orgId AS orgId, p.quest_activities AS questActivities, p.terrain_biome AS terrainBiome, p.season AS season, a.tile_art_enabled AS tileArtEnabled " +
+        "FROM project p LEFT JOIN app a ON a.id = p.appId WHERE p.id=?"
+      ).bind(pid).first();
       if (ownerRow) bundle.orgId = ownerRow.orgId;
+      // Artistic Fog-of-War Tiles — same live-owner-injection pattern as
+      // orgId/questActivities: an app-level toggle + two project-level
+      // settings, neither part of the published bundle JSON itself.
+      bundle.tileArtEnabled = !!(ownerRow && ownerRow.tileArtEnabled);
+      bundle.terrainBiome = (ownerRow && ownerRow.terrainBiome) || null;
+      bundle.season = (ownerRow && ownerRow.season) || null;
       // R12 — the per-project activity-relevance filter isn't part of the
       // published bundle JSON (it's a project-row column, set via the
       // separate PATCH endpoint, not the Fence Editor's Publish button) —
       // injected here at read time, same live-owner-injection pattern as
       // orgId just above. null = every activity allowed (backward compat).
-      try { bundle.questActivities = ownerRow && ownerRow.quest_activities ? JSON.parse(ownerRow.quest_activities) : null; }
+      try { bundle.questActivities = ownerRow && ownerRow.questActivities ? JSON.parse(ownerRow.questActivities) : null; }
       catch (e) { bundle.questActivities = null; }
       // Merge active live zones — filtered by guide when visitor arrived via a guide's walk link
       const liveGuide = url.searchParams.get("guide");
@@ -4472,10 +4650,16 @@ async function api(request, env, url) {
       const { prompt } = await request.json();
       if (!prompt || typeof prompt !== "string") return json({ error: "prompt required" }, 400, CORS_PUBLIC);
       const result = await env.AI.run("@cf/black-forest-labs/flux-1-schnell", { prompt: prompt.slice(0, 800) });
-      // flux-1-schnell returns { image: <base64 PNG> } rather than raw bytes.
+      // flux-1-schnell's docs describe { image: <base64 PNG> }, but confirmed
+      // live (2026-08-25) it sometimes actually returns JPEG bytes under that
+      // same base64 "image" field -- hardcoding content-type:image/png
+      // mislabeled those responses. Sniff the real format from the decoded
+      // magic bytes instead of trusting the model's documented shape.
       if (result && typeof result.image === "string") {
         const bytes = Uint8Array.from(atob(result.image), c => c.charCodeAt(0));
-        return new Response(bytes, { status: 200, headers: { "content-type": "image/png", ...CORS_PUBLIC } });
+        const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+        const ct = isPng ? "image/png" : "image/jpeg";
+        return new Response(bytes, { status: 200, headers: { "content-type": ct, ...CORS_PUBLIC } });
       }
       // Fallback for any texture model that instead streams raw image bytes.
       if (result && result.body) {
@@ -4485,6 +4669,234 @@ async function api(request, env, url) {
     } catch (e) {
       return json({ error: e.message }, 502, CORS_PUBLIC);
     }
+  }
+
+  // --- Artistic Fog-of-War Tiles, Phase A: tile_asset is the shared,
+  // platform-global library of curated board-game-style tile art. Master-
+  // only (curation is a deliberate hand-picked step after generating via
+  // /api/texture-gen above, not a per-org/per-scope upload surface like
+  // audio clips or 3D models) -- mirrors /api/asset-object's binary-upload
+  // shape (query-string metadata + raw body bytes), storing into the TILES
+  // bucket instead of MODELS. ---
+  if (path === "/api/tile-asset" && method === "POST") {
+    if (!(await authed(request, env))) return json({ error: "admin access required" }, 403, AC);
+    if (!env.TILES) return json({ error: "no tiles bucket bound (create R2 'geofence-tiles' + binding)" }, 500, AC);
+    const terrainType = (url.searchParams.get("terrainType") || "").trim();
+    const variantIndex = parseInt(url.searchParams.get("variantIndex") || "0", 10) || 0;
+    const style = (url.searchParams.get("style") || "").trim();
+    // Season is orthogonal to terrainType (see migrations/0054) -- 'summer'/
+    // 'winter', or omitted/null for a season-neutral tile (rock_face,
+    // scree, urban_block, plaza, landmarks, fog all look the same
+    // year-round).
+    const seasonRaw = url.searchParams.get("season");
+    const season = seasonRaw === "summer" || seasonRaw === "winter" ? seasonRaw : null;
+    if (!terrainType) return json({ error: "terrainType required" }, 400, AC);
+    const buf = await request.arrayBuffer();
+    if (!buf.byteLength) return json({ error: "empty upload" }, 400, AC);
+    // Sniff actual format from magic bytes rather than trusting the
+    // uploader's Content-Type header -- /api/texture-gen's own output isn't
+    // reliably PNG (see its own comment), and every tile in this library
+    // was produced by that route. R2 key keeps a .png extension regardless
+    // (a permanent opaque id, same convention as audio/model keys elsewhere
+    // in this codebase -- the extension is cosmetic, real format lives in
+    // the stored httpMetadata.contentType the GET route actually serves).
+    const bytes = new Uint8Array(buf);
+    const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+    const uploadCt = isPng ? "image/png" : "image/jpeg";
+    const r2Key = "tile/" + crypto.randomUUID() + ".png";
+    await env.TILES.put(r2Key, buf, { httpMetadata: { contentType: uploadCt } });
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO tile_asset (id,terrain_type,variant_index,r2_key,style,season,created_at) VALUES (?,?,?,?,?,?,?)"
+    ).bind(id, terrainType, variantIndex, r2Key, style, season, now).run();
+    await logAudit(env, request, { keyId: "master" }, "tile.asset.create", terrainType + "#" + variantIndex + (season ? "/" + season : ""));
+    return json({ id, terrainType, variantIndex, season, r2Key, url: "/api/tiles/" + r2Key }, 201, AC);
+  }
+
+  // --- serve a tile PNG from R2, public streaming read only -- uploads go
+  // through /api/tile-asset above, same split as /api/models/:key vs
+  // /api/asset-object. ---
+  if (path.startsWith("/api/tiles/") && method === "GET") {
+    const key = decodeURIComponent(path.slice("/api/tiles/".length)).trim();
+    if (!key) return json({ error: "need a tile key" }, 400);
+    if (!env.TILES) return json({ error: "no tiles bucket bound (create R2 'geofence-tiles' + binding)" }, 500);
+    let obj = null;
+    try { obj = await env.TILES.get(key); }
+    catch (e) { return new Response("invalid key", { status: 404, headers: CORS_PUBLIC }); }
+    if (!obj) return new Response("not found", { status: 404, headers: CORS_PUBLIC });
+    const h = new Headers(CORS_PUBLIC);
+    h.set("content-type", (obj.httpMetadata && obj.httpMetadata.contentType) || "image/png");
+    h.set("cache-control", "public, max-age=31536000, immutable"); // r2_key is a permanent opaque id, same reasoning as audio/model URLs
+    if (obj.httpEtag) h.set("etag", obj.httpEtag);
+    return new Response(obj.body, { headers: h });
+  }
+
+  // --- list the shared tile library, so the Fence Editor / engine can
+  // preload every image they might need to render. Public: this is just
+  // art, not customer data. ---
+  if (path === "/api/tile-assets" && method === "GET") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500, CORS_PUBLIC);
+    const terrainType = url.searchParams.get("terrainType");
+    // ?season= narrows to that season's tiles PLUS every season-neutral one
+    // (season IS NULL) -- a caller with no season set at all (project.season
+    // unset) omits this and gets everything, same "no filter = show all"
+    // convention as terrainType.
+    const season = url.searchParams.get("season");
+    const conditions = [], binds = [];
+    if (terrainType) { conditions.push("terrain_type=?"); binds.push(terrainType); }
+    if (season === "summer" || season === "winter") { conditions.push("(season IS NULL OR season=?)"); binds.push(season); }
+    const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
+    const sql = "SELECT id,terrain_type AS terrainType,variant_index AS variantIndex,r2_key AS r2Key,style,season,created_at AS createdAt FROM tile_asset" +
+      where + " ORDER BY terrain_type,variant_index";
+    const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
+    const { results } = await stmt.all();
+    return json({ tiles: (results || []).map(t => ({ ...t, url: "/api/tiles/" + t.r2Key })) }, 200, CORS_PUBLIC);
+  }
+
+  // --- Artistic Fog-of-War Tiles, Phase B: OSM + elevation terrain
+  // classifier. Reads corridor geometry straight from the request body
+  // (the Fence Editor's live in-memory zones, same "snapshot what's on
+  // screen" approach Test Mode's editorToSimBundle() already uses) rather
+  // than the published bundle, so "Generate Terrain" works before a
+  // project's first Publish. One Overpass query per call for the whole
+  // project's combined corridor bbox (never per-cell -- Overpass fair-use
+  // policy), Terrarium DEM tiles fetched+decoded on demand and cached per
+  // call to avoid re-fetching the same tile for neighboring cells. ---
+  const mClassify = path.match(/^\/api\/projects\/([^/]+)\/classify-terrain$/);
+  if (mClassify && method === "POST") {
+    const pid = decodeURIComponent(mClassify[1]);
+    const A = await auth(request, env);
+    const proj = await env.DB.prepare("SELECT id,orgId,terrain_biome AS terrainBiome FROM project WHERE id=?").bind(pid).first();
+    if (!proj) return json({ error: "project not found" }, 404, AC);
+    if (!(await codeObjectScopeOk(env, A, proj.orgId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const corridors = Array.isArray(b.corridors) ? b.corridors : [];
+    if (!corridors.length) return json({ error: "corridors required: array of {coords:[[lon,lat],...], widthM}" }, 400, AC);
+
+    const cellSet = new Set();
+    const bufferFeatures = [];
+    for (const c of corridors) {
+      if (!Array.isArray(c.coords) || c.coords.length < 2) continue;
+      const widthM = (typeof c.widthM === "number" && c.widthM > 0) ? c.widthM : 8;
+      let line;
+      try { line = turf.lineString(c.coords); } catch (e) { continue; }
+      const halfWidthKm = (widthM / 2 + TILE_REVEAL_MARGIN_M) / 1000;
+      let buf;
+      try { buf = turf.buffer(line, halfWidthKm, { units: "kilometers" }); } catch (e) { continue; }
+      if (!buf) continue;
+      bufferFeatures.push(buf);
+      try {
+        h3.polygonToCells(buf.geometry.coordinates, 10, true).forEach(cell => cellSet.add(cell));
+      } catch (e) {}
+    }
+    if (!cellSet.size) return json({ error: "no valid corridor geometry" }, 400, AC);
+
+    let elements = [];
+    try {
+      const [west, south, east, north] = turf.bbox(turf.featureCollection(bufferFeatures));
+      elements = await fetchOverpassFeatures([south, west, north, east]);
+    } catch (e) { /* offline/unreachable Overpass -- fall through to elevation + biome fallback only */ }
+
+    const areaFeatures = [], lineFeatures = [];
+    for (const el of elements) {
+      if (el.type !== "way" || !el.tags) continue;
+      const rule = TERRAIN_TAXONOMY.find(r => r.test(el.tags));
+      if (rule) {
+        const poly = overpassElementToPolygon(el);
+        if (poly) areaFeatures.push({ type: rule.type, poly });
+        continue;
+      }
+      const lineRule = TERRAIN_LINE_TYPES.find(r => r.test(el.tags));
+      if (lineRule) {
+        const ln = overpassElementToLine(el);
+        if (ln) {
+          try {
+            const lbuf = turf.buffer(ln, lineRule.halfWidthM / 1000, { units: "kilometers" });
+            if (lbuf) lineFeatures.push({ type: lineRule.type, poly: lbuf });
+          } catch (e) {}
+        }
+      }
+    }
+
+    const biomeDefault = BIOME_FALLBACK[proj.terrainBiome] || "meadow";
+    const tileCache = new Map();
+    const now = new Date().toISOString();
+    const rows = [];
+    for (const cell of cellSet) {
+      const [lat, lon] = h3.cellToLatLng(cell);
+      let terrainType = classifyFromOsm(lon, lat, areaFeatures, lineFeatures);
+      let source = terrainType ? "osm" : null;
+      let elevation = null, slope = null;
+      if (!terrainType) {
+        const el = await classifyFromElevation(lon, lat, tileCache);
+        elevation = el.elevation; slope = el.slope;
+        if (el.type) { terrainType = el.type; source = "elevation"; }
+      }
+      if (!terrainType) { terrainType = biomeDefault; source = "biome-fallback"; }
+      rows.push({ cell, terrainType, variantIndex: hashCellToVariant(cell), elevation, slope, source });
+    }
+
+    const CHUNK = 50;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const stmts = rows.slice(i, i + CHUNK).map(r => env.DB.prepare(
+        "INSERT INTO terrain_cell (project_id,h3_cell,terrain_type,variant_index,elevation_m,slope_deg,source,classified_at) VALUES (?,?,?,?,?,?,?,?) " +
+        "ON CONFLICT(project_id,h3_cell) DO UPDATE SET terrain_type=excluded.terrain_type,variant_index=excluded.variant_index,elevation_m=excluded.elevation_m,slope_deg=excluded.slope_deg,source=excluded.source,classified_at=excluded.classified_at"
+      ).bind(pid, r.cell, r.terrainType, r.variantIndex, r.elevation, r.slope, r.source, now));
+      await env.DB.batch(stmts);
+    }
+
+    await logAudit(env, request, A, "terrain.classify", pid + " (" + rows.length + " cells)");
+    const summary = {};
+    rows.forEach(r => summary[r.terrainType] = (summary[r.terrainType] || 0) + 1);
+    return json({ ok: true, cellCount: rows.length, summary }, 200, AC);
+  }
+
+  // --- read a project's classified cells, for the engine's tile renderer.
+  // Public: this is just terrain classification, not customer data. ---
+  const mTerrainCells = path.match(/^\/api\/projects\/([^/]+)\/terrain-cells$/);
+  if (mTerrainCells && method === "GET") {
+    const pid = decodeURIComponent(mTerrainCells[1]);
+    const { results } = await env.DB.prepare(
+      "SELECT h3_cell AS h3Cell,terrain_type AS terrainType,variant_index AS variantIndex FROM terrain_cell WHERE project_id=?"
+    ).bind(pid).all();
+    return json({ cells: results || [] }, 200, CORS_PUBLIC);
+  }
+
+  // --- Artistic Fog-of-War Tiles, Phase D: reveal state, generalizing Ridge
+  // Quest's /api/fog-cells + /api/players/:id/fog off player_account onto
+  // the platform's generic device table -- same deviceId-in-body pattern
+  // POST /api/events already uses (anonymous, no bearer auth, device row
+  // assumed pre-registered via POST /api/devices), not Ridge Quest's
+  // login-gated playerAuth. ---
+  const mRevealCells = path.match(/^\/api\/projects\/([^/]+)\/reveal-cells$/);
+  if (mRevealCells && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500, CORS_PUBLIC);
+    const pid = decodeURIComponent(mRevealCells[1]);
+    const b = await request.json().catch(() => ({}));
+    if (!b.deviceId) return json({ error: "deviceId required" }, 400, CORS_PUBLIC);
+    const cells = Array.isArray(b.cells) ? b.cells.filter(c => typeof c === "string" && c.length > 0 && c.length <= 20) : [];
+    const state = b.state === 1 ? 1 : 2;
+    if (!cells.length) return json({ error: "cells (non-empty array) required" }, 400, CORS_PUBLIC);
+    if (cells.length > 500) return json({ error: "too many cells in one call (max 500)" }, 400, CORS_PUBLIC);
+    const now = new Date().toISOString();
+    await env.DB.batch(cells.map(cell =>
+      env.DB.prepare(
+        "INSERT INTO tile_fog_cell (device_id,project_id,h3_cell,state,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(device_id,project_id,h3_cell) DO UPDATE SET state=MAX(state,excluded.state),updated_at=excluded.updated_at"
+      ).bind(b.deviceId, pid, cell, state, now)
+    ));
+    return json({ ok: true, count: cells.length }, 200, CORS_PUBLIC);
+  }
+  const mProjectFog = path.match(/^\/api\/projects\/([^/]+)\/fog$/);
+  if (mProjectFog && method === "GET") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500, CORS_PUBLIC);
+    const pid = decodeURIComponent(mProjectFog[1]);
+    const deviceId = url.searchParams.get("device");
+    if (!deviceId) return json({ error: "?device= required" }, 400, CORS_PUBLIC);
+    const { results } = await env.DB.prepare(
+      "SELECT h3_cell,state FROM tile_fog_cell WHERE device_id=? AND project_id=?"
+    ).bind(deviceId, pid).all();
+    return json({ cells: results || [] }, 200, CORS_PUBLIC);
   }
 
   // --- Chatterbox Studio: org-scoped voice palette + Resemble AI proxy.
