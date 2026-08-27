@@ -355,3 +355,7 @@ Only works in Chrome or Edge (Web Bluetooth API).
 - **Never** hardcode or commit Cloudflare account IDs, API tokens, or `ADMIN_TOKEN`.
 - Secrets go in `wrangler.jsonc` secret bindings or `.dev.vars` (gitignored) for local dev.
 - The `database_id` in `wrangler.jsonc` is not a secret — committing it is fine.
+- Secret scanning: `gitleaks` runs in CI (`.github/workflows/secret-scan.yml`) on every push/PR
+  to `main`, and locally via `.githooks/pre-commit`. Enable the hook once per clone with
+  `git config core.hooksPath .githooks`. Config + public-value allowlist: `.gitleaks.toml`.
+  See `SECURITY.md`.

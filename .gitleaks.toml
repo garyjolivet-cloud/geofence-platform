@@ -1,0 +1,20 @@
+# gitleaks config — used by both .githooks/pre-commit and .github/workflows/secret-scan.yml
+# Starts from the bundled default ruleset and only adds an allowlist for
+# identifiers that are public by design (see CLAUDE.md "Guardrails").
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-public identifiers that are safe to commit"
+regexes = [
+  # Google OAuth *client ID* — public by design (worker.js / ridge-quest.html)
+  '''228254697293-80gino7h5nfbbth1tlui3ndided7bjr8\.apps\.googleusercontent\.com''',
+  # D1 database_id in wrangler.jsonc — CLAUDE.md explicitly declares this non-secret
+  '''d1b9f6e3-d70b-4bf0-a91e-9385f886fa73''',
+]
+paths = [
+  # generated lockfiles — integrity hashes only, no credentials
+  '''package-lock\.json$''',
+  '''blender-bridge/package-lock\.json$''',
+]

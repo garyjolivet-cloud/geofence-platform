@@ -1,9 +1,33 @@
-Plaintext
+# tooling / local state
 .wrangler/
-.dev.vars
-.env
 node_modules/
 dist/
+.claude/
+
+# secrets & env — broad
+.dev.vars
+.dev.vars.*
+*.dev.vars
+.env
+.env.*
+*.env
+!.env.example
+*.pem
+*.key
+*.p12
+
+# local data / logs / scratch
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.orig
+*.rej
+*.swp
+*~
+
+# blender-bridge build artifacts
 blender-bridge/exports/
 blender-bridge/textures/
 blender-bridge/fonts/

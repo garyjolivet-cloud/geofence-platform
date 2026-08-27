@@ -1,0 +1,6 @@
+# Keep shell scripts and CI/config files LF so they run on Linux runners and git-bash.
+.githooks/** text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf

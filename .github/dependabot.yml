@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: "/blender-bridge"
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

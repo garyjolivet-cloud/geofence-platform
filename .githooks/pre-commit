@@ -1,0 +1,22 @@
+#!/bin/sh
+# Local secret-scan backstop. Enable once per clone:  git config core.hooksPath .githooks
+# Git for Windows runs this via its bundled bash, so /bin/sh is fine on Windows too.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks not found on PATH — skipping local secret scan."
+  echo "            install it from https://github.com/gitleaks/gitleaks/releases"
+  echo "            (CI still scans this push via .github/workflows/secret-scan.yml)"
+  exit 0
+fi
+
+gitleaks protect --staged --redact --config .gitleaks.toml
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo
+  echo "pre-commit: gitleaks found a potential secret in staged changes — commit blocked."
+  echo "            if it is a false positive, add an allowlist entry to .gitleaks.toml"
+  exit $status
+fi
+
+exit 0
