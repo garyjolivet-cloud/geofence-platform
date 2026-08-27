@@ -52,6 +52,11 @@ const ACTIVITY_TERRAIN_TYPE = { hike: "path_hike", bike: "path_bike", xcountry: 
 const FOG_TERRAIN_TYPE = "fog";
 
 let projectId = null, deviceId = null;
+// revealAll: draw every classified cell with its real tile art regardless of
+// fog/reveal state. Off for the game surfaces (engine/sim/quest -- fog is the
+// point there); on for the Map Paint editor, which needs to see what it's
+// painting. Default false so every existing caller is unaffected.
+let revealAll = false;
 let terrainCells = new Map();   // h3Cell -> {terrainType, variantIndex}
 let fogCells = new Map();       // h3Cell -> state (2 = revealed)
 let tileUrlByKey = new Map();   // "<terrainType>_<variantIndex>" -> R2-served URL
@@ -73,6 +78,7 @@ function closedRing(ring){
 async function load(opts){
   projectId = (opts && opts.projectId) || null;
   deviceId = (opts && opts.deviceId) || null;
+  revealAll = !!(opts && opts.revealAll);
   terrainCells = new Map();
   fogCells = new Map();
   tileUrlByKey = new Map();
@@ -161,8 +167,9 @@ async function trySource(fn, label){
     }
   }
 }
-async function attachToMap(map){
+async function attachToMap(map, opts){
   mapRef = map;
+  if(opts && opts.revealAll != null) revealAll = !!opts.revealAll;
   if(!map.getSource("tile-cells")){
     await trySource(() => {
       map.addSource("tile-cells", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -231,13 +238,25 @@ function renderCells(){
   if(typeof h3 === "undefined") return;
   const feats = [];
   terrainCells.forEach((c, cell) => {
-    const key = isRevealed(cell) ? tileKey(c.terrainType, c.variantIndex) : tileKey(FOG_TERRAIN_TYPE, 0);
+    const key = (revealAll || isRevealed(cell)) ? tileKey(c.terrainType, c.variantIndex) : tileKey(FOG_TERRAIN_TYPE, 0);
     if(!tileUrlByKey.has(key)) return; // asset not in the library yet -- skip rather than render a broken pattern ref
     const ring = closedRing(h3.cellToBoundary(cell, true));
     feats.push({ type: "Feature", properties: { tileKey: key }, geometry: { type: "Polygon", coordinates: [ring] } });
   });
   src.setData({ type: "FeatureCollection", features: feats });
 }
+
+// Map Paint editor hook: replace the in-memory classified-cell set from the
+// editor's own working copy and redraw, with no server round-trip. `entries`
+// is an array (or Map values) of {h3Cell, terrainType, variantIndex}. Pairs
+// with revealAll:true so every cell shows its real art while painting.
+async function setCells(entries){
+  terrainCells = new Map();
+  (entries || []).forEach(c => { if(c && c.h3Cell) terrainCells.set(c.h3Cell, { terrainType: c.terrainType, variantIndex: c.variantIndex || 0 }); });
+  if(mapRef) await preloadAllImages(mapRef);
+  renderCells();
+}
+function redraw(){ renderCells(); }
 
 function haversineM(a, b){
   const R = 6371000, toRad = d => d * Math.PI / 180;
@@ -338,6 +357,6 @@ function reveal(lat, lon, acc, accuracyCapM){
 }
 
 global.TileFog = { load, attachToMap, reveal, renderCorridors, isRevealed,
-  ACTIVITY_WIDTH_M, ACTIVITY_TERRAIN_TYPE };
+  setCells, redraw, ACTIVITY_WIDTH_M, ACTIVITY_TERRAIN_TYPE };
 
 })(typeof window !== "undefined" ? window : globalThis);

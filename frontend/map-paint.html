@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chase Life — Map Paint</title>
+<script src="role-gate.js"></script>
+<script src="client-picker.js"></script>
+<script src="top-nav.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
+<script src="/tile-fog.js"></script>
+<script>RoleGate.require(['admin']);</script>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --night:#0a1018;--slate:#141d2b;--slate-2:#1b2738;--rim:#2e3f58;--coral:#ff6a3d;
+         --snow:#ffffff;--ice:#c8dff2;--fog:#8aa5bf;--hazard:#ff2f4e;--go:#38e0a6;--amber:#ffc24d; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Barlow",system-ui,sans-serif;background:var(--night);color:var(--snow);overflow:hidden}
+  body{display:flex;flex-direction:column}
+  .hdr{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rim);background:rgba(10,16,24,.95);flex:0 0 auto}
+  .hdr h1{font-family:"Black Han Sans";font-size:17px;margin:0;flex:0 0 auto}
+  .hdr .crumb{font-family:"Barlow Condensed";font-size:13px;color:var(--fog);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  button{font-family:"Barlow Condensed";font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+         font-size:12px;color:var(--snow);background:var(--slate);border:1px solid var(--rim);border-radius:8px;
+         padding:7px 12px;cursor:pointer}
+  button.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
+  button.ghost{background:none}
+  button:disabled{opacity:.4;cursor:default}
+  select{font-family:"Barlow Condensed";font-size:13px;background:var(--slate-2);color:var(--snow);
+         border:1px solid var(--rim);border-radius:8px;padding:6px 9px}
+  .hint{font-family:"Barlow";font-size:12px;color:var(--fog)}
+  label.k{font-family:"Barlow Condensed";text-transform:uppercase;font-size:10px;letter-spacing:.6px;color:var(--fog);display:block;margin:10px 0 4px}
+
+  #noProjectHint{padding:20px;text-align:center}
+
+  #paintScreen{flex:1;display:none;min-height:0}
+  #paintScreen.show{display:flex}
+
+  .rail{width:280px;flex:0 0 auto;border-right:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;
+        background:rgba(255,255,255,.01);min-width:220px;max-width:50vw;resize:horizontal;overflow:auto}
+  .railHead{padding:10px 12px;border-bottom:1px solid var(--rim);display:flex;gap:6px;align-items:center;flex:0 0 auto}
+  .railHead .ttl{font-family:"Barlow Condensed";font-weight:700;text-transform:uppercase;font-size:12px;letter-spacing:.5px;color:var(--ice);flex:1}
+  #paletteHost{flex:1;overflow-y:auto;padding:8px}
+  details.fam{border:1px solid var(--rim);border-radius:8px;margin-bottom:6px;background:var(--slate-2)}
+  details.fam>summary{cursor:pointer;list-style:none;padding:7px 10px;font-family:"Barlow Condensed";font-weight:700;
+        text-transform:uppercase;font-size:11px;letter-spacing:.5px;color:var(--ice)}
+  details.fam>summary::-webkit-details-marker{display:none}
+  .swGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px;padding:8px}
+  .sw{padding:3px;border:2px solid transparent;border-radius:8px;background:var(--slate);cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center}
+  .sw img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:5px;background:#000;image-rendering:auto}
+  .sw span{font-family:"Barlow Condensed";font-size:9px;color:var(--fog);line-height:1.1;text-align:center;word-break:break-word}
+  .sw.sel{border-color:var(--coral)}
+
+  #mapWrap{flex:1;min-width:0;position:relative}
+  #map{position:absolute;inset:0}
+  #baseSel{position:absolute;top:10px;right:10px;z-index:5}
+  #status{position:absolute;left:10px;bottom:10px;z-index:5;max-width:60%;background:rgba(10,16,24,.9);
+        border:1px solid var(--rim);border-radius:8px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice)}
+
+  .side{width:250px;flex:0 0 auto;border-left:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;
+        background:rgba(255,255,255,.01);overflow-y:auto;padding:12px;min-width:210px;max-width:50vw;resize:horizontal}
+  .side h2{font-family:"Barlow Condensed";font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--ice);margin:0 0 8px}
+  .side>*{flex:0 0 auto}
+  .row{display:flex;gap:6px;margin:6px 0}
+  .row button{flex:1}
+  #curTile{display:flex;align-items:center;gap:8px;margin:6px 0;font-family:"Barlow Condensed";font-size:12px;color:var(--fog)}
+  #curTile img{width:32px;height:32px;border-radius:5px;object-fit:cover;background:#000}
+  #saveState{font-family:"Barlow Condensed";font-size:11px;color:var(--fog);margin-top:4px;min-height:14px}
+  hr{border:none;border-top:1px solid var(--rim);margin:12px 0}
+
+  /* read-only view mode (/paint?...&view=1) — just the map + its content */
+  body.view .rail,body.view .side,body.view #baseSel{display:none}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>Map Paint</h1>
+  <span class="crumb" id="hdrCrumb"></span>
+  <div id="topNav" style="display:flex;gap:8px;align-items:center"></div>
+</div>
+
+<div id="noProjectHint" class="hint">Pick a company and project above to paint its fog-of-war terrain map.</div>
+
+<div id="paintScreen">
+  <div class="rail">
+    <div class="railHead">
+      <span class="ttl">Tile palette</span>
+      <select id="seasonSel" title="Season for this project's tile art">
+        <option value="">— season —</option>
+        <option value="summer">Summer</option>
+        <option value="winter">Winter</option>
+      </select>
+    </div>
+    <div id="paletteHost"></div>
+  </div>
+
+  <div id="mapWrap">
+    <div id="map"></div>
+    <select id="baseSel" title="Basemap">
+      <option value="sat">Satellite</option>
+      <option value="topo">Topo</option>
+      <option value="street">Street</option>
+    </select>
+    <div id="status" class="hint" style="display:none"></div>
+  </div>
+
+  <div class="side">
+    <h2>Region</h2>
+    <div class="row">
+      <button id="toolRegion">Region</button>
+      <button id="regionFinish" class="ghost" disabled>Finish</button>
+    </div>
+    <div class="row">
+      <button id="regionClear" class="ghost" disabled>Clear region</button>
+    </div>
+    <div class="row">
+      <button id="autoFillBtn">Auto-fill terrain</button>
+    </div>
+    <p class="hint" style="margin:4px 0 0">Draw a polygon, then Auto-fill runs OpenStreetMap + elevation recognition to match tiles. Hand-painted hexes are never overwritten by Auto-fill.</p>
+
+    <hr>
+    <h2>Paint</h2>
+    <div class="row">
+      <button id="toolBrush" class="on">Brush</button>
+      <button id="toolEraser">Eraser</button>
+    </div>
+    <div class="row">
+      <button id="toolFill" class="ghost">Fill region</button>
+    </div>
+    <label class="k">Brush size</label>
+    <div class="row" id="brushSizes">
+      <button data-k="0" class="on">1 hex</button>
+      <button data-k="1">7</button>
+      <button data-k="2">19</button>
+    </div>
+    <div id="curTile"><span>no tile selected</span></div>
+    <div class="row">
+      <button id="undoBtn" class="ghost" disabled>&#8617; Undo</button>
+      <button id="saveBtn" class="on">Save</button>
+    </div>
+    <div id="saveState"></div>
+
+    <hr>
+    <div class="row">
+      <button id="exportBtn" class="ghost">Export PNG</button>
+      <button id="viewBtn" class="ghost">Open view</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   MAP PAINT — a paint program for the per-project H3 fog-of-war terrain
+   map (terrain_cell rows). Draw a polygon region, let the existing
+   OSM/elevation classifier fill it (POST /api/projects/:id/classify-terrain
+   with {polygons:[ring]}), then hand-paint hexes from the shared tile
+   library. Manual hexes are stored with source='manual' via
+   POST /api/projects/:id/terrain-cells and the classifier never touches
+   them. Hex rendering is delegated to the shared frontend/tile-fog.js
+   (revealAll mode); this page only adds the editor overlay layers.
+   Grid: H3 resolution 10 everywhere, same as tile-fog.js / the engine.
+   ===================================================================== */
+
+function getToken(){ return localStorage.getItem("gp.session")||""; }
+function currentOrg(){ return (window.ClientPicker && ClientPicker.resolve()) || ""; }
+
+const params = new URLSearchParams(location.search);
+const viewMode = params.get("view") === "1";
+
+/* ---- which family each terrain_type belongs to in the palette tree ---- */
+const TERRAIN_FAMILIES = {
+  water_lake:"Water", water_river:"Water", wetland:"Water",
+  forest:"Vegetation", scrub:"Vegetation", meadow:"Vegetation",
+  rock_face:"Rock & snow", scree:"Rock & snow", snow:"Rock & snow",
+  farmland:"Open ground", sand:"Open ground",
+  urban_block:"Built", plaza:"Built",
+  fog:"Other"
+};
+const FAMILY_ORDER = ["Water","Vegetation","Rock & snow","Open ground","Built","Paths","Landmarks","Other"];
+function familyFor(t){
+  if(TERRAIN_FAMILIES[t]) return TERRAIN_FAMILIES[t];
+  if(t.indexOf("path_")===0) return "Paths";
+  if(t.indexOf("landmark_")===0) return "Landmarks";
+  return "Other";
+}
+
+/* ---- state ---- */
+let projectId=null, season=null;
+let mapReady=false, resizePending=false;
+const cells = new Map();          // h3 -> {terrainType, variantIndex, source}
+const dirtyPaint = new Map();     // h3 -> {terrainType, variantIndex}  (pending upsert)
+const dirtyErase = new Set();     // h3                                 (pending delete)
+let undoStack = [];               // array of strokes; stroke = [{h3, prev, next}]
+let selectedTile = null;          // {terrainType, variantIndex, url}
+let paletteTiles = [];
+let tool = "brush";               // region | brush | eraser | fill
+let brushK = 0;
+
+let regionDraft = [];             // [lon,lat] while drawing
+let regionRing = null;            // [lon,lat] finished ring (open)
+let regionCellSet = null;         // Set<h3> of cells inside the finished ring
+let regionHandles = [];
+
+let isStroking=false, currentStroke=null, strokeVisited=null;
+let flushing=false, flushAgain=false, flushTimer=null;
+
+/* ---- geojson helpers ---- */
+const EMPTY = {type:"FeatureCollection",features:[]};
+function fc(f){ return {type:"FeatureCollection",features:f}; }
+function lineFeat(c){ return {type:"Feature",geometry:{type:"LineString",coordinates:c}}; }
+function polyFeat(ring){ return {type:"Feature",geometry:{type:"Polygon",coordinates:[ring]}}; }
+function closeRing(r){ const a=r[0],b=r[r.length-1]; return (a[0]===b[0]&&a[1]===b[1])?r:r.concat([a]); }
+function setData(id,d){ const s=map.getSource(id); if(s) s.setData(d); }
+function cellsArray(){ return [...cells].map(([h3Cell,v])=>({h3Cell,terrainType:v.terrainType,variantIndex:v.variantIndex})); }
+function toast(m){ const el=document.getElementById("status"); el.style.display="block"; el.textContent=m; }
+
+/* ---- map ---- */
+const BASES = {
+  sat:   {tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], attr:"Esri, Maxar"},
+  topo:  {tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"], attr:"Esri"},
+  street:{tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"], attr:"Esri"}
+};
+const map = new maplibregl.Map({
+  container:"map",
+  style:{version:8,
+    sources:{base:{type:"raster",tiles:BASES.sat.tiles,tileSize:256,attribution:BASES.sat.attr}},
+    layers:[{id:"base",type:"raster",source:"base"}]},
+  center:[-117.0547,51.3027], zoom:13, maxZoom:24,
+  preserveDrawingBuffer:true      // required so Export PNG can read the canvas
+});
+map.addControl(new maplibregl.NavigationControl());
+map.on("load",()=>{
+  mapReady=true;
+  if(resizePending){ resizePending=false; map.resize(); }
+});
+document.getElementById("baseSel").onchange = e => {
+  const s=map.getSource("base"); if(s) s.setTiles(BASES[e.target.value].tiles);
+};
+function waitForMap(){ return mapReady ? Promise.resolve() : new Promise(res=>map.once("load",res)); }
+
+function ensureOverlayLayers(){
+  if(map.getSource("region-poly")) return;
+  map.addSource("region-poly",{type:"geojson",data:EMPTY});
+  map.addLayer({id:"region-poly-fill",type:"fill",source:"region-poly",paint:{"fill-color":"#ffc24d","fill-opacity":0.08}});
+  map.addLayer({id:"region-poly-line",type:"line",source:"region-poly",paint:{"line-color":"#ffc24d","line-width":2,"line-dasharray":[2,1.5]}});
+  map.addSource("manual-outline",{type:"geojson",data:EMPTY});
+  map.addLayer({id:"manual-outline-line",type:"line",source:"manual-outline",paint:{"line-color":"#38e0a6","line-width":1,"line-opacity":0.65}});
+  map.addSource("paint-hover",{type:"geojson",data:EMPTY});
+  map.addLayer({id:"paint-hover-line",type:"line",source:"paint-hover",paint:{"line-color":"#ffffff","line-width":1.5,"line-opacity":0.9}});
+}
+
+/* ---- terrain load / render ---- */
+async function refetchCells(){
+  cells.clear(); dirtyPaint.clear(); dirtyErase.clear();
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(projectId)+"/terrain-cells");
+    const j=r.ok?await r.json():{cells:[]};
+    (j.cells||[]).forEach(c=>cells.set(c.h3Cell,{terrainType:c.terrainType,variantIndex:c.variantIndex||0,source:c.source||"auto"}));
+  }catch(e){}
+}
+function renderLocal(){
+  if(window.TileFog) TileFog.setCells(cellsArray());
+  const manual=[...cells].filter(([,v])=>v.source==="manual").map(([h])=>h);
+  setData("manual-outline", fc(manual.map(h=>polyFeat(closeRing(h3.cellToBoundary(h,true))))));
+}
+let _rlq=false;
+function renderLocalThrottled(){ if(_rlq) return; _rlq=true; requestAnimationFrame(()=>{ _rlq=false; renderLocal(); }); }
+
+async function loadTerrain(refLatLon){
+  await TileFog.load({projectId, season, revealAll:true});
+  await TileFog.attachToMap(map, {revealAll:true});
+  ensureOverlayLayers();
+  await refetchCells();
+  renderLocal();
+  fitToContent(refLatLon);
+}
+function fitToContent(ref){
+  const hs=[...cells.keys()];
+  if(hs.length){
+    let minLon=Infinity,minLat=Infinity,maxLon=-Infinity,maxLat=-Infinity;
+    hs.forEach(h=>h3.cellToBoundary(h,true).forEach(pt=>{
+      if(pt[0]<minLon)minLon=pt[0]; if(pt[0]>maxLon)maxLon=pt[0];
+      if(pt[1]<minLat)minLat=pt[1]; if(pt[1]>maxLat)maxLat=pt[1];
+    }));
+    if(isFinite(minLon)) map.fitBounds([[minLon,minLat],[maxLon,maxLat]],{padding:40,animate:false,linear:true});
+    return;
+  }
+  // published bundles carry ref as [lat,lon] (engine convention); MapLibre wants [lon,lat]
+  if(ref && ref.length>=2) map.jumpTo({center:[ref[1],ref[0]], zoom:14});
+}
+
+/* ---- palette ---- */
+async function buildPalette(){
+  const host=document.getElementById("paletteHost");
+  host.innerHTML='<div class="hint" style="padding:8px">loading tiles…</div>';
+  try{
+    const qs = season ? "?season="+encodeURIComponent(season) : "";
+    const r=await fetch("/api/tile-assets"+qs);
+    const j=r.ok?await r.json():{tiles:[]};
+    paletteTiles=j.tiles||[];
+  }catch(e){ paletteTiles=[]; }
+  renderPalette();
+}
+function renderPalette(){
+  const host=document.getElementById("paletteHost");
+  if(!paletteTiles.length){ host.innerHTML='<div class="hint" style="padding:8px">no tiles in the library for this season.</div>'; return; }
+  const byFam={};
+  paletteTiles.forEach(t=>{ (byFam[familyFor(t.terrainType)] ||= []).push(t); });
+  host.innerHTML="";
+  FAMILY_ORDER.forEach(fam=>{
+    const list=byFam[fam]; if(!list||!list.length) return;
+    const d=document.createElement("details"); d.className="fam"; d.open=true;
+    const s=document.createElement("summary"); s.textContent=fam+" ("+list.length+")"; d.appendChild(s);
+    const g=document.createElement("div"); g.className="swGrid";
+    list.forEach(t=>{
+      const b=document.createElement("button"); b.className="sw"; b.type="button";
+      b.innerHTML='<img loading="lazy" src="'+t.url+'" alt=""><span>'+t.terrainType+' · v'+(t.variantIndex||0)+'</span>';
+      b.onclick=()=>selectTile(t,b);
+      if(selectedTile && selectedTile.terrainType===t.terrainType && selectedTile.variantIndex===(t.variantIndex||0)) b.classList.add("sel");
+      g.appendChild(b);
+    });
+    d.appendChild(g); host.appendChild(d);
+  });
+}
+function selectTile(t,btn){
+  selectedTile={terrainType:t.terrainType, variantIndex:t.variantIndex||0, url:t.url};
+  document.querySelectorAll(".sw.sel").forEach(el=>el.classList.remove("sel"));
+  if(btn) btn.classList.add("sel");
+  const cur=document.getElementById("curTile");
+  cur.innerHTML='<img src="'+t.url+'"><span>'+t.terrainType+' · v'+(t.variantIndex||0)+'</span>';
+  if(tool==="eraser") setTool("brush");
+}
+
+/* ---- painting ---- */
+function brushDisk(centerH3){
+  let d=h3.gridDisk(centerH3, brushK);
+  if(regionCellSet) d=d.filter(c=>regionCellSet.has(c));
+  return d;
+}
+function applyCell(h3cell, tile, stroke){
+  const prev = cells.get(h3cell) ? {...cells.get(h3cell)} : null;
+  let next=null;
+  if(tile){
+    next={terrainType:tile.terrainType, variantIndex:tile.variantIndex||0};
+    cells.set(h3cell,{...next,source:"manual"});
+    dirtyPaint.set(h3cell,next); dirtyErase.delete(h3cell);
+  }else{
+    cells.delete(h3cell);
+    dirtyErase.add(h3cell); dirtyPaint.delete(h3cell);
+  }
+  if(stroke) stroke.push({h3:h3cell, prev, next});
+}
+function paintAt(lngLat){
+  if(!currentStroke) return;
+  const center=h3.latLngToCell(lngLat.lat, lngLat.lng, 10);
+  for(const c of brushDisk(center)){
+    if(strokeVisited.has(c)) continue;
+    strokeVisited.add(c);
+    if(tool==="eraser") applyCell(c, null, currentStroke);
+    else if(selectedTile) applyCell(c, selectedTile, currentStroke);
+  }
+  renderLocalThrottled();
+}
+function endStroke(){
+  if(!isStroking) return;
+  isStroking=false; map.dragPan.enable();
+  if(currentStroke && currentStroke.length){ undoStack.push(currentStroke); updateUndoBtn(); scheduleFlush(); }
+  currentStroke=null; strokeVisited=null;
+  renderLocal();
+}
+function renderHover(lngLat){
+  if(viewMode || (tool!=="brush" && tool!=="eraser")){ setData("paint-hover", EMPTY); return; }
+  const c=h3.latLngToCell(lngLat.lat, lngLat.lng, 10);
+  setData("paint-hover", fc(brushDisk(c).map(h=>polyFeat(closeRing(h3.cellToBoundary(h,true))))));
+}
+
+map.on("mousedown", e=>{
+  if(viewMode) return;
+  if(tool!=="brush" && tool!=="eraser") return;
+  if(tool==="brush" && !selectedTile){ toast("Pick a tile from the palette first."); return; }
+  currentStroke=[]; strokeVisited=new Set(); isStroking=true;
+  map.dragPan.disable();                 // re-enabled in endStroke() and setTool()
+  paintAt(e.lngLat);
+});
+map.on("mousemove", e=>{
+  if(isStroking) paintAt(e.lngLat);
+  else renderHover(e.lngLat);
+});
+window.addEventListener("mouseup", endStroke);
+map.on("mouseout", ()=>{ if(!isStroking) setData("paint-hover", EMPTY); });
+
+map.on("click", e=>{
+  if(viewMode) return;
+  if(tool==="region"){ regionDraft.push([e.lngLat.lng, e.lngLat.lat]); renderRegionDraft(); }
+  else if(tool==="fill"){ doFill(); }
+});
+map.on("dblclick", e=>{
+  if(viewMode || tool!=="region"){ return; }
+  e.preventDefault();
+  // the dblclick's two "click" events each added a near-duplicate vertex — drop the last
+  if(regionDraft.length>3){
+    const a=regionDraft[regionDraft.length-1], b=regionDraft[regionDraft.length-2];
+    if(Math.abs(a[0]-b[0])<1e-6 && Math.abs(a[1]-b[1])<1e-6) regionDraft.pop();
+  }
+  finishRegion();
+});
+
+/* ---- region polygon ---- */
+function renderRegionDraft(){
+  const f=[];
+  if(regionDraft.length>=2) f.push(lineFeat(regionDraft.concat(regionDraft.length>=3?[regionDraft[0]]:[])));
+  if(regionDraft.length>=3) f.push(polyFeat(regionDraft.concat([regionDraft[0]])));
+  setData("region-poly", fc(f));
+  document.getElementById("regionFinish").disabled = regionDraft.length<3;
+  document.getElementById("regionClear").disabled = regionDraft.length===0 && !regionRing;
+}
+function renderRegion(){
+  setData("region-poly", regionRing ? fc([polyFeat(closeRing(regionRing)), lineFeat(closeRing(regionRing))]) : EMPTY);
+}
+function recomputeRegionCells(){
+  regionCellSet = regionRing ? new Set(h3.polygonToCells([closeRing(regionRing).map(p=>[p[0],p[1]])], 10, true)) : null;
+}
+function clearRegionHandles(){ regionHandles.forEach(m=>m.remove()); regionHandles=[]; }
+function placeRegionHandles(){
+  clearRegionHandles();
+  if(!regionRing) return;
+  regionRing.forEach((pt,i)=>{
+    const el=document.createElement("div");
+    el.style.cssText="width:12px;height:12px;border-radius:3px;background:#ffc24d;border:1px solid #1a0d07;cursor:move";
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(pt).addTo(map);
+    mk.on("drag",()=>{ const ll=mk.getLngLat(); regionRing[i]=[ll.lng,ll.lat]; renderRegion(); });
+    mk.on("dragend",()=>{ recomputeRegionCells(); });
+    regionHandles.push(mk);
+  });
+}
+function finishRegion(){
+  if(regionDraft.length<3) return;
+  regionRing = regionDraft.slice();
+  regionDraft = [];
+  recomputeRegionCells();
+  renderRegion();
+  placeRegionHandles();
+  setTool("brush");
+  toast(regionCellSet.size+" hexes in region. Auto-fill, or paint by hand.");
+}
+function clearRegion(){
+  regionDraft=[]; regionRing=null; regionCellSet=null;
+  clearRegionHandles();
+  setData("region-poly", EMPTY);
+  document.getElementById("regionFinish").disabled=true;
+  document.getElementById("regionClear").disabled=true;
+}
+function doFill(){
+  if(!regionCellSet){ toast("Draw and finish a region first."); return; }
+  if(!selectedTile){ toast("Pick a tile from the palette first."); return; }
+  const stroke=[];
+  regionCellSet.forEach(c=>applyCell(c, selectedTile, stroke));
+  if(stroke.length){ undoStack.push(stroke); updateUndoBtn(); scheduleFlush(); }
+  renderLocal();
+  toast("Filled "+stroke.length+" hexes.");
+}
+
+/* ---- undo ---- */
+function updateUndoBtn(){ document.getElementById("undoBtn").disabled = !undoStack.length; }
+function undo(){
+  const stroke=undoStack.pop(); if(!stroke) return;
+  // Restores each hex to its pre-stroke value. A hex that was auto-classified
+  // before the stroke comes back marked source='manual' on the server (the
+  // paint endpoint only writes manual rows) — visually identical; re-run
+  // Auto-fill if you want it auto-managed again.
+  for(let i=stroke.length-1;i>=0;i--){
+    const {h3:h,prev}=stroke[i];
+    if(prev){ cells.set(h,{...prev}); dirtyPaint.set(h,{terrainType:prev.terrainType,variantIndex:prev.variantIndex}); dirtyErase.delete(h); }
+    else { cells.delete(h); dirtyErase.add(h); dirtyPaint.delete(h); }
+  }
+  updateUndoBtn(); renderLocal(); scheduleFlush();
+}
+
+/* ---- persistence: POST /api/projects/:id/terrain-cells ---- */
+function setSaveState(s){ document.getElementById("saveState").textContent=s; }
+function scheduleFlush(){
+  setSaveState("unsaved changes…");
+  clearTimeout(flushTimer);
+  flushTimer=setTimeout(()=>flush(), 800);
+}
+async function flush(){
+  if(flushing){ flushAgain=true; return; }
+  const paint=[...dirtyPaint].map(([h3Cell,v])=>({h3Cell,terrainType:v.terrainType,variantIndex:v.variantIndex}));
+  const erase=[...dirtyErase];
+  if(!paint.length && !erase.length){ setSaveState("saved"); return; }
+  flushing=true; setSaveState("saving…");
+  try{
+    while(paint.length || erase.length){
+      const body={ paint:paint.splice(0,1000), erase:erase.splice(0,1000) };
+      const r=await fetch("/api/projects/"+encodeURIComponent(projectId)+"/terrain-cells",{
+        method:"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+        body:JSON.stringify(body)});
+      if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.error||("HTTP "+r.status)); }
+    }
+    dirtyPaint.clear(); dirtyErase.clear();
+    setSaveState("saved "+new Date().toLocaleTimeString());
+  }catch(e){
+    setSaveState("save failed: "+e.message);
+  }finally{
+    flushing=false;
+    if(flushAgain){ flushAgain=false; scheduleFlush(); }
+  }
+}
+
+/* ---- auto-fill via the OSM/elevation classifier ---- */
+async function autoFill(){
+  if(!regionRing){ toast("Draw a region first: Region tool → click a polygon → Finish."); return; }
+  await flush();   // land any pending hand-paints (they're protected server-side) before re-reading
+  const closed=closeRing(regionRing).map(p=>[p[0],p[1]]);
+  toast("Recognising terrain (OpenStreetMap + elevation)… a few seconds.");
+  document.getElementById("autoFillBtn").disabled=true;
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(projectId)+"/classify-terrain",{
+      method:"POST", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({polygons:[closed]})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
+    await refetchCells();
+    renderLocal();
+    const sum=j.summary?Object.entries(j.summary).map(([k,v])=>k+" "+v).join(", "):"";
+    toast((j.cellCount||0)+" hexes auto-filled"+(sum?": "+sum:"")+".");
+  }catch(e){ toast("Auto-fill failed: "+e.message); }
+  finally{ document.getElementById("autoFillBtn").disabled=false; }
+}
+
+/* ---- tool switching ---- */
+function setTool(t){
+  tool=t;
+  isStroking=false; if(map && map.dragPan) map.dragPan.enable();   // never leave pan disabled
+  map.doubleClickZoom[t==="region"?"disable":"enable"]();
+  [["toolRegion","region"],["toolBrush","brush"],["toolEraser","eraser"],["toolFill","fill"]]
+    .forEach(([id,name])=>document.getElementById(id).classList.toggle("on", tool===name));
+  if(t==="region"){ regionDraft=[]; renderRegionDraft(); toast("Click to add polygon corners; double-click or Finish to close."); }
+  setData("paint-hover", EMPTY);
+}
+
+/* ---- export / view ---- */
+function exportPNG(){
+  map.triggerRepaint();
+  requestAnimationFrame(()=>{
+    const a=document.createElement("a");
+    a.href=map.getCanvas().toDataURL("image/png");
+    a.download=((document.getElementById("hdrCrumb").textContent||"map").replace(/[^\w-]+/g,"_"))+"-terrain.png";
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+}
+function openView(){
+  const q=["project="+encodeURIComponent(projectId)];
+  if(currentOrg()) q.push("asClient="+encodeURIComponent(currentOrg()));
+  q.push("view=1");
+  window.open("/paint?"+q.join("&"), "_blank");
+}
+
+/* ---- wire the toolbar ---- */
+document.getElementById("toolRegion").onclick=()=>{ clearRegion(); setTool("region"); };
+document.getElementById("regionFinish").onclick=finishRegion;
+document.getElementById("regionClear").onclick=()=>{ clearRegion(); toast("Region cleared."); };
+document.getElementById("autoFillBtn").onclick=autoFill;
+document.getElementById("toolBrush").onclick=()=>setTool("brush");
+document.getElementById("toolEraser").onclick=()=>setTool("eraser");
+document.getElementById("toolFill").onclick=()=>{ setTool("fill"); doFill(); };
+document.getElementById("brushSizes").onclick=e=>{
+  const b=e.target.closest("button[data-k]"); if(!b) return;
+  brushK=+b.dataset.k;
+  document.querySelectorAll("#brushSizes button").forEach(x=>x.classList.toggle("on", x===b));
+};
+document.getElementById("undoBtn").onclick=undo;
+document.getElementById("saveBtn").onclick=()=>{ clearTimeout(flushTimer); flush(); };
+document.getElementById("exportBtn").onclick=exportPNG;
+document.getElementById("viewBtn").onclick=openView;
+document.getElementById("seasonSel").onchange=async e=>{
+  const val=e.target.value||null;
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(projectId),{
+      method:"PATCH", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({season:val})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.status); }
+    season=val;
+    await TileFog.load({projectId, season, revealAll:true});
+    renderLocal(); buildPalette();
+    toast("Season set to "+(val||"none")+".");
+  }catch(err){ toast("Couldn't set season: "+err.message); e.target.value=season||""; }
+};
+
+/* ---- screen / project plumbing (mirrors gpx-editor.html / record.html) ---- */
+function showPaintScreen(){
+  document.getElementById("noProjectHint").style.display="none";
+  document.getElementById("paintScreen").classList.add("show");
+  if(viewMode) document.body.classList.add("view");
+  if(mapReady) requestAnimationFrame(()=>map.resize());
+  else resizePending=true;
+}
+function showNoProject(){
+  document.getElementById("noProjectHint").style.display="block";
+  document.getElementById("paintScreen").classList.remove("show");
+}
+function resetEditor(){
+  cells.clear(); dirtyPaint.clear(); dirtyErase.clear();
+  undoStack=[]; updateUndoBtn();
+  selectedTile=null; document.getElementById("curTile").innerHTML="<span>no tile selected</span>";
+  clearRegion();
+  setSaveState("");
+}
+async function enterProject(id, proj){
+  projectId=id;
+  document.getElementById("hdrCrumb").textContent=(proj&&proj.name)||id;
+  resetEditor();
+  showPaintScreen();
+  let bundle={};
+  try{ const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle"); if(r.ok) bundle=await r.json(); }catch(e){}
+  season = bundle.season || null;
+  document.getElementById("seasonSel").value = season || "";
+  await waitForMap();
+  await loadTerrain(bundle.ref);
+  await buildPalette();
+  setTool(viewMode ? "region" : "brush");
+  if(viewMode){ document.getElementById("topNav").style.display="none"; }
+}
+
+if(window.TopNav){
+  TopNav.init({
+    navEl: document.getElementById("topNav"),
+    active: "paint",
+    onCompanyChange: ()=>{ showNoProject(); },
+    onProjectChange: (id, proj)=>{ if(id) enterProject(id, proj); else showNoProject(); }
+  });
+}
+const _initialProjectId = window.TopNav && TopNav.resolveProject && TopNav.resolveProject();
+if(_initialProjectId) enterProject(_initialProjectId, null);
+else showNoProject();
+</script>
+</body>
+</html>

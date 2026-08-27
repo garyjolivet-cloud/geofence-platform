@@ -744,6 +744,36 @@ async function sendEmail(env, { to, subject, html }) {
   return { sent: true };
 }
 
+// --- Map Paint (POST /api/projects/:id/terrain-cells + the classifier's
+// manual-cell guard) pure logic, factored out so tests/terrain-paint.test.js
+// can exercise it without a live D1/Overpass, same pattern as the classifier
+// helpers above. ---
+
+// Drop hand-painted cells (source='manual') from the classifier's working
+// set so a re-run only refreshes auto-classified ground. `candidateCells` is
+// any iterable of h3 strings; `manualCells` a Set (or array) to protect.
+function partitionManualCells(candidateCells, manualCells) {
+  const manual = manualCells instanceof Set ? manualCells : new Set(manualCells || []);
+  const toClassify = [];
+  for (const c of candidateCells) if (!manual.has(c)) toClassify.push(c);
+  return toClassify;
+}
+
+// Validate + normalise a terrain-cells POST body. Returns { paint, erase } or
+// { error }. h3 strings guarded to 1..20 chars (same as reveal-cells),
+// terrain_type to 1..40, variant_index coerced to an integer (default 0),
+// and a hard 2000-cell-per-call cap (the client batches beyond that).
+function normalizeTerrainPaint(body) {
+  const okCell = c => typeof c === "string" && c.length > 0 && c.length <= 20;
+  const paint = (Array.isArray(body && body.paint) ? body.paint : [])
+    .filter(p => p && okCell(p.h3Cell) && typeof p.terrainType === "string" && p.terrainType.length > 0 && p.terrainType.length <= 40)
+    .map(p => ({ h3Cell: p.h3Cell, terrainType: p.terrainType, variantIndex: Number.isInteger(p.variantIndex) ? p.variantIndex : 0 }));
+  const erase = (Array.isArray(body && body.erase) ? body.erase : []).filter(okCell);
+  if (!paint.length && !erase.length) return { error: "paint and/or erase (arrays) required" };
+  if (paint.length + erase.length > 2000) return { error: "too many cells in one call (max 2000)" };
+  return { paint, erase };
+}
+
 // Artistic Fog-of-War Tiles classifier internals, exported for
 // tests/terrain-classifier.test.js -- same "_internal exports for a
 // standalone Node test file" pattern as frontend/kalman-filter.js's
@@ -751,7 +781,8 @@ async function sendEmail(env, { to, subject, html }) {
 export {
   TERRAIN_TAXONOMY, TERRAIN_LINE_TYPES, BIOME_FALLBACK,
   hashCellToVariant, classifyFromOsm, classifyElevationSlope,
-  overpassElementToPolygon, overpassElementToLine
+  overpassElementToPolygon, overpassElementToLine,
+  partitionManualCells, normalizeTerrainPaint
 };
 
 export default {
@@ -778,6 +809,7 @@ export default {
       "/objects": "/object-studio.html",
       "/record": "/record.html",
       "/gpx-editor": "/gpx-editor.html",
+      "/paint": "/map-paint.html",
       "/login": "/login.html",
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
@@ -4772,7 +4804,8 @@ async function api(request, env, url) {
     if (!(await codeObjectScopeOk(env, A, proj.orgId))) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json().catch(() => ({}));
     const corridors = Array.isArray(b.corridors) ? b.corridors : [];
-    if (!corridors.length) return json({ error: "corridors required: array of {coords:[[lon,lat],...], widthM}" }, 400, AC);
+    const polygons = Array.isArray(b.polygons) ? b.polygons : [];
+    if (!corridors.length && !polygons.length) return json({ error: "corridors and/or polygons required: corridors [{coords:[[lon,lat],...], widthM}], polygons [[[lon,lat],...]]" }, 400, AC);
 
     const cellSet = new Set();
     const bufferFeatures = [];
@@ -4790,7 +4823,33 @@ async function api(request, env, url) {
         h3.polygonToCells(buf.geometry.coordinates, 10, true).forEach(cell => cellSet.add(cell));
       } catch (e) {}
     }
-    if (!cellSet.size) return json({ error: "no valid corridor geometry" }, 400, AC);
+    // Map Paint feeds a drawn polygon region straight in -- the ring already
+    // IS the area to classify (no corridor buffering), but everything past
+    // this point (shared-bbox Overpass query, per-cell OSM/DEM/biome
+    // classification, chunked upsert) is identical to the corridor branch.
+    for (const ring of polygons) {
+      if (!Array.isArray(ring) || ring.length < 3) continue;
+      const closed = (ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) ? ring : ring.concat([ring[0]]);
+      let poly;
+      try { poly = turf.polygon([closed]); } catch (e) { continue; }
+      bufferFeatures.push(poly);
+      try {
+        h3.polygonToCells(poly.geometry.coordinates, 10, true).forEach(cell => cellSet.add(cell));
+      } catch (e) {}
+    }
+    if (!cellSet.size) return json({ error: "no valid corridor or polygon geometry" }, 400, AC);
+
+    // Hand-painted cells (Map Paint, source='manual') are never re-classified
+    // or wiped -- drop them from the working set before any OSM/DEM work, and
+    // the DELETE below excludes them too, so a re-run only refreshes
+    // auto-classified ground.
+    let manualCells = new Set();
+    try {
+      const mc = await env.DB.prepare("SELECT h3_cell FROM terrain_cell WHERE project_id=? AND source='manual'").bind(pid).all();
+      manualCells = new Set((mc.results || []).map(r => r.h3_cell));
+    } catch (e) {}
+    const toClassify = partitionManualCells(cellSet, manualCells);
+    if (!toClassify.length) return json({ ok: true, cellCount: 0, summary: {}, note: "every cell in the region is hand-painted" }, 200, AC);
 
     let elements = [];
     try {
@@ -4823,7 +4882,7 @@ async function api(request, env, url) {
     const tileCache = new Map();
     const now = new Date().toISOString();
     const rows = [];
-    for (const cell of cellSet) {
+    for (const cell of toClassify) {
       const [lat, lon] = h3.cellToLatLng(cell);
       let terrainType = classifyFromOsm(lon, lat, areaFeatures, lineFeatures);
       let source = terrainType ? "osm" : null;
@@ -4845,7 +4904,7 @@ async function api(request, env, url) {
     // prior classification before inserting the fresh set makes a re-run
     // genuinely reflect the current corridor set, matching the "safe to
     // re-run after corridor edits" promise -- not just duplicate-safe.
-    await env.DB.prepare("DELETE FROM terrain_cell WHERE project_id=?").bind(pid).run();
+    await env.DB.prepare("DELETE FROM terrain_cell WHERE project_id=? AND source<>'manual'").bind(pid).run();
     const CHUNK = 50;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const stmts = rows.slice(i, i + CHUNK).map(r => env.DB.prepare(
@@ -4867,9 +4926,44 @@ async function api(request, env, url) {
   if (mTerrainCells && method === "GET") {
     const pid = decodeURIComponent(mTerrainCells[1]);
     const { results } = await env.DB.prepare(
-      "SELECT h3_cell AS h3Cell,terrain_type AS terrainType,variant_index AS variantIndex FROM terrain_cell WHERE project_id=?"
+      "SELECT h3_cell AS h3Cell,terrain_type AS terrainType,variant_index AS variantIndex,source FROM terrain_cell WHERE project_id=?"
     ).bind(pid).all();
     return json({ cells: results || [] }, 200, CORS_PUBLIC);
+  }
+
+  // --- Map Paint: hand-painted terrain cells. Writes terrain_cell rows with
+  // source='manual', which the classifier above never overwrites or deletes
+  // (see its manualCells guard + "source<>'manual'" DELETE). Same auth as
+  // classify-terrain (scoped `publish` via codeObjectScopeOk), same
+  // cell-string guard as reveal-cells, same 50-row env.DB.batch chunking as
+  // the classifier's upsert. Body: { paint:[{h3Cell,terrainType,variantIndex}],
+  // erase:[h3Cell,...] }. ---
+  if (mTerrainCells && method === "POST") {
+    if (!env.DB) return json({ error: "D1 not bound" }, 500, AC);
+    const pid = decodeURIComponent(mTerrainCells[1]);
+    const A = await auth(request, env);
+    const proj = await env.DB.prepare("SELECT id,orgId FROM project WHERE id=?").bind(pid).first();
+    if (!proj) return json({ error: "project not found" }, 404, AC);
+    if (!(await codeObjectScopeOk(env, A, proj.orgId))) return json({ error: "unauthorized" }, 401, AC);
+    const b = await request.json().catch(() => ({}));
+    const { paint, erase, error } = normalizeTerrainPaint(b);
+    if (error) return json({ error }, 400, AC);
+    const now = new Date().toISOString();
+    const CHUNK = 50;
+    for (let i = 0; i < paint.length; i += CHUNK) {
+      await env.DB.batch(paint.slice(i, i + CHUNK).map(p => env.DB.prepare(
+        "INSERT INTO terrain_cell (project_id,h3_cell,terrain_type,variant_index,elevation_m,slope_deg,source,classified_at) VALUES (?,?,?,?,NULL,NULL,'manual',?) " +
+        "ON CONFLICT(project_id,h3_cell) DO UPDATE SET terrain_type=excluded.terrain_type,variant_index=excluded.variant_index,elevation_m=NULL,slope_deg=NULL,source='manual',classified_at=excluded.classified_at"
+      ).bind(pid, p.h3Cell, p.terrainType, p.variantIndex, now)));
+    }
+    for (let i = 0; i < erase.length; i += CHUNK) {
+      const chunk = erase.slice(i, i + CHUNK);
+      await env.DB.prepare(
+        "DELETE FROM terrain_cell WHERE project_id=? AND h3_cell IN (" + chunk.map(() => "?").join(",") + ")"
+      ).bind(pid, ...chunk).run();
+    }
+    await logAudit(env, request, A, "terrain.paint", pid + " (+" + paint.length + " / -" + erase.length + ")");
+    return json({ ok: true, painted: paint.length, erased: erase.length }, 200, AC);
   }
 
   // --- Artistic Fog-of-War Tiles, Phase D: reveal state, generalizing Ridge

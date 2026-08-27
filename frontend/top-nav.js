@@ -108,6 +108,7 @@
   const TOOLS = [
     { key:"edit",         label:"Edit",          href:"/editor" },
     { key:"gpx",          label:"GPX Editor",    href:"/gpx-editor" },
+    { key:"paint",        label:"Map Paint",     href:"/paint" },
     { key:"audio",        label:"Audio Studio",  href:"/studio",       needsStops:true },
     { key:"chatterbox",   label:"Chatterbox",    href:"/chatterbox",   needsStops:true },
     { key:"code-library", label:"Code Library",  href:"/code-library", needsStops:true },
