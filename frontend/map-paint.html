@@ -140,6 +140,7 @@
     <hr>
     <h2>Paint</h2>
     <div class="row">
+      <button id="toolPan" title="Navigate the map without painting">Pan</button>
       <button id="toolBrush" class="on">Brush</button>
       <button id="toolEraser">Eraser</button>
     </div>
@@ -153,6 +154,7 @@
       <button data-k="2">19</button>
     </div>
     <div id="curTile"><span>no tile selected</span></div>
+    <div class="hint" style="margin:2px 0">Drag to paint. To move the map: the <b>Pan</b> tool, or hold <b>Space</b>.</div>
     <div class="row">
       <button id="undoBtn" class="ghost" disabled>&#8617; Undo</button>
       <button id="saveBtn" class="on">Save</button>
@@ -398,11 +400,12 @@ function renderHover(lngLat){
 }
 
 map.on("mousedown", e=>{
-  if(viewMode) return;
+  if(viewMode || spaceHeld) return;                 // Space held -> let dragPan handle the drag
+  if(e.originalEvent && e.originalEvent.button !== 0) return; // left button only; middle/right always pan/rotate
   if(tool!=="brush" && tool!=="eraser") return;
   if(tool==="brush" && !selectedTile){ toast("Pick a tile from the palette first."); return; }
   currentStroke=[]; strokeVisited=new Set(); isStroking=true;
-  map.dragPan.disable();                 // re-enabled in endStroke() and setTool()
+  map.dragPan.disable();                 // re-enabled in endStroke() / setTool() / Space keydown
   paintAt(e.lngLat);
 });
 map.on("mousemove", e=>{
@@ -411,6 +414,29 @@ map.on("mousemove", e=>{
 });
 window.addEventListener("mouseup", endStroke);
 map.on("mouseout", ()=>{ if(!isStroking) setData("paint-hover", EMPTY); });
+
+/* ---- Hold Space to pan while a paint tool is active (Photoshop convention).
+   dragPan is never permanently off — the stroke handler above just skips
+   while Space is down, and this makes sure pan is on the moment Space is
+   pressed even mid-hover. ---- */
+let spaceHeld=false;
+function updateCursor(){
+  const c = map.getCanvas();
+  if(viewMode){ c.style.cursor=""; return; }
+  c.style.cursor = (spaceHeld || tool==="pan") ? "grab"
+    : (tool==="brush"||tool==="eraser"||tool==="region") ? "crosshair" : "";
+}
+window.addEventListener("keydown", e=>{
+  if(e.code==="Space" && !spaceHeld && e.target.tagName!=="INPUT" && e.target.tagName!=="SELECT"){
+    spaceHeld=true; e.preventDefault();
+    if(!isStroking) map.dragPan.enable();
+    setData("paint-hover", EMPTY);
+    updateCursor();
+  }
+});
+window.addEventListener("keyup", e=>{
+  if(e.code==="Space"){ spaceHeld=false; updateCursor(); }
+});
 
 map.on("click", e=>{
   if(viewMode) return;
@@ -577,12 +603,13 @@ function setTool(t){
   // also kills double-click-to-finish. The dblclick handler calls
   // e.preventDefault() instead, which suppresses the zoom while keeping the
   // event.
-  [["toolRegion","region"],["toolBrush","brush"],["toolEraser","eraser"],["toolFill","fill"]]
+  [["toolPan","pan"],["toolRegion","region"],["toolBrush","brush"],["toolEraser","eraser"],["toolFill","fill"]]
     .forEach(([id,name])=>document.getElementById(id).classList.toggle("on", tool===name));
   if(t==="region"){ regionDraft=[]; renderRegionDraft(); }
   document.getElementById("regionBar").classList.toggle("show", t==="region" && !viewMode);
   updateRegionBar();
   setData("paint-hover", EMPTY);
+  updateCursor();
 }
 function updateRegionBar(){
   const txt=document.getElementById("regionBarText");
@@ -632,6 +659,7 @@ document.getElementById("clearAllBtn").onclick=()=>{
   eraseCells([...cells.keys()], "");
 };
 document.getElementById("autoFillBtn").onclick=autoFill;
+document.getElementById("toolPan").onclick=()=>setTool("pan");
 document.getElementById("toolBrush").onclick=()=>setTool("brush");
 document.getElementById("toolEraser").onclick=()=>setTool("eraser");
 document.getElementById("toolFill").onclick=()=>{ setTool("fill"); doFill(); };
