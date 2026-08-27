@@ -746,7 +746,7 @@ function styleFor(k){ return {version:8,
   sources:{base:{type:"raster",tiles:BASES[k].tiles,tileSize:256,attribution:BASES[k].attr}},
   layers:[{id:"base",type:"raster",source:"base"}]}; }
 
-const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:[-117.0547,51.3027],zoom:16});
+const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:[-117.0547,51.3027],zoom:16,maxZoom:24});
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.addControl(new maplibregl.ScaleControl({maxWidth:120,unit:"metric"}));
 // AR-object live 3D preview module/map-load race handshake — same pattern
@@ -1332,7 +1332,7 @@ async function initTileArt(b,pid){
     await TileFog.load({projectId:pid,deviceId:null,season:b.season});
     await TileFog.attachToMap(map);
     TileFog.renderCorridors(extractTileCorridorsFromBundle(b));
-  }catch(e){}
+  }catch(e){ console.warn('TileFog init failed:', e); } // was a bare silent catch -- cost real time to root-cause a real bug (2026-08-25) with zero visible signal
 }
 function loadBundle(b,srcLabel,pid){
   if(!b || !Array.isArray(b.zones)){ log("ev-warn","that doesn't look like a bundle (need a zones array)"); return; }

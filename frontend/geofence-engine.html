@@ -374,7 +374,7 @@ async function initTileArt(b,pid){
   try{
     await TileFog.load({projectId:pid,deviceId:devId,season:b.season});
     if(MapView.map){ await TileFog.attachToMap(MapView.map); TileFog.renderCorridors(extractTileCorridorsFromBundle(b)); }
-  }catch(e){}
+  }catch(e){ console.warn('TileFog init failed:', e); } // was a bare silent catch -- cost real time to root-cause a real bug (2026-08-25) with zero visible signal
 }
 
 async function loadWalkingPaths(b){
@@ -1910,7 +1910,7 @@ const MapView = {
           tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
           tileSize:256, attribution:'Esri, Maxar'}},
         layers:[{id:'base',type:'raster',source:'base'}]},
-      center:LonLat(BUNDLE.ref), zoom:16
+      center:LonLat(BUNDLE.ref), zoom:16, maxZoom:24
     });
     this.map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
     this.map.on('load', ()=>{

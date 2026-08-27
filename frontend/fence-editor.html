@@ -1247,7 +1247,7 @@ function styleFor(k){ return {version:8,
   sources:{base:{type:"raster",tiles:BASES[k].tiles,tileSize:256,attribution:BASES[k].attr}},
   layers:[{id:"base",type:"raster",source:"base"}]}; }
 
-const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16});
+const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16,maxZoom:24});
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.doubleClickZoom.disable(); // dblclick on a stop opens the rename/copy/delete menu instead of zooming (map-wide trade-off, MapLibre has no per-layer dblclick-zoom toggle)
 // AR-object live 3D preview module/map-load race handshake — stash the map
@@ -2120,6 +2120,17 @@ function render(){
   renderSources();
   drawList();
   autoSave();
+  // Artistic Fog-of-War Tiles -- confirmed live (2026-08-25): deleting (or
+  // copying/dragging/editing) a corridor zone updates the normal "fences"
+  // map layer correctly via renderSources() above, but the separate
+  // TileFog-managed ribbon layer is its own independent source that only
+  // ever gets (re)populated when explicitly told to -- it was never wired
+  // into the app's own render() cycle, so a deleted corridor's ribbon
+  // silently kept showing on the map. Cheap (just a setData() call) and
+  // only runs when Test Mode + tile art are actually active.
+  if(simMode&&typeof TileFog!=='undefined'&&simBundle&&simBundle.tileArtEnabled){
+    TileFog.renderCorridors(liveTileCorridors());
+  }
   if(sel>=0&&zones[sel]) refreshHandles(zones[sel]); else clearHandles();
 }
 
@@ -6353,13 +6364,26 @@ function extractTileCorridorsFromBundle(b){
   });
   return out;
 }
+// Lighter-weight than extractTileCorridorsFromBundle() -- reads directly
+// off the live `zones` array (already [lon,lat], the raw editor shape
+// convention, so no bundle-style lat/lon swap needed) instead of rebuilding
+// a full sim bundle just to get corridor coordinates. Called from render()
+// itself (see its own comment) so ANY zone mutation while Test Mode is
+// active -- delete, copy, drag, shape edit, activityType change -- keeps
+// the tile-corridor ribbon in sync, rather than requiring every individual
+// mutation function to remember to refresh it (the exact class of bug
+// CLAUDE.md's editorToSimBundle()/autoSave() sections warn about).
+function liveTileCorridors(){
+  return zones.filter(z=>z.shape.type==="corridor"||z.shape.type==="path")
+    .map(z=>({coords:z.shape.coords,activityType:z.activityType||"hike"}));
+}
 async function initTileArt(b){
   if(!b.tileArtEnabled||!b.project||typeof TileFog==='undefined') return;
   try{
     await TileFog.load({projectId:b.project,deviceId:null,season:b.season});
     await TileFog.attachToMap(map);
     TileFog.renderCorridors(extractTileCorridorsFromBundle(b));
-  }catch(e){}
+  }catch(e){ console.warn('TileFog init failed:', e); } // was a bare silent catch -- cost real time to root-cause a real bug (2026-08-25) with zero visible signal
 }
 function editorToSimBundle(){
   const farM=+(document.getElementById("audioRange").value)||64;

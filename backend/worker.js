@@ -4837,6 +4837,15 @@ async function api(request, env, url) {
       rows.push({ cell, terrainType, variantIndex: hashCellToVariant(cell), elevation, slope, source });
     }
 
+    // Full replace, not additive-only -- confirmed live (2026-08-25): a
+    // corridor deleted in the editor (or shrunk/moved) left its previously-
+    // classified cells behind forever, since this route only ever
+    // inserted/updated cells for the corridors in THIS request, never
+    // pruned rows for corridors no longer present. Wiping the project's
+    // prior classification before inserting the fresh set makes a re-run
+    // genuinely reflect the current corridor set, matching the "safe to
+    // re-run after corridor edits" promise -- not just duplicate-safe.
+    await env.DB.prepare("DELETE FROM terrain_cell WHERE project_id=?").bind(pid).run();
     const CHUNK = 50;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const stmts = rows.slice(i, i + CHUNK).map(r => env.DB.prepare(

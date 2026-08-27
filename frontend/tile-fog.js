@@ -25,14 +25,22 @@
  *     cell + its k=1 ring (same "torch radius" Ridge Quest uses), POSTs new
  *     cells, re-renders. Call from the position tick loop (HUD.onFix etc).
  *   TileFog.renderCorridors(corridors)            -> corridors:
- *     [{coords:[[lon,lat],...], activityType}], draws the continuous
- *     activity-typed ribbon graphic along each one.
+ *     [{coords:[[lon,lat],...], activityType}]. Caches this corridor set
+ *     and (re-)draws only the ribbon segments whose H3 cell is currently
+ *     revealed -- per direct product feedback (2026-08-26), a corridor
+ *     should reveal progressively as the visitor passes through each hex,
+ *     the same "board game" mechanic the terrain hex fill already uses,
+ *     not draw its whole length upfront. reveal() re-invokes this
+ *     automatically whenever new cells get revealed, so callers only need
+ *     to call renderCorridors() once (or whenever the corridor set itself
+ *     changes, e.g. an edit) -- not on every tick.
  *   TileFog.isRevealed(h3Cell) -> boolean
  */
 (function(global){
 
 const RESOLUTION = 10; // H3 res-10, ~66m edge — matches ridge-quest.html's FOG_RESOLUTION
 const REVEAL_POST_CHUNK = 500; // /api/projects/:id/reveal-cells caps at 500 cells/call
+const REVEAL_SAMPLE_INTERVAL_M = 15; // corridor-densification step for per-hex reveal clipping -- fine enough to catch cell transitions against a ~66m hex edge without being expensive over a multi-km corridor
 
 // Real-world corridor width per activity, and which shared tile_asset
 // terrain_type each one's ribbon texture is stored under (see the plan's
@@ -99,15 +107,28 @@ function isRevealed(h3Cell){ return (fogCells.get(h3Cell) || 0) >= 2; }
 // CLAUDE.md's zoom-level survey).
 function pxPerMeterAtZ0(lat){ return 1 / (156543.03392 * Math.cos(lat * Math.PI / 180)); }
 
+// The generated tile PNGs are ~1024px, authored as dense repeating
+// micro-patterns (many small trees/rocks/etc baked into one image, meant to
+// read as a fine texture at a MUCH smaller display size -- like a
+// wallpaper swatch, not one giant motif). MapLibre's fill-pattern/
+// line-pattern render a pattern image at its *native* pixel size unless
+// told otherwise via `pixelRatio` on addImage() -- confirmed live
+// (2026-08-25): with no pixelRatio, a single real-world hex (only ~30-100
+// screen px across at this app's normal zoom range) showed one full
+// 1024px tree motif blown up hugely instead of the intended dense small-
+// tree texture. pixelRatio scales the DISPLAYED size to nativePx/ratio, so
+// this shrinks the on-screen pattern repeat to a size that actually reads
+// as a texture rather than a single oversized image.
+const TILE_IMAGE_PIXEL_RATIO = 8;
 async function preloadImage(map, key){
   if(loadedImageKeys.has(key) || map.hasImage(key)) { loadedImageKeys.add(key); return; }
   const url = tileUrlByKey.get(key);
-  if(!url) return;
+  if(!url){ console.warn('TileFog: no tile-asset URL registered for', key, '-- was TileFog.load() called with the right season?'); return; }
   try{
     const img = await map.loadImage(url);
-    if(!map.hasImage(key)) map.addImage(key, img.data);
+    if(!map.hasImage(key)) map.addImage(key, img.data, { pixelRatio: TILE_IMAGE_PIXEL_RATIO });
     loadedImageKeys.add(key);
-  }catch(e){}
+  }catch(e){ console.warn('TileFog: image load failed for', key, url, e); }
 }
 
 async function preloadAllImages(map){
@@ -117,23 +138,88 @@ async function preloadAllImages(map){
   await Promise.all([...keys].map(k => preloadImage(map, k)));
 }
 
+// Confirmed live (2026-08-25): map.addSource() throws "Style is not done
+// loading" if MapLibre's internal Style._loaded flag isn't set yet --
+// initTileArt()'s own try/catch was silently swallowing this, so calling
+// attachToMap() too early meant TileFog never activated at all: no hex
+// fill, no corridor ribbon, no error visible anywhere. Also confirmed live:
+// map.isStyleLoaded()/map.once('idle',...) are NOT reliable signals to wait
+// on in this app specifically -- both stayed false/never fired for many
+// seconds in a real session, apparently because this editor's own many
+// frequently-updated custom GeoJSON sources (fences/draft/walkpath/etc,
+// re-setData()'d on nearly every user action) keep the map's overall
+// "idle" bookkeeping from ever settling, even though the STYLE itself
+// (the thing addSource() actually needs) is long since ready by then. So
+// this retries the real addSource() call directly on that specific error
+// instead of trusting any one readiness event/flag.
+async function trySource(fn, label){
+  for(let attempt=0; attempt<20; attempt++){
+    try{ return fn(); }
+    catch(e){
+      if(!/Style is not done loading/.test(e.message||"") || attempt===19) throw e;
+      await new Promise(r => setTimeout(r, 250));
+    }
+  }
+}
 async function attachToMap(map){
   mapRef = map;
   if(!map.getSource("tile-cells")){
-    map.addSource("tile-cells", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-    map.addLayer({ id: "tile-cells-fill", type: "fill", source: "tile-cells",
-      paint: { "fill-pattern": ["get", "tileKey"] } });
+    await trySource(() => {
+      map.addSource("tile-cells", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({ id: "tile-cells-fill", type: "fill", source: "tile-cells",
+        paint: { "fill-pattern": ["get", "tileKey"] } });
+    });
   }
   if(!map.getSource("tile-corridors")){
-    map.addSource("tile-corridors", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-    map.addLayer({ id: "tile-corridors-line", type: "line", source: "tile-corridors",
-      paint: {
-        "line-pattern": ["get", "tileKey"],
-        "line-width": ["interpolate", ["exponential", 2], ["zoom"],
-          0, ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"]],
-          20, ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 1048576]
-        ]
-      } });
+    await trySource(() => {
+      map.addSource("tile-corridors", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({ id: "tile-corridors-line", type: "line", source: "tile-corridors",
+        paint: {
+          "line-pattern": ["get", "tileKey"],
+          // The exact real-world-meters conversion is mathematically
+          // correct, but confirmed live (2026-08-25) it makes a narrow
+          // corridor (e.g. a 2m hike/bike path) render under 1.5px wide at
+          // this app's normal editing zoom (~15-16) -- literally
+          // imperceptible, not "a thin path," reading as "no path drawn" at
+          // all. This is a board-game-readable overlay, not a survey-grade
+          // map, so each stop's value is max(trueWidthAtThisZoom,
+          // floorAtThisZoom) -- a wide corridor (20m ski_chute) already
+          // exceeds its floor at normal zoom and is unaffected.
+          //
+          // A first attempt wrapped two separate top-level `interpolate`
+          // expressions in `max(...)` -- confirmed live (2026-08-25) that's
+          // invalid: "Only one zoom-based step/interpolate subexpression
+          // may be used in an expression," which made addLayer() throw on
+          // EVERY call, silently (until logging was added), so the
+          // corridor layer never got created at all. Fixed by using a
+          // SINGLE interpolate whose per-stop VALUES each already contain
+          // their own max(...) of the true width (widthM * pxPerMeterAtZ0
+          // * 2^stopZoom, precomputed per stop since Web Mercator px/m
+          // scales as exactly 2^zoom) against a hand-picked visible floor
+          // -- only one interpolate subexpression total, satisfying the
+          // validator, while still behaving identically in practice.
+          // Confirmed live (2026-08-26): this curve originally stopped at
+          // zoom 20 -- MapLibre CLAMPS to an interpolate's last stop for
+          // any zoom beyond it, so a viewer zooming in further than z20
+          // (easily reachable -- MapLibre's own default maxZoom is 22) saw
+          // the path frozen at exactly 30px forever, looking proportionally
+          // tinier the closer they got ("can't tell there's a trail with
+          // grass on the side"), not an intentional stopping point. Extended
+          // to z24 (see attachToMap()'s own map instances, whose maxZoom is
+          // now explicitly raised to 24 too) so both the true-width math
+          // and the floor keep growing all the way to a genuinely
+          // close-up, ground-level-ish view.
+          "line-width": ["interpolate", ["exponential", 2], ["zoom"],
+            0,  ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"]], 1],
+            12, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 4096], 4],
+            16, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 65536], 10],
+            18, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 262144], 18],
+            20, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 1048576], 30],
+            22, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 4194304], 60],
+            24, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 16777216], 120]
+          ]
+        } });
+    });
   }
   await preloadAllImages(map);
   renderCells();
@@ -153,17 +239,77 @@ function renderCells(){
   src.setData({ type: "FeatureCollection", features: feats });
 }
 
-function renderCorridors(corridors){
-  if(!mapRef) return;
-  const src = mapRef.getSource("tile-corridors"); if(!src) return;
-  const feats = (corridors || []).filter(c => Array.isArray(c.coords) && c.coords.length >= 2).map(c => {
+function haversineM(a, b){
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b[1] - a[1]), dLon = toRad(b[0] - a[0]);
+  const la1 = toRad(a[1]), la2 = toRad(b[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+// Adds intermediate points every ~REVEAL_SAMPLE_INTERVAL_M along a
+// [lon,lat] coordinate array so per-hex reveal clipping (below) doesn't
+// miss a cell transition that falls between two widely-spaced authored
+// vertices (a corridor is often just a handful of points spanning
+// hundreds of meters each).
+function densifyLine(coords, intervalM){
+  const out = [coords[0]];
+  for(let i = 0; i < coords.length - 1; i++){
+    const a = coords[i], b = coords[i + 1];
+    const distM = haversineM(a, b);
+    const steps = Math.max(1, Math.ceil(distM / intervalM));
+    for(let s = 1; s <= steps; s++){
+      const t = s / steps;
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  return out;
+}
+
+let lastCorridors = [];
+
+// Splits each cached corridor's densified line into maximal contiguous
+// runs whose H3 cell is currently revealed, emitting one LineString
+// feature per run -- an unrevealed stretch simply isn't drawn at all
+// (letting the fog-placeholder hex show through untouched underneath),
+// rather than drawing the whole corridor upfront. Re-run on every reveal()
+// so newly-revealed ground immediately extends the visible ribbon.
+function buildRevealedCorridorFeatures(){
+  if(typeof h3 === "undefined") return [];
+  const feats = [];
+  lastCorridors.forEach(c => {
+    if(!Array.isArray(c.coords) || c.coords.length < 2) return;
     const activity = c.activityType || "hike";
     const key = tileKey(ACTIVITY_TERRAIN_TYPE[activity] || ACTIVITY_TERRAIN_TYPE.hike, 0);
-    return { type: "Feature",
-      properties: { tileKey: key, widthM: ACTIVITY_WIDTH_M[activity] || 2, pxPerMeterAtZ0: pxPerMeterAtZ0(c.coords[0][1]) },
-      geometry: { type: "LineString", coordinates: c.coords } };
-  }).filter(f => tileUrlByKey.has(f.properties.tileKey));
+    if(!tileUrlByKey.has(key)) return;
+    const props = { tileKey: key, widthM: ACTIVITY_WIDTH_M[activity] || 2, pxPerMeterAtZ0: pxPerMeterAtZ0(c.coords[0][1]) };
+    const dense = densifyLine(c.coords, REVEAL_SAMPLE_INTERVAL_M);
+    let seg = null;
+    dense.forEach(pt => {
+      const revealed = isRevealed(h3.latLngToCell(pt[1], pt[0], RESOLUTION));
+      if(revealed){
+        if(!seg) seg = [pt]; else seg.push(pt);
+      }else{
+        if(seg && seg.length >= 2) feats.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: seg } });
+        seg = null;
+      }
+    });
+    if(seg && seg.length >= 2) feats.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: seg } });
+  });
+  return feats;
+}
+
+function refreshCorridorRender(){
+  if(!mapRef){ console.warn('TileFog.renderCorridors: called before attachToMap() -- no-op'); return; }
+  const src = mapRef.getSource("tile-corridors");
+  if(!src){ console.warn('TileFog.renderCorridors: "tile-corridors" source does not exist yet -- no-op'); return; }
+  const feats = buildRevealedCorridorFeatures();
+  if(lastCorridors.length > 0 && feats.length === 0) console.warn('TileFog.renderCorridors:', lastCorridors.length, 'corridor(s) cached, but 0 revealed segments to draw yet (expected until the visitor walks into one) -- if this persists after walking, check coords/tileUrlByKey (season) as before.');
   src.setData({ type: "FeatureCollection", features: feats });
+}
+
+function renderCorridors(corridors){
+  lastCorridors = corridors || [];
+  refreshCorridorRender();
 }
 
 // Mirrors ridge-quest.html's Quest._revealFog(p, acc) exactly (H3 k=1 disk
@@ -178,6 +324,7 @@ function reveal(lat, lon, acc, accuracyCapM){
   if(!newCells.length) return [];
   newCells.forEach(cell => fogCells.set(cell, 2));
   renderCells();
+  refreshCorridorRender();
   if(projectId && deviceId){
     for(let i = 0; i < newCells.length; i += REVEAL_POST_CHUNK){
       const chunk = newCells.slice(i, i + REVEAL_POST_CHUNK);
