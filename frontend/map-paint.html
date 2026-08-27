@@ -58,6 +58,12 @@
   #baseSel{position:absolute;top:10px;right:10px;z-index:5}
   #status{position:absolute;left:10px;bottom:10px;z-index:5;max-width:60%;background:rgba(10,16,24,.9);
         border:1px solid var(--rim);border-radius:8px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice)}
+  #regionBar{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:6;display:none;
+        align-items:center;gap:10px;background:rgba(10,16,24,.96);border:1px solid var(--amber);border-radius:10px;
+        padding:8px 12px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice);box-shadow:0 6px 22px rgba(0,0,0,.45)}
+  #regionBar.show{display:flex}
+  #regionBar button{padding:5px 10px}
+  #seasonBtns button.on{background:var(--go);border-color:var(--go);color:#04140d}
 
   .side{width:250px;flex:0 0 auto;border-left:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;
         background:rgba(255,255,255,.01);overflow-y:auto;padding:12px;min-width:210px;max-width:50vw;resize:horizontal}
@@ -87,11 +93,7 @@
   <div class="rail">
     <div class="railHead">
       <span class="ttl">Tile palette</span>
-      <select id="seasonSel" title="Season for this project's tile art">
-        <option value="">— season —</option>
-        <option value="summer">Summer</option>
-        <option value="winter">Winter</option>
-      </select>
+      <span id="seasonTag" class="hint" style="font-family:'Barlow Condensed'">all seasons</span>
     </div>
     <div id="paletteHost"></div>
   </div>
@@ -103,10 +105,22 @@
       <option value="topo">Topo</option>
       <option value="street">Street</option>
     </select>
+    <div id="regionBar">
+      <span id="regionBarText">Click the map to add polygon corners</span>
+      <button id="regionBarFinish" disabled>&#10003; Finish</button>
+      <button id="regionBarCancel" class="ghost">&#10005; Cancel</button>
+    </div>
     <div id="status" class="hint" style="display:none"></div>
   </div>
 
   <div class="side">
+    <label class="k" style="margin-top:0">Season — tile set</label>
+    <div class="row" id="seasonBtns">
+      <button data-season="summer">Summer</button>
+      <button data-season="winter">Winter</button>
+    </div>
+    <div id="seasonHint" class="hint" style="margin:-2px 0 2px">One season per project. Sets which tile art the game shows.</div>
+    <hr>
     <h2>Region</h2>
     <div class="row">
       <button id="toolRegion">Region</button>
@@ -416,6 +430,7 @@ function renderRegionDraft(){
   setData("region-poly", fc(f));
   document.getElementById("regionFinish").disabled = regionDraft.length<3;
   document.getElementById("regionClear").disabled = regionDraft.length===0 && !regionRing;
+  updateRegionBar();
 }
 function renderRegion(){
   setData("region-poly", regionRing ? fc([polyFeat(closeRing(regionRing)), lineFeat(closeRing(regionRing))]) : EMPTY);
@@ -452,6 +467,7 @@ function clearRegion(){
   setData("region-poly", EMPTY);
   document.getElementById("regionFinish").disabled=true;
   document.getElementById("regionClear").disabled=true;
+  if(tool!=="region") document.getElementById("regionBar").classList.remove("show");
 }
 function doFill(){
   if(!regionCellSet){ toast("Draw and finish a region first."); return; }
@@ -535,11 +551,33 @@ async function autoFill(){
 function setTool(t){
   tool=t;
   isStroking=false; if(map && map.dragPan) map.dragPan.enable();   // never leave pan disabled
-  map.doubleClickZoom[t==="region"?"disable":"enable"]();
+  // NOTE: do NOT disable map.doubleClickZoom here — MapLibre only emits the
+  // "dblclick" map event from the DoubleClickZoomHandler, so disabling it
+  // also kills double-click-to-finish. The dblclick handler calls
+  // e.preventDefault() instead, which suppresses the zoom while keeping the
+  // event.
   [["toolRegion","region"],["toolBrush","brush"],["toolEraser","eraser"],["toolFill","fill"]]
     .forEach(([id,name])=>document.getElementById(id).classList.toggle("on", tool===name));
-  if(t==="region"){ regionDraft=[]; renderRegionDraft(); toast("Click to add polygon corners; double-click or Finish to close."); }
+  if(t==="region"){ regionDraft=[]; renderRegionDraft(); }
+  document.getElementById("regionBar").classList.toggle("show", t==="region" && !viewMode);
+  updateRegionBar();
   setData("paint-hover", EMPTY);
+}
+function updateRegionBar(){
+  const txt=document.getElementById("regionBarText");
+  const fin=document.getElementById("regionBarFinish");
+  if(!txt) return;
+  const n=regionDraft.length;
+  txt.textContent = n<3
+    ? "Click the map to add polygon corners ("+n+")"
+    : n+" corners — double-click, Enter, or Finish to close · Esc to cancel";
+  fin.disabled = n<3;
+}
+function cancelRegionDraw(){
+  regionDraft=[]; renderRegionDraft();
+  document.getElementById("regionBar").classList.remove("show");
+  setTool("brush");
+  toast("Region drawing cancelled.");
 }
 
 /* ---- export / view ---- */
@@ -576,19 +614,38 @@ document.getElementById("undoBtn").onclick=undo;
 document.getElementById("saveBtn").onclick=()=>{ clearTimeout(flushTimer); flush(); };
 document.getElementById("exportBtn").onclick=exportPNG;
 document.getElementById("viewBtn").onclick=openView;
-document.getElementById("seasonSel").onchange=async e=>{
-  const val=e.target.value||null;
+document.getElementById("regionBarFinish").onclick=finishRegion;
+document.getElementById("regionBarCancel").onclick=cancelRegionDraw;
+
+/* ---- season (one per project — persisted via PATCH /api/projects/:id) ---- */
+function syncSeasonUI(){
+  document.querySelectorAll("#seasonBtns button").forEach(b=>b.classList.toggle("on", b.dataset.season===season));
+  document.getElementById("seasonTag").textContent = season ? (season+" tiles") : "all seasons";
+}
+async function setSeason(val){
+  const next = (season===val) ? null : val;   // click the active one again -> clear (show all)
+  const prev = season;
+  season = next; syncSeasonUI();
   try{
     const r=await fetch("/api/projects/"+encodeURIComponent(projectId),{
       method:"PATCH", headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
-      body:JSON.stringify({season:val})});
-    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.status); }
-    season=val;
+      body:JSON.stringify({season:next})});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||("HTTP "+r.status)); }
     await TileFog.load({projectId, season, revealAll:true});
-    renderLocal(); buildPalette();
-    toast("Season set to "+(val||"none")+".");
-  }catch(err){ toast("Couldn't set season: "+err.message); e.target.value=season||""; }
+    renderLocal(); await buildPalette();
+    toast("Season: "+(next||"all")+".");
+  }catch(err){ season=prev; syncSeasonUI(); toast("Couldn't set season: "+err.message); }
+}
+document.getElementById("seasonBtns").onclick=e=>{
+  const b=e.target.closest("button[data-season]"); if(b) setSeason(b.dataset.season);
 };
+
+/* ---- keyboard: Enter finishes a region, Esc cancels it ---- */
+window.addEventListener("keydown",e=>{
+  if(tool!=="region" || viewMode) return;
+  if(e.key==="Enter" && regionDraft.length>=3){ e.preventDefault(); finishRegion(); }
+  else if(e.key==="Escape"){ e.preventDefault(); cancelRegionDraw(); }
+});
 
 /* ---- screen / project plumbing (mirrors gpx-editor.html / record.html) ---- */
 function showPaintScreen(){
@@ -617,11 +674,11 @@ async function enterProject(id, proj){
   let bundle={};
   try{ const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle"); if(r.ok) bundle=await r.json(); }catch(e){}
   season = bundle.season || null;
-  document.getElementById("seasonSel").value = season || "";
+  syncSeasonUI();
   await waitForMap();
   await loadTerrain(bundle.ref);
   await buildPalette();
-  setTool(viewMode ? "region" : "brush");
+  setTool("brush");
   if(viewMode){ document.getElementById("topNav").style.display="none"; }
 }
 
