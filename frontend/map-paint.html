@@ -77,7 +77,8 @@
   hr{border:none;border-top:1px solid var(--rim);margin:12px 0}
 
   /* read-only view mode (/paint?...&view=1) — just the map + its content */
-  body.view .rail,body.view .side,body.view #baseSel{display:none}
+  body.view .rail,body.view .side,body.view #baseSel,body.view #regionBar{display:none}
+  body.view #exitViewBtn{display:block}
 </style>
 </head>
 <body>
@@ -105,6 +106,7 @@
       <option value="topo">Topo</option>
       <option value="street">Street</option>
     </select>
+    <button id="exitViewBtn" style="position:absolute;top:10px;right:10px;z-index:7;display:none">&#10005; Exit view</button>
     <div id="regionBar">
       <span id="regionBarText">Click the map to add polygon corners</span>
       <button id="regionBarFinish" disabled>&#10003; Finish</button>
@@ -135,6 +137,9 @@
     <div class="row">
       <button id="regionClear" class="ghost" disabled title="Remove just the region selection, leaving hexes untouched">Remove outline</button>
     </div>
+    <label style="margin-top:6px;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ice)">
+      <input type="checkbox" id="showCorridorsChk" checked style="width:auto"> show corridors / paths
+    </label>
     <p class="hint" style="margin:4px 0 0">Draw a polygon, then Auto-fill runs OpenStreetMap + elevation recognition to match tiles. Hand-painted hexes are never overwritten by Auto-fill.</p>
 
     <hr>
@@ -218,6 +223,7 @@ const dirtyErase = new Set();     // h3                                 (pending
 let undoStack = [];               // array of strokes; stroke = [{h3, prev, next}]
 let selectedTile = null;          // {terrainType, variantIndex, url}
 let paletteTiles = [];
+let projectZones = [];            // bundle.zones — for the corridor reference overlay
 let tool = "brush";               // region | brush | eraser | fill
 let brushK = 0;
 
@@ -265,6 +271,17 @@ function waitForMap(){ return mapReady ? Promise.resolve() : new Promise(res=>ma
 
 function ensureOverlayLayers(){
   if(map.getSource("region-poly")) return;
+  // corridor reference — the project's corridor/path centrelines from the
+  // published bundle, drawn over the terrain so you can paint along the
+  // actual routes. Added first so the region / hover / manual overlays stay
+  // on top of it.
+  map.addSource("corridor-ref",{type:"geojson",data:EMPTY});
+  map.addLayer({id:"corridor-ref-casing",type:"line",source:"corridor-ref",
+    layout:{"line-cap":"round","line-join":"round"},
+    paint:{"line-color":"#0a1018","line-width":5,"line-opacity":0.5}});
+  map.addLayer({id:"corridor-ref-line",type:"line",source:"corridor-ref",
+    layout:{"line-cap":"round","line-join":"round"},
+    paint:{"line-color":"#ff6a3d","line-width":2.5,"line-dasharray":[1.5,1]}});
   map.addSource("region-poly",{type:"geojson",data:EMPTY});
   map.addLayer({id:"region-poly-fill",type:"fill",source:"region-poly",paint:{"fill-color":"#ffc24d","fill-opacity":0.08}});
   map.addLayer({id:"region-poly-line",type:"line",source:"region-poly",paint:{"line-color":"#ffc24d","line-width":2,"line-dasharray":[2,1.5]}});
@@ -295,9 +312,29 @@ async function loadTerrain(refLatLon){
   await TileFog.load({projectId, season, revealAll:true});
   await TileFog.attachToMap(map, {revealAll:true});
   ensureOverlayLayers();
+  renderCorridorRef();
   await refetchCells();
   renderLocal();
   fitToContent(refLatLon);
+}
+
+/* ---- corridor reference overlay (project's corridor/path centrelines) ---- */
+function bundleCorridorLines(){
+  const out=[];
+  const add=coords=>{ if(Array.isArray(coords) && coords.length>=2) out.push(coords.map(p=>[p[0],p[1]])); };
+  (projectZones||[]).forEach(z=>{
+    (z.layers||[]).forEach(l=>{
+      const g=l&&l.geometry;
+      if(g && (g.type==="corridor"||g.type==="path")) add(g.path||g.coords);
+    });
+    if(z.shape && (z.shape.type==="corridor"||z.shape.type==="path")) add(z.shape.coords);
+  });
+  return out;
+}
+function renderCorridorRef(){
+  const chk=document.getElementById("showCorridorsChk");
+  const on = chk ? chk.checked : true;
+  setData("corridor-ref", fc(on ? bundleCorridorLines().map(c=>lineFeat(c)) : []));
 }
 function fitToContent(ref){
   const hs=[...cells.keys()];
@@ -674,6 +711,12 @@ document.getElementById("exportBtn").onclick=exportPNG;
 document.getElementById("viewBtn").onclick=openView;
 document.getElementById("regionBarFinish").onclick=finishRegion;
 document.getElementById("regionBarCancel").onclick=cancelRegionDraw;
+document.getElementById("showCorridorsChk").onchange=renderCorridorRef;
+document.getElementById("exitViewBtn").onclick=()=>{
+  const q=["project="+encodeURIComponent(projectId)];
+  if(currentOrg()) q.push("asClient="+encodeURIComponent(currentOrg()));
+  location.href="/paint?"+q.join("&");
+};
 
 /* ---- season (one per project — persisted via PATCH /api/projects/:id) ---- */
 function syncSeasonUI(){
@@ -731,6 +774,7 @@ async function enterProject(id, proj){
   showPaintScreen();
   let bundle={};
   try{ const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle"); if(r.ok) bundle=await r.json(); }catch(e){}
+  projectZones = Array.isArray(bundle.zones) ? bundle.zones : [];
   season = bundle.season || null;
   syncSeasonUI();
   await waitForMap();

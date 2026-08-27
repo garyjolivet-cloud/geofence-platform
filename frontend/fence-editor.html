@@ -1121,6 +1121,10 @@
   </select>
   <button id="generateTerrainBtn" class="ghost" style="width:100%;margin-top:6px">Generate Terrain</button>
   <div class="hint" id="terrainStatus" style="margin:4px 0 0">Not yet generated.</div>
+  <label style="margin-top:8px;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ice)">
+    <input type="checkbox" id="showTerrainChk" checked style="width:auto"> show painted terrain on the map
+  </label>
+  <a id="openPaintLink" href="/paint" target="_blank" class="hint" style="display:inline-block;margin-top:4px">✏️ Open Map Paint — draw / hand-edit the terrain art →</a>
 </div>
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
@@ -3465,11 +3469,28 @@ async function renderTerrainPreview(pid){
     });
     src.setData(fc(feats));
     if(feats.length && !document.getElementById("terrainStatus").textContent.includes("classified")){
-      document.getElementById("terrainStatus").textContent=feats.length+" cells already generated.";
+      document.getElementById("terrainStatus").textContent=feats.length+" terrain hexes painted.";
     }
+    applyTerrainVisibility();
   }catch(e){}
 }
 document.getElementById("generateTerrainBtn")?.addEventListener("click",generateTerrain);
+
+// Show/hide the painted-terrain preview (the terrain_cell hexes authored in
+// Map Paint / Generate Terrain) on the editing map. On by default; choice
+// persists per browser.
+function applyTerrainVisibility(){
+  const on = document.getElementById("showTerrainChk")?.checked ?? true;
+  ["terrain-preview-fill","terrain-preview-line"].forEach(id=>{
+    if(map.getLayer(id)) map.setLayoutProperty(id,"visibility", on?"visible":"none");
+  });
+  try{ localStorage.setItem("gp.editorShowTerrain", on?"1":"0"); }catch(e){}
+}
+try{ if(localStorage.getItem("gp.editorShowTerrain")==="0"){ const c=document.getElementById("showTerrainChk"); if(c) c.checked=false; } }catch(e){}
+document.getElementById("showTerrainChk")?.addEventListener("change",()=>{
+  applyTerrainVisibility();
+  if(document.getElementById("showTerrainChk").checked) renderTerrainPreview(afProjectId());
+});
 
 // afOpenStudioHref()/the Audio Palette's own "Open in Studio" link (with a
 // deep link straight to the selected stop's zone/bearing in Audio Studio)
@@ -5343,6 +5364,11 @@ async function loadFromPlatform(id){
     if(window.CodeObjects) CodeObjects.refresh(true);
     doAudioRefresh();
     doAssetRefresh();
+    // Painted terrain (Map Paint / Generate Terrain) — show it automatically
+    // when a project opens so stops can be placed against the artistic map.
+    renderTerrainPreview(id);
+    const opl=document.getElementById("openPaintLink");
+    if(opl) opl.href="/paint?project="+encodeURIComponent(id)+(b.orgId?"&asClient="+encodeURIComponent(b.orgId):"");
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
 // Publish-time geometry sanity check. The map's own drag handles already
