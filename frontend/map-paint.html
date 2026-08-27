@@ -127,10 +127,13 @@
       <button id="regionFinish" class="ghost" disabled>Finish</button>
     </div>
     <div class="row">
-      <button id="regionClear" class="ghost" disabled>Clear region</button>
+      <button id="autoFillBtn">Auto-fill terrain</button>
     </div>
     <div class="row">
-      <button id="autoFillBtn">Auto-fill terrain</button>
+      <button id="regionErase" class="ghost" disabled title="Delete every terrain hex inside the region">Erase hexes in region</button>
+    </div>
+    <div class="row">
+      <button id="regionClear" class="ghost" disabled title="Remove just the region selection, leaving hexes untouched">Remove outline</button>
     </div>
     <p class="hint" style="margin:4px 0 0">Draw a polygon, then Auto-fill runs OpenStreetMap + elevation recognition to match tiles. Hand-painted hexes are never overwritten by Auto-fill.</p>
 
@@ -153,6 +156,9 @@
     <div class="row">
       <button id="undoBtn" class="ghost" disabled>&#8617; Undo</button>
       <button id="saveBtn" class="on">Save</button>
+    </div>
+    <div class="row">
+      <button id="clearAllBtn" class="ghost" title="Delete every terrain hex on the whole map">Clear all hexes</button>
     </div>
     <div id="saveState"></div>
 
@@ -428,9 +434,13 @@ function renderRegionDraft(){
   if(regionDraft.length>=2) f.push(lineFeat(regionDraft.concat(regionDraft.length>=3?[regionDraft[0]]:[])));
   if(regionDraft.length>=3) f.push(polyFeat(regionDraft.concat([regionDraft[0]])));
   setData("region-poly", fc(f));
+  updateRegionButtons();
+  updateRegionBar();
+}
+function updateRegionButtons(){
   document.getElementById("regionFinish").disabled = regionDraft.length<3;
   document.getElementById("regionClear").disabled = regionDraft.length===0 && !regionRing;
-  updateRegionBar();
+  document.getElementById("regionErase").disabled = !regionCellSet;
 }
 function renderRegion(){
   setData("region-poly", regionRing ? fc([polyFeat(closeRing(regionRing)), lineFeat(closeRing(regionRing))]) : EMPTY);
@@ -458,16 +468,27 @@ function finishRegion(){
   recomputeRegionCells();
   renderRegion();
   placeRegionHandles();
+  updateRegionButtons();
   setTool("brush");
-  toast(regionCellSet.size+" hexes in region. Auto-fill, or paint by hand.");
+  toast(regionCellSet.size+" hexes in region. Auto-fill, paint, or Erase hexes in region.");
 }
 function clearRegion(){
   regionDraft=[]; regionRing=null; regionCellSet=null;
   clearRegionHandles();
   setData("region-poly", EMPTY);
-  document.getElementById("regionFinish").disabled=true;
-  document.getElementById("regionClear").disabled=true;
+  updateRegionButtons();
   if(tool!=="region") document.getElementById("regionBar").classList.remove("show");
+}
+// Delete terrain hexes (any source — auto or manual) for a set of H3 cells.
+// One undoable stroke; the erase is flushed to the server (DELETE) on save.
+function eraseCells(targets, label){
+  const list = targets.filter(c => cells.has(c));
+  if(!list.length){ toast("No hexes to clear" + (label ? " " + label : "") + "."); return; }
+  const stroke = [];
+  list.forEach(c => applyCell(c, null, stroke));
+  undoStack.push(stroke); updateUndoBtn(); scheduleFlush();
+  renderLocal();
+  toast("Cleared " + list.length + " hexes" + (label ? " " + label : "") + ".");
 }
 function doFill(){
   if(!regionCellSet){ toast("Draw and finish a region first."); return; }
@@ -600,7 +621,16 @@ function openView(){
 /* ---- wire the toolbar ---- */
 document.getElementById("toolRegion").onclick=()=>{ clearRegion(); setTool("region"); };
 document.getElementById("regionFinish").onclick=finishRegion;
-document.getElementById("regionClear").onclick=()=>{ clearRegion(); toast("Region cleared."); };
+document.getElementById("regionClear").onclick=()=>{ clearRegion(); toast("Region outline removed (hexes untouched)."); };
+document.getElementById("regionErase").onclick=()=>{
+  if(!regionCellSet){ toast("Finish a region first."); return; }
+  eraseCells([...regionCellSet], "in the region");
+};
+document.getElementById("clearAllBtn").onclick=()=>{
+  if(!cells.size){ toast("Nothing painted yet."); return; }
+  if(!confirm("Erase all "+cells.size+" hexes on the whole map? Undo is still available until you leave the page.")) return;
+  eraseCells([...cells.keys()], "");
+};
 document.getElementById("autoFillBtn").onclick=autoFill;
 document.getElementById("toolBrush").onclick=()=>setTool("brush");
 document.getElementById("toolEraser").onclick=()=>setTool("eraser");
