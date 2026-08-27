@@ -66,6 +66,11 @@
   #scrubBar{position:fixed;left:0;right:0;bottom:0;height:56px;background:rgba(10,16,24,.95);border-top:1px solid var(--rim);
             display:none;align-items:center;gap:12px;padding:0 16px;z-index:50}
   #scrubBar.show{display:flex}
+  /* the fixed scrub bar (shown once a track loads) is full-width and sits on
+     top of the bottom of both side columns — pad them so their last controls
+     (notably Save As…) clear it instead of being hidden behind it */
+  body:has(#scrubBar.show) .side{padding-bottom:68px}
+  body:has(#scrubBar.show) #gpxTreeHost{padding-bottom:62px}
   #scrubRange{flex:1}
   #scrubKm,#scrubElev{font-family:"Barlow Condensed";font-size:13px;color:var(--ice);white-space:nowrap;min-width:70px}
 </style>
