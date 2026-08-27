@@ -55,7 +55,8 @@
 
   #mapWrap{flex:1;min-width:0;position:relative}
   #map{position:absolute;inset:0}
-  #baseSel{position:absolute;top:10px;right:10px;z-index:5}
+  #mapCtls{position:absolute;top:10px;right:10px;z-index:5;display:flex;gap:6px;align-items:flex-start}
+  #tiltBtn.on{background:var(--coral);border-color:var(--coral);color:#1a0d07}
   #status{position:absolute;left:10px;bottom:10px;z-index:5;max-width:60%;background:rgba(10,16,24,.9);
         border:1px solid var(--rim);border-radius:8px;padding:6px 10px;font-family:"Barlow Condensed";font-size:12px;color:var(--ice)}
   #regionBar{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:6;display:none;
@@ -79,6 +80,7 @@
   /* read-only view mode (/paint?...&view=1) — just the map + its content */
   body.view .rail,body.view .side,body.view #baseSel,body.view #regionBar{display:none}
   body.view #exitViewBtn{display:block}
+  #exitViewBtn{position:absolute;top:10px;left:10px;z-index:7;display:none}
 </style>
 </head>
 <body>
@@ -101,12 +103,15 @@
 
   <div id="mapWrap">
     <div id="map"></div>
-    <select id="baseSel" title="Basemap">
-      <option value="sat">Satellite</option>
-      <option value="topo">Topo</option>
-      <option value="street">Street</option>
-    </select>
-    <button id="exitViewBtn" style="position:absolute;top:10px;right:10px;z-index:7;display:none">&#10005; Exit view</button>
+    <div id="mapCtls">
+      <button id="tiltBtn" title="3D terrain tilt">3D</button>
+      <select id="baseSel" title="Basemap">
+        <option value="sat">Satellite</option>
+        <option value="topo">Topo</option>
+        <option value="street">Street</option>
+      </select>
+    </div>
+    <button id="exitViewBtn">&#10005; Exit view</button>
     <div id="regionBar">
       <span id="regionBarText">Click the map to add polygon corners</span>
       <button id="regionBarFinish" disabled>&#10003; Finish</button>
@@ -259,11 +264,24 @@ const map = new maplibregl.Map({
   center:[-117.0547,51.3027], zoom:13, maxZoom:24,
   preserveDrawingBuffer:true      // required so Export PNG can read the canvas
 });
-map.addControl(new maplibregl.NavigationControl());
+map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
+const TERRAIN_SRC = "terrain-dem";
+let threeDOn = false;
 map.on("load",()=>{
   mapReady=true;
+  // Terrarium DEM — same free source the other map pages use for 3D terrain.
+  map.addSource(TERRAIN_SRC,{type:"raster-dem",
+    tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+    tileSize:256, encoding:"terrarium", maxzoom:15});
   if(resizePending){ resizePending=false; map.resize(); }
 });
+function setThreeD(on){
+  threeDOn=on;
+  document.getElementById("tiltBtn").classList.toggle("on", on);
+  if(map.getSource(TERRAIN_SRC)) map.setTerrain(on ? {source:TERRAIN_SRC, exaggeration:1.4} : null);
+  map.easeTo({pitch: on?60:0, duration:400});
+}
+document.getElementById("tiltBtn").onclick = ()=>setThreeD(!threeDOn);
 document.getElementById("baseSel").onchange = e => {
   const s=map.getSource("base"); if(s) s.setTiles(BASES[e.target.value].tiles);
 };
