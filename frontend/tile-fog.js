@@ -232,16 +232,66 @@ async function attachToMap(map, opts){
   renderCells();
 }
 
+// Chaikin corner-cutting on a closed ring of [lng,lat] points. Two passes
+// (SMOOTH_ITERATIONS) turn the hex staircase along a terrain-type boundary
+// into an organic curve. Runs on the DISSOLVED patch outline (see
+// renderCells), not per hexagon, so total vertex count still drops vs. the
+// old one-feature-per-hex render.
+const SMOOTH_ITERATIONS = 2;
+function chaikinClosedRing(ring){
+  const closed = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+  const pts = closed ? ring.slice(0, -1) : ring.slice();
+  if(pts.length < 3) return closedRing(ring);
+  const out = [];
+  for(let i = 0; i < pts.length; i++){
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+    out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+  }
+  out.push(out[0].slice());
+  return out;
+}
+function smoothRing(ring){
+  let r = ring;
+  for(let i = 0; i < SMOOTH_ITERATIONS; i++) r = chaikinClosedRing(r);
+  return r;
+}
+
 function renderCells(){
   if(!mapRef) return;
   const src = mapRef.getSource("tile-cells"); if(!src) return;
   if(typeof h3 === "undefined") return;
-  const feats = [];
+
+  // Group cell ids by the tile key they render with, then dissolve each
+  // group's contiguous hexes into one outline (h3.cellsToMultiPolygon) and
+  // round it. Fewer geojson features than one-per-hex AND smooth edges --
+  // the mobile-friendly compromise (vs. a finer H3 resolution, which is 7x+
+  // more features). Falls back to per-hex polygons if the loaded h3-js
+  // lacks cellsToMultiPolygon.
+  const byKey = new Map();
   terrainCells.forEach((c, cell) => {
     const key = (revealAll || isRevealed(cell)) ? tileKey(c.terrainType, c.variantIndex) : tileKey(FOG_TERRAIN_TYPE, 0);
     if(!tileUrlByKey.has(key)) return; // asset not in the library yet -- skip rather than render a broken pattern ref
-    const ring = closedRing(h3.cellToBoundary(cell, true));
-    feats.push({ type: "Feature", properties: { tileKey: key }, geometry: { type: "Polygon", coordinates: [ring] } });
+    let arr = byKey.get(key); if(!arr){ arr = []; byKey.set(key, arr); }
+    arr.push(cell);
+  });
+
+  const canDissolve = typeof h3.cellsToMultiPolygon === "function";
+  const feats = [];
+  byKey.forEach((cellsForKey, key) => {
+    if(canDissolve){
+      let polys = null;
+      try { polys = h3.cellsToMultiPolygon(cellsForKey, true); } catch(e){ polys = null; }
+      if(polys){
+        const mp = polys.map(poly => poly.map(ring => smoothRing(ring)));
+        feats.push({ type: "Feature", properties: { tileKey: key }, geometry: { type: "MultiPolygon", coordinates: mp } });
+        return;
+      }
+    }
+    cellsForKey.forEach(cell => {
+      feats.push({ type: "Feature", properties: { tileKey: key },
+        geometry: { type: "Polygon", coordinates: [closedRing(h3.cellToBoundary(cell, true))] } });
+    });
   });
   src.setData({ type: "FeatureCollection", features: feats });
 }
