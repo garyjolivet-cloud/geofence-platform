@@ -527,7 +527,13 @@ function renderRegion(){
   setData("region-poly", regionRing ? fc([polyFeat(closeRing(regionRing)), lineFeat(closeRing(regionRing))]) : EMPTY);
 }
 function recomputeRegionCells(){
-  regionCellSet = regionRing ? new Set(h3.polygonToCells([closeRing(regionRing).map(p=>[p[0],p[1]])], 10, true)) : null;
+  if(!regionRing){ regionCellSet=null; return; }
+  try{
+    regionCellSet = new Set(h3.polygonToCells([closeRing(regionRing).map(p=>[p[0],p[1]])], 10, true));
+  }catch(e){
+    regionCellSet = new Set();
+    toast("Couldn't read that region shape — try a simpler / non-crossing polygon.");
+  }
 }
 function clearRegionHandles(){ regionHandles.forEach(m=>m.remove()); regionHandles=[]; }
 function placeRegionHandles(){
@@ -641,7 +647,14 @@ async function autoFill(){
       body:JSON.stringify({polygons:[closed]})});
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
+    // Preserve any hand-paints made while the classify request was in flight —
+    // refetchCells() clears the dirty sets, which would otherwise silently
+    // drop them.
+    const keepPaint=new Map(dirtyPaint), keepErase=new Set(dirtyErase);
     await refetchCells();
+    keepPaint.forEach((v,h)=>{ cells.set(h,{...v,source:"manual"}); dirtyPaint.set(h,v); });
+    keepErase.forEach(h=>{ cells.delete(h); dirtyErase.add(h); });
+    if(dirtyPaint.size || dirtyErase.size) scheduleFlush();
     renderLocal();
     const sum=j.summary?Object.entries(j.summary).map(([k,v])=>k+" "+v).join(", "):"";
     toast((j.cellCount||0)+" hexes auto-filled"+(sum?": "+sum:"")+".");
@@ -783,21 +796,29 @@ function resetEditor(){
   undoStack=[]; updateUndoBtn();
   selectedTile=null; document.getElementById("curTile").innerHTML="<span>no tile selected</span>";
   clearRegion();
+  document.getElementById("regionBar").classList.remove("show");
   setSaveState("");
 }
 async function enterProject(id, proj){
+  // projectId doubles as the re-entrancy guard: a later enterProject() call
+  // overwrites it, and each `projectId!==id` check below bails the stale run
+  // so it can't render another project's data over the current one.
   projectId=id;
   document.getElementById("hdrCrumb").textContent=(proj&&proj.name)||id;
   resetEditor();
   showPaintScreen();
   let bundle={};
   try{ const r=await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle"); if(r.ok) bundle=await r.json(); }catch(e){}
+  if(projectId!==id) return;
   projectZones = Array.isArray(bundle.zones) ? bundle.zones : [];
   season = bundle.season || null;
   syncSeasonUI();
   await waitForMap();
+  if(projectId!==id) return;
   await loadTerrain(bundle.ref);
+  if(projectId!==id) return;
   await buildPalette();
+  if(projectId!==id) return;
   setTool("brush");
   if(viewMode){ document.getElementById("topNav").style.display="none"; }
 }

@@ -4838,6 +4838,10 @@ async function api(request, env, url) {
       } catch (e) {}
     }
     if (!cellSet.size) return json({ error: "no valid corridor or polygon geometry" }, 400, AC);
+    // Guard the per-cell OSM/DEM loop (and Overpass load) against an
+    // accidentally huge drawn region -- res-10 is ~66 m/hex, so 20k cells is
+    // already ~300 km2.
+    if (cellSet.size > 20000) return json({ error: "region too large (" + cellSet.size + " cells) — draw a smaller area or split it into parts" }, 400, AC);
 
     // Hand-painted cells (Map Paint, source='manual') are never re-classified
     // or wiped -- drop them from the working set before any OSM/DEM work, and
