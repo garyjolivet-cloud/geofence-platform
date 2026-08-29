@@ -117,6 +117,18 @@ async function deleteProjectRows(env, pid) {
   await env.DB.prepare("DELETE FROM studio_session WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM chatterbox_script WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM audio_folder WHERE scope='project' AND scope_id=?").bind(pid).run();
+  // AR/3D asset tree — same scope='project' shape as the audio tree, same
+  // "look up each r2_key before dropping the rows" R2 cleanup (models live in
+  // env.MODELS). This was previously missed here, leaving orphaned
+  // asset_object rows + model objects on every project delete.
+  if (env.MODELS) {
+    const { results: modelRows } = await env.DB.prepare(
+      "SELECT r2_key FROM asset_object WHERE scope='project' AND scope_id=?"
+    ).bind(pid).all();
+    for (const row of (modelRows || [])) if (row.r2_key) await env.MODELS.delete(row.r2_key).catch(() => {});
+  }
+  await env.DB.prepare("DELETE FROM asset_object WHERE scope='project' AND scope_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM asset_folder WHERE scope='project' AND scope_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM stop_folder WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM position_history WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM record_session WHERE project_id=?").bind(pid).run();
