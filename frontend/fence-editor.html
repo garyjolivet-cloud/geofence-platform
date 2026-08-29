@@ -4175,6 +4175,34 @@ async function loadActiveWalkingPathData(ids){
   autoSave();
 }
 
+// Used wherever a "⋯" menu might be opened from inside another already-open
+// .sf-menu; harmless to call from the persistent stop tree too (it just
+// behaves like a normal close-other-menus).
+function closeNestedMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>{ if(!m.classList.contains("wp-picker")) m.remove(); }); }
+// Shared by every "⋯"/picker menu in this file (the shape picker, stop
+// tree, stop folders, corridor row menus). Two real bugs this fixes, both
+// hit in practice: (1) a menu's anchor button often isn't a direct child
+// of anything with position:relative, so position:absolute resolves
+// against a distant positioned ancestor and can put the menu anywhere;
+// (2) even when the anchor's parent IS positioned, a scrollable ancestor
+// (overflow-y:auto) clips any absolutely-positioned descendant regardless
+// of z-index. Rendering into document.body with position:fixed
+// coordinates computed from the anchor's own getBoundingClientRect()
+// sidesteps both.
+function openPortalMenu(anchorBtn, cls, buildFn, keepPickerOpen){
+  if(keepPickerOpen) closeNestedMenus(); else closeStopFolderMenus();
+  const menu=document.createElement("div"); menu.className="sf-menu "+cls;
+  menu.style.position="fixed"; menu.style.top="0"; menu.style.left="0"; menu.style.right="auto"; menu.style.visibility="hidden";
+  buildFn(menu);
+  document.body.appendChild(menu);
+  const ar=anchorBtn.getBoundingClientRect(), mr=menu.getBoundingClientRect();
+  let top=ar.bottom+4;
+  if(top+mr.height>window.innerHeight) top=Math.max(4, ar.top-mr.height-4);
+  let left=Math.min(ar.left, window.innerWidth-mr.width-4);
+  menu.style.top=top+"px"; menu.style.left=Math.max(4,left)+"px"; menu.style.visibility="visible";
+  return menu;
+}
+
 /* ---- GPX import helpers — parse a track recorded by another app
    (Strava, Gaia GPS, AllTrails, Garmin Connect, ...) for "Import GPX as
    Corridor". GPX's <trkpt lat lon> + optional <ele> maps directly onto our
