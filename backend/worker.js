@@ -91,7 +91,11 @@ async function cleanupOldRecordings(env) {
 // Every table with a project_id/projectId column, kept in one place so the
 // single-project DELETE and the app-cascade DELETE loop can't drift apart
 // again — they used to only clean event/published_bundle, silently leaving
-// orphaned rows in the other five tables every time a project was deleted.
+// orphaned rows in the other tables every time a project was deleted.
+// Any table with a hard `REFERENCES project(id)` FK MUST be cleared here
+// before `DELETE FROM project`, or D1 rejects the delete with
+// `FOREIGN KEY constraint failed`. tests/delete-project-rows-fk.test.js
+// re-derives that list from migrations/*.sql and fails if one is missing.
 async function deleteProjectRows(env, pid) {
   await env.DB.prepare("DELETE FROM event WHERE projectId=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM published_bundle WHERE projectId=?").bind(pid).run();
@@ -117,6 +121,9 @@ async function deleteProjectRows(env, pid) {
   await env.DB.prepare("DELETE FROM position_history WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM record_session WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM record_folder WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM record_schedule WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM terrain_cell WHERE project_id=?").bind(pid).run();
+  await env.DB.prepare("DELETE FROM tile_fog_cell WHERE project_id=?").bind(pid).run();
   await env.DB.prepare("DELETE FROM project WHERE id=?").bind(pid).run();
   // Any remaining un-migrated legacy R2 audio still sitting under "<pid>/..."
   if (env.AUDIO) {
