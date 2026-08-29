@@ -197,21 +197,29 @@
   </div>
 </div>
 
-<!-- Workspace settings modal — per-app feature flags. None of these seven
-     boolean flags (threeDEnabled, fogEnabled, questEnabled, tileArtEnabled,
-     etc.) had ANY admin UI before this — all were master-token-only via
-     direct PUT /api/apps/:id calls. Only tileArtEnabled is exposed here for
-     now, added on direct request; the others stay API-only until someone
-     actually needs them in this UI too, rather than building out all seven
-     speculatively. -->
+<!-- Workspace settings modal — the one admin UI for a workspace's (`app`
+     row's) seven feature flags: 3D Mode, Terrain altitude, Flying visitors,
+     Hazard warnings, Fog of war, Ridge Quest, Tile Art. Each toggle is a
+     PUT /api/apps/:id (master token). These flags are denormalized into a
+     project's published bundle at publish time, so a change here does NOT
+     reach a live tour until that tour is republished — hence the amber
+     republish notice below, which lists exactly which tours to reopen. -->
 <div id="wsSettingsModal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.65);align-items:center;justify-content:center;padding:20px">
-  <div style="width:100%;max-width:420px;background:#141d2b;border:1px solid #2e3f58;border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:14px">
+  <div style="width:100%;max-width:480px;max-height:calc(100vh - 40px);overflow-y:auto;background:#141d2b;border:1px solid #2e3f58;border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:14px">
     <div style="display:flex;align-items:center;justify-content:space-between">
       <h2 style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:0">Workspace settings</h2>
       <button onclick="closeWsSettings()" style="background:none;border:none;color:#8aa5bf;font-size:20px;cursor:pointer">✕</button>
     </div>
     <p style="font-family:'Barlow Condensed';font-size:13px;color:#8aa5bf;margin:0" id="wsSettingsClientName"></p>
-    <div id="wsSettingsList" style="display:flex;flex-direction:column;gap:10px"></div>
+    <div id="wsSettingsList" style="display:flex;flex-direction:column;gap:16px"></div>
+    <!-- Republish notice — hidden until the first flag change this session,
+         then persists (with the affected tours as one-click editor links)
+         until the modal is closed, so the user can't dismiss the settings
+         change without seeing that it needs a republish to take effect. -->
+    <div id="wsRepublishNotice" style="display:none;border:1px solid #b5791f;background:rgba(181,121,31,.12);border-radius:10px;padding:12px 14px;font-family:'Barlow Condensed';font-size:13px;color:#f0c078">
+      <strong style="display:block;font-size:13px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">⚠ Republish required</strong>
+      <span id="wsRepublishBody"></span>
+    </div>
     <p class="hint" id="wsSettingsMsg" style="font-family:'Barlow Condensed';font-size:12px;color:#8aa5bf;margin:0"></p>
   </div>
 </div>
@@ -607,27 +615,49 @@ async function submitMerge(){
 }
 document.getElementById("mergeModal").addEventListener("click",e=>{ if(e.target===document.getElementById("mergeModal")) closeMergeModal(); });
 
-// ---- Workspace settings: per-app feature-flag toggles (currently just
-// tileArtEnabled — see the modal's own HTML comment for why the other six
-// flags aren't exposed here yet). A client can have more than one
-// workspace (appsForClient already exists for exactly this), so this lists
-// every workspace under the clicked client, not just a single default one. ----
+// ---- Workspace settings: the admin UI for an `app` row's seven feature
+// flags. PUT /api/apps/:id already COALESCE-updates any subset of them
+// (worker.js), so this is purely a frontend fan-out — one checkbox per
+// (workspace × flag). A client can own several workspaces (appsForClient),
+// so this lists every one under the clicked client. Each flag is
+// denormalized into a project's published bundle at publish time, so a
+// change here needs the affected tours republished before it goes live —
+// tracked/surfaced by #wsRepublishNotice. ----
+const WS_FLAGS=[
+  {key:"threeDEnabled",          label:"3D Mode",          hint:"terrain, tilt, AR objects, altitude gates"},
+  {key:"terrainAltitudeEnabled", label:"Terrain altitude", hint:"live terrain-height fusion for stops"},
+  {key:"visitorsFly",            label:"Flying visitors",  hint:"skip ground-elevation sampling"},
+  {key:"hazardAwareEnabled",     label:"Hazard warnings",  hint:"proximity alerts near hazard zones"},
+  {key:"fogEnabled",             label:"Fog of war",       hint:"visual reveal layer"},
+  {key:"questEnabled",           label:"Ridge Quest",      hint:"exploration game mode"},
+  {key:"tileArtEnabled",         label:"Tile Art",         hint:"artistic fog-of-war basemap"},
+];
+// Workspaces changed this modal session — the republish notice accumulates
+// across toggles (change 3D on one workspace and Fog on another → both sets
+// of tours listed). Reset when the modal is (re)opened.
+let _wsDirtyAppIds=new Set();
 function openWsSettings(clientId, clientName){
   document.getElementById("wsSettingsClientName").textContent=clientName;
   document.getElementById("wsSettingsMsg").textContent="";
+  _wsDirtyAppIds=new Set();
+  renderWsRepublishNotice();
   const apps=appsForClient(clientId);
   const list=document.getElementById("wsSettingsList");
   list.innerHTML=apps.length?apps.map(a=>`
-    <label style="display:flex;align-items:center;gap:10px;font-family:'Barlow Condensed';font-size:14px;cursor:pointer">
-      <input type="checkbox" data-app-id="${esc(a.id)}" ${a.tileArtEnabled?"checked":""} onchange="toggleWsTileArt(this)" style="width:18px;height:18px;accent-color:var(--coral)">
-      <span style="flex:1">${esc(a.name)} <span style="color:#8aa5bf;font-size:12px">— Tile Art (Artistic Fog-of-War)</span></span>
-    </label>`).join("")
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="font-family:'Barlow Condensed';font-size:14px;font-weight:700;letter-spacing:.3px">${esc(a.name)}</div>
+      ${WS_FLAGS.map(f=>`
+        <label style="display:flex;align-items:center;gap:10px;font-family:'Barlow Condensed';font-size:13px;cursor:pointer;padding-left:4px">
+          <input type="checkbox" data-app-id="${esc(a.id)}" data-flag="${f.key}" ${a[f.key]?"checked":""} onchange="toggleWsFlag(this)" style="width:16px;height:16px;flex:0 0 auto;accent-color:var(--coral)">
+          <span style="flex:1">${esc(f.label)} <span style="color:#8aa5bf;font-size:11px">— ${esc(f.hint)}</span></span>
+        </label>`).join("")}
+    </div>`).join("")
     : '<p class="hint" style="font-family:\'Barlow Condensed\';font-size:13px;color:#8aa5bf;margin:0">No workspaces under this customer yet.</p>';
   document.getElementById("wsSettingsModal").style.display="flex";
 }
 function closeWsSettings(){ document.getElementById("wsSettingsModal").style.display="none"; }
-async function toggleWsTileArt(checkbox){
-  const appId=checkbox.dataset.appId;
+async function toggleWsFlag(checkbox){
+  const appId=checkbox.dataset.appId, flag=checkbox.dataset.flag;
   const app=_apps.find(a=>a.id===appId);
   const msg=document.getElementById("wsSettingsMsg");
   const token=await askToken();
@@ -636,12 +666,31 @@ async function toggleWsTileArt(checkbox){
   try{
     const r=await fetch("/api/apps/"+encodeURIComponent(appId),{method:"PUT",
       headers:{"content-type":"application/json",authorization:"Bearer "+token},
-      body:JSON.stringify({name:app?app.name:appId, tileArtEnabled:checkbox.checked})});
+      body:JSON.stringify({name:app?app.name:appId, [flag]:checkbox.checked})});
     const j=await r.json().catch(()=>({}));
     if(!r.ok){ checkbox.checked=!checkbox.checked; msg.textContent="Failed: "+(j.error||r.status); return; }
-    if(app) app.tileArtEnabled=checkbox.checked;
+    if(app) app[flag]=checkbox.checked;
     msg.textContent="Saved.";
+    _wsDirtyAppIds.add(appId);
+    renderWsRepublishNotice();
   }catch(e){ checkbox.checked=!checkbox.checked; msg.textContent="Failed: "+e.message; }
+}
+// Amber banner: appears after the first flag change and stays put, naming
+// every tour in a changed workspace with a one-click link into the editor
+// (where the user hits Publish). Feature flags only reach the live engine
+// via the published bundle, so without a republish the toggle looks applied
+// but does nothing on the walk.
+function renderWsRepublishNotice(){
+  const box=document.getElementById("wsRepublishNotice");
+  const body=document.getElementById("wsRepublishBody");
+  if(!_wsDirtyAppIds.size){ box.style.display="none"; body.innerHTML=""; return; }
+  const affected=_projects.filter(p=>_wsDirtyAppIds.has(p.appId));
+  const links=affected.length
+    ? affected.map(p=>`<a href="/editor?project=${encodeURIComponent(p.id)}" style="color:#f0c078;text-decoration:underline">${esc(p.name||p.id)}</a>`).join(", ")
+    : "(no published tours in the changed workspace yet)";
+  body.innerHTML="Feature flags only take effect once a tour is republished. Open "+
+    (affected.length?"and re-Publish: ":"")+links+".";
+  box.style.display="block";
 }
 document.getElementById("wsSettingsModal").addEventListener("click",e=>{ if(e.target===document.getElementById("wsSettingsModal")) closeWsSettings(); });
 

@@ -276,7 +276,7 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | PATCH | `/api/projects/:id` | scoped (`publish`); partial update — `record_retention_days`, `questPublic` (Ridge Quest R7 public-picker opt-in, second of two levels alongside `app.questEnabled`), `questActivities` (array of `ski`/`hike`/`bike`/`drive`/`xcski`, or `null` for all — which activities this project's picker/leaderboard offer), `terrainBiome` (Artistic Fog-of-War Tiles classification fallback), and/or `season` (`summer`/`winter`/`null`) |
 | PUT | `/api/projects/:id/app` | master |
 | GET/POST | `/api/apps` | GET public, POST master |
-| PUT | `/api/apps/:id` | master; partial update of name/description and seven boolean flags (`threeDEnabled`/`terrainAltitudeEnabled`/`visitorsFly`/`hazardAwareEnabled`/`fogEnabled`/`questEnabled`/`tileArtEnabled`) |
+| PUT | `/api/apps/:id` | master; partial update of name/description and seven boolean flags (`threeDEnabled`/`terrainAltitudeEnabled`/`visitorsFly`/`hazardAwareEnabled`/`fogEnabled`/`questEnabled`/`tileArtEnabled`). All seven are toggleable from `index.html`'s "Workspace settings" modal (⚙ per client → `WS_FLAGS` × workspaces); changing one shows a persistent "Republish required" notice listing the affected tours, since the flags only reach a live tour via its published bundle. |
 | DELETE | `/api/apps/:id` | master (`?cascade=true` deletes all projects too) |
 | GET | `/api/quest-workspaces` | public; Ridge Quest's in-app resort picker — only apps with `questEnabled=1`, returns `id`+`name` only |
 | GET | `/api/quest-projects?app=` | public; only projects under a `questEnabled` app that are themselves `questPublic=1`, returns `id`+`name` only |
