@@ -1671,7 +1671,7 @@ async function api(request, env, url) {
   // --- nuke all data (master only) — wipes every row, keeps schema ---
   if (path === "/api/nuke" && method === "DELETE") {
     if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
-    const tables = ["event","consent","device","audit_log","published_bundle","api_key","project","app"];
+    const tables = ["event","consent","device","audit_log","published_bundle","api_key","project","corridor","corridor_folder","app"];
     const wiped = [], skipped = [];
     for (const t of tables) {
       try { await env.DB.prepare(`DELETE FROM ${t}`).run(); wiped.push(t); }
@@ -1931,8 +1931,8 @@ async function api(request, env, url) {
       if (chk) return json({ error: "remove or reassign this app's projects first, or use cascade=true" }, 409, AC);
     }
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
-    await env.DB.prepare("DELETE FROM walking_path WHERE app_id=?").bind(aid).run();
-    await env.DB.prepare("DELETE FROM walking_path_folder WHERE app_id=?").bind(aid).run();
+    await env.DB.prepare("DELETE FROM corridor WHERE app_id=?").bind(aid).run();
+    await env.DB.prepare("DELETE FROM corridor_folder WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
     return json({ ok: true, deleted: aid }, 200, AC);
@@ -3033,7 +3033,7 @@ async function api(request, env, url) {
   }
 
   // --- RECORD folders: organize sessions into a tree, same shape/behavior
-  // as stop_folder/walking_path_folder — always project-scoped, and (unlike
+  // as stop_folder/corridor_folder — always project-scoped, and (unlike
   // audio_folder) deleting a folder moves its sessions up to the parent
   // instead of destroying them, since a recorded session is expensive or
   // impossible to redo and often kept for liability. ---
@@ -4183,16 +4183,18 @@ async function api(request, env, url) {
     return json({ id: scriptId, name, folderId }, 200, AC);
   }
 
-  // --- Walking paths: a recorded, filtered GPS trail (Field Recorder), saved
-  // at the app (workspace) level so one path is reusable across every
-  // project in that workspace — not project-scoped like every other tree in
-  // this app. Flat list, no folders (confirmed with the user). The list
-  // endpoint omits points_json (same "leave the heavy payload out of the
-  // list" convention as studio_session/chatterbox_script); GET by id is
-  // public/no-auth since the anonymous visitor-facing engine needs to fetch
-  // a published project's path with no session token, same as the bundle
-  // read itself. ---
-  if (path === "/api/walking-path" && method === "POST") {
+  // --- Corridors: a recorded or drawn GPS line (Field Recorder, the Fence
+  // Editor's Corridor tool, or GPX import), saved at the app (workspace)
+  // level so one corridor is reusable across every project in that workspace
+  // — not project-scoped like every other tree in this app. Organized in a
+  // folder tree (corridor_folder). The list endpoint omits points_json (same
+  // "leave the heavy payload out of the list" convention as
+  // studio_session/chatterbox_script); GET by id is public/no-auth since the
+  // anonymous visitor-facing engine needs to fetch a published project's
+  // map-match corridor with no session token, same as the bundle read
+  // itself. Consolidated from the old Path / Walking Path / Corridor trio,
+  // migration 0055. ---
+  if (path === "/api/corridor" && method === "POST") {
     const A = await auth(request, env);
     const b = await request.json().catch(() => ({}));
     const appId = (b.appId || "").trim(), name = (b.name || "").trim();
@@ -4201,56 +4203,56 @@ async function api(request, env, url) {
     if (!Array.isArray(b.points) || b.points.length < 2) return json({ error: "points (array of [lon,lat]) required" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
     if (folderId) {
-      const folder = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(folderId, appId).first();
+      const folder = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(folderId, appId).first();
       if (!folder) return json({ error: "folder not found" }, 404, AC);
     }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    // widthM is the former Corridor library's one real distinguishing field
-    // (0049 merge) — NULL means a plain path (snap-guide use), a real number
-    // means it's used as a buffered corridor trigger-zone import instead.
-    const widthM = b.widthM != null ? b.widthM : null;
+    // Every corridor has a width (column is NOT NULL DEFAULT 10); callers
+    // that don't care about the trigger band (e.g. Field Recorder) just omit
+    // it and get the default.
+    const widthM = b.widthM != null ? b.widthM : 10;
     await env.DB.prepare(
-      "INSERT INTO walking_path (id,app_id,folder_id,name,points_json,width_m,distance_m,elev_gain_m,elev_loss_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO corridor (id,app_id,folder_id,name,points_json,width_m,distance_m,elev_gain_m,elev_loss_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
     ).bind(id, appId, folderId, name, JSON.stringify(b.points), widthM, b.distanceM || 0, b.elevGainM || 0, b.elevLossM || 0, now, now).run();
-    await logAudit(env, request, A, "walkingpath.create", appId + "/" + name);
+    await logAudit(env, request, A, "corridor.create", appId + "/" + name);
     return json({ id, name, folderId, widthM }, 201, AC);
   }
 
-  if (path === "/api/walking-path" && method === "GET") {
+  if (path === "/api/corridor" && method === "GET") {
     const A = await auth(request, env);
     const appId = (url.searchParams.get("appId") || "").trim();
     if (!appId) return json({ error: "appId required" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
     const { results } = await env.DB.prepare(
-      "SELECT id,folder_id AS folderId,name,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM,updated_at AS updatedAt FROM walking_path WHERE app_id=? ORDER BY name"
+      "SELECT id,folder_id AS folderId,name,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM,updated_at AS updatedAt FROM corridor WHERE app_id=? ORDER BY name"
     ).bind(appId).all();
-    return json({ paths: results || [] }, 200, AC);
+    return json({ corridors: results || [] }, 200, AC);
   }
 
-  const mWalkingPath = path.match(/^\/api\/walking-path\/([^/]+)$/);
-  if (mWalkingPath && (method === "GET" || method === "PATCH" || method === "DELETE")) {
-    const pathId = decodeURIComponent(mWalkingPath[1]);
+  const mCorridor = path.match(/^\/api\/corridor\/([^/]+)$/);
+  if (mCorridor && (method === "GET" || method === "PATCH" || method === "DELETE")) {
+    const corridorId = decodeURIComponent(mCorridor[1]);
     const row = await env.DB.prepare(
-      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM FROM walking_path WHERE id=?"
-    ).bind(pathId).first();
-    if (!row) return json({ error: "walking path not found" }, 404, AC);
+      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM FROM corridor WHERE id=?"
+    ).bind(corridorId).first();
+    if (!row) return json({ error: "corridor not found" }, 404, AC);
 
     if (method === "GET") {
       // Public — the live engine (no visitor session) needs to fetch this
-      // for a published, path-driven project.
+      // for a published project that map-matches onto a corridor.
       let points;
-      try { points = JSON.parse(row.pointsJson); } catch (e) { return json({ error: "stored path is corrupt" }, 500, AC); }
-      return json({ id: pathId, name: row.name, appId: row.appId, folderId: row.folderId, widthM: row.widthM, distanceM: row.distanceM, elevGainM: row.elevGainM, elevLossM: row.elevLossM, points }, 200, AC);
+      try { points = JSON.parse(row.pointsJson); } catch (e) { return json({ error: "stored corridor is corrupt" }, 500, AC); }
+      return json({ id: corridorId, name: row.name, appId: row.appId, folderId: row.folderId, widthM: row.widthM, distanceM: row.distanceM, elevGainM: row.elevGainM, elevLossM: row.elevLossM, points }, 200, AC);
     }
 
     const A = await auth(request, env);
     if (!(await appScopeAuthOk(env, A, row.appId))) return json({ error: "unauthorized" }, 401, AC);
 
     if (method === "DELETE") {
-      await env.DB.prepare("DELETE FROM walking_path WHERE id=?").bind(pathId).run();
-      await logAudit(env, request, A, "walkingpath.delete", pathId);
-      return json({ ok: true, deleted: pathId }, 200, AC);
+      await env.DB.prepare("DELETE FROM corridor WHERE id=?").bind(corridorId).run();
+      await logAudit(env, request, A, "corridor.delete", corridorId);
+      return json({ ok: true, deleted: corridorId }, 200, AC);
     }
 
     const b = await request.json().catch(() => ({}));
@@ -4263,18 +4265,18 @@ async function api(request, env, url) {
     if (b.folderId !== undefined) {
       const newFolderId = b.folderId || null;
       if (newFolderId) {
-        const folder = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(newFolderId, row.appId).first();
+        const folder = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(newFolderId, row.appId).first();
         if (!folder) return json({ error: "folder not found" }, 404, AC);
       }
       folderId = newFolderId;
     }
-    // widthM is a real, separate on/off edit — b.widthM===null clears it back
-    // to a plain path, a number sets/changes it, undefined leaves it alone
-    // (the pre-existing rename/move call sites never send this key at all).
-    if (b.widthM !== undefined) widthM = b.widthM;
+    // A number sets/changes the width; undefined leaves it alone (the
+    // rename/move call sites never send this key). null is coerced to the
+    // default since the column is NOT NULL.
+    if (b.widthM !== undefined) widthM = b.widthM != null ? b.widthM : 10;
     // GPX Editor in-place save — points/distanceM/elevGainM/elevLossM are all
-    // optional so the pre-existing rename/move call sites (which only ever
-    // send {name} or {folderId}) keep working unchanged.
+    // optional so the rename/move call sites (which only ever send {name} or
+    // {folderId}) keep working unchanged.
     if (b.points !== undefined) {
       if (!Array.isArray(b.points) || b.points.length < 2) return json({ error: "points (array of [lon,lat]) required" }, 400, AC);
       pointsJson = JSON.stringify(b.points);
@@ -4282,39 +4284,40 @@ async function api(request, env, url) {
       if (b.elevGainM != null) elevGainM = b.elevGainM;
       if (b.elevLossM != null) elevLossM = b.elevLossM;
     }
-    await env.DB.prepare("UPDATE walking_path SET name=?, folder_id=?, points_json=?, width_m=?, distance_m=?, elev_gain_m=?, elev_loss_m=?, updated_at=? WHERE id=?")
-      .bind(name, folderId, pointsJson, widthM, distanceM, elevGainM, elevLossM, new Date().toISOString(), pathId).run();
-    await logAudit(env, request, A, "walkingpath.update", pathId);
-    return json({ id: pathId, name, folderId, widthM }, 200, AC);
+    await env.DB.prepare("UPDATE corridor SET name=?, folder_id=?, points_json=?, width_m=?, distance_m=?, elev_gain_m=?, elev_loss_m=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, pointsJson, widthM, distanceM, elevGainM, elevLossM, new Date().toISOString(), corridorId).run();
+    await logAudit(env, request, A, "corridor.update", corridorId);
+    return json({ id: corridorId, name, folderId, widthM }, 200, AC);
   }
 
-  // --- Walking path folders: same tree shape as stop_folder, but app-scoped
-  // to match walking_path itself (see above). Deleting a folder cascades to
-  // every path inside its subtree, same convention as audio_folder deletes
-  // cascading to clips — move paths out first if they should survive. ---
-  async function collectWalkingPathFolderSubtreeIds(env, rootId) {
+  // --- Corridor folders: same tree shape as stop_folder, but app-scoped to
+  // match corridor itself (see above). Deleting a folder moves any corridors
+  // inside its subtree up to the deleted folder's own parent rather than
+  // destroying them (a corridor can be an expensive-to-redo field walk),
+  // same as stop_folder does for zones on folder delete. ---
+  async function collectCorridorFolderSubtreeIds(env, rootId) {
     const ids = [rootId]; let frontier = [rootId];
     while (frontier.length) {
       const ph = frontier.map(() => "?").join(",");
-      const { results } = await env.DB.prepare(`SELECT id FROM walking_path_folder WHERE parent_id IN (${ph})`).bind(...frontier).all();
+      const { results } = await env.DB.prepare(`SELECT id FROM corridor_folder WHERE parent_id IN (${ph})`).bind(...frontier).all();
       frontier = (results || []).map(r => r.id);
       ids.push(...frontier);
     }
     return ids;
   }
 
-  if (path === "/api/walking-path-folder" && method === "GET") {
+  if (path === "/api/corridor-folder" && method === "GET") {
     const A = await auth(request, env);
     const appId = (url.searchParams.get("appId") || "").trim();
     if (!appId) return json({ error: "appId required" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
     const { results } = await env.DB.prepare(
-      "SELECT id,parent_id AS parentId,name FROM walking_path_folder WHERE app_id=? ORDER BY name"
+      "SELECT id,parent_id AS parentId,name FROM corridor_folder WHERE app_id=? ORDER BY name"
     ).bind(appId).all();
     return json({ folders: results || [] }, 200, AC);
   }
 
-  if (path === "/api/walking-path-folder" && method === "POST") {
+  if (path === "/api/corridor-folder" && method === "POST") {
     const A = await auth(request, env);
     const b = await request.json().catch(() => ({}));
     const appId = (b.appId || "").trim(), name = (b.name || "").trim();
@@ -4323,39 +4326,34 @@ async function api(request, env, url) {
     if (name.includes("/")) return json({ error: "folder name can't contain /" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
     if (parentId) {
-      const parent = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(parentId, appId).first();
+      const parent = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(parentId, appId).first();
       if (!parent) return json({ error: "parent folder not found" }, 404, AC);
     }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    await env.DB.prepare("INSERT INTO walking_path_folder (id,app_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+    await env.DB.prepare("INSERT INTO corridor_folder (id,app_id,parent_id,name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
       .bind(id, appId, parentId, name, now, now).run();
-    await logAudit(env, request, A, "walkingpathfolder.create", appId + "/" + name);
+    await logAudit(env, request, A, "corridorfolder.create", appId + "/" + name);
     return json({ id, appId, parentId, name }, 201, AC);
   }
 
-  const mWalkingPathFolder = path.match(/^\/api\/walking-path-folder\/([^/]+)$/);
-  if (mWalkingPathFolder && (method === "PATCH" || method === "DELETE")) {
-    const folderId = decodeURIComponent(mWalkingPathFolder[1]);
+  const mCorridorFolder = path.match(/^\/api\/corridor-folder\/([^/]+)$/);
+  if (mCorridorFolder && (method === "PATCH" || method === "DELETE")) {
+    const folderId = decodeURIComponent(mCorridorFolder[1]);
     const A = await auth(request, env);
-    const row = await env.DB.prepare("SELECT app_id AS appId,parent_id AS parentId,name FROM walking_path_folder WHERE id=?").bind(folderId).first();
+    const row = await env.DB.prepare("SELECT app_id AS appId,parent_id AS parentId,name FROM corridor_folder WHERE id=?").bind(folderId).first();
     if (!row) return json({ error: "folder not found" }, 404, AC);
     if (!(await appScopeAuthOk(env, A, row.appId))) return json({ error: "unauthorized" }, 401, AC);
 
     if (method === "DELETE") {
-      // Unlike audio_folder (cascade-deletes clips), a walking path is a
-      // physically-recorded field walk — expensive to redo, not just
-      // re-uploadable. Move any paths in the deleted subtree up to this
-      // folder's own parent instead of destroying them, same as
-      // stop_folder does for zones on folder delete.
-      const folderIds = await collectWalkingPathFolderSubtreeIds(env, folderId);
+      const folderIds = await collectCorridorFolderSubtreeIds(env, folderId);
       const fph = folderIds.map(() => "?").join(",");
       const { meta } = await env.DB.prepare(
-        `UPDATE walking_path SET folder_id=?, updated_at=? WHERE app_id=? AND folder_id IN (${fph})`
+        `UPDATE corridor SET folder_id=?, updated_at=? WHERE app_id=? AND folder_id IN (${fph})`
       ).bind(row.parentId, new Date().toISOString(), row.appId, ...folderIds).run();
-      await env.DB.prepare(`DELETE FROM walking_path_folder WHERE id IN (${fph})`).bind(...folderIds).run();
-      await logAudit(env, request, A, "walkingpathfolder.delete", folderId + " (" + (meta.changes || 0) + " paths moved up)");
-      return json({ ok: true, deletedFolders: folderIds.length, movedPaths: meta.changes || 0 }, 200, AC);
+      await env.DB.prepare(`DELETE FROM corridor_folder WHERE id IN (${fph})`).bind(...folderIds).run();
+      await logAudit(env, request, A, "corridorfolder.delete", folderId + " (" + (meta.changes || 0) + " corridors moved up)");
+      return json({ ok: true, deletedFolders: folderIds.length, movedCorridors: meta.changes || 0 }, 200, AC);
     }
 
     const b = await request.json().catch(() => ({}));
@@ -4367,24 +4365,18 @@ async function api(request, env, url) {
     if (b.parentId !== undefined) {
       const newParentId = b.parentId || null;
       if (newParentId) {
-        const parent = await env.DB.prepare("SELECT id FROM walking_path_folder WHERE id=? AND app_id=?").bind(newParentId, row.appId).first();
+        const parent = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(newParentId, row.appId).first();
         if (!parent) return json({ error: "parent folder not found" }, 404, AC);
-        const subtreeIds = await collectWalkingPathFolderSubtreeIds(env, folderId);
+        const subtreeIds = await collectCorridorFolderSubtreeIds(env, folderId);
         if (subtreeIds.includes(newParentId)) return json({ error: "can't move a folder into its own subtree" }, 400, AC);
       }
       parentId = newParentId;
     }
-    await env.DB.prepare("UPDATE walking_path_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
+    await env.DB.prepare("UPDATE corridor_folder SET name=?, parent_id=?, updated_at=? WHERE id=?")
       .bind(name, parentId, new Date().toISOString(), folderId).run();
-    await logAudit(env, request, A, "walkingpathfolder.update", folderId);
+    await logAudit(env, request, A, "corridorfolder.update", folderId);
     return json({ id: folderId, name, parentId }, 200, AC);
   }
-
-  // --- Corridors retired as a separate table/API (migration 0049) — a
-  // corridor was always just "a path with a width" (0048's own comment
-  // already called it "an exact structural mirror of walking_path"), so it
-  // merged into walking_path's own width_m column instead of staying a
-  // parallel table+endpoint family. See /api/walking-path above.
 
   // --- Stop folders: organize a project's map stops (zones) into a tree
   // when there are hundreds of them. Deliberately its own table, independent
@@ -5129,11 +5121,11 @@ async function api(request, env, url) {
     }
   }
 
-  // --- Code Object folders: same tree shape as walking_path_folder, but
+  // --- Code Object folders: same tree shape as corridor_folder, but
   // org-scoped to match code_object itself (see codeObjectScopeOk above).
   // Deleting a folder moves objects in its subtree up to the parent instead
   // of destroying them — a hand-authored object is as expensive to redo as
-  // a recorded walk, same reasoning walking_path_folder's delete uses.
+  // a recorded walk, same reasoning corridor_folder's delete uses.
   async function collectCodeObjectFolderSubtreeIds(env, rootId) {
     const ids = [rootId]; let frontier = [rootId];
     while (frontier.length) {

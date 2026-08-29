@@ -115,12 +115,10 @@ const corridorLayer = {
   assert(problems.length === 0, "a 2-point corridor passes validation, got " + JSON.stringify(problems));
 })();
 
-(function testValidateGeometryRejectsShortPath() {
-  const zs = [{ name: "Bad Path", shape: { type: "path", coords: [[-117.05, 51.305]] } }];
-  const problems = validateZoneGeometry(zs, haversineM);
-  assert(problems.length === 1 && /path needs at least 2 points/.test(problems[0]),
-    "a 1-point path is rejected with a clear message, got " + JSON.stringify(problems));
-})();
+// (The former "path needs at least 2 points" check went away with the
+// "path" shape type — Path/Walking Path/Corridor were consolidated into
+// one "corridor" concept, migration 0055. A moving-audio corridor is still
+// a corridor and covered by the corridor check above.)
 
 (function testValidateGeometryUnaffectedForOtherShapes() {
   // Confirm the new branches didn't disturb the three pre-existing checks.
@@ -132,6 +130,42 @@ const corridorLayer = {
   ];
   const problems = validateZoneGeometry(zs, haversineM);
   assert(problems.length === 2, "circle-radius and tripline-degenerate checks still fire as before, got " + JSON.stringify(problems));
+})();
+
+// ---- moving-audio corridor serialization is mirrored across all 3 sites ----
+// Path/Walking Path/Corridor were consolidated (migration 0055). "Moving
+// audio" is now a toggle on a corridor that re-serializes to the former
+// "Path" bundle form (top-level zo.path + movement fields). This is the
+// one genuinely new serialization behavior, and — per CLAUDE.md's
+// verbatim-mirror rule — it must be handled identically in zoneToEngine
+// (publish), engineToZone (import), and editorToSimBundle (Test Mode).
+// This test guards the source of all three against a future edit dropping
+// it from one, without needing a full runtime scaffold.
+(function testMovingAudioMirroredInAllThree() {
+  const zoneToEngine = extractMethodBody("function zoneToEngine(z){");
+  const engineToZone = extractMethodBody("function engineToZone(zo){");
+  const editorToSimBundle = extractMethodBody("function editorToSimBundle(){");
+
+  // The retired "path" shape type must not linger in any of the three.
+  for (const [name, body] of [["zoneToEngine", zoneToEngine], ["engineToZone", engineToZone], ["editorToSimBundle", editorToSimBundle]]) {
+    assert(!/["']path["']/.test(body) || /zo\.path|z\.path|\.path\b/.test(body),
+      name + " no longer references a \"path\" shape-type string");
+  }
+
+  // zoneToEngine: a moving-audio corridor emits top-level path + marker + width.
+  assert(/movingAudio/.test(zoneToEngine) && /zo\.path\s*=/.test(zoneToEngine) &&
+    /zo\.movingAudio\s*=\s*true/.test(zoneToEngine) && /zo\.widthM\s*=/.test(zoneToEngine),
+    "zoneToEngine emits zo.path + zo.movingAudio + zo.widthM for a moving-audio corridor");
+
+  // engineToZone: reconstructs a corridor with movingAudio from a top-level path.
+  assert(/movingCorridor\s*=\s*Array\.isArray\(zo\.path\)/.test(engineToZone) &&
+    /type:\s*["']corridor["']/.test(engineToZone) && /z\.movingAudio\s*=\s*true/.test(engineToZone),
+    "engineToZone rebuilds a corridor with movingAudio=true when zo.path is present");
+
+  // editorToSimBundle: same top-level path emission, gated on movingAudio.
+  assert(/movingAudio/.test(editorToSimBundle) && /out\.path\s*=/.test(editorToSimBundle) &&
+    /out\.movingAudio\s*=\s*true/.test(editorToSimBundle),
+    "editorToSimBundle emits out.path + out.movingAudio for a moving-audio corridor");
 })();
 
 console.log(pass + " passed, " + fail + " failed");

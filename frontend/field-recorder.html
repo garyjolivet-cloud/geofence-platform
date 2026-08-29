@@ -206,7 +206,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     <div class="mode-toggle">
       <button id="btnModePers" class="mode-btn sel" onclick="setMode('persistent')">Persistent</button>
       <button id="btnModeLive" class="mode-btn"     onclick="setMode('live')">Live ⬤</button>
-      <button id="btnModePath" class="mode-btn"     onclick="setMode('path')">🥾 Path</button>
+      <button id="btnModePath" class="mode-btn"     onclick="setMode('path')">➰ Corridor</button>
       <button id="btnModeRecord" class="mode-btn"   onclick="setMode('record')">🎥 Record</button>
     </div>
     <div id="activityRow">
@@ -225,9 +225,9 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
       <button class="fbt" id="btnCodeObj">🧩 Code</button>
     </div>
     <div id="pathBtns" style="display:none;align-items:center;gap:8px">
-      <button class="fbt" id="btnPathToggle" onclick="togglePathRecording()">🥾 Start Walking</button>
+      <button class="fbt" id="btnPathToggle" onclick="togglePathRecording()">➰ Start Corridor</button>
       <div id="pathStats" class="hint" style="flex:1;text-align:center"></div>
-      <button class="fbt" id="btnPathSave" style="display:none" onclick="savePathRecording()">💾 Save Path</button>
+      <button class="fbt" id="btnPathSave" style="display:none" onclick="savePathRecording()">💾 Save Corridor</button>
     </div>
     <div id="recordBtns" style="display:none;align-items:center;gap:8px">
       <input id="recordTypeInput" list="recordTypeList" placeholder="type (e.g. Patrol Sweep)" style="max-width:150px;min-width:0">
@@ -1163,26 +1163,26 @@ function haversineM(lat1,lon1,lat2,lon2){
 }
 
 /* ============================================================
-   Walking Path recording — a continuous GPS trail (distinct from the
+   Corridor recording — a continuous GPS trail (distinct from the
    Mark-Stop/Record persistent+live modes above), later saved to the
-   app-level walking-path store for the Fence Editor to snap/slide stops
-   onto and the live engine to map-match against. Points buffer in plain
-   memory (not IndexedDB) — a multi-km walk is at most a few thousand
+   app-level corridor store for the Fence Editor to draw stops from / snap
+   stops onto and the live engine to map-match against. Points buffer in
+   plain memory (not IndexedDB) — a multi-km walk is at most a few thousand
    points, and the DB/network are only touched once, at Save.
    ============================================================ */
 function togglePathRecording(){
   if(pathRecording){
     pathRecording = false;
-    document.getElementById("btnPathToggle").textContent = "🥾 Start Walking";
+    document.getElementById("btnPathToggle").textContent = "➰ Start Corridor";
     document.getElementById("btnPathSave").style.display = pathPoints.length>=2 ? "" : "none";
     setStatus(pathPoints.length+" point(s) recorded — review and save, or start again");
   } else {
     pathPoints = [];
     pathRecording = true;
-    document.getElementById("btnPathToggle").textContent = "⏹ Stop Walking";
+    document.getElementById("btnPathToggle").textContent = "⏹ Stop Corridor";
     document.getElementById("btnPathSave").style.display = "none";
     updatePathStatsUI();
-    setStatus("Recording walking path…");
+    setStatus("Recording corridor…");
   }
 }
 function pathDistanceM(points){
@@ -1257,17 +1257,19 @@ async function savePathRecording(){
   const distanceM=pathDistanceM(filtered);
   const smoothed=smoothElevation(filtered);
   const {gainM,lossM}=elevGainLoss(smoothed);
-  const name=(prompt("Name this walking path:"+(droppedCount?" ("+droppedCount+" bad point(s) will be filtered out)":""))||"").trim();
+  const name=(prompt("Name this corridor:"+(droppedCount?" ("+droppedCount+" bad point(s) will be filtered out)":""))||"").trim();
   if(!name) return;
+  const widthStr=(prompt("Trigger-band width in meters (blank = 10):","")||"").trim();
+  const widthM=widthStr?(+widthStr||10):10;
   try{
-    const r=await fetch("/api/walking-path",{
+    const r=await fetch("/api/corridor",{
       method:"POST",
       headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
-      body:JSON.stringify({appId:currentAppId, name, points:smoothed.map(p=>[p.lon,p.lat,p.elevM]), distanceM, elevGainM:gainM, elevLossM:lossM})
+      body:JSON.stringify({appId:currentAppId, name, widthM, points:smoothed.map(p=>[p.lon,p.lat,p.elevM]), distanceM, elevGainM:gainM, elevLossM:lossM})
     });
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.error||r.statusText);
-    setStatus('Saved walking path "'+name+'" ('+filtered.length+' pts, '+(distanceM/1000).toFixed(2)+' km'+((gainM||lossM)?', ▲'+gainM+'m ▼'+lossM+'m':'')+')');
+    setStatus('Saved corridor "'+name+'" ('+filtered.length+' pts, '+(distanceM/1000).toFixed(2)+' km'+((gainM||lossM)?', ▲'+gainM+'m ▼'+lossM+'m':'')+')');
     pathPoints=[];
     document.getElementById("btnPathSave").style.display="none";
     updatePathStatsUI();

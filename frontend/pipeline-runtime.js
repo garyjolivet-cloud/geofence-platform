@@ -89,13 +89,15 @@ const BLOCKS = {
     outputs: [{ id: "bearingDeg", type: "number", label: "Bearing (°)" }, { id: "isHazard", type: "gate", label: "Is Hazard" }, { id: "id", type: "text", label: "Zone ID" }],
     params: []
   },
-  // Only populated when the project has a Walking Path selected — see
+  // Only populated when the project has a map-match corridor active — see
   // PipelineRuntime.setPathProgress(), called once per GPS tick by whichever
   // host (geofence-engine.html, geofence-sim.html, fence-editor.html's
   // SimFencer) owns the live position + map-matching. All ports are null
-  // when no path is active, or before the visitor has map-matched onto it.
+  // when no corridor is active, or before the visitor has map-matched onto
+  // it. (The block type id keeps its historical "walking_path_progress"
+  // name — it's a value stored in published pipeline JSON.)
   "data.walking_path_progress": {
-    label: "Walking Path Progress", category: "data",
+    label: "Corridor Progress", category: "data",
     inputs: [],
     outputs: [
       { id: "distanceCoveredM", type: "number", label: "Distance Walked (m)" }, { id: "distanceRemainingM", type: "number", label: "Distance Remaining (m)" },

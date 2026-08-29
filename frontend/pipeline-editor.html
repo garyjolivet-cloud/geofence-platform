@@ -556,7 +556,7 @@ function findBrokenRefs(text, nodes){
 function chipRefText(nodeId, portId){ return "{{" + nodeId + "." + portId + "}}"; }
 // What a chip should say — the block's label + the port's human label (now
 // set on every output in pipeline-runtime.js's BLOCKS registry), e.g.
-// "Walking Path Progress → % Complete". Falls back to the raw ids for a
+// "Corridor Progress → % Complete". Falls back to the raw ids for a
 // stale/broken reference so it's still identifiable (and still editable —
 // selecting it and hitting Insert value replaces it with a working one).
 function describeRef(nodeId, portId, nodes){

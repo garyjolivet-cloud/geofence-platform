@@ -456,7 +456,7 @@
 <script src="/code-objects.js"></script>
 <script src="/audio-tree.js"></script>
 <script src="/asset-tree.js"></script>
-<script src="/gpx-tree.js"></script>
+<script src="/corridor-tree.js"></script>
 </head>
 <body>
 <div id="crossToolNav"></div>
@@ -707,11 +707,11 @@
     <h2 id="pTitle">Stop</h2>
     <label class="k">name</label>
     <input id="pName" placeholder="Mountain Flower Garden">
-    <!-- ── Path movement (path stops only) — plus the full trigger system below,
-         same as every other stop: hazard flag, Voices & Audio, pipeline,
-         speak-when/dwell, and Advanced (webhook/bearing) ── -->
+    <!-- ── Moving audio (corridor stops with the toggle on) — an ambient
+         bed that travels the line on a shared real-world clock. Shown only
+         when #pCorridorMoving is ticked. ── -->
     <div class="va-section" id="pPathSection" style="display:none">
-      <div class="va-label">Movement</div>
+      <div class="va-label">Moving audio</div>
       <label class="k">movement mode</label>
       <select id="pMoveMode">
         <option value="walk">Walk</option>
@@ -722,7 +722,7 @@
       </select>
       <label class="k" style="margin-top:6px">speed (km/h)</label>
       <input id="pSpeed" type="number" min="0" step="1">
-      <label class="k" style="margin-top:6px">when it reaches the end of the path</label>
+      <label class="k" style="margin-top:6px">when it reaches the end of the line</label>
       <select id="pLoopMode">
         <option value="loop">Loop — jump back to start and repeat</option>
         <option value="pingpong">Ping-pong — reverse and travel back</option>
@@ -731,9 +731,16 @@
       <div class="hint" style="margin:4px 0 0">Position is always on a shared real-world clock — visitors near the route at the same moment hear it in the same place.</div>
     </div>
 
-    <!-- ── Corridor run taxonomy (Ridge Quest R0, corridor stops only) ── -->
+    <!-- ── Corridor details (corridor stops only) — behavior toggles plus
+         Ridge Quest run taxonomy ── -->
     <div class="va-section" id="pCorridorSection" style="display:none">
-      <div class="va-label">Run details</div>
+      <div class="va-label">Corridor</div>
+      <label style="display:flex;align-items:center;gap:8px;margin:6px 0;text-transform:none;font-family:inherit;font-size:13px;color:inherit">
+        <input id="pCorridorMoving" type="checkbox" style="width:auto;margin:0">
+        Audio travels along this line (moving ambient bed)
+      </label>
+      <div class="hint" style="margin:-2px 0 4px">Map-matching (snap the visitor onto a line) is set per corridor in the Corridors palette, not here.</div>
+      <div class="va-label" style="margin-top:8px">Run details</div>
       <label class="k">difficulty</label>
       <select id="pDifficulty">
         <option value="">— not set —</option>
@@ -756,11 +763,9 @@
       <div class="hint" style="margin:4px 0 0">The stop's "name" field above is this run's display name — no separate field needed.</div>
     </div>
 
-    <!-- ── Artistic map tile corridor (corridor OR path stops) — which
-         continuous ribbon graphic "Generate Terrain" draws along this
-         stop's length, on top of the classified hex terrain. Separate from
-         the ski-only "Run details" section above since path stops (the far
-         more common shape for bike/hike/city-walk projects) get this too. ── -->
+    <!-- ── Artistic map tile corridor (corridor stops) — which continuous
+         ribbon graphic "Generate Terrain" draws along this corridor's
+         length, on top of the classified hex terrain. ── -->
     <div class="va-section" id="pTileCorridorSection" style="display:none">
       <div class="va-label">Artistic map corridor</div>
       <label class="k">activity (sets ribbon width + texture)</label>
@@ -1161,24 +1166,25 @@
 </div>
 <input type="file" id="asUploadInput" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" style="display:none">
 
-<!-- Paths & Corridors palette: drag-source browser for the app-scoped
-     library the GPX Editor tab saves into (walking_path/corridor tables).
-     Dragging a path onto the map activates it for stop-snapping (same
-     effect as picking it in the existing Walking Path picker); dragging a
-     corridor creates a new corridor stop from its recorded geometry (same
-     effect as "Import GPX as Corridor", just sourced from a saved library
-     entry instead of a fresh file). Read-only here — all editing (import,
-     trim, reverse, filter) lives in the GPX Editor tab, reachable via
-     TopNav, same division of labor as Audio Palette vs Audio Studio. -->
+<!-- Corridors palette: drag-source browser for the app-scoped corridor
+     library the GPX Editor tab saves into (corridor/corridor_folder
+     tables). Dragging a corridor onto the map creates a new corridor stop
+     from its recorded geometry (same effect as "Import GPX as Corridor",
+     just sourced from a saved library entry instead of a fresh file); the
+     per-row checkbox toggles whether that corridor is used for map-matching
+     (visitor GPS snapped onto it, stops snap/slide along it). Read-only
+     editing here — all import/trim/reverse/filter lives in the GPX Editor
+     tab, reachable via TopNav, same division of labor as Audio Palette vs
+     Audio Studio. -->
 <div id="gpxPalette">
   <div id="gpxPaletteHead">
-    <span class="ttl">&#129485; Paths</span>
+    <span class="ttl">&#10160; Corridors</span>
     <button id="gpxRefresh" class="ghost" title="Refresh">&#8635;</button>
     <button id="gpxPaletteMin" class="ghost" title="Minimize">&#8722;</button>
   </div>
   <div id="gpxPaletteBody">
     <div id="gpxTreeHost"></div>
-    <div class="hint">drag a path onto the map to activate it for stop-snapping, or a corridor to create a new corridor stop from it</div>
+    <div class="hint">drag a corridor onto the map to create a stop from it, or tick its box to use it for map-matching</div>
   </div>
 </div>
 
@@ -1373,7 +1379,7 @@ function autoSave(){
         isTemplate:document.getElementById("isTemplateChk")?.checked,
         liveTtlMs:document.getElementById("liveTtlMs")?.value,
         audioRetriggerDelayS:document.getElementById("audioRetriggerDelayS")?.value,
-        walkingPathIds:selectedWalkingPathIds.slice(),
+        mapMatchCorridorIds:selectedWalkingPathIds.slice(),
         globalCodeObjects:globalCodeObjects.slice()};
       localStorage.setItem(DRAFT_KEY,JSON.stringify(snap));
     }catch(e){}
@@ -1400,6 +1406,16 @@ function autoRestore(){
     document.body.appendChild(b);
     requestAnimationFrame(()=>b.classList.add("show"));
     b.querySelector(".gp-c-restore").onclick=async()=>{
+      // A draft from before the Path→Corridor consolidation may hold zones
+      // with shape.type==="path" — map them to a moving-audio corridor so
+      // they still render/round-trip (one-directional, no dual-read cost).
+      (snap.zones||[]).forEach(z=>{
+        if(z && z.shape && z.shape.type==="path"){
+          z.shape={type:"corridor",coords:z.shape.coords||[],widthM:10};
+          z.movingAudio=true;
+          if(z.onPathId!=null){ z.snapCorridorId=z.onPathId; delete z.onPathId; }
+        }
+      });
       zones=snap.zones; sel=-1;
       _currentProjectId=snap.id||null;
       document.getElementById("projCrumb").textContent=label;
@@ -1426,7 +1442,8 @@ function autoRestore(){
       if(snap.liveTtlMs!=null) document.getElementById("liveTtlMs").value=snap.liveTtlMs;
       if(snap.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=snap.audioRetriggerDelayS;
       if(Array.isArray(snap.globalCodeObjects)) globalCodeObjects=snap.globalCodeObjects.slice();
-      if(Array.isArray(snap.walkingPathIds) && snap.walkingPathIds.length) await loadActiveWalkingPathData(snap.walkingPathIds);
+      const _mmIds=snap.mapMatchCorridorIds||snap.walkingPathIds;
+      if(Array.isArray(_mmIds) && _mmIds.length) await loadActiveWalkingPathData(_mmIds);
       render(); refreshProps();
       ps().textContent="draft restored ("+snap.zones.length+" zone"+(snap.zones.length===1?"":"s")+") — Publish to save to D1";
       b.remove();
@@ -1779,17 +1796,18 @@ function uniqueZoneId(base,selfZone){
 const LL=p=>[+p[1].toFixed(6),+p[0].toFixed(6)];     // [lon,lat] -> [lat,lon]
 const LonLat=p=>[p[1],p[0]];                          // [lat,lon] -> [lon,lat]
 
-// Path stops keep their audio clip in a separate field (ambientAudioUrl) from
-// every other stop's audioUrl, since the engine treats audioUrl as "this
-// zone's one spoken line, replacing TTS" — reusing it for a moving ambient
-// bed would fight with that and with the shared single-clip audio channel.
-// The upload/trim/browse UI is otherwise identical, so this one helper is
-// all that's needed to point it at the right field.
-function zoneAudioField(z){ return (z&&z.shape&&z.shape.type==="path")?"ambientAudioUrl":"audioUrl"; }
+// A corridor with "moving audio" on keeps its clip in a separate field
+// (ambientAudioUrl) from every other stop's audioUrl, since the engine
+// treats audioUrl as "this zone's one spoken line, replacing TTS" — reusing
+// it for a moving ambient bed would fight with that and with the shared
+// single-clip audio channel. The upload/trim/browse UI is otherwise
+// identical, so this one helper is all that's needed to point it at the
+// right field.
+function zoneAudioField(z){ return (z&&z.movingAudio)?"ambientAudioUrl":"audioUrl"; }
 function zoneCenterLonLat(z){ const s=z.shape;
   if(s.type==="circle") return s.center;
   if(s.type==="tripline") return [(s.from[0]+s.to[0])/2,(s.from[1]+s.to[1])/2];
-  if(s.type==="path") return s.coords[0];
+  if(s.type==="corridor" && z.movingAudio) return s.coords[0];
   return centroidLonLat(s.coords);
 }
 function zoneGenR(z){ const s=z.shape;
@@ -1809,8 +1827,9 @@ const HAZARD_CODE_OBJECT_ID="hazard-zone";
 function zoneIsHazard(z){ return (z.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID); }
 /* ---- create a stop with defaults ---- */
 function makeZone(name,shape){
-  // Path stops get every field a normal stop has (they fire the full trigger
-  // system too) plus their own movement + independent ambient-bed fields.
+  // Corridor stops get every field a normal stop has (they fire the full
+  // trigger system too) plus run taxonomy, an optional map-match flag, and
+  // optional moving-audio fields (see the movingAudio toggle).
   const base={ id:uniqueZoneId(slug(name)), name, shape, say:"",
            fires:DEFAULTS.fires, dwellS:DEFAULTS.dwellS,
            approachM:DEFAULTS.approachM, audioM:DEFAULTS.audioM, volume:1, loopAudio:true,
@@ -1825,12 +1844,13 @@ function makeZone(name,shape){
            // legacy/unorganized projects. Purely editor-side; the live
            // engine never reads this, only exported so it round-trips.
            folderId:null,
-           // Snapped onto one of the project's active Walking Paths (see the
-           // Walking Path section below), by that path's own id — constrains
-           // dragging to slide along that SPECIFIC path instead of free 2D
-           // movement (never "whichever path happens to be loaded"). null
-           // for every normal stop; only set by finishShape()'s snap check.
-           onPathId:null,
+           // Snapped onto one of the project's map-match corridors (see the
+           // Corridor section below), by that corridor's own id — constrains
+           // dragging to slide along that SPECIFIC line instead of free 2D
+           // movement (never "whichever corridor happens to be loaded").
+           // null for every normal stop; only set by finishShape()'s snap
+           // check.
+           snapCorridorId:null,
            // Per-stop Kokoro voice override for TTS (spoken line). null
            // means "use the default voice" (af_bella).
            ttsVoice:null,
@@ -1847,21 +1867,24 @@ function makeZone(name,shape){
            // test. See zoneToEngine/engineToZone/editorToSimBundle for the
            // other 3 mirror locations this field must stay in sync with.
            altM:null, altToleranceM:null };
-  if(shape.type==="path"){
+  if(shape.type==="corridor"){
+    // Ridge Quest (R0) run taxonomy — difficulty/runType are read by R1's
+    // corridor-crossing classification and by the points/leaderboard
+    // system; this editor doesn't validate or act on them itself. base.name
+    // doubles as the run's display name.
+    base.difficulty=null; base.runType="run";
+    // Which ribbon graphic "Generate Terrain" draws along this corridor
+    // (see pTileCorridorSection). Has its own 3 export/import/sim mirror
+    // locations to stay in sync with, same as difficulty/runType.
+    base.activityType="hike";
+    // "Moving audio" mode — when true, this corridor serializes to the
+    // engine's moving-ambient-bed form (an audio source travels the line at
+    // speedKmh) instead of a static trigger band. movementMode/speedKmh/
+    // loopMode/ambientAudioUrl are always present so toggling is instant.
+    base.movingAudio=false;
     base.movementMode="walk"; base.speedKmh=MOVE_SPEEDS.walk; base.loopMode="loop";
     base.ambientAudioUrl=null;
   }
-  // Ridge Quest (R0) — run taxonomy. difficulty/runType are read by R1's
-  // corridor-crossing classification and by the points/leaderboard system;
-  // this editor doesn't validate or act on them itself. base.name (the
-  // existing per-stop name field, shown as "name" in the panel) doubles as
-  // the run's display name — no separate runName field needed.
-  if(shape.type==="corridor"){ base.difficulty=null; base.runType="run"; }
-  // Artistic map tile corridor -- which ribbon graphic "Generate Terrain"
-  // draws along this stop. Applies to both corridor and path shapes (see
-  // pTileCorridorSection); has its own 3 export/import/sim mirror
-  // locations to stay in sync with, same as difficulty/runType above.
-  if(shape.type==="corridor"||shape.type==="path"){ base.activityType="hike"; }
   return base;
 }
 
@@ -1903,14 +1926,14 @@ function renderSourcesInner(){
     // features — every other zone keeps rendering normally.
     try{
     const s=z.shape, selected=(i===sel);
-    const isPath=s.type==="path";
-    // While testing, a path (moving ambient) stop's own rings track its
-    // current live position along the route (same position its amber
-    // marker uses via simAmbientCenterNow) instead of staying pinned to
-    // the route's starting point — that's the whole point of "moving
-    // ambient": the rings should visibly travel with it.
+    const isMovingCorridor=(s.type==="corridor" && !!z.movingAudio);
+    // While testing, a moving-audio corridor's own rings track its current
+    // live position along the route (same position its amber marker uses
+    // via simAmbientCenterNow) instead of staying pinned to the route's
+    // starting point — that's the whole point of "moving audio": the rings
+    // should visibly travel with it.
     let c=zoneCenterLonLat(z);
-    if(isPath&&simMode&&simBundle){
+    if(isMovingCorridor&&simMode&&simBundle){
       const sz=simBundle.zones.find(x=>x.id===z.id);
       if(sz&&sz.path&&sz.path.length>1){
         const live=simAmbientCenterNow(sz,Date.now()); // [lat,lon]
@@ -2044,14 +2067,13 @@ function renderSourcesInner(){
       feats.push({type:"Feature",properties:{kind:"triphit",zIdx:i},
         geometry:{type:"Polygon",coordinates:[rectRing(s.from,s.to,TRIPLINE_HIT_HALF_WIDTH_M)]}});
     }
-    else if(s.type==="path") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:true},
-        geometry:{type:"LineString",coordinates:s.coords}});
-    // Corridor (Ridge Quest R0) — rendered as a plain line via the existing
-    // fence-line layer, same as path/tripline. No buffered-width fill yet
-    // (would need a real polyline-buffer-to-polygon helper, not built in
-    // this pass) — the width number lives in the property panel and in the
-    // exported geometry; visually it's a labeled line only for now.
-    else if(s.type==="corridor") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name+" ("+(s.widthM||10)+"m)",isPath:false},
+    // Corridor — rendered as a plain line via the existing fence-line
+    // layer, same as tripline. No buffered-width fill yet (would need a real
+    // polyline-buffer-to-polygon helper, not built in this pass) — the
+    // width number lives in the property panel and in the exported
+    // geometry; visually it's a labeled line only for now. A moving-audio
+    // corridor uses the dashed "moving" style and drops the width label.
+    else if(s.type==="corridor") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:isMovingCorridor?z.name:(z.name+" ("+(s.widthM||10)+"m)"),isPath:isMovingCorridor},
         geometry:{type:"LineString",coordinates:s.coords}});
     // label
     const _lp={kind:"label",name:z.name,zIdx:i};
@@ -2113,7 +2135,7 @@ function renderSourcesInner(){
   // not just the draft's own point marker, but (since a thrown/rejected
   // setData mid-render-cycle could leave the map's internal source-update
   // pipeline in a bad state) other zones' rings on the "fences" source too.
-  if((tool==="polygon"||tool==="tripline"||tool==="path"||tool==="corridor")&&draft.length>=2) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
+  if((tool==="polygon"||tool==="tripline"||tool==="corridor")&&draft.length>=2) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
   if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
         geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
@@ -2243,7 +2265,7 @@ map.on("load",()=>{
   // polygon-only "general"/approach trigger boundary — amber to read as
   // "the outer approach edge," distinct from the audio-fade blue and the
   // prange/pclear purple family. Reuses the amber already established
-  // elsewhere in this file for bearing arrows/walking-path lines.
+  // elsewhere in this file for bearing arrows / map-match corridor lines.
   map.addLayer({id:"gen-ring",type:"line",source:"fences",filter:["==","kind","genring"],
      paint:{"line-color":"#ffc24d","line-width":1.2,"line-dasharray":[1,2],"line-opacity":0.5}});
   // project-level rings (voice range, full volume, visitor)
@@ -2303,7 +2325,7 @@ function _zoneMousedown(e){
   // page reload, with no error visible anywhere in the UI.
   let snap;
   if(z.shape.type==="circle")    snap={center:[...z.shape.center]};
-  else if(z.shape.type==="polygon"||z.shape.type==="path"||z.shape.type==="corridor") snap={coords:z.shape.coords.map(c=>[...c])};
+  else if(z.shape.type==="polygon"||z.shape.type==="corridor") snap={coords:z.shape.coords.map(c=>[...c])};
   else                           snap={from:[...z.shape.from],to:[...z.shape.to]};
   map.dragPan.disable();
   _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false};
@@ -2321,14 +2343,13 @@ map.on("mousemove",e=>{
   _zoneDrag.moved=true;
   const z=zones[_zoneDrag.zIdx], s=_zoneDrag.snap;
   if(z.shape.type==="circle"){
-    // A stop snapped onto a Walking Path stays constrained to that SPECIFIC
-    // path (by onPathId) — drag motion is projected onto the nearest point
-    // of that path's own line, never "whichever path happens to be active
-    // right now" (that used to be the same bug as the reported "second path
-    // load breaks the first path's stops": onPath was a bare boolean with no
-    // path reference). If the stop's own path isn't currently active, fall
-    // back to free drag rather than silently snapping onto an unrelated one.
-    const onPath=z.onPathId?walkingPathsActive.find(w=>w.id===z.onPathId):null;
+    // A stop snapped onto a map-match corridor stays constrained to that
+    // SPECIFIC line (by snapCorridorId) — drag motion is projected onto the
+    // nearest point of that corridor's own line, never "whichever corridor
+    // happens to be active right now". If the stop's own corridor isn't
+    // currently active, fall back to free drag rather than silently
+    // snapping onto an unrelated one.
+    const onPath=z.snapCorridorId?walkingPathsActive.find(w=>w.id===z.snapCorridorId):null;
     if(onPath){
       const raw=[s.center[0]+dLng, s.center[1]+dLat];
       const match=nearestPointOnPath(raw,onPath.points);
@@ -2337,7 +2358,7 @@ map.on("mousemove",e=>{
       z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
     }
   }
-  else if(z.shape.type==="polygon"||z.shape.type==="path"||z.shape.type==="corridor") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
+  else if(z.shape.type==="polygon"||z.shape.type==="corridor") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
   else { z.shape.from=[s.from[0]+dLng,s.from[1]+dLat]; z.shape.to=[s.to[0]+dLng,s.to[1]+dLat]; }
   // select this zone if not already selected
   if(sel!==_zoneDrag.zIdx){ sel=_zoneDrag.zIdx; refreshProps(); }
@@ -2393,7 +2414,6 @@ map.on("click",e=>{
     if(tool==="circle"){ draft=[p]; finishShape(); }
     else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
     else if(tool==="polygon"){ draft.push(p); render(); }
-    else if(tool==="path"){ draft.push(p); render(); }
     else if(tool==="corridor"){ draft.push(p); render(); }
     return;
   }
@@ -2416,17 +2436,16 @@ function updateDrawUiVisibility(t){
   document.getElementById("drawHint").style.display = t?"block":"none";
 }
 function setTool(t){ tool=t; draft=[];
-  const shapeLabel={circle:"● Circle",polygon:"⬡ Polygon",tripline:"／ Tripline",path:"〜 Path",corridor:"➰ Corridor"}[t];
+  const shapeLabel={circle:"● Circle",polygon:"⬡ Polygon",tripline:"／ Tripline",corridor:"➰ Corridor"}[t];
   if(shapeLabel){ document.getElementById("shapePickerBtn").textContent=shapeLabel+" — drawing…"; document.getElementById("shapePickerBtn").classList.add("on"); }
   else resetShapePickerBtn();
   updateDrawUiVisibility(t);
-  document.getElementById("finishBtn").textContent = (t==="path"||t==="corridor")?"Finish "+t:"Finish polygon";
+  document.getElementById("finishBtn").textContent = t==="corridor"?"Finish corridor":"Finish polygon";
   document.getElementById("drawHint").textContent={
     circle:"click the center on the map (reveal radius set above)",
     polygon:"click each corner; press Finish to close it",
     tripline:"click the two ends of the crossing line",
-    path:"click each point along the route; press Finish when done (2+ points)",
-    corridor:"click each point down the run (top to bottom); press Finish when done (2+ points)"}[t]||"pick a shape to start drawing";
+    corridor:"click each point along the line; press Finish when done (2+ points)"}[t]||"pick a shape to start drawing";
   render();
 }
 function openShapePicker(anchorBtn){
@@ -2435,55 +2454,51 @@ function openShapePicker(anchorBtn){
     mkItem("● Circle",()=>setTool("circle"));
     mkItem("⬡ Polygon",()=>setTool("polygon"));
     mkItem("／ Tripline",()=>setTool("tripline"));
-    mkItem("〜 Path",()=>setTool("path"));
-    mkItem("🥾 Walking Path",()=>openWalkingPathPicker(anchorBtn));
-    // Ridge Quest (R0) — the corridor trigger primitive (signed distance to
-    // a polyline minus half-width) already exists and works in Geofencer/
-    // SimFencer, it just had no authoring UI until now. Draws like Path
-    // (multi-click, Finish button) with an added width.
+    // The corridor trigger primitive (signed distance to a polyline minus
+    // half-width) is evaluated by Geofencer/SimFencer. Draws multi-click
+    // with a Finish button and a width. A corridor can also carry
+    // "moving audio" (an ambient bed that travels the line) and/or be used
+    // for map-matching — both are toggles in its property panel.
     mkItem("➰ Corridor",()=>setTool("corridor"));
-    // Ridge Quest (R9) — hand-clicking a corridor point-by-point works for a
-    // short chute but doesn't scale to a real resort's full run network.
-    // Reuses the exact same parseGPX() a recorded track already goes
-    // through for Walking Paths — GPX's <trkpt> maps directly onto a
-    // corridor's [lon,lat] coords, no separate parser needed.
+    // Hand-clicking a corridor point-by-point doesn't scale to a real
+    // resort's full run network. Reuses the exact same parseGPX() a
+    // recorded track already goes through — GPX's <trkpt> maps directly
+    // onto a corridor's [lon,lat] coords, no separate parser needed.
     mkItem("⬆ Import GPX as Corridor",()=>importCorridorFromGPX());
   });
 }
 document.getElementById("shapePickerBtn").onclick=e=>{ e.stopPropagation(); openShapePicker(e.currentTarget); };
 document.getElementById("finishBtn").onclick=()=>{
   if(tool==="polygon"&&draft.length>=3) finishShape();
-  else if(tool==="path"&&draft.length>=2) finishShape();
   else if(tool==="corridor"&&draft.length>=2) finishShape();
 };
 document.getElementById("cancelBtn").onclick=()=>{ draft=[]; tool=null;
   resetShapePickerBtn();
   updateDrawUiVisibility(null); render(); };
 
-const WALKING_PATH_SNAP_M=15; // how close a new/dragged circle stop must be to the walking path to snap onto it
+const WALKING_PATH_SNAP_M=15; // how close a new/dragged circle stop must be to a map-match corridor to snap onto it
 function finishShape(){
   const name="Stop "+(zones.length+1);
   let shape;
   if(tool==="circle") shape={type:"circle",center:draft[0],radiusM:+document.getElementById("newRadius").value||12};
   else if(tool==="polygon") shape={type:"polygon",coords:draft.slice()};
   else if(tool==="tripline") shape={type:"tripline",from:draft[0],to:draft[1]};
-  else if(tool==="path") shape={type:"path",coords:draft.slice()};
   else if(tool==="corridor") shape={type:"corridor",coords:draft.slice(),widthM:+document.getElementById("newCorridorWidth").value||10};
   const z=makeZone(name,shape);
   z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as audio uploads
-  // Snap onto the nearest active walking path only if placed near it —
-  // off-path stops remain fully allowed (confirmed with the user); this just
-  // makes a deliberately-near placement land exactly on the line instead of
-  // just beside it, and marks (via onPathId) which specific path it should
-  // stay constrained to when dragged afterward. With several paths active,
-  // pick whichever one the placement is actually closest to.
+  // Snap onto the nearest active map-match corridor only if placed near it —
+  // off-line stops remain fully allowed; this just makes a deliberately-near
+  // placement land exactly on the line instead of just beside it, and marks
+  // (via snapCorridorId) which specific corridor it should stay constrained
+  // to when dragged afterward. With several active, pick whichever one the
+  // placement is actually closest to.
   if(tool==="circle" && walkingPathsActive.length){
     let winner=null;
     for(const path of walkingPathsActive){
       const match=nearestPointOnPath(shape.center,path.points);
       if(match && match.distM<=WALKING_PATH_SNAP_M && (!winner||match.distM<winner.match.distM)) winner={path,match};
     }
-    if(winner){ shape.center=winner.match.point; z.onPathId=winner.path.id; }
+    if(winner){ shape.center=winner.match.point; z.snapCorridorId=winner.path.id; }
   }
   zones.push(z); draft=[]; tool=null;
   resetShapePickerBtn();
@@ -2509,11 +2524,12 @@ function refreshHandles(z){
   if(!z||sel<0) return;
   const c=zoneCenterLonLat(z); // [lon,lat]
 
-  // Path stops get everything a normal stop gets (bearing/approach/audio-fade
-  // handles below, steps 1/2/4) plus their own pair of hearing-range handles
-  // for the ambient bed (voice range / full vol) and per-point vertex handles
-  // instead of the polygon/tripline handles in steps 6/7.
-  const isPathZone=z.shape.type==="path";
+  // Corridor stops get everything a normal stop gets (bearing/approach/
+  // audio-fade handles below, steps 1/2/4) plus per-point vertex handles
+  // (step 9). Capped at 40 points — a GPX-imported corridor can be ~150
+  // points, and one draggable Marker per point would flood the map; above
+  // the cap, whole-shape drag (the mousedown handler) is the only edit.
+  const isPathZone=z.shape.type==="corridor" && z.shape.coords.length<=40;
 
   // ---- 1: bearing tip handle (amber) — always shown, defaults to 90° ----
   if(z.bearingDeg==null) z.bearingDeg=90;
@@ -2602,7 +2618,7 @@ function refreshHandles(z){
     }
   }
 
-  // ---- 9: path stop's own vertex handles ----
+  // ---- 9: corridor stop's own vertex handles ----
   if(isPathZone){
     z.shape.coords.forEach((coord,i)=>{
       const el=_mkHandle("mh-vertex","point "+(i+1));
@@ -2626,32 +2642,33 @@ function refreshProps(){
   const z=zones[sel]; box.style.display="block";
   document.getElementById("pTitle").textContent=z.shape.type.toUpperCase()+" stop";
   document.getElementById("pName").value=z.name;
-  const isPath=z.shape.type==="path";
+  const isCorridor=z.shape.type==="corridor";
+  const movingAudio=isCorridor && !!z.movingAudio;
 
-  // Path stops fire the full trigger system too (hazard flag, pipeline,
-  // "speak when"/dwell, all folded into the single Advanced section below) —
-  // exactly like every other stop — plus their own Movement/ambient section.
+  // Every stop (corridor included) fires the full trigger system — hazard
+  // flag, pipeline, "speak when"/dwell, folded into the Advanced section
+  // below. A corridor adds its own Corridor section, and when moving-audio
+  // is on, the Moving audio section too.
   document.getElementById("pFiresRow").style.display="block";
   document.getElementById("advToggle").style.display="block";
   document.getElementById("advBody").style.display="";
-  document.getElementById("pPathSection").style.display=isPath?"block":"none";
-  document.getElementById("pAudioSectionLabel").textContent=isPath?"Ambient sound":"Voices & Audio";
+  document.getElementById("pPathSection").style.display=movingAudio?"block":"none";
+  document.getElementById("pAudioSectionLabel").textContent=movingAudio?"Ambient sound":"Voices & Audio";
 
-  if(isPath){
+  if(movingAudio){
     document.getElementById("pMoveMode").value=z.movementMode||"walk";
     document.getElementById("pSpeed").value=z.speedKmh??MOVE_SPEEDS[z.movementMode||"walk"];
     document.getElementById("pLoopMode").value=z.loopMode||"loop";
-    // fall through — path zones also populate the normal trigger fields below
   }
-  const isCorridor=z.shape.type==="corridor";
   document.getElementById("pCorridorSection").style.display=isCorridor?"block":"none";
   if(isCorridor){
+    document.getElementById("pCorridorMoving").checked=!!z.movingAudio;
     document.getElementById("pDifficulty").value=z.difficulty||"";
     document.getElementById("pRunType").value=z.runType||"run";
     document.getElementById("pCorridorWidth").value=z.shape.widthM||10;
   }
-  document.getElementById("pTileCorridorSection").style.display=(isCorridor||isPath)?"block":"none";
-  if(isCorridor||isPath){
+  document.getElementById("pTileCorridorSection").style.display=isCorridor?"block":"none";
+  if(isCorridor){
     document.getElementById("pCorridorActivity").value=z.activityType||"hike";
   }
   const isCircle=z.shape.type==="circle";
@@ -2803,18 +2820,15 @@ function renderGlobalCodeObjectsChips(){
     const canvas=map.getCanvas();
     canvas.addEventListener("dragover",e=>{
       if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")||e.dataTransfer.types.includes("application/x-asset-object-json")
-         ||e.dataTransfer.types.includes("application/x-gpxitem-path")||e.dataTransfer.types.includes("application/x-gpxitem-corridor"))e.preventDefault();
+         ||e.dataTransfer.types.includes("application/x-gpxitem-corridor"))e.preventDefault();
     });
     canvas.addEventListener("drop",e=>{
       e.preventDefault();
-      // Drag a saved path/corridor from the Paths & Corridors palette onto
-      // the map — same gpx-tree.js MIME types its item rows set on
-      // dragstart. Neither needs a target zone/drop position: a path just
-      // gets activated project-wide (same as picking it in the existing
-      // Walking Path picker), and a corridor renders at its own recorded
-      // coordinates (same as importCorridorFromGPX/importCorridorFromLibrary).
-      const gpxPathId=e.dataTransfer.getData("application/x-gpxitem-path");
-      if(gpxPathId){ toggleWalkingPath(gpxPathId,true); return; }
+      // Drag a saved corridor from the Corridors palette onto the map —
+      // same corridor-tree.js MIME type its item rows set on dragstart. It
+      // renders at its own recorded coordinates (same as
+      // importCorridorFromGPX/importCorridorFromLibrary); no target
+      // zone/drop position needed.
       const gpxCorridorId=e.dataTransfer.getData("application/x-gpxitem-corridor");
       if(gpxCorridorId){ importCorridorFromLibrary(gpxCorridorId); return; }
       // Drag a 3D asset from the AR Objects palette directly onto a stop on
@@ -3139,10 +3153,15 @@ document.getElementById("pMoveMode").addEventListener("input",()=>{
 });
 bindProp("pSpeed",z=>{ z.speedKmh=Math.max(0,+document.getElementById("pSpeed").value||0); });
 bindProp("pLoopMode",z=>{ z.loopMode=document.getElementById("pLoopMode").value; });
+document.getElementById("pCorridorMoving").addEventListener("change",()=>{
+  if(sel<0) return; const z=zones[sel];
+  z.movingAudio=document.getElementById("pCorridorMoving").checked;
+  refreshProps(); render(); autoSave();
+});
 bindProp("pDifficulty",z=>{ z.difficulty=document.getElementById("pDifficulty").value||null; });
 bindProp("pRunType",z=>{ z.runType=document.getElementById("pRunType").value; });
 bindProp("pCorridorWidth",z=>{ if(z.shape.type==="corridor") z.shape.widthM=Math.max(2,+document.getElementById("pCorridorWidth").value||10); });
-bindProp("pCorridorActivity",z=>{ if(z.shape.type==="corridor"||z.shape.type==="path") z.activityType=document.getElementById("pCorridorActivity").value; });
+bindProp("pCorridorActivity",z=>{ if(z.shape.type==="corridor") z.activityType=document.getElementById("pCorridorActivity").value; });
 bindProp("pIsViewpoint",z=>{
   z.isViewpoint=document.getElementById("pIsViewpoint").checked;
   document.getElementById("pViewpointBody").style.display=z.isViewpoint?"block":"none";
@@ -3428,7 +3447,7 @@ const TERRAIN_PREVIEW_COLORS={
   plaza:"#c98f6a",trail:"#a3743f"
 };
 function gatherTileCorridors(){
-  return zones.filter(z=>z.shape.type==="corridor"||z.shape.type==="path")
+  return zones.filter(z=>z.shape.type==="corridor")
     .map(z=>({coords:z.shape.coords,widthM:z.shape.widthM||null,activityType:z.activityType||"hike"}));
 }
 async function generateTerrain(){
@@ -3635,7 +3654,7 @@ function dockCollapsedRow(){
    where the user left it, same as before. */
 const PANEL_MENU_ITEMS=[
   {key:"region",label:"Region Editor",el:()=>document.getElementById("mainPanel")},
-  {key:"paths", label:"Paths",         el:()=>document.getElementById("gpxPalette")},
+  {key:"paths", label:"Corridors",     el:()=>document.getElementById("gpxPalette")},
   {key:"audio", label:"Audio Palette", el:()=>document.getElementById("audioPalette")},
   {key:"ar",    label:"AR Objects",    el:()=>document.getElementById("assetPalette")},
   {key:"code",  label:"Code Objects",  el:()=>document.querySelector(".co-float")}
@@ -3827,30 +3846,26 @@ function doAudioRefresh(){
   document.getElementById("afNoOrg").style.display = afOrgId()?"none":"block";
   audioTree.refresh({ projectId: afProjectId(), projectLabel: projName()||afProjectId(), orgId: afOrgId() });
   loadStopFolders();
-  loadWalkingPaths().then(updateWalkingPathBtnLabel);
   gpxTree.refresh({ appId: afAppId() });
+  updateWalkingPathBtnLabel();
 }
 
-// Drag-source-only browser for the app-scoped Paths library the GPX Editor
-// tab saves into — walking_path, not project-scoped, so this uses afAppId()
-// (same scope loadWalkingPaths() above already reads), not
-// afOrgId()/afProjectId() like the Audio/AR trees above. Corridors used to
-// be a separate table/kind here (branched on item.kind==="corridor"); since
-// migration 0049 merged them into walking_path as an optional widthM field,
-// the same branch now reads widthM instead — a plain path (no width)
-// activates it exactly like the existing Walking Path picker
-// (toggleWalkingPath); a path *with* a width imports it as a new corridor
-// stop, mirroring importCorridorFromGPX but sourced from a saved library
-// entry.
-const gpxTree=GpxTree.mount(document.getElementById("gpxTreeHost"),{
+// The one Corridors palette — the shared corridor-tree.js widget over the
+// app-scoped `corridor` library the GPX Editor tab saves into (app-scoped,
+// so this uses afAppId(), not afOrgId()/afProjectId() like the Audio/AR
+// trees). Clicking a row creates a corridor stop from that geometry
+// (importCorridorFromLibrary); the per-row checkbox (selectable:true)
+// toggles whether that corridor is used for map-matching
+// (toggleWalkingPath adds/removes it from selectedWalkingPathIds).
+const gpxTree=CorridorTree.mount(document.getElementById("gpxTreeHost"),{
   appId: afAppId(),
   getToken,
   readOnly:true,
+  selectable:true,
+  isSelected: it=>selectedWalkingPathIds.includes(it.id),
+  onToggle: (it,on)=>toggleWalkingPath(it.id,on),
   onError: ()=>{}, // drag-source only — nothing here can fail loudly enough to need a popup
-  onPick: item=>{
-    if(item.widthM==null) toggleWalkingPath(item.id,true);
-    else importCorridorFromLibrary(item.id);
-  }
+  onPick: item=>importCorridorFromLibrary(item.id)
 });
 document.getElementById("gpxRefresh").onclick=()=>gpxTree.refresh({appId:afAppId()});
 
@@ -4020,77 +4035,31 @@ document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
 document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); selectZone(-1); };
 
 /* ============================================================
-   Walking Path — a recorded, filtered GPS trail (Field Recorder) a project
-   can select for stops to snap onto/slide along. Deliberately NOT the same
-   as the existing shape.type==="path" draw-tool above (a per-zone movable/
-   ambient-audio shape) — this is a separate, app-level-scoped, reusable
-   reference route. Organized into its own folder tree (walking_path_folder),
-   same shape as the stop tree below but app-scoped — reuses the .sf-menu/
-   .stop-folder-row/.sf-picker CSS and closeStopFolderMenus()/openPortalMenu()
-   machinery rather than inventing new widgets.
+   Map-match corridors — the subset of the app-scoped Corridor library
+   (`corridor` table) that a project has ticked for map-matching: the
+   visitor's GPS is snapped onto the nearest one, and stops can snap/slide
+   along it. The library tree UI itself is corridor-tree.js (mounted in the
+   #gpxPalette below); this section is just the "which corridors are active
+   on this project" plumbing, mirrored from geofence-engine.html /
+   geofence-sim.html's WALKING_PATHS collection. Identifiers keep the
+   historical walkingPath* names to stay parallel with those two files.
    ============================================================ */
-let walkingPaths=[];              // [{id,folderId,name,distanceM,updatedAt}] for the current app, from GET /api/walking-path
-let walkingPathFolders=[];        // [{id,parentId,name}] for the current app, from GET /api/walking-path-folder
-let wpTreeExpanded=new Set([null]); // folder ids expanded in the picker — root (id null) starts expanded, collapsible like any other folder
-// Multiple walking paths can be active on a project at once (checkbox
-// multi-select in the picker, not a single radio pick). selectedWalkingPathIds
-// is the ordered list of active ids (order = selection order; index 0 is the
-// "primary" path Test Mode's auto-walk follows, see buildSimStopsPath).
+// Multiple map-match corridors can be active on a project at once (checkbox
+// multi-select in the Corridors palette). selectedWalkingPathIds is the
+// ordered list of active corridor ids (order = selection order; index 0 is
+// the "primary" one Test Mode's auto-walk follows, see buildSimStopsPath).
 // walkingPathsActive holds the full fetched geometry + precomputed
-// progress-tracking arrays + a stable display color for each active path,
-// mirrored from geofence-engine.html/geofence-sim.html's WALKING_PATHS.
-const WP_COLOR_PALETTE=["#ffc24d","#38e0a6","#5eb1ff","#ff6a9d","#c792ff","#ffab5e","#5ee6e6","#ff8c66"]; // first entry matches the old single-path amber, so one active path looks unchanged
+// progress-tracking arrays + a stable display color for each.
+const WP_COLOR_PALETTE=["#ffc24d","#38e0a6","#5eb1ff","#ff6a9d","#c792ff","#ffab5e","#5ee6e6","#ff8c66"];
 let selectedWalkingPathIds=[];
 let walkingPathsActive=[]; // [{id,name,points,elev,cumM,cumGainM,cumLossM,totalGainM,totalLossM,color},...]
-let _pathWalkStartT=null, _pathWalkStartDistM=null, _pathWalkStartPathId=null; // locked in on the first on-path tick each walk; reset when the snapped-to path changes; cleared by SimFencer.reset()
+let _pathWalkStartT=null, _pathWalkStartDistM=null, _pathWalkStartPathId=null; // locked in on the first on-line tick each walk; reset when the snapped-to corridor changes; cleared by SimFencer.reset()
 
 // Project-wide "global functions" — Code Objects dropped on the map rather
 // than a specific stop (setupMapDrop's fallback below), executed every GPS
 // tick regardless of which zone (if any) the visitor is in. Same
 // {objectId,version,params} reference shape as zone.codeObjects.
 let globalCodeObjects=[];
-async function loadWalkingPaths(){
-  const appId=afAppId();
-  if(!appId){ walkingPaths=[]; walkingPathFolders=[]; return; }
-  try{
-    const [rp,rf]=await Promise.all([
-      fetch("/api/walking-path?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}}),
-      fetch("/api/walking-path-folder?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}})
-    ]);
-    const jp=rp.ok?await rp.json():null;
-    const jf=rf.ok?await rf.json():null;
-    walkingPaths=(jp&&jp.paths)||[];
-    walkingPathFolders=(jf&&jf.folders)||[];
-  }catch(e){ walkingPaths=[]; walkingPathFolders=[]; }
-}
-function wpFolderById(id){ return walkingPathFolders.find(f=>f.id===id); }
-function wpFolderPath(f){
-  if(!f) return "";
-  const parent=f.parentId?wpFolderById(f.parentId):null;
-  return parent?wpFolderPath(parent)+" / "+f.name:f.name;
-}
-function collectWpFolderSubtreeIds(rootId){
-  const ids=[rootId]; let frontier=[rootId];
-  while(frontier.length){
-    const next=walkingPathFolders.filter(f=>frontier.includes(f.parentId)).map(f=>f.id);
-    ids.push(...next); frontier=next;
-  }
-  return ids;
-}
-function buildWpTree(){
-  const byId=new Map();
-  const root={id:null,name:null,parentId:null,children:[],paths:[]};
-  byId.set(null,root);
-  walkingPathFolders.forEach(f=>byId.set(f.id,{id:f.id,name:f.name,parentId:f.parentId,children:[],paths:[]}));
-  walkingPathFolders.forEach(f=>{ const node=byId.get(f.id); (byId.get(f.parentId)||root).children.push(node); });
-  walkingPaths.forEach(p=>{ (byId.get(p.folderId)||root).paths.push(p); });
-  (function sortRec(node){
-    node.children.sort((a,b)=>a.name.localeCompare(b.name));
-    node.paths.sort((a,b)=>a.name.localeCompare(b.name));
-    node.children.forEach(sortRec);
-  })(root);
-  return root;
-}
 // Standard nearest-point-on-polyline projection: for each consecutive pair
 // of path points, project lonLat onto that segment (clamped to the segment's
 // own bounds), keep whichever segment's projection is closest. The
@@ -4133,14 +4102,14 @@ function renderWalkingPathLine(retriesLeft){
 // walkingPaths list — that list is loaded independently (doAudioRefresh) and
 // isn't guaranteed to have finished yet on a fresh page load.
 function updateWalkingPathBtnLabel(){
-  // The dedicated Walking Path button was folded into the shape-picker menu
-  // (see openShapePicker); the trigger button's idle label absorbs this
-  // "which path(s) are selected" feedback instead, so it isn't silently lost.
+  // The shape-picker button's idle label carries a "which map-match
+  // corridor(s) are active" suffix so that feedback isn't silently lost
+  // (corridors are ticked in the Corridors palette, not from this button).
   if(tool) return; // mid-draw label ("● Circle — drawing…" etc.) takes priority
   const btn=document.getElementById("shapePickerBtn"); if(!btn) return;
   let suffix="";
-  if(walkingPathsActive.length===1) suffix="  (🥾 "+(walkingPathsActive[0].name||"…")+")";
-  else if(walkingPathsActive.length>1) suffix="  (🥾 "+walkingPathsActive.length+" paths)";
+  if(walkingPathsActive.length===1) suffix="  (🛤️ "+(walkingPathsActive[0].name||"…")+")";
+  else if(walkingPathsActive.length>1) suffix="  (🛤️ "+walkingPathsActive.length+" corridors)";
   btn.textContent = "add a stop — pick a shape ▾"+suffix;
 }
 // Shared fetch+precompute for one path's full geometry/progress data — used
@@ -4149,7 +4118,7 @@ function updateWalkingPathBtnLabel(){
 // Color is assigned by the caller, not here, since it depends on how many
 // other paths are already active/being loaded alongside this one.
 async function fetchWalkingPathEntry(id){
-  const r=await fetch("/api/walking-path/"+id);
+  const r=await fetch("/api/corridor/"+id);
   if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
   const j=await r.json();
   const points=j.points||[];
@@ -4168,13 +4137,19 @@ async function toggleWalkingPath(id,active){
     if(walkingPathsActive.some(w=>w.id===id)) return; // already active
     let entry;
     try{ entry=await fetchWalkingPathEntry(id); }
-    catch(e){ alert("Couldn't load that walking path: "+e.message); return; }
+    catch(e){ alert("Couldn't load that corridor: "+e.message); return; }
     entry.color=WP_COLOR_PALETTE[selectedWalkingPathIds.length%WP_COLOR_PALETTE.length];
     selectedWalkingPathIds.push(id);
     walkingPathsActive.push(entry);
   } else {
     selectedWalkingPathIds=selectedWalkingPathIds.filter(x=>x!==id);
     walkingPathsActive=walkingPathsActive.filter(w=>w.id!==id);
+    // Clear snapCorridorId on any stop snapped to this corridor — the drag
+    // handler falls back to free-drag for a dangling reference, but left
+    // set it would export into every future published bundle with nothing
+    // in the UI showing the stop is orphaned.
+    const affected=zones.filter(z=>z.snapCorridorId===id);
+    if(affected.length){ affected.forEach(z=>z.snapCorridorId=null); }
   }
   if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
   renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave();
@@ -4199,274 +4174,11 @@ async function loadActiveWalkingPathData(ids){
   updateWalkingPathBtnLabel();
   autoSave();
 }
-let _wpPickerAnchor=null; // the toolbar button — kept so any mutation (create/rename/move/delete) can reopen a fresh picker afterward, same pattern the old delete-only button already used
-async function openWalkingPathPicker(anchorBtn){
-  closeStopFolderMenus(); // hide any stale picker immediately, before the await below
-  _wpPickerAnchor=anchorBtn;
-  await loadWalkingPaths();
-  // Built via openPortalMenu (document.body + position:fixed), same as every
-  // other picker/menu in this file — NOT anchorBtn.parentElement (the old
-  // approach here), since that nests the menu inside #mainPanel's own
-  // scrollable box and gets clipped by its overflow the moment the tree is
-  // taller than the visible panel, instead of floating freely over the map.
-  openPortalMenu(anchorBtn, "sf-picker wp-picker", menu=>{
-    const head=document.createElement("div"); head.style.cssText="display:flex;gap:4px;padding:2px 4px 6px";
-    const noneBtn=document.createElement("button"); noneBtn.className="sf-menu-item"; noneBtn.type="button"; noneBtn.style.flex="1";
-    noneBtn.textContent=(selectedWalkingPathIds.length?"":"✓ ")+"— none (not path-driven) —"; noneBtn.title="Clear all selected paths";
-    noneBtn.onclick=e=>{ e.stopPropagation(); closeStopFolderMenus(); loadActiveWalkingPathData([]); };
-    const newFolderBtn=document.createElement("button"); newFolderBtn.className="ghost sf-more"; newFolderBtn.type="button";
-    newFolderBtn.style.flex="0 0 auto"; newFolderBtn.title="New folder"; newFolderBtn.textContent="＋📁";
-    newFolderBtn.onclick=e=>{ e.stopPropagation(); createWpFolder(null); };
-    const importBtn=document.createElement("button"); importBtn.className="ghost sf-more"; importBtn.type="button";
-    importBtn.style.flex="0 0 auto"; importBtn.title="Import a GPX track from another app"; importBtn.textContent="⬆GPX";
-    const importInput=document.createElement("input"); importInput.type="file"; importInput.accept=".gpx,application/gpx+xml";
-    importInput.style.display="none";
-    importInput.onchange=()=>{ const f=importInput.files[0]; importInput.value=""; if(f) importWpFromGPX(f); };
-    importBtn.onclick=e=>{ e.stopPropagation(); importInput.click(); };
-    head.appendChild(noneBtn); head.appendChild(newFolderBtn); head.appendChild(importBtn); head.appendChild(importInput);
-    menu.appendChild(head);
-    if(!walkingPaths.length && !walkingPathFolders.length){
-      const hint=document.createElement("div"); hint.className="hint"; hint.style.padding="6px 10px"; hint.textContent="no saved paths yet — record one in Field Recorder";
-      menu.appendChild(hint);
-    }
-    menu.appendChild(buildWpFolderRow(buildWpTree()));
-  });
-}
-// Root (id null) renders as a collapsible row too, same as the stop tree's
-// root — collapsing it hides every top-level folder/path at once, which
-// matters here since this whole tree lives inside a floating picker over
-// the map rather than a fixed-height side panel.
-function buildWpFolderRow(node){
-  const isRoot=node.id===null;
-  const wrap=document.createElement("div");
-  const expanded=wpTreeExpanded.has(node.id);
-  const row=document.createElement("div"); row.className="stop-folder-row";
-  const chevron=document.createElement("span"); chevron.className="sf-chevron"; chevron.textContent=expanded?"▾":"▸";
-  chevron.onclick=e=>{ e.stopPropagation(); if(wpTreeExpanded.has(node.id))wpTreeExpanded.delete(node.id);else wpTreeExpanded.add(node.id); openWalkingPathPicker(_wpPickerAnchor); };
-  const icon=document.createElement("span"); icon.textContent=isRoot?"📂":"📁";
-  const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.textContent=isRoot?"All paths":node.name;
-  const count=document.createElement("span"); count.className="sf-count"; count.textContent=node.paths.length;
-  row.appendChild(chevron); row.appendChild(icon); row.appendChild(nameEl); row.appendChild(count);
-  if(!isRoot){
-    const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯"; moreBtn.title="New subfolder, rename, move, or delete";
-    moreBtn.onclick=e=>{ e.stopPropagation(); openWpFolderMenu(moreBtn,node); };
-    row.appendChild(moreBtn);
-  }
-  row.onclick=()=>{ if(wpTreeExpanded.has(node.id))wpTreeExpanded.delete(node.id);else wpTreeExpanded.add(node.id); openWalkingPathPicker(_wpPickerAnchor); };
-  wrap.appendChild(row);
-  if(expanded){
-    const kids=document.createElement("div"); kids.className="sf-children";
-    node.children.forEach(child=>kids.appendChild(buildWpFolderRow(child)));
-    node.paths.forEach(p=>kids.appendChild(buildWpPathRow(p)));
-    if(!node.children.length && !node.paths.length){ const e2=document.createElement("div"); e2.className="hint"; e2.style.padding="4px 8px"; e2.textContent="empty"; kids.appendChild(e2); }
-    wrap.appendChild(kids);
-  }
-  return wrap;
-}
-function buildWpPathRow(p){
-  const row=document.createElement("div"); row.className="stop-folder-row";
-  // Multi-select checkbox — same pattern as the stop-tree's "Bulk assign"
-  // checkboxes (co-bulk-chk): stopPropagation on the checkbox's own click so
-  // the row's outer click doesn't also fire, toggling twice.
-  const chk=document.createElement("input"); chk.type="checkbox";
-  // The global `input,textarea,select{width:100%}` rule (meant for text
-  // inputs/selects) also matches bare <input type=checkbox> elements unless
-  // overridden — this app's other checkboxes dodge it by living inside a
-  // `label.chk` (which has its own `input{width:auto}` rule); this one isn't,
-  // so it needs the override directly or it stretches to fill the row,
-  // squeezing the name text next to it down to nothing.
-  chk.style.cssText="width:auto;flex:0 0 auto;margin-right:6px;accent-color:var(--coral)";
-  chk.checked=selectedWalkingPathIds.includes(p.id);
-  chk.onclick=e=>{ e.stopPropagation(); toggleWalkingPath(p.id,chk.checked); };
-  row.appendChild(chk);
-  const nameEl=document.createElement("span"); nameEl.className="sf-name"; nameEl.style.cursor="pointer";
-  nameEl.textContent="🥾 "+p.name+" ("+(p.distanceM/1000).toFixed(2)+" km)";
-  nameEl.onclick=e=>{ e.stopPropagation(); chk.checked=!chk.checked; toggleWalkingPath(p.id,chk.checked); };
-  row.appendChild(nameEl);
-  const moreBtn=document.createElement("button"); moreBtn.className="ghost sf-more"; moreBtn.textContent="⋯"; moreBtn.title="Rename, move, or delete";
-  moreBtn.onclick=e=>{ e.stopPropagation(); openWpPathMenu(moreBtn,p); };
-  row.appendChild(moreBtn);
-  return row;
-}
-// The wp-picker tree itself is a .sf-menu (so click-away-close and the shared
-// styling work for free) — but that means the global closeStopFolderMenus()
-// would remove it too, along with any nested "⋯" submenu, leaving the
-// submenu appended into a now-detached (invisible) node. Used wherever a
-// "⋯" menu might be opened from inside another already-open .sf-menu (the
-// walking-path picker); harmless to call from the persistent stop tree too
-// (nothing there is .wp-picker-classed, so it just behaves like a normal
-// close-other-menus).
-function closeNestedMenus(){ document.querySelectorAll(".sf-menu").forEach(m=>{ if(!m.classList.contains("wp-picker")) m.remove(); }); }
-// Shared by every "⋯"/picker menu in this file (stop tree, stop folders,
-// walking-path tree). Two real bugs this fixes, both hit in practice:
-// (1) a menu's anchor button often isn't a direct child of anything with
-// position:relative (e.g. the stop row's own "⋯" lives inside a plain
-// flex wrapper div, not the positioned .zone row) — position:absolute then
-// resolves against whatever distant ancestor IS positioned, which can put
-// the menu anywhere, including pinned near the top of the page. (2) even
-// when the anchor's parent IS positioned, a scrollable ancestor
-// (overflow-y:auto — the stop tree panel and the walking-path picker both
-// scroll) clips any absolutely-positioned descendant to its own bounds
-// regardless of z-index. Rendering into document.body with position:fixed
-// coordinates computed from the anchor's own getBoundingClientRect() sidesteps
-// both — the menu no longer depends on its anchor's positioning context or
-// which scrollable container it happens to be inside.
-function openPortalMenu(anchorBtn, cls, buildFn, keepPickerOpen){
-  if(keepPickerOpen) closeNestedMenus(); else closeStopFolderMenus();
-  const menu=document.createElement("div"); menu.className="sf-menu "+cls;
-  menu.style.position="fixed"; menu.style.top="0"; menu.style.left="0"; menu.style.right="auto"; menu.style.visibility="hidden";
-  buildFn(menu);
-  document.body.appendChild(menu);
-  const ar=anchorBtn.getBoundingClientRect(), mr=menu.getBoundingClientRect();
-  let top=ar.bottom+4;
-  if(top+mr.height>window.innerHeight) top=Math.max(4, ar.top-mr.height-4);
-  let left=Math.min(ar.left, window.innerWidth-mr.width-4);
-  menu.style.top=top+"px"; menu.style.left=Math.max(4,left)+"px"; menu.style.visibility="visible";
-  return menu;
-}
-// Project settings popover's own toggle/position/click-away logic used to
-// live here — removed 2026-08-08, now TopNav's shared gearPopover owns all
-// of that (open/close, positioning against its own gear button, and a
-// "click" — not "mousedown" — outside-close listener, for the exact same
-// native-<select>-inside-a-popover reason this file used to handle locally).
-// See the TopNav.init({renderSettings,onSettingsOpen}) call near the end of
-// this file for what fence-editor.html still needs to do: reparent
-// #projSettingsPopover in once, and refresh its live bits (global code
-// object chips) on every open.
-function openWpFolderMenu(anchorBtn,node){
-  openPortalMenu(anchorBtn, "", menu=>{
-    const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeNestedMenus(); fn(); }; menu.appendChild(b); };
-    mkItem("＋ New subfolder",()=>createWpFolder(node.id));
-    mkItem("✎ Rename",()=>renameWpFolder(node));
-    mkItem("📁 Move to…",()=>{ closeNestedMenus(); openWpFolderPicker(anchorBtn,node,targetId=>moveWpFolder(node.id,targetId)); });
-    mkItem("🗑 Delete",()=>deleteWpFolder(node));
-  }, true);
-}
-function openWpPathMenu(anchorBtn,p){
-  openPortalMenu(anchorBtn, "", menu=>{
-    const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeNestedMenus(); fn(); }; menu.appendChild(b); };
-    mkItem("✎ Rename",()=>renameWpPath(p));
-    mkItem("📁 Move to…",()=>{ closeNestedMenus(); openWpFolderPicker(anchorBtn,null,targetId=>moveWpPath(p.id,targetId)); });
-    mkItem("⬇ Export GPX",()=>exportWpAsGPX(p));
-    mkItem("🗑 Delete",()=>deleteWpPath(p));
-  }, true);
-}
-function openWpFolderPicker(anchorBtn,excludeNode,onPick){
-  const excludeIds=excludeNode?collectWpFolderSubtreeIds(excludeNode.id):[];
-  openPortalMenu(anchorBtn, "sf-picker", menu=>{
-    const rootBtn=document.createElement("button"); rootBtn.className="sf-menu-item"; rootBtn.type="button"; rootBtn.textContent="📁 (root)";
-    rootBtn.onclick=e=>{ e.stopPropagation(); closeNestedMenus(); onPick(null); };
-    menu.appendChild(rootBtn);
-    walkingPathFolders.filter(f=>!excludeIds.includes(f.id)).sort((a,b)=>wpFolderPath(a).localeCompare(wpFolderPath(b))).forEach(f=>{
-      const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent="📁 "+wpFolderPath(f);
-      b.onclick=e=>{ e.stopPropagation(); closeNestedMenus(); onPick(f.id); };
-      menu.appendChild(b);
-    });
-  }, true);
-}
-async function createWpFolder(parentId){
-  const appId=afAppId(); if(!appId){ alert("Pick a client/app for this tour first."); return; }
-  const name=(prompt("New folder name:")||"").trim();
-  if(!name) return;
-  try{
-    const r=await fetch("/api/walking-path-folder",{method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({appId,parentId:parentId||null,name})});
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error||r.statusText);
-    if(parentId) wpTreeExpanded.add(parentId);
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(e){ alert("Create folder failed: "+e.message); }
-}
-async function renameWpFolder(node){
-  const name=(prompt("Rename folder:",node.name)||"").trim();
-  if(!name||name===node.name) return;
-  try{
-    const r=await fetch("/api/walking-path-folder/"+node.id,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({name})});
-    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(e){ alert("Rename failed: "+e.message); }
-}
-async function moveWpFolder(folderId,targetParentId){
-  try{
-    const r=await fetch("/api/walking-path-folder/"+folderId,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({parentId:targetParentId})});
-    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
-    if(targetParentId) wpTreeExpanded.add(targetParentId);
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(e){ alert("Move failed: "+e.message); }
-}
-async function deleteWpFolder(node){
-  const subtreeIds=collectWpFolderSubtreeIds(node.id);
-  const affected=walkingPaths.filter(p=>p.folderId&&subtreeIds.includes(p.folderId));
-  const msg='Delete "'+node.name+'"'+(affected.length?' and move '+affected.length+' walking path(s) up to its parent folder':'')+'? This cannot be undone.';
-  if(!confirm(msg)) return;
-  try{
-    const r=await fetch("/api/walking-path-folder/"+node.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(e){ alert("Delete failed: "+e.message); }
-}
-async function renameWpPath(p){
-  const name=(prompt("Rename walking path:",p.name)||"").trim();
-  if(!name||name===p.name) return;
-  try{
-    const r=await fetch("/api/walking-path/"+p.id,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({name})});
-    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
-    const active=walkingPathsActive.find(w=>w.id===p.id);
-    if(active){ active.name=name; updateWalkingPathBtnLabel(); }
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(e){ alert("Rename failed: "+e.message); }
-}
-async function moveWpPath(pathId,targetFolderId){
-  try{
-    const r=await fetch("/api/walking-path/"+pathId,{method:"PATCH",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},body:JSON.stringify({folderId:targetFolderId})});
-    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
-    if(targetFolderId) wpTreeExpanded.add(targetFolderId);
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(e){ alert("Move failed: "+e.message); }
-}
-async function deleteWpPath(p){
-  if(!confirm('Delete the walking path "'+p.name+'"? This is permanent and removes it from any project using it.')) return;
-  try{
-    const r=await fetch("/api/walking-path/"+p.id,{method:"DELETE",headers:{authorization:"Bearer "+getToken()}});
-    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
-    if(selectedWalkingPathIds.includes(p.id)) await toggleWalkingPath(p.id,false);
-    // Clear onPathId on any stop snapped to this path — the drag handler
-    // already falls back to free-drag gracefully for a dangling reference
-    // (walkingPathsActive.find() just returns undefined), but left alone
-    // it exports into every future published bundle forever with nothing
-    // in the UI ever showing the stop is orphaned this way.
-    const affected=zones.filter(z=>z.onPathId===p.id);
-    if(affected.length){ affected.forEach(z=>z.onPathId=null); autoSave(); render(); }
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(err){ alert("Delete failed: "+err.message); }
-}
 
-/* ---- GPX export/import — interop with paths recorded by other apps
-   (Strava, Gaia GPS, AllTrails, Garmin Connect, ...). GPX's <trkpt lat lon>
-   + optional <ele> maps directly onto our [lon,lat,elevM] point shape, so
-   no lossy conversion either direction. ---- */
-function pointsToGPX(name, points){
-  const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-  const trkpts=points.map(p=>{
-    const lon=p[0], lat=p[1], ele=p[2];
-    return '      <trkpt lat="'+lat.toFixed(6)+'" lon="'+lon.toFixed(6)+'">'+(ele!=null?'<ele>'+ele+'</ele>':'')+'</trkpt>';
-  }).join('\n');
-  return '<?xml version="1.0" encoding="UTF-8"?>\n'+
-    '<gpx version="1.1" creator="Chase Life Geofence Platform" xmlns="http://www.topografix.com/GPX/1/1">\n'+
-    '  <trk>\n    <name>'+esc(name)+'</name>\n    <trkseg>\n'+trkpts+'\n    </trkseg>\n  </trk>\n</gpx>\n';
-}
-async function exportWpAsGPX(p){
-  try{
-    const r=await fetch("/api/walking-path/"+p.id);
-    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
-    const j=await r.json();
-    const gpx=pointsToGPX(j.name, j.points||[]);
-    const blob=new Blob([gpx],{type:"application/gpx+xml"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=(j.name||"walking-path").replace(/[^a-z0-9\-_]+/gi,"_")+".gpx";
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),1000);
-  }catch(e){ alert("Export failed: "+e.message); }
-}
+/* ---- GPX import helpers — parse a track recorded by another app
+   (Strava, Gaia GPS, AllTrails, Garmin Connect, ...) for "Import GPX as
+   Corridor". GPX's <trkpt lat lon> + optional <ele> maps directly onto our
+   [lon,lat,elevM] point shape, so no lossy conversion. ---- */
 // Accepts a <trk>/<trkseg>/<trkpt> track (the common case for a recorded
 // walk) or falls back to a <rte>/<rtept> route if that's all the file has —
 // some apps export routes instead of tracks. Bare <wpt> waypoint-only files
@@ -4509,26 +4221,6 @@ function gpxDistanceM(points){
   for(let i=1;i<points.length;i++) d+=haversineM(points[i-1],points[i]);
   return d;
 }
-async function importWpFromGPX(file){
-  const appId=afAppId();
-  if(!appId){ alert("Pick a client/app for this tour first."); return; }
-  try{
-    const text=await file.text();
-    const {points,name:gpxName}=parseGPX(text);
-    const defaultName=gpxName||file.name.replace(/\.gpx$/i,"");
-    const name=(prompt("Name this walking path:",defaultName)||"").trim();
-    if(!name) return;
-    const distanceM=gpxDistanceM(points);
-    const {gainM,lossM}=gpxElevGainLoss(points);
-    const r=await fetch("/api/walking-path",{
-      method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
-      body:JSON.stringify({appId,name,points,distanceM,elevGainM:gainM,elevLossM:lossM})
-    });
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error||r.statusText);
-    openWalkingPathPicker(_wpPickerAnchor);
-  }catch(e){ alert("Import failed: "+e.message); }
-}
 
 // R9 — bulk-author a Ridge Quest corridor (run/chute/trail) straight from a
 // recorded GPX track instead of clicking every point down the run by hand.
@@ -4568,14 +4260,12 @@ function importCorridorFromGPX(){
   input.click();
 }
 // Same subsample-then-makeZone flow as importCorridorFromGPX above, but
-// sourced from a saved library path-with-a-width (Paths palette drag/pick)
+// sourced from a saved corridor library entry (Corridors palette drag/pick)
 // instead of a freshly-parsed GPX file — it already carries its own
-// name/widthM from when it was saved in the GPX Editor, so there's no
-// name/width prompt here. Was /api/corridor/:id before migration 0049
-// merged the Corridor library into walking_path.
+// name/widthM from when it was saved, so there's no name/width prompt here.
 async function importCorridorFromLibrary(corridorId){
   try{
-    const r=await fetch("/api/walking-path/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
+    const r=await fetch("/api/corridor/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
     const j=await r.json();
     const points=j.points||[];
@@ -4655,7 +4345,7 @@ function folderMatchesSearchDeep(node){
 function buildZoneRow(i){
   const z=zones[i];
   const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
-  const cue=z.shape.type==="path"?"ambient":(z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive"));
+  const cue=z.movingAudio?"ambient":(z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive"));
   const hzBadge=zoneIsHazard(z)?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
   const coBadge=(z.codeObjects&&z.codeObjects.length)?'<span title="'+z.codeObjects.length+' code object'+(z.codeObjects.length===1?'':'s')+' attached" style="font-size:10px;margin-left:3px;vertical-align:middle">🧩'+(z.codeObjects.length>1?'×'+z.codeObjects.length:'')+'</span>':'';
   const bulkChk=coBulkMode?'<input type="checkbox" class="co-bulk-chk" style="margin-right:6px;accent-color:var(--coral)" '+(coBulkSel.has(z.id)?"checked":"")+'>':'';
@@ -4923,25 +4613,25 @@ document.getElementById("stopsToggleBtn").onclick=()=>{
 /* ---- export to the engine's rich BUNDLE ([lat,lon]) ---- */
 function zoneToEngine(z){
   const s=z.shape;
-  const isPath=s.type==="path";
+  // A "moving audio" corridor serializes to the engine's moving-ambient-bed
+  // form (top-level zo.path + movement fields + circle-at-moving-point
+  // layers) — byte-identical to how the old "Path" shape type serialized —
+  // so the engine's existing centerNow() moving-audio path lights up with
+  // no runtime change. A plain corridor serializes as the static
+  // signed-distance trigger band.
+  const movingAudio=s.type==="corridor" && !!z.movingAudio;
   const zo={ id:z.id, name:z.name, audibleFromM:z.audioM };
   zo.center=LL(zoneCenterLonLat(z));
-  // Path stops fire the same trigger system as every other stop, evaluated
-  // at runtime against wherever the stop currently is on its route (the
-  // engine resolves this via centerNow()) — a path has no natural drawn
-  // shape of its own, so both the general and target (say/dwell) layers
-  // reuse the approach radius as a plain circle.
   const genR=zoneGenR(z);
   if(s.type==="circle")        zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:s.radiusM}];
   else if(s.type==="polygon")  zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"polygon",coords:s.coords.map(LL)}}];
   else if(s.type==="tripline") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}];
-  // Corridor (Ridge Quest R0) — the geometry shape Geofencer/SimFencer's
-  // existing corridor primitive already reads (nearest-segment distance to
-  // path, minus half of widthM). R1 (not built yet) adds top/bottom
-  // tripline pairing on top of this for direction+speed classification —
-  // this only needs to get the corridor's own volume authored correctly.
-  else if(s.type==="corridor") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"corridor",path:s.coords.map(LL),widthM:s.widthM||10}}];
-  else if(isPath)              zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:genR}];
+  // Corridor — the geometry shape Geofencer/SimFencer's corridor primitive
+  // reads (nearest-segment distance to the polyline, minus half of widthM).
+  else if(s.type==="corridor" && !movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"corridor",path:s.coords.map(LL),widthM:s.widthM||10}}];
+  // Moving-audio corridor — no drawn shape of its own; both layers reuse
+  // the approach radius as a plain circle at the current moving point.
+  else if(s.type==="corridor" && movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:genR}];
   const trig=[];
   const rev={ oncePerVisit:true, layer:"target" };
   if(s.type==="tripline") rev.fires_on="enter";              // crossing
@@ -4962,12 +4652,12 @@ function zoneToEngine(z){
   // from Studio's audio_folder) — the live engine never reads this, only
   // exported so reloading a published bundle restores the same tree layout.
   if(z.folderId) zo.folderId=z.folderId;
-  // Editor-only — which of the project's active Walking Paths (if any) this
-  // stop is snapped onto (constrains dragging to slide along that specific
-  // path). The live engine doesn't need this (map-matching runs against the
-  // visitor's own position, not per-stop state) — only exported so a
-  // publish+reload doesn't silently drop every stop's snapped-to-path status.
-  if(z.onPathId) zo.onPathId=z.onPathId;
+  // Editor-only — which map-match corridor (if any) this stop is snapped
+  // onto (constrains dragging to slide along that specific line). The live
+  // engine doesn't read this (map-matching runs against the visitor's own
+  // position, not per-stop state) — only exported so a publish+reload
+  // doesn't silently drop every stop's snapped-to-line status.
+  if(z.snapCorridorId) zo.snapCorridorId=z.snapCorridorId;
   if(z.ttsVoice) zo.ttsVoice=z.ttsVoice;
   if(z.arObjects&&z.arObjects.length) zo.arObjects=z.arObjects;
   // Altitude gate (3D Mode) — null/omitted means "any altitude", the
@@ -4977,8 +4667,8 @@ function zoneToEngine(z){
   if(s.type==="corridor"){
     if(z.difficulty) zo.difficulty=z.difficulty;
     if(z.runType) zo.runType=z.runType;
+    if(z.activityType) zo.activityType=z.activityType;
   }
-  if((s.type==="corridor"||s.type==="path")&&z.activityType) zo.activityType=z.activityType;
   // Viewpoint (Ridge Quest R4, circle stops only) — precomputed
   // viewshedCells is static data, exported as-is (recomputed by staff via
   // the "Recompute viewshed" button, never at runtime).
@@ -4987,12 +4677,17 @@ function zoneToEngine(z){
     zo.viewshedMaxDistM=z.viewshedMaxDistM||2000;
     zo.viewshedCells=z.viewshedCells||[];
   }
-  if(isPath){
+  if(movingAudio){
     zo.path=s.coords.map(LL);
     zo.movementMode=z.movementMode||"walk";
     zo.speedKmh=z.speedKmh||0;
     zo.loopMode=z.loopMode||"loop";
     if(z.ambientAudioUrl) zo.ambientAudioUrl=z.ambientAudioUrl;
+    // Explicit marker + echoed width so engineToZone can round-trip this
+    // back to a corridor with movingAudio on (top-level zo.path alone is
+    // the discriminator, but keep both for self-documentation).
+    zo.movingAudio=true;
+    zo.widthM=s.widthM||10;
   }
   return zo;
 }
@@ -5129,7 +4824,7 @@ async function exportBundle(){
               guideId:null,
               liveTtlMs:+document.getElementById("liveTtlMs").value,
               audioRetriggerDelayS:+document.getElementById("audioRetriggerDelayS").value,
-              walkingPathIds:selectedWalkingPathIds.slice(),
+              mapMatchCorridorIds:selectedWalkingPathIds.slice(),
               globalCodeObjects:globalCodeObjects.slice(),
               // Denormalized from the app row at publish time (3D-mode plan,
               // architecture note B) so player-only pages (geofence-engine.html)
@@ -5163,11 +4858,14 @@ document.getElementById("copyBtn").onclick=async ()=>{ await exportBundle();
   document.getElementById("status").textContent="bundle copied to clipboard"; };
 
 /* ---- import an existing bundle to edit (reverse of export) ---- */
-function engineToZone(zo,legacyPathId){
-  const isPath=Array.isArray(zo.path)&&zo.path.length>=2;
+function engineToZone(zo){
+  // A top-level zo.path (2+ points) is the discriminator for a moving-audio
+  // corridor — it serialized in the former "Path" shape form. Everything
+  // else parses from the target layer's geometry/radius as before.
+  const movingCorridor=Array.isArray(zo.path)&&zo.path.length>=2;
   let shape;
-  if(isPath){
-    shape={type:"path",coords:zo.path.map(LonLat)};
+  if(movingCorridor){
+    shape={type:"corridor",coords:zo.path.map(LonLat),widthM:zo.widthM||10};
   } else {
     const tgt=(zo.layers||[]).find(l=>l.kind==="target")||(zo.layers||[]).find(l=>l.radiusM!=null||l.geometry)||{};
     if(tgt.radiusM!=null) shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:tgt.radiusM};
@@ -5177,8 +4875,10 @@ function engineToZone(zo,legacyPathId){
     else shape={type:"circle",center:zo.center?LonLat(zo.center):REF.slice(),radiusM:12};
   }
   const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
-  if(shape.type==="corridor"){ z.difficulty=zo.difficulty||null; z.runType=zo.runType||"run"; }
-  if(shape.type==="corridor"||shape.type==="path"){ z.activityType=zo.activityType||"hike"; }
+  if(shape.type==="corridor"){
+    z.difficulty=zo.difficulty||null; z.runType=zo.runType||"run";
+    z.activityType=zo.activityType||"hike";
+  }
   if(shape.type==="circle" && zo.isViewpoint){
     z.isViewpoint=true;
     z.viewshedMaxDistM=zo.viewshedMaxDistM||2000;
@@ -5205,21 +4905,19 @@ function engineToZone(zo,legacyPathId){
   if(zo.isHazard && !(z.codeObjects||[]).some(co=>co.objectId===HAZARD_CODE_OBJECT_ID)){
     z.codeObjects=(z.codeObjects||[]).concat([{objectId:HAZARD_CODE_OBJECT_ID,version:1,params:{}}]);
   }
-  // Per-stop hearing-range override — every stop, not just path stops.
+  // Per-stop hearing-range override — every stop, not just moving-audio.
   z.spatialClearM=zo.spatialClearM??null;
   // Stop tree folder — resolved against the live folder list at render time
   // (loadStopFolders/drawList), so a stale/deleted id just falls back to root.
   z.folderId=zo.folderId||null;
-  // zo.onPathId is the current format; zo.onPath (a bare boolean, from
-  // before multi-path support) only tells us THAT a stop was on-path, not
-  // WHICH path — the caller resolves that ambiguity for us by passing the
-  // bundle's own (single, legacy) walkingPathId as legacyPathId.
-  z.onPathId = zo.onPathId || (zo.onPath ? (legacyPathId||null) : null);
+  // Which map-match corridor this stop is snapped onto (editor-only glue).
+  z.snapCorridorId = zo.snapCorridorId || null;
   z.ttsVoice=zo.ttsVoice||null;
   z.arObjects=Array.isArray(zo.arObjects)?zo.arObjects:[];
   z.altM=zo.altM??null;
   z.altToleranceM=zo.altToleranceM??null;
-  if(isPath){
+  if(movingCorridor){
+    z.movingAudio=true;
     z.movementMode=zo.movementMode||"walk";
     z.speedKmh=zo.speedKmh??MOVE_SPEEDS[z.movementMode];
     z.loopMode=zo.loopMode||"loop";
@@ -5232,11 +4930,7 @@ document.getElementById("importBtn").onclick=()=>{
   if(!raw){ document.getElementById("status").textContent="paste a bundle into the box first, then Import"; return; }
   try{ const b=JSON.parse(raw);
     if(!Array.isArray(b.zones)) throw new Error("no zones array");
-    // Pre-multi-path bundles only have a single bundle-level walkingPathId
-    // and per-stop zo.onPath booleans (no per-stop path reference) — thread
-    // that single id through as the fallback every on-path stop resolves to.
-    const legacyPathId=(b.walkingPathIds&&b.walkingPathIds[0])||b.walkingPathId||null;
-    zones=b.zones.map(zo=>engineToZone(zo,legacyPathId)); sel=-1; tool=null; draft=[];
+    zones=b.zones.map(zo=>engineToZone(zo)); sel=-1; tool=null; draft=[];
     // engineToZone() takes the incoming bundle's zo.id verbatim (needed to
     // round-trip a project we exported ourselves) — but a hand-edited or
     // externally-produced bundle can have two zones sharing an id, which
@@ -5253,7 +4947,7 @@ document.getElementById("importBtn").onclick=()=>{
     if(b.appId){ const as=document.getElementById("appSel"); if(as) as.value=b.appId; }
     if(b.liveTtlMs) document.getElementById("liveTtlMs").value=String(b.liveTtlMs);
     if(b.audioRetriggerDelayS!=null) document.getElementById("audioRetriggerDelayS").value=String(b.audioRetriggerDelayS);
-    loadActiveWalkingPathData(Array.isArray(b.walkingPathIds)?b.walkingPathIds:(b.walkingPathId?[b.walkingPathId]:[]));
+    loadActiveWalkingPathData(Array.isArray(b.mapMatchCorridorIds)?b.mapMatchCorridorIds:[]);
     globalCodeObjects=Array.isArray(b.globalCodeObjects)?b.globalCodeObjects.slice():[];
     renderGlobalCodeObjectsChips();
     render(); refreshProps();
@@ -5335,8 +5029,8 @@ async function loadFromPlatform(id){
       // appId field was tracked — or otherwise missing it — leaves #appSel
       // unset even though the project ROW itself always has the real
       // appId. This silently broke anything keyed by app (not just orgId),
-      // which the old audio/library trees never were but Walking Paths
-      // now are — GET /api/walking-path needs the real appId, not this
+      // which the old audio/library trees never were but the Corridor
+      // library is — GET /api/corridor needs the real appId, not this
       // bundle's possibly-stale/absent copy of it. Fall back to the
       // authoritative project list.
       try{
@@ -5385,12 +5079,10 @@ function validateZoneGeometry(zs){
     if(s.type==="circle" && !(s.radiusM>0)) problems.push('"'+z.name+'" — circle radius must be greater than 0');
     else if(s.type==="polygon" && (!s.coords || s.coords.length<3)) problems.push('"'+z.name+'" — polygon needs at least 3 points');
     else if(s.type==="tripline" && !(haversineM(s.from,s.to)>0.5)) problems.push('"'+z.name+'" — tripline endpoints are the same point (or nearly so)');
-    // corridor/path were added after this check was written and never got
-    // their own rule — same failure mode as the others (a degenerate <2-point
+    // corridor — same failure mode as the others (a degenerate <2-point
     // line reaches the live engine unfireable, e.g. a bad GPX import that
     // collapsed to one point) with nothing here to catch it before publish.
     else if(s.type==="corridor" && (!s.coords || s.coords.length<2)) problems.push('"'+z.name+'" — corridor needs at least 2 points');
-    else if(s.type==="path" && (!s.coords || s.coords.length<2)) problems.push('"'+z.name+'" — path needs at least 2 points');
   });
   return problems;
 }
@@ -6400,7 +6092,7 @@ function extractTileCorridorsFromBundle(b){
 // mutation function to remember to refresh it (the exact class of bug
 // CLAUDE.md's editorToSimBundle()/autoSave() sections warn about).
 function liveTileCorridors(){
-  return zones.filter(z=>z.shape.type==="corridor"||z.shape.type==="path")
+  return zones.filter(z=>z.shape.type==="corridor")
     .map(z=>({coords:z.shape.coords,activityType:z.activityType||"hike"}));
 }
 async function initTileArt(b){
@@ -6416,28 +6108,27 @@ function editorToSimBundle(){
   const clearM=+(document.getElementById("audioClear").value)||8;
   const simZones=zones.map(z=>{
     const s=z.shape;
+    const movingAudio=s.type==="corridor" && !!z.movingAudio;
     let center;
     if(s.type==="circle") center=[s.center[1],s.center[0]];
     else if(s.type==="polygon"){const c=centroidLonLat(s.coords);center=[c[1],c[0]];}
     else if(s.type==="tripline") center=[(s.from[1]+s.to[1])/2,(s.from[0]+s.to[0])/2];
-    // Path (moving ambient) stops: real live position is handled by
+    // Moving-audio corridor: real live position is handled by
     // SimAmbient/simAmbientCenterNow below; this `center` is only a
     // load-time fallback (e.g. for the ref-point average).
-    else if(s.type==="path") center=[s.coords[0][1],s.coords[0][0]];
+    else if(movingAudio) center=[s.coords[0][1],s.coords[0][0]];
     else if(s.type==="corridor"){const c=centroidLonLat(s.coords);center=[c[1],c[0]];}
-    const isPath=s.type==="path";
-    // Path stops fire triggers too now, against a circle centered on their
-    // *current* live position (resolved at eval-time in SimFencer.sd via
-    // simAmbientCenterNow) — same approachM ring used for both general
-    // and target (say/dwell) layers since a path has no natural
-    // drawn radius of its own.
+    // A moving-audio corridor fires triggers against a circle centered on
+    // its *current* live position (resolved at eval-time in SimFencer.sd
+    // via simAmbientCenterNow) — same approachM ring for both general and
+    // target layers, since it has no natural drawn radius.
     const generalLayer={kind:"general",radiusM:z.approachM||30};
     let targetLayer;
     if(s.type==="circle") targetLayer={kind:"target",radiusM:s.radiusM||12};
     else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
     else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
+    else if(movingAudio) targetLayer={kind:"target",radiusM:z.approachM||30};
     else if(s.type==="corridor") targetLayer={kind:"target",geometry:{type:"corridor",path:s.coords.map(c=>[c[1],c[0]]),widthM:s.widthM||10}};
-    else if(isPath) targetLayer={kind:"target",radiusM:z.approachM||30};
     const triggers=[];
     if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true});
       else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true});}
@@ -6471,17 +6162,16 @@ function editorToSimBundle(){
       difficulty:s.type==="corridor"?(z.difficulty||null):null,
       runType:s.type==="corridor"?(z.runType||"run"):null,
       // Artistic map tile corridor — same "3 mirrors stay in sync" reasoning
-      // as difficulty/runType above; applies to path stops too, not just
-      // corridor, since a plain Path is the far more common tile-corridor
-      // shape for bike/hike/city-walk projects.
-      activityType:(s.type==="corridor"||isPath)?(z.activityType||"hike"):null,
+      // as difficulty/runType above.
+      activityType:s.type==="corridor"?(z.activityType||"hike"):null,
       // Ridge Quest R4 — same "not consumed by Test Mode, exported anyway
       // so the 3 mirrors stay in sync" reasoning as difficulty/runType above.
       isViewpoint:s.type==="circle"?!!z.isViewpoint:false,
       viewshedMaxDistM:(s.type==="circle"&&z.isViewpoint)?(z.viewshedMaxDistM||2000):null,
       viewshedCells:(s.type==="circle"&&z.isViewpoint)?(z.viewshedCells||[]):[]};
-    if(s.type==="path"){
+    if(movingAudio){
       out.path=s.coords.map(c=>[c[1],c[0]]);
+      out.movingAudio=true;
       out.movementMode=z.movementMode||"walk";
       out.speedKmh=z.speedKmh||0;
       out.loopMode=z.loopMode||"loop";
@@ -7000,17 +6690,16 @@ function simPathPointAt(s){if(simPath.length<2)return simPath[0]||null;let acc=0
     acc+=seg;}return simPath[simPath.length-1];}
 function buildSimStopsPath(){
   const lead=(p,q,m)=>{const len=SimGeo.hav(q,p)||1,k=m/len;return[p[0]+(p[0]-q[0])*k,p[1]+(p[1]-q[1])*k];};
-  // Walk the recorded route itself when one's selected, regardless of stop
-  // order — this is how a path-driven tour is actually walked (GPS
-  // map-matched onto the path as it goes), not a straight line stop-to-stop.
-  // Auto-walk only follows ONE path at a time — it's parametrized as a
-  // single scalar distance along one polyline (see simPathPointAt), so
-  // there's no well-defined notion of walking two paths simultaneously.
-  // With multiple paths active, the first-selected one is the "primary"
-  // path walked (same convention as its color/button-label being first).
+  // Walk the map-match corridor itself when one's active, regardless of
+  // stop order — this is how a corridor-driven tour is actually walked (GPS
+  // map-matched onto the line as it goes), not a straight stop-to-stop.
+  // Auto-walk only follows ONE at a time — it's parametrized as a single
+  // scalar distance along one polyline (see simPathPointAt), so there's no
+  // well-defined notion of walking two simultaneously. With several active,
+  // the first-selected is the "primary" one walked.
   const primary=walkingPathsActive[0];
   if(primary && primary.points.length>=2){
-    if(walkingPathsActive.length>1) simLogEv("sev-sys","walking along: "+primary.name+" (1 of "+walkingPathsActive.length+" selected paths)");
+    if(walkingPathsActive.length>1) simLogEv("sev-sys","walking along: "+primary.name+" (1 of "+walkingPathsActive.length+" active corridors)");
     const pts=primary.points.map(pt=>[pt[1],pt[0]]); // [lon,lat] -> [lat,lon], matching SimGeo's convention
     const path=[lead(pts[0],pts[1],20)];
     pts.forEach(p=>path.push(p));

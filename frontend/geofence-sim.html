@@ -198,11 +198,11 @@ async function loadWalkingPaths(b){
   WALKING_PATHS = [];
   _pathWalkStartT = null; _pathWalkStartDistM = null; _pathWalkStartPathId = null;
   if(typeof PipelineRuntime!=='undefined') PipelineRuntime.setPathProgress(null);
-  const ids = b && Array.isArray(b.walkingPathIds) ? b.walkingPathIds : (b && b.walkingPathId ? [b.walkingPathId] : []);
+  const ids = b && Array.isArray(b.mapMatchCorridorIds) ? b.mapMatchCorridorIds : [];
   if(!ids.length){ renderWalkPaths(); return; }
   await Promise.all(ids.map(async id=>{
     try{
-      const r = await fetch('/api/walking-path/'+id,{cache:'no-store'});
+      const r = await fetch('/api/corridor/'+id,{cache:'no-store'});
       if(!r.ok) return;
       const j = await r.json();
       const latlon = (j.points||[]).map(pt=>[pt[1],pt[0]]); // stored [lon,lat] -> this sim's own [lat,lon] convention

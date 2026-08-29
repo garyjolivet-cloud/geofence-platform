@@ -7,7 +7,7 @@
 <script src="role-gate.js"></script>
 <script src="client-picker.js"></script>
 <script src="top-nav.js"></script>
-<script src="gpx-tree.js"></script>
+<script src="corridor-tree.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script>RoleGate.require(['admin','operator']);</script>
@@ -86,12 +86,12 @@
   <div id="topNav" style="display:flex;gap:8px;align-items:center"></div>
 </div>
 
-<div id="noProjectHint" class="hint">Pick a company and project above to load its Paths library.</div>
+<div id="noProjectHint" class="hint">Pick a company and project above to load its Corridors library.</div>
 
 <div id="gpxScreen">
   <div class="rail">
     <div class="railHead">
-      <span class="ttl">Paths</span>
+      <span class="ttl">Corridors</span>
       <button id="importBtn" class="ghost" title="Import a GPX file">&#8593; Import</button>
       <button id="treeRefreshBtn" class="ghost" title="Refresh">&#8635;</button>
     </div>
@@ -138,7 +138,7 @@
     <hr>
     <div class="row">
       <button id="saveBtn" class="on" disabled>Save</button>
-      <button id="widthBtn" class="ghost" disabled title="Set or clear a corridor width for the currently loaded path">&#8960; Width&hellip;</button>
+      <button id="widthBtn" class="ghost" disabled title="Set the trigger-band width for the currently loaded corridor">&#8960; Width&hellip;</button>
     </div>
     <div class="row">
       <button id="saveAsBtn">Save As&hellip;</button>
@@ -155,17 +155,14 @@
 <script>
 "use strict";
 /* =====================================================================
-   GPX EDITOR — import a recorded GPX track (or reopen a saved path),
+   GPX EDITOR — import a recorded GPX track (or reopen a saved corridor),
    clean it up with the noise filter, trim/cut sections, reverse
-   direction, and save into the app-scoped Paths library (walking_path
-   table — a "corridor" is just a path with widthM set, since migration
-   0049 merged the old separate corridor table into it) that
-   fence-editor.html's own Paths palette and Walking Path picker already
-   read from. Point convention throughout: [lon,lat,elevM|null,tMs|null]
-   — matches fence-editor.html's [lon,lat,elevM] Walking Path points
-   exactly, plus an optional 4th element (parsed GPX <time>) used only by
-   the noise filter; never sent to the backend (walking_path stores
-   3-element points).
+   direction, and save into the app-scoped Corridors library (corridor
+   table) that fence-editor.html's own Corridors palette reads from.
+   Point convention throughout: [lon,lat,elevM|null,tMs|null] — matches
+   fence-editor.html's [lon,lat,elevM] corridor points exactly, plus an
+   optional 4th element (parsed GPX <time>) used only by the noise
+   filter; never sent to the backend (corridor stores 3-element points).
    ===================================================================== */
 
 function getToken(){ return localStorage.getItem("gp.session")||""; }
@@ -257,7 +254,7 @@ let points=[];       // active/displayed set — basePoints, or filterImpossible
 let filterOn=true, filterAvailable=false;
 let cumLens=[0], cumGain=[0], cumLoss=[0];
 let bounds=null;
-let loadedFrom=null; // {kind:'path', id, name, widthM} once opened from/saved to the tree — widthM null means a plain path, a number means it's used as a corridor (migration 0049 merged the old separate corridor table into walking_path's own widthM column)
+let loadedFrom=null; // {kind:'corridor', id, name, widthM} once opened from/saved to the tree — widthM is always a number (the trigger-band width; default 10)
 let undoStack=[];    // snapshots of basePoints from before each structural edit (Trim/Delete/Reverse) — lets Undo reverse one if the result isn't liked; cleared whenever a different track is opened, since undoing across tracks makes no sense
 let mapReady=false, playheadMarker=null, resizePending=false, renderQueued=false;
 // setBase()->recompute() and map's own "load" handler can each independently
@@ -675,28 +672,23 @@ document.getElementById("importInput").onchange=async()=>{
   }catch(e){ alert("Import failed: "+e.message); }
 };
 
-/* ---- open an existing tree item — always walking_path since migration
-   0049 merged the old separate corridor table into it; widthM (if any)
-   just rides along as a normal field. ---- */
+/* ---- open an existing tree item (a corridor row). ---- */
 async function openTreeItem(item){
   try{
-    const r=await fetch("/api/walking-path/"+item.id,{headers:{authorization:"Bearer "+getToken()}});
+    const r=await fetch("/api/corridor/"+item.id,{headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
     const j=await r.json();
     const pts=(j.points||[]).map(p=>[p[0],p[1],p[2]==null?null:p[2],null]);
-    if(pts.length<2){ alert("This path doesn't have enough points."); return; }
-    loadedFrom={kind:"path", id:item.id, name:j.name, widthM:j.widthM};
+    if(pts.length<2){ alert("This corridor doesn't have enough points."); return; }
+    loadedFrom={kind:"corridor", id:item.id, name:j.name, widthM:j.widthM};
     updateHdrCrumb();
     updateWidthBtn();
     setBase(pts, {resetHistory:true});
   }catch(e){ alert("Open failed: "+e.message); }
 }
-// ".c" suffix (and the Width button's label) is purely cosmetic — it's
-// just whether widthM is set on the one shared table now, not a different
-// kind of record.
 function updateHdrCrumb(){
   if(!loadedFrom) return;
-  document.getElementById("hdrCrumb").textContent = loadedFrom.name+(loadedFrom.widthM!=null?".c":".p");
+  document.getElementById("hdrCrumb").textContent = loadedFrom.name;
 }
 function updateWidthBtn(){
   const btn=document.getElementById("widthBtn");
@@ -705,7 +697,7 @@ function updateWidthBtn(){
 }
 
 /* ---- tree mount ---- */
-const gpxTree=GpxTree.mount(document.getElementById("gpxTreeHost"),{
+const gpxTree=CorridorTree.mount(document.getElementById("gpxTreeHost"),{
   appId:null,
   getToken,
   readOnly:false,
@@ -733,42 +725,39 @@ document.getElementById("saveBtn").onclick=async()=>{
   const {distanceM,elevGainM,elevLossM}=currentTotals();
   const flatPoints=points.map(p=>[p[0],p[1],p[2]]);
   try{
-    await patchJson("/api/walking-path/"+loadedFrom.id,{points:flatPoints,distanceM,elevGainM,elevLossM});
+    await patchJson("/api/corridor/"+loadedFrom.id,{points:flatPoints,distanceM,elevGainM,elevLossM});
     gpxTree.refresh({appId});
     alert("Saved.");
   }catch(e){ alert("Save failed: "+e.message); }
 };
-// One "Save As…" flow instead of separate Path/Corridor buttons — width is
-// just an optional field on a path now (migration 0049), so there's one
-// name prompt and one optional width prompt instead of two whole buttons.
+// Save As… — one name prompt plus an optional width prompt (every corridor
+// has a width; blank keeps the default 10 m trigger band).
 document.getElementById("saveAsBtn").onclick=async()=>{
   if(!appId){ alert("Pick a company and project first."); return; }
   if(points.length<2) return;
-  const name=(prompt("Name this path:", (loadedFrom&&loadedFrom.name)||"")||"").trim();
+  const name=(prompt("Name this corridor:", (loadedFrom&&loadedFrom.name)||"")||"").trim();
   if(!name) return;
-  const widthStr=(prompt("Corridor width in meters — leave blank for a plain path:", loadedFrom&&loadedFrom.widthM!=null?String(loadedFrom.widthM):"")||"").trim();
-  const widthM=widthStr?(+widthStr||null):null;
+  const widthStr=(prompt("Trigger-band width in meters (blank = 10):", loadedFrom&&loadedFrom.widthM!=null?String(loadedFrom.widthM):"")||"").trim();
+  const widthM=widthStr?(+widthStr||10):10;
   const target=gpxTree.getUploadTarget();
   const folderId = target ? target.folderId : null;
   const {distanceM,elevGainM,elevLossM}=currentTotals();
   try{
-    const j=await postJson("/api/walking-path",{appId,name,points:points.map(p=>[p[0],p[1],p[2]]),folderId,widthM,distanceM,elevGainM,elevLossM});
-    loadedFrom={kind:"path", id:j.id, name, widthM};
+    const j=await postJson("/api/corridor",{appId,name,points:points.map(p=>[p[0],p[1],p[2]]),folderId,widthM,distanceM,elevGainM,elevLossM});
+    loadedFrom={kind:"corridor", id:j.id, name, widthM};
     updateHdrCrumb();
     updateWidthBtn();
     document.getElementById("saveBtn").disabled=false;
     gpxTree.refresh({appId});
   }catch(e){ alert("Save failed: "+e.message); }
 };
-// Turns the currently loaded path into a corridor (or back into a plain
-// path) in place — an edit, not a copy, unlike the old "Save as Corridor"
-// button which always created a brand-new disconnected record.
+// Change the trigger-band width of the currently loaded corridor in place.
 document.getElementById("widthBtn").onclick=async()=>{
   if(!loadedFrom) return;
-  const widthStr=(prompt("Corridor width in meters — leave blank for a plain path:", loadedFrom.widthM!=null?String(loadedFrom.widthM):"")||"").trim();
-  const widthM=widthStr?(+widthStr||null):null;
+  const widthStr=(prompt("Trigger-band width in meters (blank = 10):", loadedFrom.widthM!=null?String(loadedFrom.widthM):"")||"").trim();
+  const widthM=widthStr?(+widthStr||10):10;
   try{
-    await patchJson("/api/walking-path/"+loadedFrom.id,{widthM});
+    await patchJson("/api/corridor/"+loadedFrom.id,{widthM});
     loadedFrom.widthM=widthM;
     updateHdrCrumb();
     updateWidthBtn();
@@ -776,8 +765,8 @@ document.getElementById("widthBtn").onclick=async()=>{
   }catch(e){ alert("Save failed: "+e.message); }
 };
 
-/* ---- project/app resolution — walking_path is app-scoped (not
-   project-scoped), same as fence-editor.html's afAppId()/loadWalkingPaths();
+/* ---- project/app resolution — corridor is app-scoped (not
+   project-scoped), same as fence-editor.html's afAppId();
    a project only needs to be selected to resolve which app owns the
    library, matching record.html's own project-gated screen pattern. ---- */
 function showGpxScreen(){

@@ -1,31 +1,34 @@
-// Shared folder/tree browser for the GPX Editor — a structural port of
+// Shared folder/tree browser for corridors — a structural port of
 // asset-tree.js (window.AssetTree), itself a documented port of
 // audio-tree.js, per this project's established "clone the tree module per
-// new domain" pattern. Renders one root ("Paths") backed by the single
-// walking_path table — width_m is just an optional field on a path, not a
-// separate table (migration 0049 merged the old standalone Corridor
-// library into walking_path: a corridor was always structurally "a path
-// with a width", so the former two-root Paths/Corridors tree and its two
-// parallel API families collapsed into one). A path with a width set shows
-// a "⌀Nm" badge next to its distance so it's still visually distinguishable
-// at a glance, without needing its own section.
+// new domain" pattern. Renders one root ("Corridors") backed by the single
+// app-scoped `corridor` table. Every corridor has a width (`widthM`), shown
+// as a "⌀Nm" badge next to its distance.
+//
+// This module is the ONE tree UI for corridors — it is mounted both by the
+// GPX Editor (read/pick) and by the Fence Editor's floating Corridors
+// palette (pick + multi-select for map-matching). It replaced the old
+// gpx-tree.js plus a second inline copy that used to live in
+// fence-editor.html (consolidation, migration 0055).
 //
 // Differences from a mechanical port, called out because they'd otherwise
 // be easy to get wrong:
-//  - Row label appends ".p" at render time only — cosmetic, never written
-//    to the stored name, never sent to the backend.
 //  - No upload() export — nothing here is R2-backed. Importing a GPX file
 //    into a new tree row is orchestrated by gpx-editor.html itself (POST
-//    /api/walking-path, then tree.refresh()).
-//  - Clicking a leaf row (a saved path) calls onPick(item) directly — the
-//    GPX Editor "opens" that item into the working canvas, it doesn't
-//    attach it to something else the way AssetTree's "+" button did.
+//    /api/corridor, then tree.refresh()).
+//  - Clicking a leaf row (a saved corridor) calls onPick(item) directly.
+//  - opts.selectable adds a leading checkbox per row (Fence Editor uses this
+//    to toggle a corridor's map-match membership); the checkbox stops event
+//    propagation so it doesn't also fire onPick.
 //
 // Usage:
-//   const tree = GpxTree.mount(el, {
+//   const tree = CorridorTree.mount(el, {
 //     appId,                     // required
 //     getToken: () => string,
-//     onPick: (item) => {},      // item = {kind:'path', id, name, folderId, distanceM, elevGainM, elevLossM, widthM, updatedAt}
+//     onPick: (item) => {},      // item = {kind:'corridor', id, name, folderId, distanceM, elevGainM, elevLossM, widthM, updatedAt}
+//     selectable: false,         // show a leading checkbox per row
+//     isSelected: (item) => bool,
+//     onToggle: (item, checked) => {},
 //     onError: (msg) => {},      // defaults to alert()
 //   });
 //   tree.refresh({ appId: newAppId });
@@ -46,6 +49,7 @@
       .gt-row.selected{background:rgba(255,106,61,.15)}
       .gt-row.dragover{background:rgba(255,106,61,.22);outline:1px dashed var(--coral,#ff6a3d)}
       .gt-chevron{width:14px;flex:0 0 14px;text-align:center;color:var(--fog,#8aa5bf);font-size:10px}
+      .gt-check{flex:0 0 auto;margin:0 2px 0 0}
       .gt-icon{flex:0 0 auto}
       .gt-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .gt-name input{width:100%;box-sizing:border-box}
@@ -77,11 +81,11 @@
   function fmtKm(distanceM) { return distanceM ? (distanceM / 1000).toFixed(2) + " km" : ""; }
 
   const KIND = {
-    path: {
-      label: "Paths", rootIcon: "🥾", leafIcon: "🥾", suffix: ".p",
-      listItems: "/api/walking-path", listFolders: "/api/walking-path-folder",
-      folderEp: "/api/walking-path-folder", itemEp: "/api/walking-path",
-      itemsKey: "paths"
+    corridor: {
+      label: "Corridors", rootIcon: "➰", leafIcon: "🛤️", suffix: "",
+      listItems: "/api/corridor", listFolders: "/api/corridor-folder",
+      folderEp: "/api/corridor-folder", itemEp: "/api/corridor",
+      itemsKey: "corridors"
     }
   };
 
@@ -109,7 +113,7 @@
 
   function mount(el, opts) {
     injectStyles();
-    opts = Object.assign({ readOnly: false }, opts);
+    opts = Object.assign({ readOnly: false, selectable: false }, opts);
     el.innerHTML = "";
     el.classList.add("gt-root");
 
@@ -117,7 +121,7 @@
       expanded: new Set(),
       seenRoots: new Set(),
       selected: null,
-      roots: { path: null },
+      roots: { corridor: null },
       openMenu: null,
       parentById: new Map()
     };
@@ -143,13 +147,13 @@
     async function load() {
       if (!opts.appId) { el.innerHTML = '<div class="gt-empty">no workspace selected</div>'; return; }
       const [pl, pf] = await Promise.all([
-        api(KIND.path.listItems + "?appId=" + enc(opts.appId)),
-        api(KIND.path.listFolders + "?appId=" + enc(opts.appId))
+        api(KIND.corridor.listItems + "?appId=" + enc(opts.appId)),
+        api(KIND.corridor.listFolders + "?appId=" + enc(opts.appId))
       ]);
-      state.roots.path = buildKindTree("path", pf.folders, pl[KIND.path.itemsKey]);
-      state.parentById.set("path", new Map((pf.folders || []).map(f => [f.id, f.parentId])));
-      seedRootExpanded("path:root");
-      if (!state.selected) state.selected = { kind: "path", folderId: null };
+      state.roots.corridor = buildKindTree("corridor", pf.folders, pl[KIND.corridor.itemsKey]);
+      state.parentById.set("corridor", new Map((pf.folders || []).map(f => [f.id, f.parentId])));
+      seedRootExpanded("corridor:root");
+      if (!state.selected) state.selected = { kind: "corridor", folderId: null };
       render();
     }
 
@@ -343,11 +347,16 @@
         e.dataTransfer.setData("application/x-gpxitem-" + item.kind, item.id);
         e.dataTransfer.effectAllowed = "move";
       });
-      // A width badge (⌀Nm) stands in for the old separate Corridors section
-      // — item.widthM!=null is exactly what used to mean "this came from the
-      // corridor table" pre-0049, so the icon/badge keep that distinction
-      // visible even though it's all one tree/table now.
-      const icon = document.createElement("span"); icon.className = "gt-icon"; icon.textContent = item.widthM != null ? "🛤️" : KIND[item.kind].leafIcon;
+      if (opts.selectable) {
+        const chk = document.createElement("input");
+        chk.type = "checkbox"; chk.className = "gt-check";
+        chk.checked = opts.isSelected ? !!opts.isSelected(item) : false;
+        chk.title = "Use this corridor for map-matching";
+        chk.onclick = e => e.stopPropagation();
+        chk.onchange = e => { e.stopPropagation(); if (opts.onToggle) opts.onToggle(item, chk.checked); };
+        row.appendChild(chk);
+      }
+      const icon = document.createElement("span"); icon.className = "gt-icon"; icon.textContent = KIND[item.kind].leafIcon;
       const name = document.createElement("span"); name.className = "gt-name"; name.textContent = item.name + KIND[item.kind].suffix;
       const meta = document.createElement("span"); meta.className = "gt-meta";
       meta.textContent = (item.widthM != null ? "⌀" + item.widthM + "m " : "") + fmtKm(item.distanceM);
@@ -393,9 +402,6 @@
             e.dataTransfer.effectAllowed = "move";
           });
         }
-        // MIME type is namespaced by kind (a leftover from the pre-0049
-        // two-kind era, kept since KIND is still a map, not a single
-        // constant, in case another kind is ever added the same way).
         row.addEventListener("dragover", e => {
           if (e.dataTransfer.types.includes("application/x-gpxitem-" + kind)) { e.preventDefault(); row.classList.add("dragover"); return; }
           if (e.dataTransfer.types.includes("application/x-gpxfolder-" + kind)) { e.preventDefault(); row.classList.add("dragover"); }
@@ -428,21 +434,21 @@
         const toolbar = document.createElement("div"); toolbar.className = "gt-toolbar";
         const newFolderBtn = document.createElement("button"); newFolderBtn.className = "gt-btn"; newFolderBtn.textContent = "＋ New folder";
         newFolderBtn.onclick = () => {
-          const sel = state.selected || { kind: "path", folderId: null };
+          const sel = state.selected || { kind: "corridor", folderId: null };
           createFolder(sel.kind, sel.folderId, "New folder");
         };
         toolbar.appendChild(newFolderBtn);
         el.appendChild(toolbar);
       }
-      if (state.roots.path) el.appendChild(renderFolderNode(state.roots.path, "path", 0, KIND.path.label, true));
-      else el.innerHTML = '<div class="gt-empty">no paths yet</div>';
+      if (state.roots.corridor) el.appendChild(renderFolderNode(state.roots.corridor, "corridor", 0, KIND.corridor.label, true));
+      else el.innerHTML = '<div class="gt-empty">no corridors yet</div>';
     }
 
     load().catch(e => { el.innerHTML = '<div class="gt-empty">error: ' + esc(e.message) + "</div>"; });
 
     const tree = {
       refresh(partial) { Object.assign(opts, partial || {}); return load(); },
-      getUploadTarget() { return state.selected || { kind: "path", folderId: null }; },
+      getUploadTarget() { return state.selected || { kind: "corridor", folderId: null }; },
       listFolders(kind) { return allTargets(kind); },
       revealFolder(kind, folderId) { revealFolder(kind, folderId); },
       destroy() { document.removeEventListener("mousedown", onDocMousedown); el.innerHTML = ""; }
@@ -450,5 +456,5 @@
     return tree;
   }
 
-  window.GpxTree = { mount };
+  window.CorridorTree = { mount };
 })();

@@ -25,6 +25,7 @@ geofence-platform/
 │   ├── chatterbox-studio.html ← AI voice-cloning script editor (/chatterbox route) — org-scoped voices via /api/chatterbox/*, generation via Resemble AI
 │   ├── pipeline-editor.html ← Drag-and-drop pipeline canvas (/pipeline route) — per-zone node/edge editor, opened from the Fence Editor
 │   ├── pipeline-runtime.js  ← Shared block registry + local DAG execution engine (window.PipelineRuntime), loaded by geofence-engine.html and fence-editor.html
+│   ├── corridor-tree.js    ← Shared corridor folder/library tree (window.CorridorTree) over the app-scoped `corridor` table; mounted by gpx-editor.html and fence-editor.html's Corridors palette
 │   ├── tile-fog.js          ← Artistic Fog-of-War Tiles shared module (window.TileFog) — H3 reveal state machine + MapLibre hex/corridor rendering, loaded by geofence-engine.html, geofence-sim.html, fence-editor.html's Test Mode, and map-paint.html (revealAll mode)
 │   ├── map-paint.html       ← Map Paint (/paint route) — polygon-region select + tile-palette brush editor for a project's H3 fog-of-war terrain map (terrain_cell); auto-fill reuses the classify-terrain endpoint, hand-paints persist as source='manual'
 │   ├── share.html           ← Shareable project link page
@@ -101,6 +102,8 @@ This file is never committed. In production, secrets are set via `npx wrangler s
 | `weather_cache` | Rolling hourly weather readings from Kicking Horse Resort (last 48) |
 | `snow_history` | Daily 8am MST snow snapshots (last 14 days) |
 | `chatterbox_voice` | Org-scoped Chatterbox Studio voice palette (name + Resemble AI voice UUID) |
+| `corridor` | App-scoped corridor library — a drawn/recorded GPS line (`points_json` `[[lon,lat,ele?],…]`, `width_m NOT NULL DEFAULT 10`, `distance_m`, `elev_gain_m`/`elev_loss_m`, `folder_id`). Consolidated from Path/Walking Path/Corridor (migration `0055`). See **Add-a-stop picker** / **Corridor** notes. |
+| `corridor_folder` | App-scoped folder tree for `corridor` (`parent_id` self-FK) — same shape as `stop_folder`; folder delete moves corridors up to the parent, doesn't destroy them. |
 | `audio_folder` | Real nested folder tree for audio clips (`scope`/`scope_id`/`parent_id`/`name`) — see **Audio Storage** below |
 | `audio_clip` | Audio clip metadata + stable R2 key (`scope`/`scope_id`/`folder_id`/`name`/`r2_key`) — see **Audio Storage** below |
 | `studio_session` | Saved Audio Studio timeline arrangements, living in the same `audio_folder` tree as clips (`folder_id`, `name`, `timeline_json`) — see **Audio Storage** below |
@@ -244,7 +247,11 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 
 **Zone body interaction:** Click any zone to select + fly to it. Drag any zone body to move the entire zone. Click empty map to deselect. **Right-click or double-click a zone** opens a Rename/Copy/Move to…/Delete menu (`openZoneMenu`, same function the stop-tree's "⋯" button uses) positioned at the cursor; double-click-to-zoom is disabled map-wide as a result (MapLibre has no per-layer toggle for it).
 
-**Add-a-stop picker:** the Circle/Polygon/Tripline/Path tools and the Walking Path picker are collapsed behind one "add a stop — pick a shape" button (`#shapePickerBtn`) instead of separate always-visible buttons.
+**Add-a-stop picker:** the Circle/Polygon/Tripline/Corridor tools + "Import GPX as Corridor" are collapsed behind one "add a stop — pick a shape" button (`#shapePickerBtn`) instead of separate always-visible buttons.
+
+**Corridor (consolidated, migration `0055`):** "Path", "Walking Path", and "Corridor" were three overlapping line features; now there is one — a **Corridor**. One draw tool, one library (`corridor`/`corridor_folder` tables, app-scoped, `/api/corridor*`), one tree UI (`corridor-tree.js`, mounted in the `#gpxPalette` "Corridors" palette and in the GPX Editor). A corridor's `shape` is `{type:"corridor", coords, widthM}`; every corridor has a width (`width_m NOT NULL DEFAULT 10`). Two optional behaviors, both toggles in the property panel / palette:
+- **`zone.movingAudio`** — an ambient audio bed travels the line at `speedKmh`/`loopMode` (the former "Path"). When on, `zoneToEngine`/`editorToSimBundle` serialize the zone to the old Path bundle form (top-level `zo.path` + `movementMode`/`speedKmh`/`loopMode`/`ambientAudioUrl` + circle-at-moving-point layers) so the engine's existing `centerNow()` moving-audio path runs unchanged; `engineToZone` detects a top-level `zo.path` and restores `movingAudio`. All 3 mirror functions must keep this in sync (CLAUDE.md's verbatim-mirror rule) — guarded by `tests/fence-editor-corridor-mirror.test.js`.
+- **map-matching** — ticked per corridor in the palette; the active set is `bundle.mapMatchCorridorIds` (was `bundle.walkingPathIds`). The runtime (`geofence-engine.html`/`geofence-sim.html` `loadWalkingPaths`, `WALKING_PATHS`) fetches geometry from public `GET /api/corridor/:id`. `zone.snapCorridorId` (was `zone.onPathId`) is editor-only glue linking a circle stop's drag-slide to a specific corridor. Runtime identifiers keep the historical `walkingPath*`/`WALKING_PATHS` names deliberately (internal, triple-mirrored). The pipeline block type string `data.walking_path_progress` is unchanged (published-bundle value); its label is "Corridor Progress".
 
 **Stop list:** the search box, Bulk-assign/Move… controls, and the stop-folder tree are collapsed behind a "stops (n) — click to edit" toggle button (`#stopsToggleBtn`/`#stopsBody`).
 
@@ -282,6 +289,10 @@ Each handle shows a floating label on hover that updates live while dragging (e.
 | GET/POST | `/api/consent` | public |
 | POST | `/api/events` | public (requires stored `store-history` consent) |
 | GET | `/api/analytics` | scoped (`analytics`) |
+| GET/POST | `/api/corridor` | GET requires `?appId=` (omits `points_json`); POST creates. Both scoped (`audio` or `publish`) on the app + same-org. |
+| GET/PATCH/DELETE | `/api/corridor/:id` | GET **public** (live engine map-match fetch, returns full `points`); PATCH/DELETE scoped (`audio`/`publish`) on the row's app. |
+| GET/POST | `/api/corridor-folder` | GET requires `?appId=`; POST creates. Scoped (`audio`/`publish`) on the app. |
+| PATCH/DELETE | `/api/corridor-folder/:id` | scoped (`audio`/`publish`) on the row's app; rename/reparent (cycle-checked) / subtree-delete (corridors moved up to parent). |
 | GET | `/api/audio/tree` | requires `?project=[&org=]` or `?scope=library&org=`; scoped (`audio`/`publish`) + same-org; returns the D1-backed folder+clip tree |
 | POST | `/api/audio-folder` | scoped (`audio` or `publish`) + same scope/org; create |
 | PATCH/DELETE | `/api/audio-folder/:id` | scoped + same scope/org; rename/reparent (same-scope only) / cascade-delete |
