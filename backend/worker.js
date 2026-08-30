@@ -1945,6 +1945,15 @@ async function api(request, env, url) {
     await env.DB.prepare("DELETE FROM api_key WHERE appId=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM corridor WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM corridor_folder WHERE app_id=?").bind(aid).run();
+    // Ridge Quest players are app-scoped — clean them (+ their child rows,
+    // same set as POST /api/players/:id/forget) or a deleted workspace
+    // leaves orphan player_account rows, and a stale google_sub then blocks
+    // that person signing up anywhere else.
+    for (const t of ["player_session", "quest_run", "player_fog_cell", "player_day_stats", "player_day_activity_stats"]) {
+      await env.DB.prepare(`DELETE FROM ${t} WHERE player_id IN (SELECT id FROM player_account WHERE app_id=?)`).bind(aid).run().catch(() => {});
+    }
+    await env.DB.prepare("DELETE FROM consent WHERE playerId IN (SELECT id FROM player_account WHERE app_id=?)").bind(aid).run().catch(() => {});
+    await env.DB.prepare("DELETE FROM player_account WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.delete", aid);
     return json({ ok: true, deleted: aid }, 200, AC);
