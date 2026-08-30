@@ -4153,6 +4153,10 @@ async function toggleWalkingPath(id,active){
     if(affected.length){ affected.forEach(z=>z.snapCorridorId=null); }
   }
   if(typeof PipelineRuntime!=="undefined") PipelineRuntime.setPathProgress(null);
+  // If Test Mode is open and idle, drop the current walk route so the next
+  // Walk rebuilds it against the just-changed map-match set (buildSimStopsPath
+  // only runs when simPath is empty).
+  if(simMode && !simPlaying) simPath=[];
   renderWalkingPathLine(); updateWalkingPathBtnLabel(); autoSave();
 }
 // Bulk restore (project load / import) — fetches every id in parallel but
@@ -6639,6 +6643,11 @@ function enterTestMode(){
   // instead of silently resuming a stale simulated walk.
   if(typeof TourState!=='undefined') TourState.init(afProjectId(), simBundle.zones.length, {ns:"sim", forceReset:true});
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
+  // Rebuild the walk route every entry — buildSimStopsPath() is only called
+  // when simPath is empty, so a leftover route from a prior test session
+  // (e.g. a stop-to-stop line built before a map-match corridor was ticked)
+  // would otherwise stick and the walk would ignore the corridor.
+  simPath=[]; simDist=0; simDir=1;
   // unlock AudioContext now while we're inside the button click gesture
   SimVoice.ensure();
   if(SimVoice.ctx.state==="suspended") SimVoice.ctx.resume();
