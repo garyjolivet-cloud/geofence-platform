@@ -19,11 +19,6 @@
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
-<!-- Shared artistic-corridor-ribbon renderer. On "My map" it's used ONLY in
-     revealAll mode to draw every run's activity graphic when fog-of-war AND
-     tile art are both off for the project; setCells() is never called here,
-     so no hex terrain art is drawn. -->
-<script src="/tile-fog.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -641,12 +636,10 @@ const Quest = {
       // GET /bundle handler). null = every activity allowed (backward
       // compat default, matches every project that predates this filter).
       this.allowedActivities = bundle.questActivities || null;
-      // Both injected server-side into the bundle at read time (worker.js's
-      // GET /bundle handler) — used by "My map" to decide whether to draw
-      // the run graphics (only when fog AND tile art are both off) and which
-      // season's ribbon textures to load.
+      // Injected server-side into the bundle at read time (worker.js's
+      // GET /bundle handler) — "My map" draws the all-runs overlay only when
+      // fog AND tile art are both off for the project.
       this.tileArtEnabled = !!bundle.tileArtEnabled;
-      this.season = bundle.season || null;
       this.corridors = (bundle.zones||[]).map(z=>{
         const target = (z.layers||[]).find(l=>l.kind==="target" && l.geometry && l.geometry.type==="corridor");
         if(!target) return null;
@@ -654,8 +647,8 @@ const Quest = {
         let lengthM=0;
         for(let i=1;i<path.length;i++) lengthM += QGeo.haversineM(path[i-1], path[i]);
         return { zoneId:z.id, name:z.name||"Run", difficulty:z.difficulty||null, runType:z.runType||"run",
-                 // activityType (hike/bike/xcountry/ski_chute/walking_city) picks the
-                 // tile-fog ribbon texture on the fog-off map. Authored in the Fence
+                 // activityType (hike/bike/xcountry/ski_chute/walking_city) sets the
+                 // dash pattern on the fog-off "all runs" map. Authored in the Fence
                  // Editor; unused by scoring.
                  activityType:z.activityType||null,
                  widthM:target.geometry.widthM||10, path, lengthM, ref };
@@ -1336,55 +1329,63 @@ function questMapBounds(){
   return [[minLon,minLat],[maxLon,maxLat]];
 }
 
-// "Show all runs" layer for the fog-off + tile-art-off "My map". Two parts:
-//  1) runLines — a plain colour-by-difficulty line (with a white casing so
-//     it reads on satellite imagery) for EVERY corridor. Always drawn, so a
-//     run is never invisible, and it carries the props the tap-popup needs.
-//  2) tile-fog's activity ribbon graphic on top, in revealAll mode (draws
-//     the whole ribbon, not just walked-over bits). setCells() is never
-//     called, so no hex terrain art appears.
+// "Show all runs" overlay for the fog-off + tile-art-off "My map": every
+// corridor drawn as a clean trail-map line — thin dark casing so it reads
+// on satellite imagery, colour by difficulty, dash pattern by activity so a
+// skier can tell downhill / XC / bike / hike / lift apart. Tap for details.
+// (The tile-art activity RIBBON graphic isn't used here — at this map's
+// zoomed-out framing it tiles into beads and its casing blobs on a
+// self-crossing recorded track; a plain line is the readable trail-map fit.)
 const RUN_DIFF_COLOR = ["match",["get","difficulty"],
-  "green","#4caf50", "blue","#2b7fff", "black","#111111", "double-black","#111111",
-  /* default */ "#d0d0d0"];
-function runTypeToActivity(rt){ return rt === "hike" ? "hike" : "ski_chute"; }
-async function drawAllRuns(map){
+  "green","#3ea54a", "blue","#2b7fff", "black","#0b0b0b", "double-black","#0b0b0b",
+  /* default (no difficulty set) */ "#e8b23a"];
+// activityType is hike/bike/xcountry/ski_chute/walking_city; also fall back
+// to runType==="lift". Each non-downhill activity gets its own thin dashed
+// overlay layer (line-dasharray can't be data-driven in one layer).
+const RUN_ACTIVITY_DASH = [
+  { id:"xc",   test:["==",["get","activityType"],"xcountry"],        dash:[2,2] },
+  { id:"bike", test:["==",["get","activityType"],"bike"],            dash:[1,1.6] },
+  { id:"hike", test:["any",["==",["get","activityType"],"hike"],["==",["get","runType"],"hike"]], dash:[0.4,1.6] },
+  { id:"walk", test:["==",["get","activityType"],"walking_city"],    dash:[0.4,1.6] },
+  { id:"lift", test:["==",["get","runType"],"lift"],                 dash:[0.2,2.4] }
+];
+function drawAllRuns(map){
   const cors = Quest.corridors || [];
   if(!cors.length) return;
   const fc = { type:"FeatureCollection", features: cors.map(c=>({
     type:"Feature",
-    properties:{ name:c.name, difficulty:c.difficulty||"", runType:c.runType||"run", lengthM:Math.round(c.lengthM||0) },
+    properties:{ name:c.name, difficulty:c.difficulty||"", runType:c.runType||"run",
+                 activityType:c.activityType||"", lengthM:Math.round(c.lengthM||0) },
     geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
   })) };
   map.addSource("runLines", { type:"geojson", data: fc });
+  // Opaque casing (not semi-transparent) so a self-crossing track doesn't
+  // compound into a white blob.
   map.addLayer({ id:"runLines-casing", type:"line", source:"runLines",
     layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":"#ffffff","line-opacity":0.55,"line-width":6 } });
+    paint:{ "line-color":"#0a1018","line-opacity":0.65,"line-width":4 } });
   map.addLayer({ id:"runLines-line", type:"line", source:"runLines",
     layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":RUN_DIFF_COLOR,"line-opacity":0.9,"line-width":3 } });
+    paint:{ "line-color":RUN_DIFF_COLOR,"line-width":2 } });
+  // Dashed activity overlay — a light stipple on top of the difficulty line.
+  RUN_ACTIVITY_DASH.forEach(a=>{
+    map.addLayer({ id:"runLines-"+a.id, type:"line", source:"runLines", filter:a.test,
+      layout:{ "line-cap":"butt","line-join":"round" },
+      paint:{ "line-color":"#f4f8ff","line-width":1.4,"line-opacity":0.9,"line-dasharray":a.dash } });
+  });
   // Tap a run -> name / difficulty / length.
   map.on("click","runLines-line",e=>{
     const p = e.features && e.features[0] && e.features[0].properties; if(!p) return;
+    const act = p.activityType || (p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
     new maplibregl.Popup({ closeButton:true, offset:8 })
       .setLngLat(e.lngLat)
       .setHTML('<div style="font:600 13px/1.35 system-ui,sans-serif;color:#0a1018">'+
         esc(p.name)+'</div><div style="font:12px system-ui,sans-serif;color:#5b7088">'+
-        (p.difficulty?esc(p.difficulty)+' · ':'')+p.lengthM+' m</div>')
+        [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
       .addTo(map);
   });
   map.on("mouseenter","runLines-line",()=>{ map.getCanvas().style.cursor="pointer"; });
   map.on("mouseleave","runLines-line",()=>{ map.getCanvas().style.cursor=""; });
-  // Activity ribbon graphic on top (best-effort — missing season textures
-  // just leave the plain runLines-line showing).
-  try{
-    if(typeof TileFog === "undefined") return;
-    await TileFog.load({ projectId: RQ_PROJECT_ID, deviceId: null, season: Quest.season, revealAll: true });
-    await TileFog.attachToMap(map, { revealAll: true });
-    TileFog.renderCorridors(cors.map(c=>({
-      coords:(c.path||[]).map(p=>[p[1],p[0]]),
-      activityType: c.activityType || runTypeToActivity(c.runType)
-    })));
-  }catch(e){ /* ribbon is optional; runLines-line already drew every run */ }
 }
 
 function renderFogMap(){
@@ -1433,7 +1434,7 @@ function renderFogMap(){
       const src = map.getSource("fog");
       if(src) src.setData(fogFeatureCollection());
     }
-    map.on("load", async ()=>{
+    map.on("load", ()=>{
       // R5 — admin-gated: fogFeatureCollection()/shroudFeatureCollection()
       // stay pure/untouched either way (Quest.fogCells itself is never
       // gated — only whether it gets DRAWN here is).
