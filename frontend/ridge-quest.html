@@ -88,6 +88,14 @@
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+  /* "show all runs" overlay (fog + tile art both off) */
+  .runLabel{font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
+    letter-spacing:.02em;white-space:nowrap;pointer-events:none;
+    text-shadow:0 0 2px #0c140f,0 0 2px #0c140f,0 1px 3px #0c140f}
+  .runDiamond{display:flex;gap:2px;pointer-events:none}
+  .runDiamond i{width:9px;height:9px;background:#111;border:1.4px solid #eef3f0;
+    transform:rotate(45deg);display:block}
+  .runDiamond.dbl i{border-color:#e5484d}
 </style>
 </head>
 <body>
@@ -1336,45 +1344,86 @@ function questMapBounds(){
 // (The tile-art activity RIBBON graphic isn't used here — at this map's
 // zoomed-out framing it tiles into beads and its casing blobs on a
 // self-crossing recorded track; a plain line is the readable trail-map fit.)
-const RUN_DIFF_COLOR = ["match",["get","difficulty"],
-  "green","#3ea54a", "blue","#2b7fff", "black","#0b0b0b", "double-black","#0b0b0b",
-  /* default (no difficulty set) */ "#e8b23a"];
-// activityType is hike/bike/xcountry/ski_chute/walking_city; also fall back
-// to runType==="lift". Each non-downhill activity gets its own thin dashed
-// overlay layer (line-dasharray can't be data-driven in one layer).
-const RUN_ACTIVITY_DASH = [
-  { id:"xc",   test:["==",["get","activityType"],"xcountry"],        dash:[2,2] },
-  { id:"bike", test:["==",["get","activityType"],"bike"],            dash:[1,1.6] },
-  { id:"hike", test:["any",["==",["get","activityType"],"hike"],["==",["get","runType"],"hike"]], dash:[0.4,1.6] },
-  { id:"walk", test:["==",["get","activityType"],"walking_city"],    dash:[0.4,1.6] },
-  { id:"lift", test:["==",["get","runType"],"lift"],                 dash:[0.2,2.4] }
-];
+// "Piste glow" run styling. Downhill runs colour by ski difficulty (black /
+// double-black get a graphite core + steel/rose halo and a ◆/◆◆ badge at
+// the top); the other trail types (XC ski / bike / hike / city walk / lift)
+// get their own hue + dash rhythm. line-dasharray isn't data-driven, so the
+// dashed cores are separate filtered layers keyed on a `dash` feature prop.
+const RUN_STYLE_DIFF = {
+  "green":        { col:"#3fae52", halo:"#3fae52", tier:"" },
+  "blue":         { col:"#3b82f6", halo:"#3b82f6", tier:"" },
+  "black":        { col:"#e9eef0", halo:"#8fa6ae", tier:"black" },
+  "double-black": { col:"#e9eef0", halo:"#c07a80", tier:"dblack" },
+  "":             { col:"#e8b23a", halo:"#e8b23a", tier:"" }   // no difficulty set
+};
+const RUN_STYLE_ACT = {
+  "xcountry":     { col:"#b18cff", halo:"#b18cff", dash:"xc" },
+  "bike":         { col:"#e0873a", halo:"#e0873a", dash:"bike" },
+  "walking_city": { col:"#8fb0c9", halo:"#8fb0c9", dash:"foot" },
+  "hike":         { col:"#86b15c", halo:"#86b15c", dash:"foot" }
+};
+const RUN_DASH = { "xc":[7,5], "bike":[2.5,3.5], "foot":[1,3.4], "lift":[0.4,2.4] };
+function runStyleFor(c){
+  const act = c.activityType || (c.runType === "hike" ? "hike" : "");
+  if(RUN_STYLE_ACT[act]){ const s = RUN_STYLE_ACT[act]; return { col:s.col, halo:s.halo, dash:s.dash, tier:"" }; }
+  if(c.runType === "lift") return { col:"#9fb0a8", halo:"#9fb0a8", dash:"lift", tier:"" };
+  const s = RUN_STYLE_DIFF[c.difficulty || ""] || RUN_STYLE_DIFF[""];
+  return { col:s.col, halo:s.halo, dash:"", tier:s.tier };
+}
 function drawAllRuns(map){
   const cors = Quest.corridors || [];
   if(!cors.length) return;
-  const fc = { type:"FeatureCollection", features: cors.map(c=>({
-    type:"Feature",
-    properties:{ name:c.name, difficulty:c.difficulty||"", runType:c.runType||"run",
-                 activityType:c.activityType||"", lengthM:Math.round(c.lengthM||0) },
-    geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
-  })) };
-  map.addSource("runLines", { type:"geojson", data: fc });
-  // Opaque casing (not semi-transparent) so a self-crossing track doesn't
-  // compound into a white blob.
+  const feats = cors.map(c=>{
+    const st = runStyleFor(c);
+    return {
+      type:"Feature",
+      properties:{ name:c.name||"Run", difficulty:c.difficulty||"", activityType:c.activityType||"",
+                   runType:c.runType||"run", lengthM:Math.round(c.lengthM||0),
+                   col:st.col, halo:st.halo, dash:st.dash, tier:st.tier },
+      geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
+    };
+  });
+  map.addSource("runLines", { type:"geojson", data:{ type:"FeatureCollection", features:feats } });
+  map.addLayer({ id:"runLines-halo", type:"line", source:"runLines",
+    layout:{ "line-cap":"round","line-join":"round" },
+    paint:{ "line-color":["get","halo"], "line-width":9, "line-blur":4, "line-opacity":0.42 } });
   map.addLayer({ id:"runLines-casing", type:"line", source:"runLines",
     layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":"#0a1018","line-opacity":0.65,"line-width":4 } });
-  map.addLayer({ id:"runLines-line", type:"line", source:"runLines",
+    paint:{ "line-color":"#0a1018", "line-opacity":0.55, "line-width":4.5 } });
+  map.addLayer({ id:"runLines-core", type:"line", source:"runLines", filter:["==",["get","dash"],""],
     layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":RUN_DIFF_COLOR,"line-width":2 } });
-  // Dashed activity overlay — a light stipple on top of the difficulty line.
-  RUN_ACTIVITY_DASH.forEach(a=>{
-    map.addLayer({ id:"runLines-"+a.id, type:"line", source:"runLines", filter:a.test,
+    paint:{ "line-color":["get","col"], "line-width":2.4 } });
+  Object.keys(RUN_DASH).forEach(k=>{
+    map.addLayer({ id:"runLines-core-"+k, type:"line", source:"runLines", filter:["==",["get","dash"],k],
       layout:{ "line-cap":"butt","line-join":"round" },
-      paint:{ "line-color":"#f4f8ff","line-width":1.4,"line-opacity":0.9,"line-dasharray":a.dash } });
+      paint:{ "line-color":["get","col"], "line-width":2.4, "line-dasharray":RUN_DASH[k] } });
   });
-  // Tap a run -> name / difficulty / length.
-  map.on("click","runLines-line",e=>{
+  map.addLayer({ id:"runLines-hot", type:"line", source:"runLines", filter:["==",["get","tier"],"dblack"],
+    layout:{ "line-cap":"round" },
+    paint:{ "line-color":"#e5484d", "line-width":1.2 } });
+  // Invisible fat hit target for the tap popup (covers every core variant).
+  map.addLayer({ id:"runLines-hit", type:"line", source:"runLines",
+    paint:{ "line-color":"#000", "line-opacity":0, "line-width":14 } });
+
+  // Name label at each run's midpoint + a ◆/◆◆ badge at the top of black /
+  // double-black runs — HTML markers so this needs no glyphs source and
+  // renders identically in Fence-Editor Test Mode.
+  cors.forEach(c=>{
+    const path = c.path || [];
+    if(path.length < 2) return;
+    const mid = path[Math.floor(path.length/2)];
+    const lbl = document.createElement("div"); lbl.className = "runLabel"; lbl.textContent = c.name || "Run";
+    new maplibregl.Marker({ element:lbl, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map);
+    const tier = runStyleFor(c).tier;
+    if(tier){
+      const b = document.createElement("div");
+      b.className = "runDiamond" + (tier === "dblack" ? " dbl" : "");
+      b.innerHTML = tier === "dblack" ? "<i></i><i></i>" : "<i></i>";
+      new maplibregl.Marker({ element:b, anchor:"bottom", offset:[0,-4] }).setLngLat([path[0][1], path[0][0]]).addTo(map);
+    }
+  });
+
+  map.on("click","runLines-hit",e=>{
     const p = e.features && e.features[0] && e.features[0].properties; if(!p) return;
     const act = p.activityType || (p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
     new maplibregl.Popup({ closeButton:true, offset:8 })
@@ -1384,8 +1433,8 @@ function drawAllRuns(map){
         [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
       .addTo(map);
   });
-  map.on("mouseenter","runLines-line",()=>{ map.getCanvas().style.cursor="pointer"; });
-  map.on("mouseleave","runLines-line",()=>{ map.getCanvas().style.cursor=""; });
+  map.on("mouseenter","runLines-hit",()=>{ map.getCanvas().style.cursor="pointer"; });
+  map.on("mouseleave","runLines-hit",()=>{ map.getCanvas().style.cursor=""; });
 }
 
 function renderFogMap(){

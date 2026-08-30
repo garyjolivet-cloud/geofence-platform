@@ -370,6 +370,10 @@
   @keyframes micpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,106,61,.4)}50%{box-shadow:0 0 0 8px rgba(255,106,61,0)}}
   .av-dot{width:16px;height:16px;border-radius:50%;background:var(--coral);border:2px solid #fff;
           box-shadow:0 0 0 5px rgba(255,106,61,.25);cursor:grab}
+  /* Test Mode corridor name label — matches the live Ridge Quest run map */
+  .runLabel{font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
+            letter-spacing:.02em;white-space:nowrap;pointer-events:none;
+            text-shadow:0 0 2px #0c140f,0 0 2px #0c140f,0 1px 3px #0c140f}
   /* map drag handles */
   .map-handle{width:14px;height:14px;border-radius:50%;border:2px solid #fff;cursor:grab;
               box-shadow:0 0 0 3px rgba(0,0,0,.55);transition:transform .1s;position:relative}
@@ -6111,6 +6115,23 @@ const SimAmbient={
 let simMode=false, simAvatar=null, simBundle=null, simPrev=null, simPrevRaw=null;
 let simPath=[], simPlaying=false, simDist=0, simTimer=null, simDir=1; // simDir: 1 = forward along simPath, -1 = backward
 let simAmbientMarkers={}, simAmbientTimer=null;
+// Test Mode: one HTML name label per corridor zone, at its midpoint — same
+// look as the live Ridge Quest run map (.runLabel CSS), so an author sees
+// the name where it'll appear on the walk.
+let simCorridorLabels=[];
+function clearSimCorridorLabels(){ simCorridorLabels.forEach(m=>m.remove()); simCorridorLabels=[]; }
+function refreshSimCorridorLabels(){
+  clearSimCorridorLabels();
+  if(!simMode || !simBundle) return;
+  (simBundle.zones||[]).forEach(z=>{
+    const tgt=(z.layers||[]).find(l=>l.geometry && l.geometry.type==="corridor");
+    const path=tgt && tgt.geometry.path;
+    if(!Array.isArray(path) || path.length<2) return;
+    const mid=path[Math.floor(path.length/2)]; // [lat,lon]
+    const el=document.createElement("div"); el.className="runLabel"; el.textContent=z.name||"Run";
+    simCorridorLabels.push(new maplibregl.Marker({element:el,anchor:"center"}).setLngLat([mid[1],mid[0]]).addTo(map));
+  });
+}
 
 // Live marker for each path (moving ambient) stop's current position —
 // redrawn on its own timer (below) independent of the visitor, since a path
@@ -6726,6 +6747,7 @@ function enterTestMode(){
   refreshArPreview();
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   _arNearState={}; // everything just got forced hidden above — forget any stale near/far state so the first tick re-evaluates cleanly
+  refreshSimCorridorLabels();
   refreshSimChips();
   simLogEv("sev-sys","test loaded — "+simBundle.zones.length+" stop"+(simBundle.zones.length===1?"":"s")
     +" — click map or drag dot.");
@@ -6740,6 +6762,7 @@ function exitTestMode(){
   if(simAmbientTimer){clearInterval(simAmbientTimer);simAmbientTimer=null;}
   Object.values(simAmbientMarkers).forEach(mk=>mk.remove());
   simAmbientMarkers={};
+  clearSimCorridorLabels();
   if(simAvatar){simAvatar.remove();simAvatar=null;}
   render();
   // Phase 3: back to normal editing — force every AR object back to full
