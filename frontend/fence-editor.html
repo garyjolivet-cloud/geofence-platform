@@ -1109,6 +1109,10 @@
     <option value="90">90 days</option>
   </select>
   <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
+  <label style="margin-top:2px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ice);cursor:pointer" title="List this tour in the public Ridge Quest map picker (/quest). The workspace must ALSO have Ridge Quest enabled — Homepage → ⚙ next to the client → Workspace settings. Applies immediately, not part of Publish.">
+    <input type="checkbox" id="pQuestPublic" style="width:auto;flex:0 0 auto"> 🎿 list this tour in Ridge Quest
+  </label>
+  <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
   <label class="k" style="margin-top:2px" title="Only used when a corridor/path cell has no OpenStreetMap tag match and elevation/slope is inconclusive — a single project-wide default, not per-cell painting.">🗺️ artistic map — terrain biome (fallback default)</label>
   <select id="terrainBiome">
     <option value="">— generic (meadow) —</option>
@@ -3391,6 +3395,36 @@ document.getElementById("recordRetentionDays")?.addEventListener("change",async(
     });
     if(!r.ok){ const e=await r.json().catch(()=>({})); alert("couldn't save retention: "+(e.error||r.status)); }
   }catch(e){ alert("couldn't save retention: "+e.message); }
+});
+
+// Ridge Quest public listing (#pQuestPublic) — per-project half of the
+// two-level opt-in (app.quest_enabled is the other half, set on the
+// homepage). Same load-fresh-on-popover-open + PATCH-immediately pattern as
+// loadRecordRetention() above; project.questPublic is returned by
+// GET /api/projects, written by PATCH /api/projects/:id.
+async function loadQuestPublic(){
+  const cb=document.getElementById("pQuestPublic"); if(!cb) return;
+  const pid=afProjectId(); if(!pid){ cb.checked=false; return; }
+  try{
+    const r=await fetch("/api/projects?org="+encodeURIComponent(afOrgId()||""),{headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok) return;
+    const j=await r.json();
+    const proj=(j.projects||[]).find(p=>p.id===pid);
+    cb.checked=!!(proj&&proj.questPublic);
+  }catch(e){}
+}
+document.getElementById("pQuestPublic")?.addEventListener("change",async()=>{
+  const cb=document.getElementById("pQuestPublic");
+  const pid=afProjectId();
+  if(!pid){ alert("Save/publish this tour first."); cb.checked=false; return; }
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid),{
+      method:"PATCH",
+      headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({questPublic:cb.checked})
+    });
+    if(!r.ok){ const e=await r.json().catch(()=>({})); alert("couldn't save: "+(e.error||r.status)); cb.checked=!cb.checked; }
+  }catch(e){ alert("couldn't save: "+e.message); cb.checked=!cb.checked; }
 });
 
 // Artistic Fog-of-War Tiles Phase C — terrain biome (project-level
@@ -6980,7 +7014,7 @@ if(window.TopNav){
       pop.style.display="";
       popoverEl.appendChild(pop);
     },
-    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); loadTerrainBiome(); },
+    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); loadQuestPublic(); loadTerrainBiome(); },
     // Real gap found via live testing, 2026-08-12: creating a project via
     // the picker while already sitting on a bare /editor correctly unlocked
     // the nav buttons but left THIS page's own "no project selected" hint
