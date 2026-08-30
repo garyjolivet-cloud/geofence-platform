@@ -3616,12 +3616,14 @@ function codeObjectsHome(){
 // into their final positions for this pass.
 function dockCollapsedRow(){
   const mp=document.getElementById("mainPanel");
-  const coFloat=document.querySelector(".co-float");
-  const coRect=coFloat?coFloat.getBoundingClientRect():document.getElementById("audioPalette").getBoundingClientRect();
   const navH=navBarHeight();
   if(mp.classList.contains("mini")){
-    mp.style.left="auto";
-    mp.style.right=(Math.round(window.innerWidth-coRect.left)+10)+"px";
+    // Plain top-left dock, left/top only — never right-anchored. A prior
+    // version pinned the mini strip's RIGHT edge to another panel; once the
+    // drag handler then set `left`, the panel had both edges pinned and
+    // "moving" it just stretched its width instead.
+    mp.style.right="auto"; mp.style.bottom="auto";
+    mp.style.left="10px";
     mp.style.top=(navH+10)+"px";
   }
   const base=document.querySelector(".base");
@@ -3765,6 +3767,10 @@ document.getElementById("audioPaletteMin").onclick=e=>{
     // Don't drag when clicking the collapse button.
     if(e.target.closest("button")) return;
     const rect=pnl.getBoundingClientRect();
+    // Un-pin the right/bottom edges before switching to left/top control —
+    // otherwise a panel that was right-anchored (e.g. the mini strip) ends
+    // up pinned on both sides and "dragging" just stretches its width.
+    pnl.style.right="auto"; pnl.style.bottom="auto";
     pnl.style.left=rect.left+"px"; pnl.style.top=rect.top+"px";
     const startX=e.clientX, startY=e.clientY, startLeft=rect.left, startTop=rect.top;
     const onMove=me=>{
