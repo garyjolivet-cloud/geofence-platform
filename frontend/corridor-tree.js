@@ -49,7 +49,7 @@
       .gt-row.selected{background:rgba(255,106,61,.15)}
       .gt-row.dragover{background:rgba(255,106,61,.22);outline:1px dashed var(--coral,#ff6a3d)}
       .gt-chevron{width:14px;flex:0 0 14px;text-align:center;color:var(--fog,#8aa5bf);font-size:10px}
-      .gt-check{flex:0 0 auto;margin:0 2px 0 0}
+      .gt-check{flex:0 0 auto;width:auto;height:auto;margin:0 4px 0 0;accent-color:var(--coral,#ff6a3d)}
       .gt-icon{flex:0 0 auto}
       .gt-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .gt-name input{width:100%;box-sizing:border-box}
@@ -350,6 +350,11 @@
       if (opts.selectable) {
         const chk = document.createElement("input");
         chk.type = "checkbox"; chk.className = "gt-check";
+        // Inline width:auto is deliberate, not just the .gt-check rule: a
+        // host page (fence-editor.html) has a global `input{width:100%}`
+        // that otherwise stretches this checkbox to fill the row and shoves
+        // the icon/name/meta off-screen. Inline beats that stylesheet rule.
+        chk.style.cssText = "width:auto;height:auto;flex:0 0 auto;margin:0 4px 0 0;accent-color:var(--coral,#ff6a3d)";
         chk.checked = opts.isSelected ? !!opts.isSelected(item) : false;
         chk.title = "Use this corridor for map-matching";
         chk.onclick = e => e.stopPropagation();
