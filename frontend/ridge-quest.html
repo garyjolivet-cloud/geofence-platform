@@ -19,6 +19,11 @@
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<!-- Shared artistic-corridor-ribbon renderer. On "My map" it's used ONLY in
+     revealAll mode to draw every run's activity graphic when fog-of-war AND
+     tile art are both off for the project; setCells() is never called here,
+     so no hex terrain art is drawn. -->
+<script src="/tile-fog.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -636,6 +641,12 @@ const Quest = {
       // GET /bundle handler). null = every activity allowed (backward
       // compat default, matches every project that predates this filter).
       this.allowedActivities = bundle.questActivities || null;
+      // Both injected server-side into the bundle at read time (worker.js's
+      // GET /bundle handler) — used by "My map" to decide whether to draw
+      // the run graphics (only when fog AND tile art are both off) and which
+      // season's ribbon textures to load.
+      this.tileArtEnabled = !!bundle.tileArtEnabled;
+      this.season = bundle.season || null;
       this.corridors = (bundle.zones||[]).map(z=>{
         const target = (z.layers||[]).find(l=>l.kind==="target" && l.geometry && l.geometry.type==="corridor");
         if(!target) return null;
@@ -643,6 +654,10 @@ const Quest = {
         let lengthM=0;
         for(let i=1;i<path.length;i++) lengthM += QGeo.haversineM(path[i-1], path[i]);
         return { zoneId:z.id, name:z.name||"Run", difficulty:z.difficulty||null, runType:z.runType||"run",
+                 // activityType (hike/bike/xcountry/ski_chute/walking_city) picks the
+                 // tile-fog ribbon texture on the fog-off map. Authored in the Fence
+                 // Editor; unused by scoring.
+                 activityType:z.activityType||null,
                  widthM:target.geometry.widthM||10, path, lengthM, ref };
       }).filter(Boolean);
       // R4 — Viewpoint zones: a plain circle stop flagged isViewpoint, with
@@ -1320,6 +1335,58 @@ function questMapBounds(){
   });
   return [[minLon,minLat],[maxLon,maxLat]];
 }
+
+// "Show all runs" layer for the fog-off + tile-art-off "My map". Two parts:
+//  1) runLines — a plain colour-by-difficulty line (with a white casing so
+//     it reads on satellite imagery) for EVERY corridor. Always drawn, so a
+//     run is never invisible, and it carries the props the tap-popup needs.
+//  2) tile-fog's activity ribbon graphic on top, in revealAll mode (draws
+//     the whole ribbon, not just walked-over bits). setCells() is never
+//     called, so no hex terrain art appears.
+const RUN_DIFF_COLOR = ["match",["get","difficulty"],
+  "green","#4caf50", "blue","#2b7fff", "black","#111111", "double-black","#111111",
+  /* default */ "#d0d0d0"];
+function runTypeToActivity(rt){ return rt === "hike" ? "hike" : "ski_chute"; }
+async function drawAllRuns(map){
+  const cors = Quest.corridors || [];
+  if(!cors.length) return;
+  const fc = { type:"FeatureCollection", features: cors.map(c=>({
+    type:"Feature",
+    properties:{ name:c.name, difficulty:c.difficulty||"", runType:c.runType||"run", lengthM:Math.round(c.lengthM||0) },
+    geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
+  })) };
+  map.addSource("runLines", { type:"geojson", data: fc });
+  map.addLayer({ id:"runLines-casing", type:"line", source:"runLines",
+    layout:{ "line-cap":"round","line-join":"round" },
+    paint:{ "line-color":"#ffffff","line-opacity":0.55,"line-width":6 } });
+  map.addLayer({ id:"runLines-line", type:"line", source:"runLines",
+    layout:{ "line-cap":"round","line-join":"round" },
+    paint:{ "line-color":RUN_DIFF_COLOR,"line-opacity":0.9,"line-width":3 } });
+  // Tap a run -> name / difficulty / length.
+  map.on("click","runLines-line",e=>{
+    const p = e.features && e.features[0] && e.features[0].properties; if(!p) return;
+    new maplibregl.Popup({ closeButton:true, offset:8 })
+      .setLngLat(e.lngLat)
+      .setHTML('<div style="font:600 13px/1.35 system-ui,sans-serif;color:#0a1018">'+
+        esc(p.name)+'</div><div style="font:12px system-ui,sans-serif;color:#5b7088">'+
+        (p.difficulty?esc(p.difficulty)+' · ':'')+p.lengthM+' m</div>')
+      .addTo(map);
+  });
+  map.on("mouseenter","runLines-line",()=>{ map.getCanvas().style.cursor="pointer"; });
+  map.on("mouseleave","runLines-line",()=>{ map.getCanvas().style.cursor=""; });
+  // Activity ribbon graphic on top (best-effort — missing season textures
+  // just leave the plain runLines-line showing).
+  try{
+    if(typeof TileFog === "undefined") return;
+    await TileFog.load({ projectId: RQ_PROJECT_ID, deviceId: null, season: Quest.season, revealAll: true });
+    await TileFog.attachToMap(map, { revealAll: true });
+    TileFog.renderCorridors(cors.map(c=>({
+      coords:(c.path||[]).map(p=>[p[1],p[0]]),
+      activityType: c.activityType || runTypeToActivity(c.runType)
+    })));
+  }catch(e){ /* ribbon is optional; runLines-line already drew every run */ }
+}
+
 function renderFogMap(){
   if(!Quest.ref){
     app.innerHTML =
@@ -1366,12 +1433,18 @@ function renderFogMap(){
       const src = map.getSource("fog");
       if(src) src.setData(fogFeatureCollection());
     }
-    map.on("load", ()=>{
+    map.on("load", async ()=>{
       // R5 — admin-gated: fogFeatureCollection()/shroudFeatureCollection()
       // stay pure/untouched either way (Quest.fogCells itself is never
-      // gated — only whether it gets DRAWN here is). When off, this whole
-      // block is simply skipped: just the plain satellite basemap shows.
-      if(!RQ_FOG_ENABLED) return;
+      // gated — only whether it gets DRAWN here is).
+      if(!RQ_FOG_ENABLED){
+        // Fog off: if tile art is ALSO off for this project, draw every run
+        // as a labelled line + its activity ribbon graphic so the skier can
+        // see the whole network. If tile art is on, leave the bare
+        // satellite basemap (that path renders its own thing elsewhere).
+        if(!Quest.tileArtEnabled) drawAllRuns(map);
+        return;
+      }
       // Shroud goes in FIRST (and its layer added first) so it paints
       // underneath the colored fog-fill/fog-line layers below.
       map.addSource("shroud", { type:"geojson", data: shroudFeatureCollection() });

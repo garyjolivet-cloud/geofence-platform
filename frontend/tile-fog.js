@@ -354,7 +354,10 @@ function buildRevealedCorridorFeatures(){
     const dense = densifyLine(c.coords, REVEAL_SAMPLE_INTERVAL_M);
     let seg = null;
     dense.forEach(pt => {
-      const revealed = isRevealed(h3.latLngToCell(pt[1], pt[0], RESOLUTION));
+      // revealAll (Map Paint, Ridge Quest "show all runs" when fog is off)
+      // draws the whole ribbon, not just walked-over segments -- same
+      // reading the hex-cell path already uses.
+      const revealed = revealAll || isRevealed(h3.latLngToCell(pt[1], pt[0], RESOLUTION));
       if(revealed){
         if(!seg) seg = [pt]; else seg.push(pt);
       }else{
