@@ -4469,6 +4469,7 @@ let _corrSyncTimer=null;
 function syncLinkedCorridorRows(){
   clearTimeout(_corrSyncTimer);
   _corrSyncTimer=setTimeout(async()=>{
+    let patched=false;
     for(const z of zones){
       if(!z.corridorId || !z.shape || z.shape.type!=="corridor") continue;
       const sig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
@@ -4478,9 +4479,13 @@ function syncLinkedCorridorRows(){
           headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
           body:JSON.stringify({name:z.name||"Corridor",points:z.shape.coords.map(c=>[c[0],c[1]]),
             widthM:z.shape.widthM||10,distanceM:Math.round(gpxDistanceM(z.shape.coords))})});
-        if(r.ok) z._corrSig=sig;
+        if(r.ok){ z._corrSig=sig; patched=true; }
       }catch(e){}
     }
+    // The Corridors tree renders name + width + distance, all of which a sync
+    // can change — reload it so a renamed/reshaped stop shows through instead
+    // of the stale row it loaded with.
+    if(patched && typeof gpxTree!=="undefined") gpxTree.refresh({appId:afAppId()});
   },1000);
 }
 
