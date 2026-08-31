@@ -135,6 +135,13 @@
       <button id="reverseBtn">&#8645; Reverse Direction</button>
     </div>
 
+    <label class="k">Extend the line</label>
+    <div class="row">
+      <button id="addStartBtn" class="ghost" disabled title="Click the map to add points before the first point">&#8676; Add to Start</button>
+      <button id="addEndBtn" class="ghost" disabled title="Click the map to add points after the last point">Add to End &#8677;</button>
+    </div>
+    <div id="addHint" class="hint"></div>
+
     <hr>
     <div class="row">
       <button id="saveBtn" class="on" disabled>Save</button>
@@ -278,7 +285,7 @@ function setBase(newPoints, opts){
   // enterProject) — undoing across tracks makes no sense, so history starts
   // clean. Otherwise (Trim/Delete/Reverse) this is a structural edit of the
   // *same* track, so snapshot the pre-edit points onto the undo stack first.
-  if(opts.resetHistory) undoStack=[];
+  if(opts.resetHistory){ undoStack=[]; if(addMode) setAddMode(addMode); } // exit extend-mode when a different track opens
   else undoStack.push(basePoints);
   basePoints = newPoints;
   refreshActive();
@@ -319,6 +326,8 @@ function recompute(){
   positionScrubberFromIdx(0);
   document.getElementById("scrubBar").classList.toggle("show", points.length>1);
   document.getElementById("saveBtn").disabled = !loadedFrom;
+  document.getElementById("addStartBtn").disabled = points.length<1;
+  document.getElementById("addEndBtn").disabled = points.length<1;
   updateWidthBtn();
   // Deferred a frame (not called inline) — reordering alone doesn't force
   // an intermediate paint, since the browser only paints after the whole
@@ -655,7 +664,31 @@ document.getElementById("reverseBtn").onclick=()=>{
   setBase(points.slice().reverse().map(p=>[p[0],p[1],p[2],null]));
 };
 
-/* ---- undo last structural edit (Trim/Delete/Reverse) ---- */
+/* ---- extend the line: click the map to add points off either end ----
+   New points carry no timestamp or elevation (lon,lat,null,null) — same
+   trade-off Reverse already makes: the noise filter self-disables once a
+   track is <90% timestamped, and Backfill Elevation can fill the gaps.
+   Each click is its own undoable step (setBase pushes to undoStack). */
+let addMode=null; // null | "start" | "end"
+function setAddMode(m){
+  addMode = (addMode===m) ? null : m;
+  document.getElementById("addStartBtn").classList.toggle("on", addMode==="start");
+  document.getElementById("addEndBtn").classList.toggle("on", addMode==="end");
+  document.getElementById("addHint").textContent = addMode
+    ? "click the map to add points to the "+addMode+" — press the button again when done"
+    : "";
+  if(mapReady) map.getCanvas().style.cursor = addMode ? "crosshair" : "";
+}
+document.getElementById("addStartBtn").onclick=()=>setAddMode("start");
+document.getElementById("addEndBtn").onclick=()=>setAddMode("end");
+document.addEventListener("keydown",e=>{ if(e.key==="Escape" && addMode) setAddMode(addMode); });
+map.on("click",e=>{
+  if(!addMode || points.length<1) return;
+  const pt=[e.lngLat.lng, e.lngLat.lat, null, null];
+  setBase(addMode==="start" ? [pt].concat(points) : points.concat([pt]));
+});
+
+/* ---- undo last structural edit (Trim/Delete/Reverse/Extend) ---- */
 document.getElementById("undoBtn").onclick=undoEdit;
 
 /* ---- import from Downloads ---- */
