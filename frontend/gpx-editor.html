@@ -46,6 +46,8 @@
 
   #mapWrap{flex:1;min-width:0;position:relative}
   #map{position:absolute;inset:0}
+  #baseSel{position:absolute;top:10px;right:10px;z-index:5;width:auto;
+           background:rgba(20,29,43,.92);cursor:pointer}
 
   .side{width:300px;flex:0 0 auto;border-left:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;
         background:rgba(255,255,255,.01);overflow-y:auto;padding:12px;resize:horizontal;min-width:240px;max-width:60vw}
@@ -99,7 +101,12 @@
     <div id="gpxTreeHost"></div>
   </div>
 
-  <div id="mapWrap"><div id="map"></div></div>
+  <div id="mapWrap"><div id="map"></div>
+    <select id="baseSel" title="Basemap">
+      <option value="streets">Streets</option>
+      <option value="sat">Satellite</option>
+    </select>
+  </div>
 
   <div class="side">
     <h2>Elevation</h2>
@@ -460,10 +467,25 @@ function moveChartSel(i0,i1){
 const map=new maplibregl.Map({
   container:"map",
   style:{version:8,
-    sources:{base:{type:"raster",tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"],tileSize:256,attribution:"Esri"}},
-    layers:[{id:"base",type:"raster",source:"base"}]},
+    sources:{
+      base:{type:"raster",tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"],tileSize:256,attribution:"Esri"},
+      sat:{type:"raster",tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],tileSize:256,attribution:"Esri"}
+    },
+    // Both basemaps present from the start; toggled by visibility so the
+    // track / trim-selection layers added on top later never get dropped
+    // (swapping the whole style would). Esri only — OSM tiles send no CORS
+    // headers (see project memory).
+    layers:[
+      {id:"base",type:"raster",source:"base"},
+      {id:"sat",type:"raster",source:"sat",layout:{visibility:"none"}}
+    ]},
   center:[-117.0547,51.3027], zoom:12
 });
+document.getElementById("baseSel").onchange=e=>{
+  const sat=e.target.value==="sat";
+  map.setLayoutProperty("base","visibility",sat?"none":"visible");
+  map.setLayoutProperty("sat","visibility",sat?"visible":"none");
+};
 map.addControl(new maplibregl.NavigationControl());
 map.on("load",()=>{
   mapReady=true;
