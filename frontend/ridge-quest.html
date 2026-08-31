@@ -1349,24 +1349,31 @@ function questMapBounds(){
 // the top); the other trail types (XC ski / bike / hike / city walk / lift)
 // get their own hue + dash rhythm. line-dasharray isn't data-driven, so the
 // dashed cores are separate filtered layers keyed on a `dash` feature prop.
+// `halo` is the soft outer glow colour, `col` the crisp inner stroke. Values
+// are tuned to read on bright alpine satellite (snow / pale rock), not just
+// dark forest — black / double-black use a white core over a strong near-
+// black casing (classic piste-map look) with a saturated steel / rose glow.
 const RUN_STYLE_DIFF = {
-  "green":        { col:"#3fae52", halo:"#3fae52", tier:"" },
-  "blue":         { col:"#3b82f6", halo:"#3b82f6", tier:"" },
-  "black":        { col:"#e9eef0", halo:"#8fa6ae", tier:"black" },
-  "double-black": { col:"#e9eef0", halo:"#c07a80", tier:"dblack" },
-  "":             { col:"#e8b23a", halo:"#e8b23a", tier:"" }   // no difficulty set
+  "green":        { col:"#57e06f", halo:"#22c246", tier:"" },
+  "blue":         { col:"#6bb6ff", halo:"#2f86ff", tier:"" },
+  "black":        { col:"#ffffff", halo:"#89b4ff", tier:"black" },
+  "double-black": { col:"#ffffff", halo:"#ff6f91", tier:"dblack" },
+  "":             { col:"#ffd166", halo:"#ffab1f", tier:"" }   // no difficulty set
 };
 const RUN_STYLE_ACT = {
-  "xcountry":     { col:"#b18cff", halo:"#b18cff", dash:"xc" },
-  "bike":         { col:"#e0873a", halo:"#e0873a", dash:"bike" },
-  "walking_city": { col:"#8fb0c9", halo:"#8fb0c9", dash:"foot" },
-  "hike":         { col:"#86b15c", halo:"#86b15c", dash:"foot" }
+  "xcountry":     { col:"#cbb0ff", halo:"#9a63ff", dash:"xc" },
+  "bike":         { col:"#ffab5e", halo:"#ff7a1a", dash:"bike" },
+  "walking_city": { col:"#bcd8ee", halo:"#79b3dc", dash:"foot" },
+  "hike":         { col:"#b3e37f", halo:"#63c23a", dash:"foot" }
 };
 const RUN_DASH = { "xc":[7,5], "bike":[2.5,3.5], "foot":[1,3.4], "lift":[0.4,2.4] };
+// zoom-scaled line width so the glow stays legible from resort-wide framing
+// down to a single run.
+const _runW = (a,b,c) => ["interpolate",["linear"],["zoom"], 12,a, 15,b, 18,c];
 function runStyleFor(c){
   const act = c.activityType || (c.runType === "hike" ? "hike" : "");
   if(RUN_STYLE_ACT[act]){ const s = RUN_STYLE_ACT[act]; return { col:s.col, halo:s.halo, dash:s.dash, tier:"" }; }
-  if(c.runType === "lift") return { col:"#9fb0a8", halo:"#9fb0a8", dash:"lift", tier:"" };
+  if(c.runType === "lift") return { col:"#c2cec9", halo:"#8ea79c", dash:"lift", tier:"" };
   const s = RUN_STYLE_DIFF[c.difficulty || ""] || RUN_STYLE_DIFF[""];
   return { col:s.col, halo:s.halo, dash:"", tier:s.tier };
 }
@@ -1386,21 +1393,21 @@ function drawAllRuns(map){
   map.addSource("runLines", { type:"geojson", data:{ type:"FeatureCollection", features:feats } });
   map.addLayer({ id:"runLines-halo", type:"line", source:"runLines",
     layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":["get","halo"], "line-width":9, "line-blur":4, "line-opacity":0.42 } });
+    paint:{ "line-color":["get","halo"], "line-width":_runW(8,14,22), "line-blur":6, "line-opacity":0.6 } });
   map.addLayer({ id:"runLines-casing", type:"line", source:"runLines",
     layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":"#0a1018", "line-opacity":0.55, "line-width":4.5 } });
+    paint:{ "line-color":"#05070b", "line-opacity":0.9, "line-width":_runW(3.5,6.5,10) } });
   map.addLayer({ id:"runLines-core", type:"line", source:"runLines", filter:["==",["get","dash"],""],
     layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":["get","col"], "line-width":2.4 } });
+    paint:{ "line-color":["get","col"], "line-width":_runW(1.8,3,4.5) } });
   Object.keys(RUN_DASH).forEach(k=>{
     map.addLayer({ id:"runLines-core-"+k, type:"line", source:"runLines", filter:["==",["get","dash"],k],
       layout:{ "line-cap":"butt","line-join":"round" },
-      paint:{ "line-color":["get","col"], "line-width":2.4, "line-dasharray":RUN_DASH[k] } });
+      paint:{ "line-color":["get","col"], "line-width":_runW(1.8,3,4.5), "line-dasharray":RUN_DASH[k] } });
   });
   map.addLayer({ id:"runLines-hot", type:"line", source:"runLines", filter:["==",["get","tier"],"dblack"],
     layout:{ "line-cap":"round" },
-    paint:{ "line-color":"#e5484d", "line-width":1.2 } });
+    paint:{ "line-color":"#ff5a5f", "line-width":_runW(1,1.6,2.4) } });
   // Invisible fat hit target for the tap popup (covers every core variant).
   map.addLayer({ id:"runLines-hit", type:"line", source:"runLines",
     paint:{ "line-color":"#000", "line-opacity":0, "line-width":14 } });
