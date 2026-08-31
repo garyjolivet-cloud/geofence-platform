@@ -6878,39 +6878,48 @@ function simPathPointAt(s){if(simPath.length<2)return simPath[0]||null;let acc=0
     acc+=seg;}return simPath[simPath.length-1];}
 function buildSimStopsPath(){
   const lead=(p,q,m)=>{const len=SimGeo.hav(q,p)||1,k=m/len;return[p[0]+(p[0]-q[0])*k,p[1]+(p[1]-q[1])*k];};
-  // Walk the map-match corridor itself when one's active, regardless of
-  // stop order — this is how a corridor-driven tour is actually walked (GPS
-  // map-matched onto the line as it goes), not a straight stop-to-stop.
-  // Auto-walk only follows ONE at a time — it's parametrized as a single
-  // scalar distance along one polyline (see simPathPointAt), so there's no
-  // well-defined notion of walking two simultaneously. With several active,
-  // the first-selected is the "primary" one walked.
-  const primary=walkingPathsActive[0];
-  if(primary && primary.points.length>=2){
-    if(walkingPathsActive.length>1) simLogEv("sev-sys","walking along: "+primary.name+" (1 of "+walkingPathsActive.length+" active corridors)");
-    const pts=primary.points.map(pt=>[pt[1],pt[0]]); // [lon,lat] -> [lat,lon], matching SimGeo's convention
-    const path=[lead(pts[0],pts[1],20)];
-    pts.forEach(p=>path.push(p));
-    path.push(lead(pts[pts.length-1],pts[pts.length-2],20));
-    simPath=path;
+  // Chain an ORDERED list of polylines (each [[lat,lon],…]) into one simPath.
+  // The sequence is fixed by the caller (stop-tree order); each line is only
+  // flipped to enter from whichever end is nearer the running tail, so the
+  // straight connector between one corridor's exit and the next corridor's
+  // entry stays as short as possible. 20 m lead-in/out at the very ends.
+  // simPathPointAt interpolates linearly between consecutive points, so the
+  // tail→next-entry gap is itself just a walkable connector segment — the
+  // avatar rides/traverses across it, crossing every corridor's trigger band
+  // in turn so every stop's say/audio fires in one WALK STOPS pass.
+  const chain=(lines)=>{
+    lines=lines.filter(l=>Array.isArray(l)&&l.length>=2);
+    if(!lines.length) return false;
+    const out=[];
+    lines.forEach(ln=>{
+      let seg=ln;
+      if(out.length){
+        const tail=out[out.length-1];
+        if(SimGeo.hav(tail,ln[ln.length-1])<SimGeo.hav(tail,ln[0])) seg=ln.slice().reverse();
+      }else{
+        out.push(lead(ln[0],ln[1],20));
+      }
+      for(const p of seg) out.push(p);
+    });
+    if(out.length>=2) out.push(lead(out[out.length-1],out[out.length-2],20));
+    simPath=out;
     return simPath.length>=2;
+  };
+  // Map-match corridors from the Corridors palette — walked in the order they
+  // were selected, chained end to end.
+  if(walkingPathsActive.length){
+    if(walkingPathsActive.length>1) simLogEv("sev-sys","walking "+walkingPathsActive.length+" corridors in sequence");
+    return chain(walkingPathsActive.map(w=>w.points.map(pt=>[pt[1],pt[0]]))); // [lon,lat] -> [lat,lon]
   }
-  // No palette map-match corridor active, but a corridor-SHAPED stop is its
-  // own walk route — the visitor travels down the drawn line and the target
-  // band (and its say/audio trigger) fires as they go. geometry.path is
-  // already [lat,lon], same convention as simPath. First one wins if there
-  // are several, same single-polyline limitation as the palette branch.
+  // No palette corridor active — walk the corridor-SHAPED stops instead, in
+  // stop-tree order (simBundle.zones order), chained end to end. geometry.path
+  // is already [lat,lon].
   const corrStops=(simBundle.zones||[])
-    .map(z=>({z,l:(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor")}))
-    .filter(x=>x.l&&Array.isArray(x.l.geometry.path)&&x.l.geometry.path.length>=2);
+    .map(z=>(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor"))
+    .filter(l=>l&&Array.isArray(l.geometry.path)&&l.geometry.path.length>=2);
   if(corrStops.length){
-    if(corrStops.length>1) simLogEv("sev-sys","walking along corridor: "+(corrStops[0].z.name||"?")+" (1 of "+corrStops.length+")");
-    const cp=corrStops[0].l.geometry.path.map(p=>[p[0],p[1]]);
-    const cpath=[lead(cp[0],cp[1],20)];
-    cp.forEach(p=>cpath.push(p));
-    cpath.push(lead(cp[cp.length-1],cp[cp.length-2],20));
-    simPath=cpath;
-    return simPath.length>=2;
+    if(corrStops.length>1) simLogEv("sev-sys","walking "+corrStops.length+" corridors in sequence");
+    return chain(corrStops.map(l=>l.geometry.path.map(p=>[p[0],p[1]])));
   }
   const pts=simBundle.zones.filter(z=>z.center).map(z=>z.center);
   if(pts.length<1)return false;
