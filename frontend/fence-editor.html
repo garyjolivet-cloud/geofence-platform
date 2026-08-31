@@ -1685,6 +1685,25 @@ async function recomputeViewshed(){
     btn.disabled=false;
   }
 }
+// The point half-way ALONG a polyline by arc length. centroidLonLat() below
+// is a closed-polygon (shoelace) centroid — correct for a polygon outline,
+// but for a near-straight open corridor line its signed area collapses to
+// ~0 and cx/(6A) explodes, stranding the corridor's marker/label/rings far
+// off the line. Corridors use this instead.
+function polylineMidpointLonLat(coords){
+  if(!coords || !coords.length) return [0,0];
+  if(coords.length===1) return coords[0].slice();
+  let total=0;
+  for(let i=1;i<coords.length;i++) total+=haversineM(coords[i-1],coords[i]);
+  let half=total/2, acc=0;
+  for(let i=1;i<coords.length;i++){
+    const seg=haversineM(coords[i-1],coords[i]);
+    if(acc+seg>=half){ const t=seg?(half-acc)/seg:0;
+      return [coords[i-1][0]+t*(coords[i][0]-coords[i-1][0]), coords[i-1][1]+t*(coords[i][1]-coords[i-1][1])]; }
+    acc+=seg;
+  }
+  return coords[coords.length-1].slice();
+}
 function centroidLonLat(coords){
   let A=0,cx=0,cy=0;
   for(let i=0;i<coords.length;i++){ const j=(i+1)%coords.length;
@@ -1824,6 +1843,7 @@ function zoneCenterLonLat(z){ const s=z.shape;
   if(s.type==="circle") return s.center;
   if(s.type==="tripline") return [(s.from[0]+s.to[0])/2,(s.from[1]+s.to[1])/2];
   if(s.type==="corridor" && z.movingAudio) return s.coords[0];
+  if(s.type==="corridor") return polylineMidpointLonLat(s.coords);
   return centroidLonLat(s.coords);
 }
 function zoneGenR(z){ const s=z.shape;
@@ -6464,7 +6484,7 @@ function editorToSimBundle(){
     // SimAmbient/simAmbientCenterNow below; this `center` is only a
     // load-time fallback (e.g. for the ref-point average).
     else if(movingAudio) center=[s.coords[0][1],s.coords[0][0]];
-    else if(s.type==="corridor"){const c=centroidLonLat(s.coords);center=[c[1],c[0]];}
+    else if(s.type==="corridor"){const c=polylineMidpointLonLat(s.coords);center=[c[1],c[0]];}
     // A moving-audio corridor fires triggers against a circle centered on
     // its *current* live position (resolved at eval-time in SimFencer.sd
     // via simAmbientCenterNow) — same approachM ring for both general and
