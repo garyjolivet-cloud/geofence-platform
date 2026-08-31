@@ -4379,18 +4379,45 @@ async function importCorridorFromLibrary(corridorId){
 
 /* ---- corridor stop <-> Corridors-tree record sync ----
    A hand-drawn (finishShape) or GPX-file-imported corridor stop is also
-   saved as an app-scoped `corridor` library row the moment it's created, so
-   it appears in the Corridors tree and can be reshaped in the GPX Editor.
-   The zone keeps the row id in z.corridorId. Sync is two-way but not
-   simultaneous: editor-side reshapes/renames push to the row (debounced, in
-   autoSave), and reconcileLinkedCorridors() adopts any GPX-Editor edits back
-   into the stop on the next project load. z._corrSig is the last-synced
-   [coords,widthM,name] signature (transient, per session). */
-async function ensureCorridorRecord(z){
+   saved as an app-scoped `corridor` library row so it appears in the
+   Corridors tree and can be reshaped in the GPX Editor. The zone keeps the
+   row id in z.corridorId; z._corrSig is the last-synced [coords,widthM,name]
+   signature (transient, per session).
+
+   IMPORTANT: the link only reaches the server on Publish (via zoneToEngine),
+   so a stop drawn-then-reloaded-before-publish comes back with corridorId
+   null. Seeding must therefore be **idempotent** — match an existing row by
+   name (closest length wins) and re-link to it, only POSTing a new row when
+   no same-named row exists. (Non-idempotent seeding created a duplicate tree
+   entry on every reload — fixed 2026-08-30.) */
+function _matchCorridorRow(rows, z){
+  const same=rows.filter(x=>x.name===(z.name||"Corridor"));
+  if(!same.length) return null;
+  if(same.length===1) return same[0];
+  const d=gpxDistanceM(z.shape.coords||[]);
+  return same.slice().sort((a,b)=>Math.abs((a.distanceM||0)-d)-Math.abs((b.distanceM||0)-d))[0];
+}
+async function _appCorridorRows(appId){
+  try{
+    const r=await fetch("/api/corridor?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}});
+    if(r.ok) return (await r.json()).corridors||[];
+  }catch(e){}
+  return null; // null = couldn't fetch (don't seed blindly); [] = fetched, none exist
+}
+async function ensureCorridorRecord(z, knownRows){
   if(!z || !z.shape || z.shape.type!=="corridor" || z.corridorId) return;
   const appId=afAppId();
   const pts=(z.shape.coords||[]).map(c=>[c[0],c[1]]); // [lon,lat], same order as the corridor table
-  if(!appId || pts.length<2) return; // no app yet -> reconcile on next load seeds it
+  if(!appId || pts.length<2) return;
+  const rows = knownRows!==undefined ? knownRows : await _appCorridorRows(appId);
+  if(rows===null) return; // list fetch failed — try again on the next load rather than risk a dupe
+  const hit=_matchCorridorRow(rows, z);
+  if(hit){ // already in the tree — just re-link
+    z.corridorId=hit.id;
+    z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
+    autoSave();
+    return;
+  }
   try{
     const r=await fetch("/api/corridor",{method:"POST",
       headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
@@ -4409,15 +4436,21 @@ async function ensureCorridorRecord(z){
 async function reconcileLinkedCorridors(){
   const appId=afAppId();
   if(!appId) return;
-  const corr=zones.filter(z=>z.shape && z.shape.type==="corridor");
+  const corr=zones.filter(z=>z.shape && z.shape.type==="corridor" && (z.shape.coords||[]).length>=2);
   if(!corr.length) return;
-  let changed=false, seeded=false;
+  const rows=await _appCorridorRows(appId);
+  if(rows===null) return;
+  const byId=new Map(rows.map(x=>[x.id,x]));
+  let changed=false, touchedTree=false;
   await Promise.all(corr.map(async z=>{
-    if(!z.corridorId){ await ensureCorridorRecord(z); if(z.corridorId){ seeded=true; changed=true; } return; }
+    if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; changed=true; } // row deleted in the tree
+    if(!z.corridorId){
+      const hit=_matchCorridorRow(rows, z);
+      if(hit){ z.corridorId=hit.id; z._corrSig=null; changed=true; }
+      else{ const before=z.corridorId; await ensureCorridorRecord(z, rows); if(z.corridorId&&!before){ changed=true; touchedTree=true; } return; }
+    }
     try{
-      const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),
-        {headers:{authorization:"Bearer "+getToken()}});
-      if(r.status===404){ z.corridorId=null; changed=true; return; } // deleted from the tree -> unlink, keep the stop
+      const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{headers:{authorization:"Bearer "+getToken()}});
       if(!r.ok) return;
       const j=await r.json();
       const rowPts=(j.points||[]).map(p=>[p[0],p[1]]);
@@ -4429,7 +4462,7 @@ async function reconcileLinkedCorridors(){
       z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
     }catch(e){}
   }));
-  if(seeded) gpxTree.refresh({appId});
+  if(touchedTree) gpxTree.refresh({appId});
   if(changed){ render(); refreshProps(); }
 }
 let _corrSyncTimer=null;
