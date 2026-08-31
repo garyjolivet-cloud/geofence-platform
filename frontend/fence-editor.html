@@ -6806,6 +6806,23 @@ function buildSimStopsPath(){
     simPath=path;
     return simPath.length>=2;
   }
+  // No palette map-match corridor active, but a corridor-SHAPED stop is its
+  // own walk route — the visitor travels down the drawn line and the target
+  // band (and its say/audio trigger) fires as they go. geometry.path is
+  // already [lat,lon], same convention as simPath. First one wins if there
+  // are several, same single-polyline limitation as the palette branch.
+  const corrStops=(simBundle.zones||[])
+    .map(z=>({z,l:(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor")}))
+    .filter(x=>x.l&&Array.isArray(x.l.geometry.path)&&x.l.geometry.path.length>=2);
+  if(corrStops.length){
+    if(corrStops.length>1) simLogEv("sev-sys","walking along corridor: "+(corrStops[0].z.name||"?")+" (1 of "+corrStops.length+")");
+    const cp=corrStops[0].l.geometry.path.map(p=>[p[0],p[1]]);
+    const cpath=[lead(cp[0],cp[1],20)];
+    cp.forEach(p=>cpath.push(p));
+    cpath.push(lead(cp[cp.length-1],cp[cp.length-2],20));
+    simPath=cpath;
+    return simPath.length>=2;
+  }
   const pts=simBundle.zones.filter(z=>z.center).map(z=>z.center);
   if(pts.length<1)return false;
   const path=[];
