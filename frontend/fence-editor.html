@@ -1830,6 +1830,12 @@ function uniqueZoneId(base,selfZone){
 }
 const LL=p=>[+p[1].toFixed(6),+p[0].toFixed(6)];     // [lon,lat] -> [lat,lon]
 const LonLat=p=>[p[1],p[0]];                          // [lat,lon] -> [lon,lat]
+// Round a [lon,lat][] to 6 dp — the same precision LL bakes into the
+// published bundle. All corridor-row point I/O goes through this so a stop's
+// coords and its linked row's points_json compare byte-identical (an
+// unrounded mismatch made reconcileLinkedCorridors see a permanent "differ"
+// and syncLinkedCorridorRows re-PATCH on every render).
+const _c6=a=>(a||[]).map(p=>[+(+p[0]).toFixed(6),+(+p[1]).toFixed(6)]);
 
 // A corridor with "moving audio" on keeps its clip in a separate field
 // (ambientAudioUrl) from every other stop's audioUrl, since the engine
@@ -2615,19 +2621,23 @@ function refreshHandles(z){
   // perpendicular to the line at its midpoint; drag = full band width (x2). ----
   if(z.shape.type==="corridor" && !z.movingAudio && z.shape.coords.length>=2){
     const cc=z.shape.coords;
-    const perp=(bearingTo(cc[0],cc[cc.length-1])+90)%360;
+    let perp=(bearingTo(cc[0],cc[cc.length-1])+90)%360;
+    if(!isFinite(perp)) perp=90; // degenerate line (coincident endpoints) — just point east
     const wNow=()=>z.shape.widthM||10;
-    const el=_mkHandle("mh-radius","width: "+wNow()+" m");
-    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,Math.max(wNow()/2,6),perp)).addTo(map);
-    mk.on("dragstart",()=>el.classList.add("mh-active"));
-    mk.on("drag",()=>{
-      const ll=mk.getLngLat();
-      z.shape.widthM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])*2));
-      const wi=document.getElementById("pCorridorWidth"); if(wi) wi.value=z.shape.widthM;
-      _setLbl(el,"width: "+z.shape.widthM+" m"); renderSources();
-    });
-    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-    _handles.push(mk);
+    const anchor=destPoint(c,Math.max(wNow()/2,6),perp);
+    if(anchor&&isFinite(anchor[0])&&isFinite(anchor[1])){ // never hand MapLibre a NaN LngLat
+      const el=_mkHandle("mh-radius","width: "+wNow()+" m");
+      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(anchor).addTo(map);
+      mk.on("dragstart",()=>el.classList.add("mh-active"));
+      mk.on("drag",()=>{
+        const ll=mk.getLngLat();
+        z.shape.widthM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])*2));
+        const wi=document.getElementById("pCorridorWidth"); if(wi) wi.value=z.shape.widthM;
+        _setLbl(el,"width: "+z.shape.widthM+" m"); renderSources();
+      });
+      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
+      _handles.push(mk);
+    }
   }
 
   // ---- 4: audio ring handle (blue, south) ----
@@ -4459,7 +4469,7 @@ async function ensureCorridorRecord(z, knownRows){
   // syncLinkedCorridorRows() then pushes the new geometry to the row instead
   // of the two silently diverging (that race is what stranded a corridor row
   // at its draw-time geometry while the published stop moved on).
-  const snap={name:z.name||"Corridor", widthM:z.shape.widthM||10, coords:(z.shape.coords||[]).map(c=>[c[0],c[1]])};
+  const snap={name:z.name||"Corridor", widthM:z.shape.widthM||10, coords:_c6(z.shape.coords)};
   if(!appId || snap.coords.length<2) return;
   const rows = knownRows!==undefined ? knownRows : await _appCorridorRows(appId);
   if(rows===null) return; // list fetch failed — try again on the next load rather than risk a dupe
@@ -4507,8 +4517,9 @@ async function reconcileLinkedCorridors(){
       const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{headers:{authorization:"Bearer "+getToken()}});
       if(!r.ok) return;
       const j=await r.json();
-      const rowPts=(j.points||[]).map(p=>[p[0],p[1]]);
-      const differ = rowPts.length>=2 && JSON.stringify(rowPts)!==JSON.stringify(z.shape.coords);
+      const rowPts=_c6((j.points||[]).map(p=>[p[0],p[1]]));
+      const stopPts=_c6(z.shape.coords);
+      const differ = rowPts.length>=2 && JSON.stringify(rowPts)!==JSON.stringify(stopPts);
       // Pull the row into the stop ONLY when the row was edited (in the GPX
       // Editor) since our last publish — i.e. its updated_at is newer than the
       // rev we round-tripped in the bundle. Otherwise the published stop is
@@ -4518,11 +4529,11 @@ async function reconcileLinkedCorridors(){
         z.shape.coords=rowPts;
         if(j.widthM) z.shape.widthM=j.widthM;
         changed=true;
-        z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
+        z._corrSig=JSON.stringify([_c6(z.shape.coords),z.shape.widthM,z.name]);
       } else if(differ){
         z._corrSig=null; // stale row — force a stop -> row push on the next autoSave
       } else {
-        z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
+        z._corrSig=JSON.stringify([stopPts,z.shape.widthM,z.name]);
       }
       z.corridorRev=(listRow&&listRow.updatedAt)||z.corridorRev||new Date().toISOString();
     }catch(e){}
@@ -4537,12 +4548,14 @@ function syncLinkedCorridorRows(){
     let patched=false;
     for(const z of zones){
       if(!z.corridorId || !z.shape || z.shape.type!=="corridor") continue;
-      const sig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
-      if(sig===z._corrSig || (z.shape.coords||[]).length<2) continue;
+      if((z.shape.coords||[]).length<2) continue;
+      const pts=_c6(z.shape.coords);
+      const sig=JSON.stringify([pts,z.shape.widthM,z.name]);
+      if(sig===z._corrSig) continue;
       try{
         const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{method:"PATCH",
           headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
-          body:JSON.stringify({name:z.name||"Corridor",points:z.shape.coords.map(c=>[c[0],c[1]]),
+          body:JSON.stringify({name:z.name||"Corridor",points:pts,
             widthM:z.shape.widthM||10,distanceM:Math.round(gpxDistanceM(z.shape.coords))})});
         if(r.ok){ z._corrSig=sig; z.corridorRev=new Date().toISOString(); patched=true; }
       }catch(e){}
@@ -5192,6 +5205,10 @@ function engineToZone(zo){
   // reconcileLinkedCorridors() pulls GPX-Editor edits back in from it.
   z.corridorId = zo.corridorId || null;
   z.corridorRev = zo.corridorRev || null;
+  // Seed the sync signature from the loaded geometry so syncLinkedCorridorRows()
+  // is a no-op on a plain select — it only fires once the stop is actually
+  // reshaped/renamed, not 1s after every render() while reconcile is still pending.
+  if(shape.type==="corridor" && z.corridorId) z._corrSig=JSON.stringify([_c6(shape.coords),shape.widthM,z.name]);
   z.ttsVoice=zo.ttsVoice||null;
   z.arObjects=Array.isArray(zo.arObjects)?zo.arObjects:[];
   z.altM=zo.altM??null;
