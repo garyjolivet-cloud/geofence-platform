@@ -374,6 +374,10 @@
   .runLabel{font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
             letter-spacing:.02em;white-space:nowrap;pointer-events:none;
             text-shadow:0 0 2px #0c140f,0 0 2px #0c140f,0 1px 3px #0c140f}
+  .runDiamond{display:flex;gap:2px;pointer-events:none}
+  .runDiamond i{width:9px;height:9px;background:#111;border:1.4px solid #eef3f0;
+                transform:rotate(45deg);display:block}
+  .runDiamond.dbl i{border-color:#e5484d}
   /* map drag handles */
   .map-handle{width:14px;height:14px;border-radius:50%;border:2px solid #fff;cursor:grab;
               box-shadow:0 0 0 3px rgba(0,0,0,.55);transition:transform .1s;position:relative}
@@ -6115,22 +6119,106 @@ const SimAmbient={
 let simMode=false, simAvatar=null, simBundle=null, simPrev=null, simPrevRaw=null;
 let simPath=[], simPlaying=false, simDist=0, simTimer=null, simDir=1; // simDir: 1 = forward along simPath, -1 = backward
 let simAmbientMarkers={}, simAmbientTimer=null;
-// Test Mode: one HTML name label per corridor zone, at its midpoint — same
-// look as the live Ridge Quest run map (.runLabel CSS), so an author sees
-// the name where it'll appear on the walk.
-let simCorridorLabels=[];
-function clearSimCorridorLabels(){ simCorridorLabels.forEach(m=>m.remove()); simCorridorLabels=[]; }
+// Test Mode: render every corridor zone with the SAME "piste glow" graphic
+// the live Ridge Quest run map draws (drawAllRuns() in ridge-quest.html) —
+// difficulty-coloured glowing line + midpoint name label + ◆/◆◆ start badge
+// on black / double-black — so an author previews the run exactly as a
+// player will see it. Kept a verbatim mirror of ridge-quest.html's
+// RUN_STYLE_* / RUN_DASH / runStyleFor(); update both together.
+let simCorridorLabels=[]; // name + diamond HTML markers
+const SIM_RUN_LAYERS=["runLines-halo","runLines-casing","runLines-core","runLines-core-xc","runLines-core-bike","runLines-core-foot","runLines-core-lift","runLines-hot","runLines-hit"];
+const SIM_RUN_STYLE_DIFF={
+  "green":        {col:"#3fae52",halo:"#3fae52",tier:""},
+  "blue":         {col:"#3b82f6",halo:"#3b82f6",tier:""},
+  "black":        {col:"#e9eef0",halo:"#8fa6ae",tier:"black"},
+  "double-black": {col:"#e9eef0",halo:"#c07a80",tier:"dblack"},
+  "":             {col:"#e8b23a",halo:"#e8b23a",tier:""}
+};
+const SIM_RUN_STYLE_ACT={
+  "xcountry":     {col:"#b18cff",halo:"#b18cff",dash:"xc"},
+  "bike":         {col:"#e0873a",halo:"#e0873a",dash:"bike"},
+  "walking_city": {col:"#8fb0c9",halo:"#8fb0c9",dash:"foot"},
+  "hike":         {col:"#86b15c",halo:"#86b15c",dash:"foot"}
+};
+const SIM_RUN_DASH={"xc":[7,5],"bike":[2.5,3.5],"foot":[1,3.4],"lift":[0.4,2.4]};
+function simRunStyleFor(c){
+  const act=c.activityType||(c.runType==="hike"?"hike":"");
+  if(SIM_RUN_STYLE_ACT[act]){const s=SIM_RUN_STYLE_ACT[act];return{col:s.col,halo:s.halo,dash:s.dash,tier:""};}
+  if(c.runType==="lift") return{col:"#9fb0a8",halo:"#9fb0a8",dash:"lift",tier:""};
+  const s=SIM_RUN_STYLE_DIFF[c.difficulty||""]||SIM_RUN_STYLE_DIFF[""];
+  return{col:s.col,halo:s.halo,dash:"",tier:s.tier};
+}
+function _simRunClick(e){
+  const p=e.features&&e.features[0]&&e.features[0].properties; if(!p) return;
+  const act=p.activityType||(p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
+  new maplibregl.Popup({closeButton:true,offset:8}).setLngLat(e.lngLat)
+    .setHTML('<div style="font:600 13px/1.35 system-ui,sans-serif;color:#0a1018">'+esc(p.name)+
+      '</div><div style="font:12px system-ui,sans-serif;color:#5b7088">'+
+      [p.difficulty&&esc(p.difficulty),act&&esc(act),p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
+    .addTo(map);
+}
+function _simRunCursor(on){ return ()=>{ map.getCanvas().style.cursor=on?"pointer":""; }; }
+const _simRunEnter=_simRunCursor(true), _simRunLeave=_simRunCursor(false);
+function clearSimCorridorLabels(){
+  simCorridorLabels.forEach(m=>m.remove()); simCorridorLabels=[];
+  if(typeof map==="undefined"||!map) return;
+  SIM_RUN_LAYERS.forEach(id=>{ if(map.getLayer(id)) map.removeLayer(id); });
+  if(map.getSource("runLines")) map.removeSource("runLines");
+  map.off("click","runLines-hit",_simRunClick);
+  map.off("mouseenter","runLines-hit",_simRunEnter);
+  map.off("mouseleave","runLines-hit",_simRunLeave);
+}
 function refreshSimCorridorLabels(){
   clearSimCorridorLabels();
   if(!simMode || !simBundle) return;
-  (simBundle.zones||[]).forEach(z=>{
+  const cors=(simBundle.zones||[]).map(z=>{
     const tgt=(z.layers||[]).find(l=>l.geometry && l.geometry.type==="corridor");
     const path=tgt && tgt.geometry.path;
-    if(!Array.isArray(path) || path.length<2) return;
-    const mid=path[Math.floor(path.length/2)]; // [lat,lon]
-    const el=document.createElement("div"); el.className="runLabel"; el.textContent=z.name||"Run";
-    simCorridorLabels.push(new maplibregl.Marker({element:el,anchor:"center"}).setLngLat([mid[1],mid[0]]).addTo(map));
+    if(!Array.isArray(path) || path.length<2) return null;
+    let lm=0; for(let i=1;i<path.length;i++) lm+=SimGeo.hav(path[i-1],path[i]);
+    return {name:z.name||"Run",difficulty:z.difficulty||"",runType:z.runType||"run",
+            activityType:z.activityType||"",path,lengthM:lm};
+  }).filter(Boolean);
+  if(!cors.length) return;
+  const feats=cors.map(c=>{
+    const st=simRunStyleFor(c);
+    return {type:"Feature",
+      properties:{name:c.name,difficulty:c.difficulty,activityType:c.activityType,runType:c.runType,
+                  lengthM:Math.round(c.lengthM),col:st.col,halo:st.halo,dash:st.dash,tier:st.tier},
+      geometry:{type:"LineString",coordinates:c.path.map(p=>[p[1],p[0]])}}; // [lat,lon] -> [lon,lat]
   });
+  map.addSource("runLines",{type:"geojson",data:{type:"FeatureCollection",features:feats}});
+  map.addLayer({id:"runLines-halo",type:"line",source:"runLines",layout:{"line-cap":"round","line-join":"round"},
+    paint:{"line-color":["get","halo"],"line-width":9,"line-blur":4,"line-opacity":0.42}});
+  map.addLayer({id:"runLines-casing",type:"line",source:"runLines",layout:{"line-cap":"round","line-join":"round"},
+    paint:{"line-color":"#0a1018","line-opacity":0.55,"line-width":4.5}});
+  map.addLayer({id:"runLines-core",type:"line",source:"runLines",filter:["==",["get","dash"],""],
+    layout:{"line-cap":"round","line-join":"round"},
+    paint:{"line-color":["get","col"],"line-width":2.4}});
+  Object.keys(SIM_RUN_DASH).forEach(k=>{
+    map.addLayer({id:"runLines-core-"+k,type:"line",source:"runLines",filter:["==",["get","dash"],k],
+      layout:{"line-cap":"butt","line-join":"round"},
+      paint:{"line-color":["get","col"],"line-width":2.4,"line-dasharray":SIM_RUN_DASH[k]}});
+  });
+  map.addLayer({id:"runLines-hot",type:"line",source:"runLines",filter:["==",["get","tier"],"dblack"],
+    layout:{"line-cap":"round"},paint:{"line-color":"#e5484d","line-width":1.2}});
+  map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
+    paint:{"line-color":"#000","line-opacity":0,"line-width":14}});
+  cors.forEach(c=>{
+    const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
+    const el=document.createElement("div"); el.className="runLabel"; el.textContent=c.name;
+    simCorridorLabels.push(new maplibregl.Marker({element:el,anchor:"center"}).setLngLat([mid[1],mid[0]]).addTo(map));
+    const tier=simRunStyleFor(c).tier;
+    if(tier){
+      const b=document.createElement("div"); b.className="runDiamond"+(tier==="dblack"?" dbl":"");
+      b.innerHTML=tier==="dblack"?"<i></i><i></i>":"<i></i>";
+      simCorridorLabels.push(new maplibregl.Marker({element:b,anchor:"bottom",offset:[0,-4]})
+        .setLngLat([c.path[0][1],c.path[0][0]]).addTo(map));
+    }
+  });
+  map.on("click","runLines-hit",_simRunClick);
+  map.on("mouseenter","runLines-hit",_simRunEnter);
+  map.on("mouseleave","runLines-hit",_simRunLeave);
 }
 
 // Live marker for each path (moving ambient) stop's current position —
