@@ -2611,6 +2611,25 @@ function refreshHandles(z){
     _handles.push(mk);
   }
 
+  // ---- 3b: corridor width handle (green) — sits half the band width out,
+  // perpendicular to the line at its midpoint; drag = full band width (x2). ----
+  if(z.shape.type==="corridor" && !z.movingAudio && z.shape.coords.length>=2){
+    const cc=z.shape.coords;
+    const perp=(bearingTo(cc[0],cc[cc.length-1])+90)%360;
+    const wNow=()=>z.shape.widthM||10;
+    const el=_mkHandle("mh-radius","width: "+wNow()+" m");
+    const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(destPoint(c,Math.max(wNow()/2,6),perp)).addTo(map);
+    mk.on("dragstart",()=>el.classList.add("mh-active"));
+    mk.on("drag",()=>{
+      const ll=mk.getLngLat();
+      z.shape.widthM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])*2));
+      const wi=document.getElementById("pCorridorWidth"); if(wi) wi.value=z.shape.widthM;
+      _setLbl(el,"width: "+z.shape.widthM+" m"); renderSources();
+    });
+    mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
+    _handles.push(mk);
+  }
+
   // ---- 4: audio ring handle (blue, south) ----
   if((z.audioM||0)>0){
     const el=_mkHandle("mh-audio","audio fade: "+z.audioM+" m");
