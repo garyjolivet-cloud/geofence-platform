@@ -5252,8 +5252,10 @@ async function loadFromPlatform(id){
     updateAssetPaletteVisibility();
     // Corridor stops <-> Corridors tree: adopt any GPX-Editor reshapes into
     // linked stops, and seed a tree record for any legacy corridor stop that
-    // predates this link (needs the resolved appId above).
-    reconcileLinkedCorridors();
+    // predates this link (needs the resolved appId above). Deferred off the
+    // load critical path — it does a few /api/corridor GETs and can end in a
+    // render(), neither of which should compete with first paint.
+    setTimeout(reconcileLinkedCorridors, 1500);
     document.getElementById("clientSel").value=b.orgId||"";
     document.getElementById("isTemplateChk").checked=!!b.isTemplate;
     // No standing "loaded v..." status text on a normal load anymore

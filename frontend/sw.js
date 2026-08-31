@@ -1,17 +1,31 @@
 /* Geofence Platform — offline service worker (network-first)
    Online: always fetch fresh (so deploys show immediately).
    Offline: fall back to the cached copy.
-   Audio is cache-first (large, stable). Bump CACHE to wipe old caches. */
-const CACHE = 'gp-offline-v13';
+
+   Two caches, on purpose:
+   - PAGE_CACHE  — pages / JS / bundle / fonts. Small. Wiped on every deploy
+     (bump PAGE_CACHE) so stale code can't linger offline.
+   - AUDIO_CACHE — audio clips only. Can grow to tens/hundreds of MB. NEVER
+     wiped on a code deploy: deleting a cache that large inside activate's
+     waitUntil used to stall every fetch (blank screen for 20-30s) on the
+     first navigation after a deploy. Its name has no version — audio is
+     addressed by immutable per-clip URLs, so there's nothing to invalidate.
+   activate cleanup also runs OUTSIDE waitUntil so claim()/control is never
+   held up by cache deletion. */
+const PAGE_CACHE = 'gp-offline-v14';
+const AUDIO_CACHE = 'gp-audio';
+const KEEP = new Set([PAGE_CACHE, AUDIO_CACHE]);
 
 self.addEventListener('install', e => { self.skipWaiting(); });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
+  // Take control right away; don't make it wait on cache deletion.
+  e.waitUntil(self.clients.claim());
+  // Best-effort, non-blocking: drop any cache that isn't one we keep
+  // (old gp-offline-vN from previous deploys).
+  caches.keys()
+    .then(keys => Promise.all(keys.filter(k => !KEEP.has(k)).map(k => caches.delete(k))))
+    .catch(() => {});
 });
 
 self.addEventListener('fetch', e => {
@@ -20,10 +34,10 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
 
   // audio clips — network-first so edits/re-uploads are always reflected;
-  // fall back to SW cache when offline
+  // fall back to the (unversioned, persistent) audio cache when offline
   if (url.pathname.startsWith('/api/audio/')) {
     e.respondWith((async () => {
-      const c = await caches.open(CACHE);
+      const c = await caches.open(AUDIO_CACHE);
       try {
         const res = await fetch(req);
         // <audio> elements issue Range requests (esp. iOS Safari) — the
@@ -43,7 +57,7 @@ self.addEventListener('fetch', e => {
 
   // everything else (pages, JS, bundle, fonts) — network-first, cache as offline fallback
   e.respondWith((async () => {
-    const c = await caches.open(CACHE);
+    const c = await caches.open(PAGE_CACHE);
     try {
       const res = await fetch(req);
       if (res.ok && res.status !== 206) c.put(req, res.clone()).catch(() => {});
