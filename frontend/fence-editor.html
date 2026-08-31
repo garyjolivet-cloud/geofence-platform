@@ -1873,6 +1873,13 @@ function makeZone(name,shape){
            // reshaped in the GPX Editor). null for non-corridor stops and for
            // corridors imported from the library as a one-off copy.
            corridorId:null,
+           // The linked row's `updated_at` as of our last sync/publish.
+           // reconcileLinkedCorridors() only pulls the row's geometry back
+           // into the stop when the row is NEWER than this — otherwise the
+           // published stop wins (and heals the row). Without it a row left
+           // stale by a first-link POST/PATCH race would clobber a good
+           // published stop on every reload.
+           corridorRev:null,
            // Per-stop Kokoro voice override for TTS (spoken line). null
            // means "use the default voice" (af_bella).
            ttsVoice:null,
@@ -4407,27 +4414,34 @@ async function _appCorridorRows(appId){
 async function ensureCorridorRecord(z, knownRows){
   if(!z || !z.shape || z.shape.type!=="corridor" || z.corridorId) return;
   const appId=afAppId();
-  const pts=(z.shape.coords||[]).map(c=>[c[0],c[1]]); // [lon,lat], same order as the corridor table
-  if(!appId || pts.length<2) return;
+  // Snapshot name/width/coords together — everything below (POST body AND the
+  // _corrSig we stamp on success) uses THIS tuple, so if the stop is reshaped
+  // while the POST is in flight, sig != the reshaped stop and
+  // syncLinkedCorridorRows() then pushes the new geometry to the row instead
+  // of the two silently diverging (that race is what stranded a corridor row
+  // at its draw-time geometry while the published stop moved on).
+  const snap={name:z.name||"Corridor", widthM:z.shape.widthM||10, coords:(z.shape.coords||[]).map(c=>[c[0],c[1]])};
+  if(!appId || snap.coords.length<2) return;
   const rows = knownRows!==undefined ? knownRows : await _appCorridorRows(appId);
   if(rows===null) return; // list fetch failed — try again on the next load rather than risk a dupe
   const hit=_matchCorridorRow(rows, z);
-  if(hit){ // already in the tree — just re-link
-    z.corridorId=hit.id;
-    z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
+  if(hit){ // already in the tree — just re-link; leave _corrSig unset so the
+    z.corridorId=hit.id; // reconcile pass that follows decides who wins
+    z.corridorRev=hit.updatedAt||null;
     autoSave();
     return;
   }
   try{
     const r=await fetch("/api/corridor",{method:"POST",
       headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
-      body:JSON.stringify({appId,name:z.name||"Corridor",points:pts,
-        widthM:z.shape.widthM||10,distanceM:Math.round(gpxDistanceM(z.shape.coords))})});
+      body:JSON.stringify({appId,name:snap.name,points:snap.coords,
+        widthM:snap.widthM,distanceM:Math.round(gpxDistanceM(z.shape.coords))})});
     if(!r.ok) return;
     const j=await r.json();
     if(j && j.id){
       z.corridorId=j.id;
-      z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
+      z._corrSig=JSON.stringify([snap.coords,snap.widthM,snap.name]);
+      z.corridorRev=new Date().toISOString();
       gpxTree.refresh({appId});
       autoSave();
     }
@@ -4443,23 +4457,35 @@ async function reconcileLinkedCorridors(){
   const byId=new Map(rows.map(x=>[x.id,x]));
   let changed=false, touchedTree=false;
   await Promise.all(corr.map(async z=>{
-    if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; changed=true; } // row deleted in the tree
+    if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; z.corridorRev=null; changed=true; } // row deleted in the tree
     if(!z.corridorId){
       const hit=_matchCorridorRow(rows, z);
-      if(hit){ z.corridorId=hit.id; z._corrSig=null; changed=true; }
+      if(hit){ z.corridorId=hit.id; z.corridorRev=hit.updatedAt||null; z._corrSig=null; changed=true; }
       else{ const before=z.corridorId; await ensureCorridorRecord(z, rows); if(z.corridorId&&!before){ changed=true; touchedTree=true; } return; }
     }
     try{
+      const listRow=byId.get(z.corridorId); // carries updatedAt (the single-GET below doesn't)
       const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{headers:{authorization:"Bearer "+getToken()}});
       if(!r.ok) return;
       const j=await r.json();
       const rowPts=(j.points||[]).map(p=>[p[0],p[1]]);
-      if(rowPts.length>=2 && JSON.stringify(rowPts)!==JSON.stringify(z.shape.coords)){
+      const differ = rowPts.length>=2 && JSON.stringify(rowPts)!==JSON.stringify(z.shape.coords);
+      // Pull the row into the stop ONLY when the row was edited (in the GPX
+      // Editor) since our last publish — i.e. its updated_at is newer than the
+      // rev we round-tripped in the bundle. Otherwise the published stop is
+      // authoritative: leave it, and let syncLinkedCorridorRows() heal the row.
+      const rowNewer = !!(z.corridorRev && listRow && listRow.updatedAt && listRow.updatedAt > z.corridorRev);
+      if(differ && rowNewer){
         z.shape.coords=rowPts;
         if(j.widthM) z.shape.widthM=j.widthM;
         changed=true;
+        z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
+      } else if(differ){
+        z._corrSig=null; // stale row — force a stop -> row push on the next autoSave
+      } else {
+        z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
       }
-      z._corrSig=JSON.stringify([z.shape.coords,z.shape.widthM,z.name]);
+      z.corridorRev=(listRow&&listRow.updatedAt)||z.corridorRev||new Date().toISOString();
     }catch(e){}
   }));
   if(touchedTree) gpxTree.refresh({appId});
@@ -4479,7 +4505,7 @@ function syncLinkedCorridorRows(){
           headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
           body:JSON.stringify({name:z.name||"Corridor",points:z.shape.coords.map(c=>[c[0],c[1]]),
             widthM:z.shape.widthM||10,distanceM:Math.round(gpxDistanceM(z.shape.coords))})});
-        if(r.ok){ z._corrSig=sig; patched=true; }
+        if(r.ok){ z._corrSig=sig; z.corridorRev=new Date().toISOString(); patched=true; }
       }catch(e){}
     }
     // The Corridors tree renders name + width + distance, all of which a sync
@@ -4868,6 +4894,7 @@ function zoneToEngine(z){
   // tripped so a publish+reload doesn't sever a corridor stop from its
   // library entry / the GPX Editor.
   if(z.corridorId) zo.corridorId=z.corridorId;
+  if(z.corridorRev) zo.corridorRev=z.corridorRev;
   if(z.ttsVoice) zo.ttsVoice=z.ttsVoice;
   if(z.arObjects&&z.arObjects.length) zo.arObjects=z.arObjects;
   // Altitude gate (3D Mode) — null/omitted means "any altitude", the
@@ -5125,6 +5152,7 @@ function engineToZone(zo){
   // Corridors-tree record this corridor stop mirrors (see makeZone) —
   // reconcileLinkedCorridors() pulls GPX-Editor edits back in from it.
   z.corridorId = zo.corridorId || null;
+  z.corridorRev = zo.corridorRev || null;
   z.ttsVoice=zo.ttsVoice||null;
   z.arObjects=Array.isArray(zo.arObjects)?zo.arObjects:[];
   z.altM=zo.altM??null;
