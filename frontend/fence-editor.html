@@ -2434,7 +2434,16 @@ window.addEventListener("mouseup",()=>{
     // menu that a dblclick opens right after; that stacking was visible as
     // a multi-second UI freeze on a project with several zones.
     if(sel!==_zoneDrag.zIdx) selectZone(_zoneDrag.zIdx);
-    map.flyTo({center:zoneCenterLonLat(zones[_zoneDrag.zIdx]),zoom:Math.max(map.getZoom(),17)});
+    // Only recentre when the stop isn't already comfortably in view. A
+    // corridor carries 20-40 vertex-handle DOM markers, and flyTo re-transforms
+    // every one of them on every animation frame — a pointless recentre on a
+    // corridor that's already on screen reads as a multi-hundred-ms stutter.
+    const zc=zoneCenterLonLat(zones[_zoneDrag.zIdx]);
+    let onScreen=false;
+    try{ onScreen=map.getBounds().contains(zc); }catch(e){}
+    if(!onScreen || map.getZoom()<15.5){
+      map.flyTo({center:zc,zoom:Math.max(map.getZoom(),17)});
+    }
   } else {
     // drag: full render (repositions handles too) + autosave
     sel=_zoneDrag.zIdx; render(); refreshProps();
