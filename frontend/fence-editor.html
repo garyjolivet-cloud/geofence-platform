@@ -2575,7 +2575,11 @@ function finishShape(){
 
 /* ---- map drag handles ---- */
 let _handles=[], _vertexHandles=[], _tripHandles=[];
+// Bumped on every handle clear — a deferred vertex-handle batch (step 9)
+// checks its captured value and bails if a newer select has superseded it.
+let _vertexHandleToken=0;
 function clearHandles(){
+  _vertexHandleToken++;
   [..._handles,..._vertexHandles,..._tripHandles].forEach(m=>m.remove());
   _handles=[]; _vertexHandles=[]; _tripHandles=[];
 }
@@ -2709,14 +2713,24 @@ function refreshHandles(z){
   }
 
   // ---- 9: corridor stop's own vertex handles ----
+  // Deferred one frame so the click paints immediately. With 3D terrain on,
+  // MapLibre re-projects every DOM marker against the terrain depth buffer on
+  // each redraw, so adding 20-40 of them synchronously inside the select
+  // handler stalled the click by ~1-2s (confirmed with a perf profile:
+  // maplibre's resize/redraw/terrainDepth was the whole cost). The token
+  // guard drops the batch if another select (or a deselect) has since run.
   if(isPathZone){
-    z.shape.coords.forEach((coord,i)=>{
-      const el=_mkHandle("mh-vertex","point "+(i+1));
-      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(coord).addTo(map);
-      mk.on("dragstart",()=>el.classList.add("mh-active"));
-      mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
-      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-      _vertexHandles.push(mk);
+    const myToken=_vertexHandleToken;
+    requestAnimationFrame(()=>{
+      if(myToken!==_vertexHandleToken || sel<0 || zones[sel]!==z) return;
+      z.shape.coords.forEach((coord,i)=>{
+        const el=_mkHandle("mh-vertex","point "+(i+1));
+        const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(coord).addTo(map);
+        mk.on("dragstart",()=>el.classList.add("mh-active"));
+        mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
+        mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
+        _vertexHandles.push(mk);
+      });
     });
   }
 
