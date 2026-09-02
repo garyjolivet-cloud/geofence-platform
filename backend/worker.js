@@ -4215,6 +4215,18 @@ async function api(request, env, url) {
   // map-match corridor with no session token, same as the bundle read
   // itself. Consolidated from the old Path / Walking Path / Corridor trio,
   // migration 0055. ---
+  // Run-taxonomy allowlists (2026-09 corridor authoring split — see migration
+  // 0059). A run's difficulty / run type / activity now live on the corridor
+  // row, authored in the GPX Editor; the Fence Editor reads them read-only.
+  // null difficulty = "not set". run_type / activity_type are NOT NULL with
+  // the same defaults makeZone() uses.
+  const CORRIDOR_DIFFICULTY = ["green", "blue", "black", "double-black"];
+  const CORRIDOR_RUN_TYPE = ["run", "chute", "bowl", "ridge", "hike", "lift"];
+  const CORRIDOR_ACTIVITY = ["hike", "bike", "xcountry", "ski_chute", "walking_city"];
+  const corrDifficulty = (v) => (v == null || v === "") ? null : (CORRIDOR_DIFFICULTY.includes(v) ? v : undefined);
+  const corrRunType = (v) => (v == null || v === "") ? "run" : (CORRIDOR_RUN_TYPE.includes(v) ? v : undefined);
+  const corrActivity = (v) => (v == null || v === "") ? "hike" : (CORRIDOR_ACTIVITY.includes(v) ? v : undefined);
+
   if (path === "/api/corridor" && method === "POST") {
     const A = await auth(request, env);
     const b = await request.json().catch(() => ({}));
@@ -4227,6 +4239,8 @@ async function api(request, env, url) {
       const folder = await env.DB.prepare("SELECT id FROM corridor_folder WHERE id=? AND app_id=?").bind(folderId, appId).first();
       if (!folder) return json({ error: "folder not found" }, 404, AC);
     }
+    const difficulty = corrDifficulty(b.difficulty), runType = corrRunType(b.runType), activityType = corrActivity(b.activityType);
+    if (difficulty === undefined || runType === undefined || activityType === undefined) return json({ error: "invalid difficulty / runType / activityType" }, 400, AC);
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     // Every corridor has a width (column is NOT NULL DEFAULT 10); callers
@@ -4234,10 +4248,10 @@ async function api(request, env, url) {
     // it and get the default.
     const widthM = b.widthM != null ? b.widthM : 10;
     await env.DB.prepare(
-      "INSERT INTO corridor (id,app_id,folder_id,name,points_json,width_m,distance_m,elev_gain_m,elev_loss_m,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
-    ).bind(id, appId, folderId, name, JSON.stringify(b.points), widthM, b.distanceM || 0, b.elevGainM || 0, b.elevLossM || 0, now, now).run();
+      "INSERT INTO corridor (id,app_id,folder_id,name,points_json,width_m,distance_m,elev_gain_m,elev_loss_m,difficulty,run_type,activity_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    ).bind(id, appId, folderId, name, JSON.stringify(b.points), widthM, b.distanceM || 0, b.elevGainM || 0, b.elevLossM || 0, difficulty, runType, activityType, now, now).run();
     await logAudit(env, request, A, "corridor.create", appId + "/" + name);
-    return json({ id, name, folderId, widthM }, 201, AC);
+    return json({ id, name, folderId, widthM, difficulty, runType, activityType, updatedAt: now }, 201, AC);
   }
 
   if (path === "/api/corridor" && method === "GET") {
@@ -4245,17 +4259,29 @@ async function api(request, env, url) {
     const appId = (url.searchParams.get("appId") || "").trim();
     if (!appId) return json({ error: "appId required" }, 400, AC);
     if (!(await appScopeAuthOk(env, A, appId))) return json({ error: "unauthorized" }, 401, AC);
+    // ?withPoints=1 also returns each row's parsed geometry — the Fence
+    // Editor's reconcileLinkedCorridors() pulls every linked corridor's shape
+    // in this one request instead of N public GET-by-id calls.
+    const withPoints = url.searchParams.get("withPoints") === "1";
+    const cols = "id,folder_id AS folderId,name,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM,difficulty,run_type AS runType,activity_type AS activityType,updated_at AS updatedAt" + (withPoints ? ",points_json AS pointsJson" : "");
     const { results } = await env.DB.prepare(
-      "SELECT id,folder_id AS folderId,name,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM,updated_at AS updatedAt FROM corridor WHERE app_id=? ORDER BY name"
+      "SELECT " + cols + " FROM corridor WHERE app_id=? ORDER BY name"
     ).bind(appId).all();
-    return json({ corridors: results || [] }, 200, AC);
+    const corridors = (results || []).map((r) => {
+      if (!withPoints) return r;
+      const { pointsJson, ...rest } = r;
+      let points = [];
+      try { points = JSON.parse(pointsJson); } catch (e) { points = []; }
+      return { ...rest, points };
+    });
+    return json({ corridors }, 200, AC);
   }
 
   const mCorridor = path.match(/^\/api\/corridor\/([^/]+)$/);
   if (mCorridor && (method === "GET" || method === "PATCH" || method === "DELETE")) {
     const corridorId = decodeURIComponent(mCorridor[1]);
     const row = await env.DB.prepare(
-      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM FROM corridor WHERE id=?"
+      "SELECT app_id AS appId,folder_id AS folderId,name,points_json AS pointsJson,width_m AS widthM,distance_m AS distanceM,elev_gain_m AS elevGainM,elev_loss_m AS elevLossM,difficulty,run_type AS runType,activity_type AS activityType,updated_at AS updatedAt FROM corridor WHERE id=?"
     ).bind(corridorId).first();
     if (!row) return json({ error: "corridor not found" }, 404, AC);
 
@@ -4264,7 +4290,7 @@ async function api(request, env, url) {
       // for a published project that map-matches onto a corridor.
       let points;
       try { points = JSON.parse(row.pointsJson); } catch (e) { return json({ error: "stored corridor is corrupt" }, 500, AC); }
-      return json({ id: corridorId, name: row.name, appId: row.appId, folderId: row.folderId, widthM: row.widthM, distanceM: row.distanceM, elevGainM: row.elevGainM, elevLossM: row.elevLossM, points }, 200, AC);
+      return json({ id: corridorId, name: row.name, appId: row.appId, folderId: row.folderId, widthM: row.widthM, distanceM: row.distanceM, elevGainM: row.elevGainM, elevLossM: row.elevLossM, difficulty: row.difficulty, runType: row.runType, activityType: row.activityType, updatedAt: row.updatedAt, points }, 200, AC);
     }
 
     const A = await auth(request, env);
@@ -4279,10 +4305,16 @@ async function api(request, env, url) {
     const b = await request.json().catch(() => ({}));
     let name = row.name, folderId = row.folderId, widthM = row.widthM;
     let pointsJson = row.pointsJson, distanceM = row.distanceM, elevGainM = row.elevGainM, elevLossM = row.elevLossM;
+    let difficulty = row.difficulty, runType = row.runType, activityType = row.activityType;
     if (b.name !== undefined) {
       if (!b.name.trim()) return json({ error: "invalid name" }, 400, AC);
       name = b.name.trim();
     }
+    // Run taxonomy — undefined leaves it alone (rename/move-folder callers
+    // only ever send {name} or {folderId} and must not wipe these).
+    if (b.difficulty !== undefined) { const v = corrDifficulty(b.difficulty); if (v === undefined) return json({ error: "invalid difficulty" }, 400, AC); difficulty = v; }
+    if (b.runType !== undefined) { const v = corrRunType(b.runType); if (v === undefined) return json({ error: "invalid runType" }, 400, AC); runType = v; }
+    if (b.activityType !== undefined) { const v = corrActivity(b.activityType); if (v === undefined) return json({ error: "invalid activityType" }, 400, AC); activityType = v; }
     if (b.folderId !== undefined) {
       const newFolderId = b.folderId || null;
       if (newFolderId) {
@@ -4305,10 +4337,11 @@ async function api(request, env, url) {
       if (b.elevGainM != null) elevGainM = b.elevGainM;
       if (b.elevLossM != null) elevLossM = b.elevLossM;
     }
-    await env.DB.prepare("UPDATE corridor SET name=?, folder_id=?, points_json=?, width_m=?, distance_m=?, elev_gain_m=?, elev_loss_m=?, updated_at=? WHERE id=?")
-      .bind(name, folderId, pointsJson, widthM, distanceM, elevGainM, elevLossM, new Date().toISOString(), corridorId).run();
+    const updatedAt = new Date().toISOString();
+    await env.DB.prepare("UPDATE corridor SET name=?, folder_id=?, points_json=?, width_m=?, distance_m=?, elev_gain_m=?, elev_loss_m=?, difficulty=?, run_type=?, activity_type=?, updated_at=? WHERE id=?")
+      .bind(name, folderId, pointsJson, widthM, distanceM, elevGainM, elevLossM, difficulty, runType, activityType, updatedAt, corridorId).run();
     await logAudit(env, request, A, "corridor.update", corridorId);
-    return json({ id: corridorId, name, folderId, widthM }, 200, AC);
+    return json({ id: corridorId, name, folderId, widthM, difficulty, runType, activityType, updatedAt }, 200, AC);
   }
 
   // --- Corridor folders: same tree shape as stop_folder, but app-scoped to

@@ -168,5 +168,45 @@ const corridorLayer = {
     "editorToSimBundle emits out.path + out.movingAudio for a moving-audio corridor");
 })();
 
+// ---- 2026-09 corridor authoring split ----
+// Geometry / width / difficulty / runType / activityType are now authored
+// ONLY in the GPX Editor and stored on the `corridor` row; the Fence Editor
+// pulls them read-only. Guard both halves: (a) the publish output shape is
+// unchanged (Ridge Quest / engine / tile-fog read the baked bundle), and
+// (b) the redundant in-Fence-Editor editing UI and two-way sync are gone.
+(function testCorridorMetadataStillBaked() {
+  const zoneToEngine = extractMethodBody("function zoneToEngine(z){");
+  const engineToZone = extractMethodBody("function engineToZone(zo){");
+  // A plain corridor still serializes a target geometry with a path + widthM.
+  assert(/type:\s*["']corridor["'],\s*path:\s*s\.coords\.map\(LL\),\s*widthM:/.test(zoneToEngine.replace(/\s+/g, " ")),
+    "zoneToEngine still emits {type:'corridor', path:s.coords.map(LL), widthM:...} for a plain corridor");
+  // difficulty / runType / activityType still exported, guarded by shape type.
+  assert(/if\(z\.difficulty\)\s*zo\.difficulty\s*=\s*z\.difficulty/.test(zoneToEngine) &&
+    /if\(z\.runType\)\s*zo\.runType\s*=\s*z\.runType/.test(zoneToEngine) &&
+    /if\(z\.activityType\)\s*zo\.activityType\s*=\s*z\.activityType/.test(zoneToEngine),
+    "zoneToEngine still exports zo.difficulty / zo.runType / zo.activityType");
+  assert(/z\.difficulty\s*=\s*zo\.difficulty/.test(engineToZone) &&
+    /z\.runType\s*=\s*zo\.runType/.test(engineToZone) &&
+    /z\.activityType\s*=\s*zo\.activityType/.test(engineToZone),
+    "engineToZone still restores z.difficulty / z.runType / z.activityType from the bundle");
+})();
+
+(function testCorridorEditingUiRemoved() {
+  for (const gone of [
+    'bindProp("pDifficulty"', 'bindProp("pRunType"', 'bindProp("pCorridorWidth"',
+    'bindProp("pCorridorActivity"', "function ensureCorridorRecord", "function syncLinkedCorridorRows",
+    "function importCorridorFromGPX"
+  ]) {
+    assert(html.indexOf(gone) === -1, "removed from fence-editor.html: " + gone);
+  }
+  // No corridor vertex/width map handles left.
+  assert(html.indexOf("corridor stop's own vertex handles") === -1 &&
+    html.indexOf("corridor width handle (green)") === -1,
+    "corridor vertex + width drag handles removed from refreshHandles");
+  // importCorridorFromLibrary now links instead of copying.
+  assert(/importCorridorFromLibrary[\s\S]{0,600}z\.corridorId\s*=\s*corridorId/.test(html),
+    "importCorridorFromLibrary sets z.corridorId (linked add, not an unlinked copy)");
+})();
+
 console.log(pass + " passed, " + fail + " failed");
 if (fail > 0) process.exit(1);

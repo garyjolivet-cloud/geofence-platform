@@ -94,6 +94,7 @@
   <div class="rail">
     <div class="railHead">
       <span class="ttl">Corridors</span>
+      <button id="newCorridorBtn" class="ghost" title="Draw a new corridor by clicking points on the map">&#43; New</button>
       <button id="importBtn" class="ghost" title="Import a GPX file">&#8593; Import</button>
       <button id="treeRefreshBtn" class="ghost" title="Refresh">&#8635;</button>
     </div>
@@ -150,11 +151,38 @@
     <div id="addHint" class="hint"></div>
 
     <hr>
+    <label class="k">Run details</label>
+    <label class="k" style="margin-top:6px">Difficulty</label>
+    <select id="gpxDifficulty">
+      <option value="">&mdash; not set &mdash;</option>
+      <option value="green">Green &mdash; easy</option>
+      <option value="blue">Blue &mdash; intermediate</option>
+      <option value="black">Black &mdash; advanced</option>
+      <option value="double-black">Double black &mdash; expert</option>
+    </select>
+    <label class="k" style="margin-top:6px">Type</label>
+    <select id="gpxRunType">
+      <option value="run">Run</option>
+      <option value="chute">Chute</option>
+      <option value="bowl">Bowl</option>
+      <option value="ridge">Ridge</option>
+      <option value="hike">Hike</option>
+      <option value="lift">Lift</option>
+    </select>
+    <label class="k" style="margin-top:6px">Activity (sets ribbon width + texture)</label>
+    <select id="gpxActivityType">
+      <option value="hike">Hike</option>
+      <option value="bike">Bike</option>
+      <option value="xcountry">Cross-country ski</option>
+      <option value="ski_chute">Ski / downhill</option>
+      <option value="walking_city">City walking path</option>
+    </select>
+    <label class="k" style="margin-top:6px">Trigger-band width (m)</label>
+    <input type="number" id="gpxWidth" min="2" step="1" value="10">
+
+    <hr>
     <div class="row">
       <button id="saveBtn" class="on" disabled>Save</button>
-      <button id="widthBtn" class="ghost" disabled title="Set the trigger-band width for the currently loaded corridor">&#8960; Width&hellip;</button>
-    </div>
-    <div class="row">
       <button id="saveAsBtn">Save As&hellip;</button>
     </div>
   </div>
@@ -333,9 +361,11 @@ function recompute(){
   positionScrubberFromIdx(0);
   document.getElementById("scrubBar").classList.toggle("show", points.length>1);
   document.getElementById("saveBtn").disabled = !loadedFrom;
+  // "Add to Start" still needs ≥1 point to have an end to prepend to; "Add to
+  // End" is enabled whenever a project is loaded so it can seed the very
+  // first point of a brand-new corridor.
   document.getElementById("addStartBtn").disabled = points.length<1;
-  document.getElementById("addEndBtn").disabled = points.length<1;
-  updateWidthBtn();
+  document.getElementById("addEndBtn").disabled = !appId;
   // Deferred a frame (not called inline) — reordering alone doesn't force
   // an intermediate paint, since the browser only paints after the whole
   // synchronous call stack unwinds. requestAnimationFrame actually yields
@@ -705,10 +735,26 @@ document.getElementById("addStartBtn").onclick=()=>setAddMode("start");
 document.getElementById("addEndBtn").onclick=()=>setAddMode("end");
 document.addEventListener("keydown",e=>{ if(e.key==="Escape" && addMode) setAddMode(addMode); });
 map.on("click",e=>{
-  if(!addMode || points.length<1) return;
+  if(!addMode) return; // "end" mode with 0 points seeds the first point of a new corridor
   const pt=[e.lngLat.lng, e.lngLat.lat, null, null];
   setBase(addMode==="start" ? [pt].concat(points) : points.concat([pt]));
 });
+
+/* ---- draw a brand-new corridor from scratch ---- */
+function resetRunDetails(){
+  document.getElementById("gpxDifficulty").value="";
+  document.getElementById("gpxRunType").value="run";
+  document.getElementById("gpxActivityType").value="hike";
+  document.getElementById("gpxWidth").value="10";
+}
+document.getElementById("newCorridorBtn").onclick=()=>{
+  if(!appId){ alert("Pick a company and project first."); return; }
+  loadedFrom=null;
+  resetRunDetails();
+  document.getElementById("hdrCrumb").textContent="New corridor — click the map";
+  setBase([], {resetHistory:true});   // clears addMode; re-armed on the next line
+  setAddMode("end");
+};
 
 /* ---- undo last structural edit (Trim/Delete/Reverse/Extend) ---- */
 document.getElementById("undoBtn").onclick=undoEdit;
@@ -735,9 +781,13 @@ async function openTreeItem(item){
     const j=await r.json();
     const pts=(j.points||[]).map(p=>[p[0],p[1],p[2]==null?null:p[2],null]);
     if(pts.length<2){ alert("This corridor doesn't have enough points."); return; }
-    loadedFrom={kind:"corridor", id:item.id, name:j.name, widthM:j.widthM};
+    loadedFrom={kind:"corridor", id:item.id, name:j.name, widthM:j.widthM,
+               difficulty:j.difficulty, runType:j.runType, activityType:j.activityType};
+    document.getElementById("gpxDifficulty").value = j.difficulty || "";
+    document.getElementById("gpxRunType").value = j.runType || "run";
+    document.getElementById("gpxActivityType").value = j.activityType || "hike";
+    document.getElementById("gpxWidth").value = (j.widthM != null ? j.widthM : 10);
     updateHdrCrumb();
-    updateWidthBtn();
     setBase(pts, {resetHistory:true});
   }catch(e){ alert("Open failed: "+e.message); }
 }
@@ -745,10 +795,14 @@ function updateHdrCrumb(){
   if(!loadedFrom) return;
   document.getElementById("hdrCrumb").textContent = loadedFrom.name;
 }
-function updateWidthBtn(){
-  const btn=document.getElementById("widthBtn");
-  btn.disabled = !loadedFrom;
-  btn.textContent = "⌀ "+(loadedFrom&&loadedFrom.widthM!=null ? "Width: "+loadedFrom.widthM+"m…" : "Width…");
+// Read the Run details block into a payload fragment for POST/PATCH.
+function runDetailsPayload(){
+  return {
+    difficulty: document.getElementById("gpxDifficulty").value || null,
+    runType: document.getElementById("gpxRunType").value || "run",
+    activityType: document.getElementById("gpxActivityType").value || "hike",
+    widthM: Math.max(2, +document.getElementById("gpxWidth").value || 10)
+  };
 }
 
 /* ---- tree mount ---- */
@@ -779,43 +833,30 @@ document.getElementById("saveBtn").onclick=async()=>{
   if(!loadedFrom) return;
   const {distanceM,elevGainM,elevLossM}=currentTotals();
   const flatPoints=points.map(p=>[p[0],p[1],p[2]]);
+  const rd=runDetailsPayload();
   try{
-    await patchJson("/api/corridor/"+loadedFrom.id,{points:flatPoints,distanceM,elevGainM,elevLossM});
+    await patchJson("/api/corridor/"+loadedFrom.id,{points:flatPoints,distanceM,elevGainM,elevLossM,...rd});
+    Object.assign(loadedFrom, rd);
     gpxTree.refresh({appId});
     alert("Saved.");
   }catch(e){ alert("Save failed: "+e.message); }
 };
-// Save As… — one name prompt plus an optional width prompt (every corridor
-// has a width; blank keeps the default 10 m trigger band).
+// Save As… — a name prompt; difficulty / type / activity / width come from
+// the Run details block.
 document.getElementById("saveAsBtn").onclick=async()=>{
   if(!appId){ alert("Pick a company and project first."); return; }
   if(points.length<2) return;
   const name=(prompt("Name this corridor:", (loadedFrom&&loadedFrom.name)||"")||"").trim();
   if(!name) return;
-  const widthStr=(prompt("Trigger-band width in meters (blank = 10):", loadedFrom&&loadedFrom.widthM!=null?String(loadedFrom.widthM):"")||"").trim();
-  const widthM=widthStr?(+widthStr||10):10;
+  const rd=runDetailsPayload();
   const target=gpxTree.getUploadTarget();
   const folderId = target ? target.folderId : null;
   const {distanceM,elevGainM,elevLossM}=currentTotals();
   try{
-    const j=await postJson("/api/corridor",{appId,name,points:points.map(p=>[p[0],p[1],p[2]]),folderId,widthM,distanceM,elevGainM,elevLossM});
-    loadedFrom={kind:"corridor", id:j.id, name, widthM};
+    const j=await postJson("/api/corridor",{appId,name,points:points.map(p=>[p[0],p[1],p[2]]),folderId,distanceM,elevGainM,elevLossM,...rd});
+    loadedFrom={kind:"corridor", id:j.id, name, ...rd};
     updateHdrCrumb();
-    updateWidthBtn();
     document.getElementById("saveBtn").disabled=false;
-    gpxTree.refresh({appId});
-  }catch(e){ alert("Save failed: "+e.message); }
-};
-// Change the trigger-band width of the currently loaded corridor in place.
-document.getElementById("widthBtn").onclick=async()=>{
-  if(!loadedFrom) return;
-  const widthStr=(prompt("Trigger-band width in meters (blank = 10):", loadedFrom.widthM!=null?String(loadedFrom.widthM):"")||"").trim();
-  const widthM=widthStr?(+widthStr||10):10;
-  try{
-    await patchJson("/api/corridor/"+loadedFrom.id,{widthM});
-    loadedFrom.widthM=widthM;
-    updateHdrCrumb();
-    updateWidthBtn();
     gpxTree.refresh({appId});
   }catch(e){ alert("Save failed: "+e.message); }
 };
@@ -864,15 +905,20 @@ async function resolveAppIdFallback(id){
   }catch(e){}
   return null;
 }
+// Consumed once — a /gpx-editor?...&corridor=<id> deep-link (from the Fence
+// Editor's "Edit shape in GPX Editor" button) opens straight onto that row.
+let _pendingCorridorId = new URLSearchParams(location.search).get("corridor") || null;
 async function enterProject(id, proj){
   appId = (proj && proj.appId) || null;
   if(!appId) appId = await resolveAppIdFallback(id);
   document.getElementById("hdrCrumb").textContent = (proj&&proj.name)||id;
   loadedFrom=null;
+  resetRunDetails();
   setBase([], {resetHistory:true});
   showGpxScreen();
   if(!appId){ document.getElementById("gpxTreeHost").innerHTML='<div class="hint">couldn\'t determine this project\'s workspace</div>'; return; }
   gpxTree.refresh({appId});
+  if(_pendingCorridorId){ const cid=_pendingCorridorId; _pendingCorridorId=null; openTreeItem({ id: cid }); }
 }
 
 if(window.TopNav){

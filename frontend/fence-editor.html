@@ -700,10 +700,6 @@
     <label class="k" style="flex:0 0 auto;align-self:center;margin:0">reveal radius m</label>
     <input id="newRadius" type="number" value="12" min="3" style="flex:1">
   </div>
-  <div class="row" id="corridorRow" style="display:none">
-    <label class="k" style="flex:0 0 auto;align-self:center;margin:0">corridor width m</label>
-    <input id="newCorridorWidth" type="number" value="10" min="2" style="flex:1">
-  </div>
   <div class="row" id="finishCancelRow" style="display:none">
     <button id="finishBtn" class="ghost" style="flex:1">Finish polygon</button>
     <button id="cancelBtn" class="ghost" style="flex:0 0 auto">✕</button>
@@ -739,8 +735,10 @@
       <div class="hint" style="margin:4px 0 0">Position is always on a shared real-world clock — visitors near the route at the same moment hear it in the same place.</div>
     </div>
 
-    <!-- ── Corridor details (corridor stops only) — behavior toggles plus
-         Ridge Quest run taxonomy ── -->
+    <!-- ── Corridor stop (corridor stops only). Geometry + width + run
+         taxonomy are owned by the linked Corridors-library row and shown
+         read-only here — reshape in the GPX Editor. This panel only carries
+         the tour-corridor behaviour toggle. ── -->
     <div class="va-section" id="pCorridorSection" style="display:none">
       <div class="va-label">Corridor</div>
       <label style="display:flex;align-items:center;gap:8px;margin:6px 0;text-transform:none;font-family:inherit;font-size:13px;color:inherit">
@@ -748,43 +746,20 @@
         Audio travels along this line (moving ambient bed)
       </label>
       <div class="hint" style="margin:-2px 0 4px">Map-matching (snap the visitor onto a line) is set per corridor in the Corridors palette, not here.</div>
-      <div class="va-label" style="margin-top:8px">Run details</div>
-      <label class="k">difficulty</label>
-      <select id="pDifficulty">
-        <option value="">— not set —</option>
-        <option value="green">Green</option>
-        <option value="blue">Blue</option>
-        <option value="black">Black</option>
-        <option value="double-black">Double black</option>
-      </select>
-      <label class="k" style="margin-top:6px">type</label>
-      <select id="pRunType">
-        <option value="run">Run</option>
-        <option value="chute">Chute</option>
-        <option value="bowl">Bowl</option>
-        <option value="ridge">Ridge</option>
-        <option value="hike">Hike</option>
-        <option value="lift">Lift</option>
-      </select>
-      <label class="k" style="margin-top:6px">width (m)</label>
-      <input id="pCorridorWidth" type="number" min="2" step="1">
-      <div class="hint" style="margin:4px 0 0">The stop's "name" field above is this run's display name — no separate field needed.</div>
-    </div>
 
-    <!-- ── Artistic map tile corridor (corridor stops) — which continuous
-         ribbon graphic "Generate Terrain" draws along this corridor's
-         length, on top of the classified hex terrain. ── -->
-    <div class="va-section" id="pTileCorridorSection" style="display:none">
-      <div class="va-label">Artistic map corridor</div>
-      <label class="k">activity (sets ribbon width + texture)</label>
-      <select id="pCorridorActivity">
-        <option value="hike">Hike — 2m dirt path, grass edges</option>
-        <option value="bike">Bike — 2m dirt/gravel path, grass edges</option>
-        <option value="xcountry">Cross-country ski — 5m double track + skate lane</option>
-        <option value="ski_chute">Ski chute (downhill) — 20m open powder</option>
-        <option value="walking_city">Walking (city) — 3m paved</option>
-      </select>
-      <div class="hint" style="margin:4px 0 0">Only used by the artistic fog-of-war map, if enabled for this app.</div>
+      <div id="pCorridorLinked" style="display:none">
+        <div class="va-label" style="margin-top:8px">Run details (from the Corridors library)</div>
+        <div class="hint" id="pCorridorMeta" style="margin:2px 0 6px;color:var(--ice)">—</div>
+        <div class="row" style="display:flex;gap:6px">
+          <button id="pCorridorEditInGpx" type="button" class="ghost" style="flex:1">Edit shape in GPX Editor ↗</button>
+          <button id="pCorridorRefreshShape" type="button" class="ghost" style="flex:0 0 auto" title="Pull the latest shape / width / difficulty from the library">&#8635;</button>
+        </div>
+      </div>
+
+      <div id="pCorridorUnlinked" style="display:none">
+        <div class="hint" style="margin:8px 0 4px">Not in the Corridors library — its shape can't be edited here. Save it so you can reshape it in the GPX Editor.</div>
+        <button id="pCorridorSaveToLib" type="button" class="ghost" style="width:100%">Save to Corridors library</button>
+      </div>
     </div>
 
     <!-- ── Viewpoint (Ridge Quest R4, circle stops only) — "seen but not
@@ -1192,12 +1167,13 @@
 <div id="gpxPalette">
   <div id="gpxPaletteHead">
     <span class="ttl">&#10160; Corridors</span>
-    <button id="gpxRefresh" class="ghost" title="Refresh">&#8635;</button>
+    <button id="gpxPullShapes" class="ghost" title="Pull every linked corridor stop's shape from the library">&#8635; shapes</button>
+    <button id="gpxRefresh" class="ghost" title="Refresh list">&#8635;</button>
     <button id="gpxPaletteMin" class="ghost" title="Minimize">&#8722;</button>
   </div>
   <div id="gpxPaletteBody">
     <div id="gpxTreeHost"></div>
-    <div class="hint">drag a corridor onto the map to create a stop from it, or tick its box to use it for map-matching</div>
+    <div class="hint">click a corridor to add it to this project as a linked stop, or tick its box to use it for map-matching. Draw / reshape corridors in the GPX Editor.</div>
   </div>
 </div>
 
@@ -1373,9 +1349,6 @@ const DRAFT_KEY="gp.editor.draft";
 let _autoSaveTimer=null;
 function autoSave(){
   clearTimeout(_autoSaveTimer);
-  // Push any editor-side reshape/rename of a linked corridor stop out to its
-  // Corridors-tree record (own debounce; no-op when nothing's changed).
-  if(typeof syncLinkedCorridorRows==="function") syncLinkedCorridorRows();
   _autoSaveTimer=setTimeout(()=>{
     try{
       const id=_currentProjectId||slug(projName())||null;
@@ -1831,10 +1804,10 @@ function uniqueZoneId(base,selfZone){
 const LL=p=>[+p[1].toFixed(6),+p[0].toFixed(6)];     // [lon,lat] -> [lat,lon]
 const LonLat=p=>[p[1],p[0]];                          // [lat,lon] -> [lon,lat]
 // Round a [lon,lat][] to 6 dp — the same precision LL bakes into the
-// published bundle. All corridor-row point I/O goes through this so a stop's
-// coords and its linked row's points_json compare byte-identical (an
-// unrounded mismatch made reconcileLinkedCorridors see a permanent "differ"
-// and syncLinkedCorridorRows re-PATCH on every render).
+// published bundle. Corridor geometry pulled from a library row runs through
+// this (and the same _strideCorridor) before it lands on z.shape.coords, so a
+// stop's coords and _c6(stride(row.points)) compare byte-identical and
+// reconcileLinkedCorridors doesn't re-render every load on a phantom diff.
 const _c6=a=>(a||[]).map(p=>[+(+p[0]).toFixed(6),+(+p[1]).toFixed(6)]);
 
 // A corridor with "moving audio" on keeps its clip in a separate field
@@ -1845,11 +1818,23 @@ const _c6=a=>(a||[]).map(p=>[+(+p[0]).toFixed(6),+(+p[1]).toFixed(6)]);
 // identical, so this one helper is all that's needed to point it at the
 // right field.
 function zoneAudioField(z){ return (z&&z.movingAudio)?"ambientAudioUrl":"audioUrl"; }
+// A corridor's geometry is immutable in this editor (owned by its library
+// row), so its arc-midpoint — recomputed up to 3x per render (feats loop,
+// bearing arrows, project rings) and hit for hundreds of corridors — is
+// cached. Keyed by corridorId (or zone id for a legacy unlinked stop);
+// cleared/invalidated wherever a corridor's shape can change:
+// reconcileLinkedCorridors / refreshCorridorShapeFromLibrary / import.
+const _corrCenterCache=new Map();
 function zoneCenterLonLat(z){ const s=z.shape;
   if(s.type==="circle") return s.center;
   if(s.type==="tripline") return [(s.from[0]+s.to[0])/2,(s.from[1]+s.to[1])/2];
-  if(s.type==="corridor" && z.movingAudio) return s.coords[0];
-  if(s.type==="corridor") return polylineMidpointLonLat(s.coords);
+  if(s.type==="corridor" && z.movingAudio) return s.coords[0]; // live-tracked, never cache
+  if(s.type==="corridor"){
+    const key=z.corridorId||("z:"+z.id);
+    let m=_corrCenterCache.get(key);
+    if(!m){ m=polylineMidpointLonLat(s.coords); _corrCenterCache.set(key,m); }
+    return m;
+  }
   return centroidLonLat(s.coords);
 }
 function zoneGenR(z){ const s=z.shape;
@@ -1923,15 +1908,13 @@ function makeZone(name,shape){
            // other 3 mirror locations this field must stay in sync with.
            altM:null, altToleranceM:null };
   if(shape.type==="corridor"){
-    // Ridge Quest (R0) run taxonomy — difficulty/runType are read by R1's
-    // corridor-crossing classification and by the points/leaderboard
-    // system; this editor doesn't validate or act on them itself. base.name
-    // doubles as the run's display name.
-    base.difficulty=null; base.runType="run";
-    // Which ribbon graphic "Generate Terrain" draws along this corridor
-    // (see pTileCorridorSection). Has its own 3 export/import/sim mirror
-    // locations to stay in sync with, same as difficulty/runType.
-    base.activityType="hike";
+    // Run taxonomy — difficulty / runType / activityType. Authored ONLY in
+    // the GPX Editor (on the linked `corridor` row) and pulled read-only here
+    // by reconcileLinkedCorridors / importCorridorFromLibrary. These defaults
+    // match the row column defaults (migration 0059); still exported into the
+    // published bundle by zoneToEngine so Ridge Quest / engine / tile-fog
+    // read them from the baked zone exactly as before.
+    base.difficulty=null; base.runType="run"; base.activityType="hike";
     // "Moving audio" mode — when true, this corridor serializes to the
     // engine's moving-ambient-bed form (an audio source travels the line at
     // speedKmh) instead of a static trigger band. movementMode/speedKmh/
@@ -1982,6 +1965,11 @@ function renderSourcesInner(){
     try{
     const s=z.shape, selected=(i===sel);
     const isMovingCorridor=(s.type==="corridor" && !!z.movingAudio);
+    // Hearing-range / fade / speaker-cone / audio rings for a corridor render
+    // ONLY when it's selected — with hundreds of corridors in a project,
+    // drawing every one's ring set (40+ polygons each) on every render made
+    // Edit unusable. An unselected corridor draws just its line + name label.
+    const corrRings = s.type!=="corridor" || selected;
     // While testing, a moving-audio corridor's own rings track its current
     // live position along the route (same position its amber marker uses
     // via simAmbientCenterNow) instead of staying pinned to the route's
@@ -2021,7 +2009,7 @@ function renderSourcesInner(){
     // audio fade ring — trigger-system ring, shown for every zone type
     // including path stops (path stops fire triggers too now, at whatever
     // point along the route they currently occupy at runtime)
-    if((z.audioM||0)>0) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
+    if((z.audioM||0)>0 && corrRings) feats.push({type:"Feature",properties:{kind:"audio",sel:selected},
       geometry:{type:"Polygon",coordinates:[ringFn(z.audioM)]}});
     // Vertical-extent shadow ring + label (item A, 2026-08-14) — circle
     // stops only, v1's cylinder trigger-volume scope (see #pAltSection's
@@ -2061,7 +2049,7 @@ function renderSourcesInner(){
     // mirrors SpatialVoice.spatialRange()'s chain) — plus the gradient
     // band between the two.
     const fg=zoneFadeGeom(z);
-    if(fg){
+    if(fg && corrRings){
       // For a polygon, ringFn(0) is the polygon's own boundary (not a
       // point like a circle's center) — so the 16 speaker-cone bands below
       // (built as annuli between ringFn(r0) and ringFn(r1)) only ever cover
@@ -2122,11 +2110,9 @@ function renderSourcesInner(){
       feats.push({type:"Feature",properties:{kind:"triphit",zIdx:i},
         geometry:{type:"Polygon",coordinates:[rectRing(s.from,s.to,TRIPLINE_HIT_HALF_WIDTH_M)]}});
     }
-    // Corridor — rendered as a plain line via the existing fence-line
-    // layer, same as tripline. No buffered-width fill yet (would need a real
-    // polyline-buffer-to-polygon helper, not built in this pass) — the
-    // width number lives in the property panel and in the exported
-    // geometry; visually it's a labeled line only for now. A moving-audio
+    // Corridor — rendered as a plain line via the existing fence-line layer,
+    // same as tripline. The width number (owned by the linked library row) is
+    // shown in the line's label; no buffered-width fill. A moving-audio
     // corridor uses the dashed "moving" style and drops the width label.
     else if(s.type==="corridor") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:isMovingCorridor?z.name:(z.name+" ("+(s.widthM||10)+"m)"),isPath:isMovingCorridor},
         geometry:{type:"LineString",coordinates:s.coords}});
@@ -2169,14 +2155,16 @@ function renderSourcesInner(){
     map.getSource("project-rings").setData(fc(pf));
   }
 
-  // bearing arrows — every zone gets one (default 90° east), including path
-  // stops now that they fire the same guidance/trigger system as any other stop
+  // bearing arrows — every zone gets one (default 90° east) EXCEPT an
+  // unselected corridor (see corrRings: a corridor's on-map decoration is
+  // selected-only so hundreds of them don't cost per render).
   if(map.getSource("bearing-arrows")){
-    const arrowFeats=zones.map(z=>{
+    const arrowFeats=zones.map((z,i)=>{
+      if(z.shape.type==="corridor" && i!==sel) return null;
       const ctr=zoneCenterLonLat(z), bd=z.bearingDeg??90;
       const tip=destPoint(ctr,20,bd);
       return {type:"Feature",properties:{},geometry:{type:"LineString",coordinates:[ctr,tip]}};
-    });
+    }).filter(Boolean);
     map.getSource("bearing-arrows").setData(fc(arrowFeats));
   }
 
@@ -2190,7 +2178,7 @@ function renderSourcesInner(){
   // not just the draft's own point marker, but (since a thrown/rejected
   // setData mid-render-cycle could leave the map's internal source-update
   // pipeline in a bad state) other zones' rings on the "fences" source too.
-  if((tool==="polygon"||tool==="tripline"||tool==="corridor")&&draft.length>=2) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
+  if((tool==="polygon"||tool==="tripline")&&draft.length>=2) d.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:draft}});
   if(tool==="circle"&&draft.length) d.push({type:"Feature",properties:{},
         geometry:{type:"Polygon",coordinates:[circleRing(draft[0],+document.getElementById("newRadius").value||12,64)]}});
   const pts=draft.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}));
@@ -2383,8 +2371,10 @@ function _zoneMousedown(e){
   else if(z.shape.type==="polygon"||z.shape.type==="corridor") snap={coords:z.shape.coords.map(c=>[...c])};
   else                           snap={from:[...z.shape.from],to:[...z.shape.to]};
   map.dragPan.disable();
-  _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false};
-  map.getCanvas().style.cursor="grabbing";
+  // Corridors are fixed to their library geometry — a mousedown just selects
+  // them, never translates. (noMove: mousemove bails before applying an offset.)
+  _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false, noMove:z.shape.type==="corridor"};
+  map.getCanvas().style.cursor=_zoneDrag.noMove?"pointer":"grabbing";
 }
 map.on("mousedown","fence-fill",_zoneMousedown);
 map.on("mousedown","fence-line",_zoneMousedown);
@@ -2392,7 +2382,7 @@ map.on("mousedown","trip-hit",_zoneMousedown);
 
 // mousemove: apply offset to zone geometry while dragging
 map.on("mousemove",e=>{
-  if(!_zoneDrag) return;
+  if(!_zoneDrag || _zoneDrag.noMove) return; // corridors don't translate
   const dLng=e.lngLat.lng-_zoneDrag.startLng, dLat=e.lngLat.lat-_zoneDrag.startLat;
   if(!_zoneDrag.moved&&Math.abs(dLng)<0.000015&&Math.abs(dLat)<0.000015) return;
   _zoneDrag.moved=true;
@@ -2413,7 +2403,7 @@ map.on("mousemove",e=>{
       z.shape.center=[s.center[0]+dLng, s.center[1]+dLat];
     }
   }
-  else if(z.shape.type==="polygon"||z.shape.type==="corridor") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]);
+  else if(z.shape.type==="polygon") z.shape.coords=s.coords.map(c=>[c[0]+dLng,c[1]+dLat]); // corridors bail above (noMove)
   else { z.shape.from=[s.from[0]+dLng,s.from[1]+dLat]; z.shape.to=[s.to[0]+dLng,s.to[1]+dLat]; }
   // select this zone if not already selected
   if(sel!==_zoneDrag.zIdx){ sel=_zoneDrag.zIdx; refreshProps(); }
@@ -2478,7 +2468,6 @@ map.on("click",e=>{
     if(tool==="circle"){ draft=[p]; finishShape(); }
     else if(tool==="tripline"){ draft.push(p); if(draft.length===2) finishShape(); else render(); }
     else if(tool==="polygon"){ draft.push(p); render(); }
-    else if(tool==="corridor"){ draft.push(p); render(); }
     return;
   }
   // deselect when clicking empty map (zone mousedown handles zone clicks)
@@ -2495,21 +2484,19 @@ function resetShapePickerBtn(){
 // is actually being drawn — collapsed the rest of the time, same as circleRow.
 function updateDrawUiVisibility(t){
   document.getElementById("circleRow").style.display = t==="circle"?"flex":"none";
-  document.getElementById("corridorRow").style.display = t==="corridor"?"flex":"none";
   document.getElementById("finishCancelRow").style.display = t?"flex":"none";
   document.getElementById("drawHint").style.display = t?"block":"none";
 }
 function setTool(t){ tool=t; draft=[];
-  const shapeLabel={circle:"● Circle",polygon:"⬡ Polygon",tripline:"／ Tripline",corridor:"➰ Corridor"}[t];
+  const shapeLabel={circle:"● Circle",polygon:"⬡ Polygon",tripline:"／ Tripline"}[t];
   if(shapeLabel){ document.getElementById("shapePickerBtn").textContent=shapeLabel+" — drawing…"; document.getElementById("shapePickerBtn").classList.add("on"); }
   else resetShapePickerBtn();
   updateDrawUiVisibility(t);
-  document.getElementById("finishBtn").textContent = t==="corridor"?"Finish corridor":"Finish polygon";
+  document.getElementById("finishBtn").textContent = "Finish polygon";
   document.getElementById("drawHint").textContent={
     circle:"click the center on the map (reveal radius set above)",
     polygon:"click each corner; press Finish to close it",
-    tripline:"click the two ends of the crossing line",
-    corridor:"click each point along the line; press Finish when done (2+ points)"}[t]||"pick a shape to start drawing";
+    tripline:"click the two ends of the crossing line"}[t]||"pick a shape to start drawing";
   render();
 }
 function openShapePicker(anchorBtn){
@@ -2518,23 +2505,15 @@ function openShapePicker(anchorBtn){
     mkItem("● Circle",()=>setTool("circle"));
     mkItem("⬡ Polygon",()=>setTool("polygon"));
     mkItem("／ Tripline",()=>setTool("tripline"));
-    // The corridor trigger primitive (signed distance to a polyline minus
-    // half-width) is evaluated by Geofencer/SimFencer. Draws multi-click
-    // with a Finish button and a width. A corridor can also carry
-    // "moving audio" (an ambient bed that travels the line) and/or be used
-    // for map-matching — both are toggles in its property panel.
-    mkItem("➰ Corridor",()=>setTool("corridor"));
-    // Hand-clicking a corridor point-by-point doesn't scale to a real
-    // resort's full run network. Reuses the exact same parseGPX() a
-    // recorded track already goes through — GPX's <trkpt> maps directly
-    // onto a corridor's [lon,lat] coords, no separate parser needed.
-    mkItem("⬆ Import GPX as Corridor",()=>importCorridorFromGPX());
+    // Corridors (ski runs / trails) are drawn and shaped in the GPX Editor
+    // now, saved to the app-scoped Corridors library, then added to a project
+    // from the Corridors palette (which drops a linked, geometry-read-only
+    // stop). There is no corridor draw tool here.
   });
 }
 document.getElementById("shapePickerBtn").onclick=e=>{ e.stopPropagation(); openShapePicker(e.currentTarget); };
 document.getElementById("finishBtn").onclick=()=>{
   if(tool==="polygon"&&draft.length>=3) finishShape();
-  else if(tool==="corridor"&&draft.length>=2) finishShape();
 };
 document.getElementById("cancelBtn").onclick=()=>{ draft=[]; tool=null;
   resetShapePickerBtn();
@@ -2547,7 +2526,6 @@ function finishShape(){
   if(tool==="circle") shape={type:"circle",center:draft[0],radiusM:+document.getElementById("newRadius").value||12};
   else if(tool==="polygon") shape={type:"polygon",coords:draft.slice()};
   else if(tool==="tripline") shape={type:"tripline",from:draft[0],to:draft[1]};
-  else if(tool==="corridor") shape={type:"corridor",coords:draft.slice(),widthM:+document.getElementById("newCorridorWidth").value||10};
   const z=makeZone(name,shape);
   z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as audio uploads
   // Snap onto the nearest active map-match corridor only if placed near it —
@@ -2568,18 +2546,11 @@ function finishShape(){
   resetShapePickerBtn();
   updateDrawUiVisibility(null);
   selectZone(zones.length-1);
-  // Hand-drawn corridor -> also create its Corridors-tree record so it's
-  // editable in the GPX Editor (fire-and-forget; sets z.corridorId + autoSaves).
-  if(shape.type==="corridor") ensureCorridorRecord(z);
 }
 
 /* ---- map drag handles ---- */
 let _handles=[], _vertexHandles=[], _tripHandles=[];
-// Bumped on every handle clear — a deferred vertex-handle batch (step 9)
-// checks its captured value and bails if a newer select has superseded it.
-let _vertexHandleToken=0;
 function clearHandles(){
-  _vertexHandleToken++;
   [..._handles,..._vertexHandles,..._tripHandles].forEach(m=>m.remove());
   _handles=[]; _vertexHandles=[]; _tripHandles=[];
 }
@@ -2595,12 +2566,11 @@ function refreshHandles(z){
   if(!z||sel<0) return;
   const c=zoneCenterLonLat(z); // [lon,lat]
 
-  // Corridor stops get everything a normal stop gets (bearing/approach/
-  // audio-fade handles below, steps 1/2/4) plus per-point vertex handles
-  // (step 9). Capped at 40 points — a GPX-imported corridor can be ~150
-  // points, and one draggable Marker per point would flood the map; above
-  // the cap, whole-shape drag (the mousedown handler) is the only edit.
-  const isPathZone=z.shape.type==="corridor" && z.shape.coords.length<=40;
+  // Corridor stops get NO geometry handles — no vertex handles, no width
+  // handle. Shape + width are read-only, owned by the linked Corridors-library
+  // row (reshape in the GPX Editor). A selected corridor still gets the
+  // bearing / audio-fade / full-volume handles (steps 1 / 4 / 8), same as any
+  // stop.
 
   // ---- 1: bearing tip handle (amber) — always shown, defaults to 90° ----
   if(z.bearingDeg==null) z.bearingDeg=90;
@@ -2628,29 +2598,6 @@ function refreshHandles(z){
     });
     mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
     _handles.push(mk);
-  }
-
-  // ---- 3b: corridor width handle (green) — sits half the band width out,
-  // perpendicular to the line at its midpoint; drag = full band width (x2). ----
-  if(z.shape.type==="corridor" && !z.movingAudio && z.shape.coords.length>=2){
-    const cc=z.shape.coords;
-    let perp=(bearingTo(cc[0],cc[cc.length-1])+90)%360;
-    if(!isFinite(perp)) perp=90; // degenerate line (coincident endpoints) — just point east
-    const wNow=()=>z.shape.widthM||10;
-    const anchor=destPoint(c,Math.max(wNow()/2,6),perp);
-    if(anchor&&isFinite(anchor[0])&&isFinite(anchor[1])){ // never hand MapLibre a NaN LngLat
-      const el=_mkHandle("mh-radius","width: "+wNow()+" m");
-      const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(anchor).addTo(map);
-      mk.on("dragstart",()=>el.classList.add("mh-active"));
-      mk.on("drag",()=>{
-        const ll=mk.getLngLat();
-        z.shape.widthM=Math.max(2,Math.round(haversineM(c,[ll.lng,ll.lat])*2));
-        const wi=document.getElementById("pCorridorWidth"); if(wi) wi.value=z.shape.widthM;
-        _setLbl(el,"width: "+z.shape.widthM+" m"); renderSources();
-      });
-      mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-      _handles.push(mk);
-    }
   }
 
   // ---- 4: audio ring handle (blue, south) ----
@@ -2712,28 +2659,6 @@ function refreshHandles(z){
     }
   }
 
-  // ---- 9: corridor stop's own vertex handles ----
-  // Deferred one frame so the click paints immediately. With 3D terrain on,
-  // MapLibre re-projects every DOM marker against the terrain depth buffer on
-  // each redraw, so adding 20-40 of them synchronously inside the select
-  // handler stalled the click by ~1-2s (confirmed with a perf profile:
-  // maplibre's resize/redraw/terrainDepth was the whole cost). The token
-  // guard drops the batch if another select (or a deselect) has since run.
-  if(isPathZone){
-    const myToken=_vertexHandleToken;
-    requestAnimationFrame(()=>{
-      if(myToken!==_vertexHandleToken || sel<0 || zones[sel]!==z) return;
-      z.shape.coords.forEach((coord,i)=>{
-        const el=_mkHandle("mh-vertex","point "+(i+1));
-        const mk=new maplibregl.Marker({element:el,draggable:true}).setLngLat(coord).addTo(map);
-        mk.on("dragstart",()=>el.classList.add("mh-active"));
-        mk.on("drag",()=>{ const ll=mk.getLngLat(); z.shape.coords[i]=[ll.lng,ll.lat]; renderSources(); });
-        mk.on("dragend",()=>{ el.classList.remove("mh-active"); render(); });
-        _vertexHandles.push(mk);
-      });
-    });
-  }
-
 }
 // _activeProjSetting: which dot is open ('voice'|'clear'|'visitor'|null)
 let _activeProjSetting=null;
@@ -2767,13 +2692,14 @@ function refreshProps(){
   document.getElementById("pCorridorSection").style.display=isCorridor?"block":"none";
   if(isCorridor){
     document.getElementById("pCorridorMoving").checked=!!z.movingAudio;
-    document.getElementById("pDifficulty").value=z.difficulty||"";
-    document.getElementById("pRunType").value=z.runType||"run";
-    document.getElementById("pCorridorWidth").value=z.shape.widthM||10;
-  }
-  document.getElementById("pTileCorridorSection").style.display=isCorridor?"block":"none";
-  if(isCorridor){
-    document.getElementById("pCorridorActivity").value=z.activityType||"hike";
+    const linked=!!z.corridorId;
+    document.getElementById("pCorridorLinked").style.display=linked?"block":"none";
+    document.getElementById("pCorridorUnlinked").style.display=linked?"none":"block";
+    if(linked){
+      const dl={green:"Green",blue:"Blue",black:"Black","double-black":"Double black"}[z.difficulty]||"— difficulty not set —";
+      document.getElementById("pCorridorMeta").textContent=
+        dl+" · "+(z.runType||"run")+" · "+(z.activityType||"hike")+" · "+(z.shape.widthM||10)+" m wide";
+    }
   }
   const isCircle=z.shape.type==="circle";
   document.getElementById("pViewpointSection").style.display=isCircle?"block":"none";
@@ -2929,10 +2855,9 @@ function renderGlobalCodeObjectsChips(){
     canvas.addEventListener("drop",e=>{
       e.preventDefault();
       // Drag a saved corridor from the Corridors palette onto the map —
-      // same corridor-tree.js MIME type its item rows set on dragstart. It
-      // renders at its own recorded coordinates (same as
-      // importCorridorFromGPX/importCorridorFromLibrary); no target
-      // zone/drop position needed.
+      // same corridor-tree.js MIME type its item rows set on dragstart. Drops
+      // a linked, geometry-read-only stop (importCorridorFromLibrary); no
+      // target zone / drop position needed.
       const gpxCorridorId=e.dataTransfer.getData("application/x-gpxitem-corridor");
       if(gpxCorridorId){ importCorridorFromLibrary(gpxCorridorId); return; }
       // Drag a 3D asset from the AR Objects palette directly onto a stop on
@@ -3262,10 +3187,19 @@ document.getElementById("pCorridorMoving").addEventListener("change",()=>{
   z.movingAudio=document.getElementById("pCorridorMoving").checked;
   refreshProps(); render(); autoSave();
 });
-bindProp("pDifficulty",z=>{ z.difficulty=document.getElementById("pDifficulty").value||null; });
-bindProp("pRunType",z=>{ z.runType=document.getElementById("pRunType").value; });
-bindProp("pCorridorWidth",z=>{ if(z.shape.type==="corridor") z.shape.widthM=Math.max(2,+document.getElementById("pCorridorWidth").value||10); });
-bindProp("pCorridorActivity",z=>{ if(z.shape.type==="corridor") z.activityType=document.getElementById("pCorridorActivity").value; });
+// difficulty / run type / activity / width are owned by the linked Corridors
+// library row — authored in the GPX Editor, pulled read-only here.
+document.getElementById("pCorridorEditInGpx").onclick=()=>{
+  if(sel<0) return; const z=zones[sel];
+  if(!z.corridorId) return;
+  const org=afOrgId();
+  const u="/gpx-editor?project="+encodeURIComponent(afProjectId()||"")
+    +(org?"&asClient="+encodeURIComponent(org):"")
+    +"&corridor="+encodeURIComponent(z.corridorId);
+  window.open(u,"_blank");
+};
+document.getElementById("pCorridorRefreshShape").onclick=()=>{ if(sel>=0) refreshCorridorShapeFromLibrary(zones[sel]); };
+document.getElementById("pCorridorSaveToLib").onclick=()=>{ if(sel>=0) saveCorridorStopToLibrary(zones[sel]); };
 bindProp("pIsViewpoint",z=>{
   z.isViewpoint=document.getElementById("pIsViewpoint").checked;
   document.getElementById("pViewpointBody").style.display=z.isViewpoint?"block":"none";
@@ -4008,6 +3942,7 @@ const gpxTree=CorridorTree.mount(document.getElementById("gpxTreeHost"),{
   onPick: item=>importCorridorFromLibrary(item.id)
 });
 document.getElementById("gpxRefresh").onclick=()=>gpxTree.refresh({appId:afAppId()});
+document.getElementById("gpxPullShapes").onclick=()=>reconcileLinkedCorridors();
 
 /* ---- AR/3D Asset Palette: same floating-panel behavior as Audio Palette
    (drag header, resize corner, minimize, shrink/grow-to-fit), full CRUD
@@ -4347,128 +4282,68 @@ function openPortalMenu(anchorBtn, cls, buildFn, keepPickerOpen){
   return menu;
 }
 
-/* ---- GPX import helpers — parse a track recorded by another app
-   (Strava, Gaia GPS, AllTrails, Garmin Connect, ...) for "Import GPX as
-   Corridor". GPX's <trkpt lat lon> + optional <ele> maps directly onto our
-   [lon,lat,elevM] point shape, so no lossy conversion. ---- */
-// Accepts a <trk>/<trkseg>/<trkpt> track (the common case for a recorded
-// walk) or falls back to a <rte>/<rtept> route if that's all the file has —
-// some apps export routes instead of tracks. Bare <wpt> waypoint-only files
-// aren't a walked path and are rejected with a clear error rather than
-// silently producing a nonsensical single/sparse-point "path".
-function parseGPX(xmlText){
-  const doc=new DOMParser().parseFromString(xmlText,"application/xml");
-  if(doc.querySelector("parsererror")) throw new Error("couldn't parse this file as GPX/XML");
-  let nodes=[...doc.querySelectorAll("trkpt")];
-  if(!nodes.length) nodes=[...doc.querySelectorAll("rtept")];
-  if(!nodes.length) throw new Error("no track or route points found in this GPX file");
-  const points=nodes.map(n=>{
-    const lat=parseFloat(n.getAttribute("lat")), lon=parseFloat(n.getAttribute("lon"));
-    const eleEl=n.querySelector("ele");
-    const ele=eleEl?parseFloat(eleEl.textContent):NaN;
-    return [lon,lat,isNaN(ele)?null:ele];
-  }).filter(p=>!isNaN(p[0])&&!isNaN(p[1]));
-  if(points.length<2) throw new Error("not enough valid points in this GPX file");
-  const nameEl=doc.querySelector("trk > name")||doc.querySelector("rte > name")||doc.querySelector("metadata > name");
-  return { points, name: nameEl?nameEl.textContent.trim():"" };
-}
-// Same 2m noise-floor threshold-diff as Field Recorder's elevGainLoss() —
-// kept consistent so an imported GPX's gain/loss numbers are comparable to a
-// path recorded directly in this app, not wildly different just because the
-// source app's own altitude noise characteristics differ.
-function gpxElevGainLoss(points, noiseFloorM){
-  noiseFloorM = noiseFloorM==null ? 2 : noiseFloorM;
-  let gainM=0, lossM=0, ref=null;
-  for(const p of points){
-    const e=p[2];
-    if(e==null) continue;
-    if(ref==null){ ref=e; continue; }
-    const d=e-ref;
-    if(Math.abs(d)>=noiseFloorM){ if(d>0) gainM+=d; else lossM-=d; ref=e; }
-  }
-  return { gainM:Math.round(gainM), lossM:Math.round(lossM) };
-}
+// Total planimetric length of a [lon,lat][] polyline, metres. Used for the
+// distanceM stamped on a corridor row by the "Save to library" migration path.
 function gpxDistanceM(points){
   let d=0;
   for(let i=1;i<points.length;i++) d+=haversineM(points[i-1],points[i]);
   return d;
 }
 
-// R9 — bulk-author a Ridge Quest corridor (run/chute/trail) straight from a
-// recorded GPX track instead of clicking every point down the run by hand.
-// A raw recorded track is typically hundreds of points at ~1s GPS intervals
-// (this app's own recorded walking paths run 200-400+ points for a short
-// walk) — far denser than a corridor needs (QGeo.corridorCoverage resamples
-// at 25m steps regardless, see ridge-quest.html), and that many map-drag
-// vertex handles would be unusable. Subsampled to a manageable point count
-// via a plain stride, always keeping the true last point so the run's real
-// endpoint (used for direction classification) isn't cut off.
+// Corridor authoring split (2026-09): corridors are drawn/shaped/named and
+// given difficulty/type/activity/width ONLY in the GPX Editor, persisted to
+// the app-scoped `corridor` row. The Fence Editor adds one to a project by
+// picking it from the Corridors palette (importCorridorFromLibrary) — which
+// drops a LINKED, geometry-read-only stop — and thereafter only ever PULLS
+// from the row (reconcileLinkedCorridors on load, per-stop
+// refreshCorridorShapeFromLibrary on demand). Nothing here writes geometry
+// back. The stop still carries the tour-corridor config (say/audio/pipeline/
+// movingAudio/bearing/hearing-range/AR) and is published exactly as before.
+//
+// A raw row can be 200-400+ points; the stop stores a strided copy (rendering
+// + the published bundle only need the shape, not full GPS resolution). The
+// SAME stride runs in importCorridorFromLibrary and reconcileLinkedCorridors
+// so _c6(stride(rowPts)) === _c6(z.shape.coords) forever (an unrounded /
+// unequal-length mismatch would make reconcile re-render every load).
 const CORRIDOR_GPX_MAX_PTS=150;
-function importCorridorFromGPX(){
-  const input=document.createElement("input");
-  input.type="file"; input.accept=".gpx,application/gpx+xml";
-  input.onchange=async()=>{
-    const f=input.files[0];
-    if(!f) return;
-    try{
-      const text=await f.text();
-      const {points,name:gpxName}=parseGPX(text);
-      const defaultName=gpxName||f.name.replace(/\.gpx$/i,"");
-      const name=(prompt("Name this run/chute/trail:",defaultName)||"").trim();
-      if(!name) return;
-      const stride = points.length>CORRIDOR_GPX_MAX_PTS ? Math.ceil(points.length/CORRIDOR_GPX_MAX_PTS) : 1;
-      const coords=[];
-      for(let i=0;i<points.length;i+=stride) coords.push([points[i][0],points[i][1]]);
-      const lastPt=points[points.length-1];
-      const lastKept=coords[coords.length-1];
-      if(lastKept[0]!==lastPt[0]||lastKept[1]!==lastPt[1]) coords.push([lastPt[0],lastPt[1]]);
-      const widthM=+document.getElementById("newCorridorWidth").value||10;
-      const z=makeZone(name,{type:"corridor",coords,widthM});
-      z.folderId=focusedStopFolderId||null; // lands wherever the stop tree is currently focused, same as a manually-drawn corridor
-      zones.push(z);
-      selectZone(zones.length-1); // render()->autoSave(), same as finishShape()
-      ensureCorridorRecord(z); // also file it in the Corridors tree / GPX Editor
-    }catch(e){ alert("Import failed: "+e.message); }
-  };
-  input.click();
+function _strideCorridor(points){
+  const pts=points||[];
+  if(pts.length<2) return pts.map(p=>[p[0],p[1]]);
+  const stride = pts.length>CORRIDOR_GPX_MAX_PTS ? Math.ceil(pts.length/CORRIDOR_GPX_MAX_PTS) : 1;
+  const coords=[];
+  for(let i=0;i<pts.length;i+=stride) coords.push([pts[i][0],pts[i][1]]);
+  const last=pts[pts.length-1], kept=coords[coords.length-1];
+  if(kept[0]!==last[0]||kept[1]!==last[1]) coords.push([last[0],last[1]]);
+  return coords;
 }
-// Same subsample-then-makeZone flow as importCorridorFromGPX above, but
-// sourced from a saved corridor library entry (Corridors palette drag/pick)
-// instead of a freshly-parsed GPX file — it already carries its own
-// name/widthM from when it was saved, so there's no name/width prompt here.
+// Add a library corridor to this project as a LINKED, geometry-read-only stop
+// (Corridors palette pick / drag-onto-map). Geometry + width + difficulty +
+// runType + activityType all come from the row and are refreshed from it —
+// never edited here.
 async function importCorridorFromLibrary(corridorId){
   try{
     const r=await fetch("/api/corridor/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
     const j=await r.json();
-    const points=j.points||[];
-    if(points.length<2) throw new Error("this corridor has too few points");
-    const stride = points.length>CORRIDOR_GPX_MAX_PTS ? Math.ceil(points.length/CORRIDOR_GPX_MAX_PTS) : 1;
-    const coords=[];
-    for(let i=0;i<points.length;i+=stride) coords.push([points[i][0],points[i][1]]);
-    const lastPt=points[points.length-1];
-    const lastKept=coords[coords.length-1];
-    if(lastKept[0]!==lastPt[0]||lastKept[1]!==lastPt[1]) coords.push([lastPt[0],lastPt[1]]);
+    const coords=_c6(_strideCorridor(j.points||[]));
+    if(coords.length<2) throw new Error("this corridor has too few points");
     const z=makeZone(j.name||"Corridor",{type:"corridor",coords,widthM:j.widthM||10});
+    z.corridorId=corridorId;
+    z.corridorRev=j.updatedAt||null;
+    z.difficulty=j.difficulty||null;
+    z.runType=j.runType||"run";
+    z.activityType=j.activityType||"hike";
     z.folderId=focusedStopFolderId||null;
     zones.push(z);
+    _corrCenterCache.delete(corridorId);
     selectZone(zones.length-1);
-  }catch(e){ alert("Import failed: "+e.message); }
+  }catch(e){ alert("Add corridor failed: "+e.message); }
 }
 
-/* ---- corridor stop <-> Corridors-tree record sync ----
-   A hand-drawn (finishShape) or GPX-file-imported corridor stop is also
-   saved as an app-scoped `corridor` library row so it appears in the
-   Corridors tree and can be reshaped in the GPX Editor. The zone keeps the
-   row id in z.corridorId; z._corrSig is the last-synced [coords,widthM,name]
-   signature (transient, per session).
-
-   IMPORTANT: the link only reaches the server on Publish (via zoneToEngine),
-   so a stop drawn-then-reloaded-before-publish comes back with corridorId
-   null. Seeding must therefore be **idempotent** — match an existing row by
-   name (closest length wins) and re-link to it, only POSTing a new row when
-   no same-named row exists. (Non-idempotent seeding created a duplicate tree
-   entry on every reload — fixed 2026-08-30.) */
+/* ---- corridor stop <- Corridors-tree row (one-way pull) ---- */
+// Legacy adopt only: a pre-split corridor stop with no z.corridorId (link only
+// ever persisted on Publish) is matched to a row by name so it re-links
+// without a write.
 function _matchCorridorRow(rows, z){
   const same=rows.filter(x=>x.name===(z.name||"Corridor"));
   if(!same.length) return null;
@@ -4476,118 +4351,91 @@ function _matchCorridorRow(rows, z){
   const d=gpxDistanceM(z.shape.coords||[]);
   return same.slice().sort((a,b)=>Math.abs((a.distanceM||0)-d)-Math.abs((b.distanceM||0)-d))[0];
 }
-async function _appCorridorRows(appId){
+async function _appCorridorRows(appId, opts){
   try{
-    const r=await fetch("/api/corridor?appId="+encodeURIComponent(appId),{headers:{authorization:"Bearer "+getToken()}});
+    const r=await fetch("/api/corridor?appId="+encodeURIComponent(appId)+((opts&&opts.withPoints)?"&withPoints=1":""),
+      {headers:{authorization:"Bearer "+getToken()}});
     if(r.ok) return (await r.json()).corridors||[];
   }catch(e){}
-  return null; // null = couldn't fetch (don't seed blindly); [] = fetched, none exist
+  return null; // null = couldn't fetch — do nothing rather than blank a shape
 }
-async function ensureCorridorRecord(z, knownRows){
-  if(!z || !z.shape || z.shape.type!=="corridor" || z.corridorId) return;
-  const appId=afAppId();
-  // Snapshot name/width/coords together — everything below (POST body AND the
-  // _corrSig we stamp on success) uses THIS tuple, so if the stop is reshaped
-  // while the POST is in flight, sig != the reshaped stop and
-  // syncLinkedCorridorRows() then pushes the new geometry to the row instead
-  // of the two silently diverging (that race is what stranded a corridor row
-  // at its draw-time geometry while the published stop moved on).
-  const snap={name:z.name||"Corridor", widthM:z.shape.widthM||10, coords:_c6(z.shape.coords)};
-  if(!appId || snap.coords.length<2) return;
-  const rows = knownRows!==undefined ? knownRows : await _appCorridorRows(appId);
-  if(rows===null) return; // list fetch failed — try again on the next load rather than risk a dupe
-  const hit=_matchCorridorRow(rows, z);
-  if(hit){ // already in the tree — just re-link; leave _corrSig unset so the
-    z.corridorId=hit.id; // reconcile pass that follows decides who wins
-    z.corridorRev=hit.updatedAt||null;
-    autoSave();
-    return;
-  }
-  try{
-    const r=await fetch("/api/corridor",{method:"POST",
-      headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
-      body:JSON.stringify({appId,name:snap.name,points:snap.coords,
-        widthM:snap.widthM,distanceM:Math.round(gpxDistanceM(z.shape.coords))})});
-    if(!r.ok) return;
-    const j=await r.json();
-    if(j && j.id){
-      z.corridorId=j.id;
-      z._corrSig=JSON.stringify([snap.coords,snap.widthM,snap.name]);
-      z.corridorRev=new Date().toISOString();
-      gpxTree.refresh({appId});
-      autoSave();
-    }
-  }catch(e){}
-}
+// In-flight guard shared by reconcileLinkedCorridors / refreshCorridorShapeFromLibrary
+// / saveCorridorStopToLibrary so the 1.5s load timer can't interleave writes to
+// the same z.shape with a user-triggered refresh.
+let _corrReconcileBusy=false;
 async function reconcileLinkedCorridors(){
+  if(_corrReconcileBusy) return;
   const appId=afAppId();
   if(!appId) return;
   const corr=zones.filter(z=>z.shape && z.shape.type==="corridor" && (z.shape.coords||[]).length>=2);
   if(!corr.length) return;
-  const rows=await _appCorridorRows(appId);
-  if(rows===null) return;
-  const byId=new Map(rows.map(x=>[x.id,x]));
-  let changed=false, touchedTree=false;
-  await Promise.all(corr.map(async z=>{
-    if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; z.corridorRev=null; changed=true; } // row deleted in the tree
-    if(!z.corridorId){
-      const hit=_matchCorridorRow(rows, z);
-      if(hit){ z.corridorId=hit.id; z.corridorRev=hit.updatedAt||null; z._corrSig=null; changed=true; }
-      else{ const before=z.corridorId; await ensureCorridorRecord(z, rows); if(z.corridorId&&!before){ changed=true; touchedTree=true; } return; }
-    }
-    try{
-      const listRow=byId.get(z.corridorId); // carries updatedAt (the single-GET below doesn't)
-      const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{headers:{authorization:"Bearer "+getToken()}});
-      if(!r.ok) return;
-      const j=await r.json();
-      const rowPts=_c6((j.points||[]).map(p=>[p[0],p[1]]));
-      const stopPts=_c6(z.shape.coords);
-      const differ = rowPts.length>=2 && JSON.stringify(rowPts)!==JSON.stringify(stopPts);
-      // Pull the row into the stop ONLY when the row was edited (in the GPX
-      // Editor) since our last publish — i.e. its updated_at is newer than the
-      // rev we round-tripped in the bundle. Otherwise the published stop is
-      // authoritative: leave it, and let syncLinkedCorridorRows() heal the row.
-      const rowNewer = !!(z.corridorRev && listRow && listRow.updatedAt && listRow.updatedAt > z.corridorRev);
-      if(differ && rowNewer){
-        z.shape.coords=rowPts;
-        if(j.widthM) z.shape.widthM=j.widthM;
-        changed=true;
-        z._corrSig=JSON.stringify([_c6(z.shape.coords),z.shape.widthM,z.name]);
-      } else if(differ){
-        z._corrSig=null; // stale row — force a stop -> row push on the next autoSave
-      } else {
-        z._corrSig=JSON.stringify([stopPts,z.shape.widthM,z.name]);
+  _corrReconcileBusy=true;
+  try{
+    const rows=await _appCorridorRows(appId,{withPoints:true}); // one request, all geometry + metadata
+    if(rows===null) return;
+    const byId=new Map(rows.map(x=>[x.id,x]));
+    _corrCenterCache.clear();
+    let changed=false;
+    for(const z of corr){
+      if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; z.corridorRev=null; changed=true; } // deleted from library — keep the stop + its baked shape
+      if(!z.corridorId){
+        const hit=_matchCorridorRow(rows, z);
+        if(hit){ z.corridorId=hit.id; z.corridorRev=hit.updatedAt||null; changed=true; }
+        else continue; // legacy unlinked — leave it; "Save to library" links it explicitly
       }
-      z.corridorRev=(listRow&&listRow.updatedAt)||z.corridorRev||new Date().toISOString();
-    }catch(e){}
-  }));
-  if(touchedTree) gpxTree.refresh({appId});
-  if(changed){ render(); refreshProps(); }
-}
-let _corrSyncTimer=null;
-function syncLinkedCorridorRows(){
-  clearTimeout(_corrSyncTimer);
-  _corrSyncTimer=setTimeout(async()=>{
-    let patched=false;
-    for(const z of zones){
-      if(!z.corridorId || !z.shape || z.shape.type!=="corridor") continue;
-      if((z.shape.coords||[]).length<2) continue;
-      const pts=_c6(z.shape.coords);
-      const sig=JSON.stringify([pts,z.shape.widthM,z.name]);
-      if(sig===z._corrSig) continue;
-      try{
-        const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{method:"PATCH",
-          headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
-          body:JSON.stringify({name:z.name||"Corridor",points:pts,
-            widthM:z.shape.widthM||10,distanceM:Math.round(gpxDistanceM(z.shape.coords))})});
-        if(r.ok){ z._corrSig=sig; z.corridorRev=new Date().toISOString(); patched=true; }
-      }catch(e){}
+      const row=byId.get(z.corridorId);
+      if(!row || !Array.isArray(row.points) || row.points.length<2) continue;
+      const newCoords=_c6(_strideCorridor(row.points));
+      if(JSON.stringify(newCoords)!==JSON.stringify(_c6(z.shape.coords))){ z.shape.coords=newCoords; changed=true; }
+      const nw=row.widthM||10; if(nw!==z.shape.widthM){ z.shape.widthM=nw; changed=true; }
+      const nd=row.difficulty||null, nr=row.runType||"run", na=row.activityType||"hike";
+      if(nd!==z.difficulty||nr!==z.runType||na!==z.activityType){ z.difficulty=nd; z.runType=nr; z.activityType=na; changed=true; }
+      z.corridorRev=row.updatedAt||z.corridorRev;
     }
-    // The Corridors tree renders name + width + distance, all of which a sync
-    // can change — reload it so a renamed/reshaped stop shows through instead
-    // of the stale row it loaded with.
-    if(patched && typeof gpxTree!=="undefined") gpxTree.refresh({appId:afAppId()});
-  },1000);
+    if(changed){ render(); refreshProps(); }
+  } finally { _corrReconcileBusy=false; }
+}
+// Per-stop "Refresh shape from library" button.
+async function refreshCorridorShapeFromLibrary(z){
+  if(!z || !z.shape || z.shape.type!=="corridor" || !z.corridorId || _corrReconcileBusy) return;
+  _corrReconcileBusy=true;
+  try{
+    const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{headers:{authorization:"Bearer "+getToken()}});
+    if(r.status===404){ z.corridorId=null; z.corridorRev=null; render(); refreshProps(); toast("That corridor was deleted from the library — stop kept, now unlinked.","warn"); return; }
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+    const j=await r.json();
+    const coords=_c6(_strideCorridor(j.points||[]));
+    if(coords.length>=2) z.shape.coords=coords;
+    z.shape.widthM=j.widthM||10;
+    z.difficulty=j.difficulty||null; z.runType=j.runType||"run"; z.activityType=j.activityType||"hike";
+    z.corridorRev=j.updatedAt||z.corridorRev;
+    _corrCenterCache.delete(z.corridorId);
+    render(); refreshProps();
+  }catch(e){ alert("Refresh failed: "+e.message); }
+  finally{ _corrReconcileBusy=false; }
+}
+// One-shot migration for a legacy unlinked corridor stop — the ONLY POST this
+// file still makes, and it's user-initiated (not authoring UI).
+async function saveCorridorStopToLibrary(z){
+  if(!z || !z.shape || z.shape.type!=="corridor" || z.corridorId || _corrReconcileBusy) return;
+  const appId=afAppId();
+  const coords=_c6(z.shape.coords||[]);
+  if(!appId || coords.length<2){ alert("Can't save — need a workspace selected and a 2+ point line."); return; }
+  _corrReconcileBusy=true;
+  try{
+    const r=await fetch("/api/corridor",{method:"POST",
+      headers:{"content-type":"application/json","authorization":"Bearer "+getToken()},
+      body:JSON.stringify({appId,name:z.name||"Corridor",points:coords,widthM:z.shape.widthM||10,
+        distanceM:Math.round(gpxDistanceM(z.shape.coords)),
+        difficulty:z.difficulty||null,runType:z.runType||"run",activityType:z.activityType||"hike"})});
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+    const j=await r.json();
+    z.corridorId=j.id; z.corridorRev=j.updatedAt||null;
+    gpxTree.refresh({appId});
+    autoSave(); render(); refreshProps();
+    toast("Saved to the Corridors library — shape it in the GPX Editor.","ok");
+  }catch(e){ alert("Save to library failed: "+e.message); }
+  finally{ _corrReconcileBusy=false; }
 }
 
 /* ============================================================
@@ -5224,14 +5072,11 @@ function engineToZone(zo){
   z.folderId=zo.folderId||null;
   // Which map-match corridor this stop is snapped onto (editor-only glue).
   z.snapCorridorId = zo.snapCorridorId || null;
-  // Corridors-tree record this corridor stop mirrors (see makeZone) —
-  // reconcileLinkedCorridors() pulls GPX-Editor edits back in from it.
+  // Corridors-library row this corridor stop is linked to (see makeZone).
+  // reconcileLinkedCorridors() pulls its geometry / width / difficulty /
+  // runType / activityType back in on load — one-way, library always wins.
   z.corridorId = zo.corridorId || null;
   z.corridorRev = zo.corridorRev || null;
-  // Seed the sync signature from the loaded geometry so syncLinkedCorridorRows()
-  // is a no-op on a plain select — it only fires once the stop is actually
-  // reshaped/renamed, not 1s after every render() while reconcile is still pending.
-  if(shape.type==="corridor" && z.corridorId) z._corrSig=JSON.stringify([_c6(shape.coords),shape.widthM,z.name]);
   z.ttsVoice=zo.ttsVoice||null;
   z.arObjects=Array.isArray(zo.arObjects)?zo.arObjects:[];
   z.altM=zo.altM??null;
@@ -6405,9 +6250,46 @@ function _simRunClick(e){
 }
 function _simRunCursor(on){ return ()=>{ map.getCanvas().style.cursor=on?"pointer":""; }; }
 const _simRunEnter=_simRunCursor(true), _simRunLeave=_simRunCursor(false);
+// The runLines source + layers cost nothing at scale (one setData). The name
+// / ◆ HTML markers do — every one re-projects against the terrain depth
+// buffer each frame — so they're viewport-culled and capped, and rebuilt on
+// moveend while Test Mode is live.
+let _simRunCors=[];
+const SIM_RUN_MARKER_CAP=60;
+let _simRunMoveTimer=null;
+function _rebuildSimCorridorMarkers(){
+  simCorridorLabels.forEach(m=>m.remove()); simCorridorLabels=[];
+  if(!simMode || !_simRunCors.length) return;
+  const b=map.getBounds();
+  const pad=(b.getEast()-b.getWest())*0.15, padN=(b.getNorth()-b.getSouth())*0.15;
+  const inView=c=>{ const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
+    return mid[1]>=b.getWest()-pad && mid[1]<=b.getEast()+pad && mid[0]>=b.getSouth()-padN && mid[0]<=b.getNorth()+padN; };
+  const ctr=map.getCenter();
+  let vis=_simRunCors.filter(inView);
+  if(vis.length>SIM_RUN_MARKER_CAP){
+    vis=vis.map(c=>{ const mid=c.path[Math.floor(c.path.length/2)];
+      return {c,d:(mid[1]-ctr.lng)**2+(mid[0]-ctr.lat)**2}; })
+      .sort((a,b2)=>a.d-b2.d).slice(0,SIM_RUN_MARKER_CAP).map(x=>x.c);
+  }
+  vis.forEach(c=>{
+    const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
+    const el=document.createElement("div"); el.className="runLabel"; el.textContent=c.name;
+    simCorridorLabels.push(new maplibregl.Marker({element:el,anchor:"center"}).setLngLat([mid[1],mid[0]]).addTo(map));
+    const tier=simRunStyleFor(c).tier;
+    if(tier){
+      const bd=document.createElement("div"); bd.className="runDiamond"+(tier==="dblack"?" dbl":"");
+      bd.innerHTML=tier==="dblack"?"<i></i><i></i>":"<i></i>";
+      simCorridorLabels.push(new maplibregl.Marker({element:bd,anchor:"bottom",offset:[0,-4]})
+        .setLngLat([c.path[0][1],c.path[0][0]]).addTo(map));
+    }
+  });
+}
+function _simRunMoveEnd(){ clearTimeout(_simRunMoveTimer); _simRunMoveTimer=setTimeout(_rebuildSimCorridorMarkers,150); }
 function clearSimCorridorLabels(){
   simCorridorLabels.forEach(m=>m.remove()); simCorridorLabels=[];
+  _simRunCors=[];
   if(typeof map==="undefined"||!map) return;
+  map.off("moveend",_simRunMoveEnd);
   SIM_RUN_LAYERS.forEach(id=>{ if(map.getLayer(id)) map.removeLayer(id); });
   if(map.getSource("runLines")) map.removeSource("runLines");
   map.off("click","runLines-hit",_simRunClick);
@@ -6450,18 +6332,9 @@ function refreshSimCorridorLabels(){
     layout:{"line-cap":"round"},paint:{"line-color":"#ff5a5f","line-width":_simRunW(1,1.6,2.4)}});
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
     paint:{"line-color":"#000","line-opacity":0,"line-width":14}});
-  cors.forEach(c=>{
-    const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
-    const el=document.createElement("div"); el.className="runLabel"; el.textContent=c.name;
-    simCorridorLabels.push(new maplibregl.Marker({element:el,anchor:"center"}).setLngLat([mid[1],mid[0]]).addTo(map));
-    const tier=simRunStyleFor(c).tier;
-    if(tier){
-      const b=document.createElement("div"); b.className="runDiamond"+(tier==="dblack"?" dbl":"");
-      b.innerHTML=tier==="dblack"?"<i></i><i></i>":"<i></i>";
-      simCorridorLabels.push(new maplibregl.Marker({element:b,anchor:"bottom",offset:[0,-4]})
-        .setLngLat([c.path[0][1],c.path[0][0]]).addTo(map));
-    }
-  });
+  _simRunCors=cors;
+  _rebuildSimCorridorMarkers();
+  map.on("moveend",_simRunMoveEnd);
   map.on("click","runLines-hit",_simRunClick);
   map.on("mouseenter","runLines-hit",_simRunEnter);
   map.on("mouseleave","runLines-hit",_simRunLeave);
