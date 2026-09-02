@@ -10,6 +10,7 @@
 <script src="code-objects.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<script src="/here-marker.js"></script>
 <style>
 :root{--night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;
       --coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;
@@ -373,6 +374,8 @@ const LIVE_RADIUS = {walk:25, ski:60, drive:100}; // default geofence radius per
 
 /* ── state ─────────────────────────────────────────── */
 let lastPos       = null;
+let lastSmoothed  = null;   // GPSFilter.push() output for the current fix — feeds the avatar
+let here          = null;   // HereMarker handle (live "you are here" avatar)
 let micStream     = null;
 let mediaRec      = null;
 let recChunks     = [];
@@ -831,7 +834,6 @@ function initMap(){
       paint:{"line-color":"#6fbfff","line-width":1.5}}, "published-line");
 
     map.addSource("zones",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
-    map.addSource("dot",  {type:"geojson",data:{type:"Feature",geometry:{type:"Point",coordinates:[0,0]}}});
     map.addLayer({id:"zone-fill",type:"fill",source:"zones",
       paint:{
         "fill-color":["case",["get","isLive"],"#ff2f4e",["get","hasClip"],"#38e0a6","#ff6a3d"],
@@ -845,14 +847,14 @@ function initMap(){
     map.addLayer({id:"zone-lbl",type:"symbol",source:"zones",
       layout:{"text-field":["get","name"],"text-size":12,"text-anchor":"top","text-offset":[0,0.5]},
       paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.5}});
-    map.addLayer({id:"gps-dot",type:"circle",source:"dot",
-      paint:{"circle-color":"#ff6a3d","circle-radius":10,"circle-stroke-color":"#fff","circle-stroke-width":2.5}});
     map.addSource("walkers",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
     map.addLayer({id:"walker-dot",type:"circle",source:"walkers",
       paint:{"circle-color":"#ffc24d","circle-radius":8,"circle-stroke-color":"#fff","circle-stroke-width":2}});
     map.addLayer({id:"walker-lbl",type:"symbol",source:"walkers",
       layout:{"text-field":["get","label"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-1.2]},
       paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.5}});
+    // Live "you are here" directional avatar (replaces the old flat gps-dot).
+    here = HereMarker.attach(map, { follow:true });
     refreshMap();
     refreshPublishedZones();
     // updateTerrain() at the top of this handler ran before vext-vol/
@@ -979,7 +981,10 @@ function refreshMap(){
     }))
   ];
   map.getSource("zones")?.setData({type:"FeatureCollection",features:allFeatures});
-  if(lastPos) map.getSource("dot")?.setData({type:"Feature",geometry:{type:"Point",coordinates:[lastPos.lon,lastPos.lat]}});
+  if(lastSmoothed && here) here.update({
+    lon:lastSmoothed.lon, lat:lastSmoothed.lat,
+    headingDeg:(headingBuffer.length ? circularMean(headingBuffer) : lastSmoothed.headingTravel),
+    accM:lastSmoothed.acc });
 }
 
 /* ── walker presence poll ───────────────────────────── */
@@ -1589,6 +1594,12 @@ async function initPermissions(){
         headingBuffer.push(heading);
         if(headingBuffer.length > 10) headingBuffer.shift();
       }
+      // Smooth the fix once, up front — the map avatar (refreshMap) and the
+      // proximity auto-play both read lastSmoothed. Route through the same
+      // GPSFilter (EKF) the walk engine uses, not the raw jittery fix.
+      lastSmoothed = (typeof GPSFilter!=='undefined')
+        ? GPSFilter.push({lat,lon,acc,t:pos.timestamp})
+        : {lat,lon,acc,headingTravel:null};
       // altitude is null on many devices/browsers (no barometer, or a fix that
       // hasn't resolved vertical position yet); resolveAlt() upgrades this to
       // a connected BLE dongle's real barometric reading when one's recent
@@ -1611,15 +1622,9 @@ async function initPermissions(){
       // a weak trail signal) — piggyback on every GPS fix, same as refreshMap,
       // so it keeps retrying until it actually succeeds instead of just once.
       refreshPublishedZones();
-      // Proximity auto-play used the raw fix directly — no smoothing at all,
-      // unlike the real walk engine. A single noisy fix (normal phone GPS
-      // jitter) can easily land more than a tight ~10m trigger radius away
-      // from where you're actually standing, silently missing a stop even
-      // though you're right there. Route through the same GPSFilter
-      // (Extended Kalman Filter) the engine now uses instead of the raw fix.
-      const smoothed = (typeof GPSFilter!=='undefined') ? GPSFilter.push({lat,lon,acc,t:pos.timestamp}) : {lat,lon};
-      checkProximityAudio(smoothed.lat, smoothed.lon);
-      if(first){ map.flyTo({center:[lon,lat],zoom:17}); setStatus("Ready"); }
+      checkProximityAudio(lastSmoothed.lat, lastSmoothed.lon);
+      // First-fix map framing is handled by HereMarker's follow:true.
+      if(first){ setStatus("Ready"); }
     },
     err => setStatus("GPS: "+err.message),
     {enableHighAccuracy:true,maximumAge:2000,timeout:30000}

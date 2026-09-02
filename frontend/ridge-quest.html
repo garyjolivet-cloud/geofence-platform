@@ -19,6 +19,7 @@
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
+<script src="/here-marker.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -629,6 +630,7 @@ const Quest = {
   watchId: null,
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
   onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
+  onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
   onCoverage: null,     // R9 — callback(corridorName, pct, passed) — fired once per band exit (whether it logged a run or was discarded), so a partial/clipped crossing isn't silent the way a below-threshold discard otherwise would be
 
@@ -716,6 +718,7 @@ const Quest = {
     this._revealFog(p, fix.acc);
     this._tickViewpoints(p);
     if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t});
+    if(this.onPosition) this.onPosition(p);   // live avatar on an open map
   },
 
   // ---- DEV/TEST-ONLY: simulate a walk without real GPS -----------------
@@ -1449,7 +1452,7 @@ function renderFogMap(){
     app.innerHTML =
       '<div class="fogMapOverlay"><button class="ghost fogMapBack" id="fogBack">← Back</button>'
       +'<div class="msg" style="padding-top:120px">Map isn’t available yet — this resort’s runs haven’t been configured.</div></div>';
-    document.getElementById("fogBack").onclick=renderHome;
+    document.getElementById("fogBack").onclick=()=>{ Quest.onPosition=null; renderHome(); };
     return;
   }
   // R11 — completion % is a number derived from tracking (Quest.fogCells),
@@ -1470,7 +1473,7 @@ function renderFogMap(){
   // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
   // exception here aborts the script before the button's handler is ever
   // attached, leaving a dead "← Back" button with no way out of the map.
-  document.getElementById("fogBack").onclick=()=>{ Quest.onFogUpdated=null; renderHome(); };
+  document.getElementById("fogBack").onclick=()=>{ Quest.onFogUpdated=null; Quest.onPosition=null; renderHome(); };
   try{
     const map = new maplibregl.Map({
       container:"fogMap",
@@ -1531,6 +1534,13 @@ function renderFogMap(){
     // to sync into (map.on("load") returned early above), and Quest itself
     // keeps tracking regardless — this only controls the redraw callback.
     if(RQ_FOG_ENABLED) Quest.onFogUpdated = syncSource;
+    // Live "you are here" directional avatar. follow:'edge' keeps the
+    // fitBounds() run-network framing above and only re-centres if the player
+    // walks off screen. Driven from _onFix -> Quest.onPosition (real fixes
+    // and ?sim=1 "Simulate walk" both). Torn down by the #fogBack handler
+    // nulling Quest.onPosition, same lifecycle as onFogUpdated.
+    const here = HereMarker.attach(map, { follow:'edge' });
+    Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat, headingDeg:p.headingTravel, accM:p.acc });
   }catch(e){
     document.getElementById("fogMap").outerHTML =
       '<div class="msg" style="padding-top:120px">Map couldn’t load (connection or device issue) — try again from a better signal.</div>';

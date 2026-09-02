@@ -137,6 +137,7 @@
 <script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
+<script src="/here-marker.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -1900,7 +1901,7 @@ function cachedVextFeatures(zoneId,centerLonLat,radiusM,altM,tol){
 }
 
 const MapView = {
-  map:null, centered:false,
+  map:null, centered:false, here:null,
   TERRAIN_SOURCE_ID:'terrain-dem',
   init(){
     this.map=new maplibregl.Map({
@@ -1914,9 +1915,9 @@ const MapView = {
     });
     this.map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
     this.map.on('load', ()=>{
-      this.map.addSource('self',{type:'geojson',data:fc([])});
-      this.map.addLayer({id:'self-dot',type:'circle',source:'self',
-        paint:{'circle-radius':8,'circle-color':'#8fb6d4','circle-stroke-color':'#0a1018','circle-stroke-width':2.5}});
+      // Live "you are here" directional avatar (dot + heading wedge + GPS
+      // accuracy ring, smart-follow) — shared with Ridge Quest + Field Recorder.
+      this.here = HereMarker.attach(this.map, { follow:true });
 
       // Every stop's marker, simplified to just two elements: a grey
       // "speaker cone" gradient disc (full-volume radius) and a blue ring
@@ -2014,8 +2015,9 @@ const MapView = {
     // work on mobile Safari at once.
     if(typeof ARView!=='undefined' && ARView.isOpen()) return;
     if(!this.map || !this.map.isStyleLoaded()) return;
-    this.map.getSource('self')?.setData({type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]}});
-    if(!this.centered){ this.map.jumpTo({center:[p.lon,p.lat], zoom:17}); this.centered=true; }
+    this.here?.update({ lon:p.lon, lat:p.lat,
+      headingDeg:(typeof TravelHeading!=='undefined' ? TravelHeading.heading : null),
+      accM:p.acc });
 
     // Every stop's marker shows regardless of distance from the visitor —
     // no stopVisibilityRadiusM proximity gate.

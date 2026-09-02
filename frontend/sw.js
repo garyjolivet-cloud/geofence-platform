@@ -12,7 +12,7 @@
      addressed by immutable per-clip URLs, so there's nothing to invalidate.
    activate cleanup also runs OUTSIDE waitUntil so claim()/control is never
    held up by cache deletion. */
-const PAGE_CACHE = 'gp-offline-v15';
+const PAGE_CACHE = 'gp-offline-v16';
 const AUDIO_CACHE = 'gp-audio';
 const KEEP = new Set([PAGE_CACHE, AUDIO_CACHE]);
 
