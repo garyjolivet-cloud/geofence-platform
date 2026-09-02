@@ -314,13 +314,17 @@ function scheduleRenderMapLine(){
 }
 const MAX_SPEED_MPS=8;
 
+// Only fitBounds when a *fresh* track is loaded (import / tree pick /
+// enterProject). Incrementally adding points in draw / Add-to-Start/End mode
+// must NOT re-fit — that jerked the view away on every click.
+let _fitOnNextRender=true;
 function setBase(newPoints, opts){
   opts = opts||{};
   // resetHistory:true is for opening a *different* track (import, tree pick,
   // enterProject) — undoing across tracks makes no sense, so history starts
-  // clean. Otherwise (Trim/Delete/Reverse) this is a structural edit of the
-  // *same* track, so snapshot the pre-edit points onto the undo stack first.
-  if(opts.resetHistory){ undoStack=[]; if(addMode) setAddMode(addMode); } // exit extend-mode when a different track opens
+  // clean. Otherwise (Trim/Delete/Reverse/extend) this is a structural edit
+  // of the *same* track, so snapshot the pre-edit points onto the undo stack.
+  if(opts.resetHistory){ undoStack=[]; _fitOnNextRender=true; if(addMode) setAddMode(addMode); } // exit extend-mode when a different track opens
   else undoStack.push(basePoints);
   basePoints = newPoints;
   refreshActive();
@@ -567,7 +571,9 @@ function renderMapLine(){
   } else if(playheadMarker){
     playheadMarker.remove(); playheadMarker=null;
   }
-  if(bounds && isFinite(bounds.minLon) && (bounds.minLon!==bounds.maxLon || bounds.minLat!==bounds.maxLat)){
+  if(_fitOnNextRender){
+    _fitOnNextRender=false;
+    if(bounds && isFinite(bounds.minLon) && (bounds.minLon!==bounds.maxLon || bounds.minLat!==bounds.maxLat)){
     // animate:false alone does NOT make fitBounds synchronous — confirmed by
     // reading MapLibre 5.24.0's own source (camera.ts): fitBounds()'s
     // internal _fitInternal() picks easeTo() vs flyTo() based on
@@ -588,8 +594,9 @@ function renderMapLine(){
     // genuinely sets duration=0 (a true single-frame jump, no flight-curve
     // math, nothing left in flight for a later call to collide with).
     map.fitBounds([[bounds.minLon,bounds.minLat],[bounds.maxLon,bounds.maxLat]],{padding:50,animate:false,linear:true});
-  } else if(coords.length===1){
-    map.flyTo({center:coords[0],zoom:15});
+    } else if(coords.length===1){
+      map.flyTo({center:coords[0],zoom:15});
+    }
   }
   updateSelVisuals();
 }
