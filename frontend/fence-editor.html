@@ -2116,10 +2116,13 @@ function renderSourcesInner(){
     // corridor uses the dashed "moving" style and drops the width label.
     else if(s.type==="corridor") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:isMovingCorridor?z.name:(z.name+" ("+(s.widthM||10)+"m)"),isPath:isMovingCorridor},
         geometry:{type:"LineString",coordinates:s.coords}});
-    // label
-    const _lp={kind:"label",name:z.name,zIdx:i};
-    if(z[zoneAudioField(z)]) _lp.hasAudio=true;
-    feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
+    // label — in Test Mode a corridor already shows its name via the
+    // piste-glow .runLabel marker, so skip this second (offset, dim) copy.
+    if(!(simMode && s.type==="corridor")){
+      const _lp={kind:"label",name:z.name,zIdx:i};
+      if(z[zoneAudioField(z)]) _lp.hasAudio=true;
+      feats.push({type:"Feature",properties:_lp,geometry:{type:"Point",coordinates:c}});
+    }
     }catch(e){ console.error("renderSources: skipping zone",z&&z.id,e); }
   });
   if(map.getSource("fences")) map.getSource("fences").setData(fc(feats));
