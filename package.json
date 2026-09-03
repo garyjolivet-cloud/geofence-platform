@@ -11,6 +11,6 @@
     "h3-js": "^4.1.0"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.127.1"
   }
 }
