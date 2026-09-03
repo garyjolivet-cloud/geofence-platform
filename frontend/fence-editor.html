@@ -2548,7 +2548,9 @@ function finishShape(){
   zones.push(z); draft=[]; tool=null;
   resetShapePickerBtn();
   updateDrawUiVisibility(null);
-  selectZone(zones.length-1);
+  // New zone in the array — needs the full tree rebuild (+ autoSave) that
+  // selectZone() no longer does; then select it for the highlight + panel.
+  sel=zones.length-1; render(); refreshProps();
 }
 
 /* ---- map drag handles ---- */
@@ -2667,7 +2669,32 @@ function refreshHandles(z){
 let _activeProjSetting=null;
 
 /* ---- selection + properties panel ---- */
-function selectZone(i){ sel=i; render(); refreshProps(); }
+// Move just the .sel class between stop-tree rows instead of rebuilding the
+// whole tree. A full drawList() (hundreds of DOM rows + their drag/drop/click
+// listeners, re-parsed from innerHTML) on every map click was the bulk of the
+// "corridor select isn't snappy" cost — nothing in a row's markup depends on
+// which zone is selected except this one class. buildZoneRow() still stamps it
+// on first build, so a row created while already selected stays correct.
+function applySelRowHighlight(){
+  const list=document.getElementById("zlist"); if(!list) return;
+  list.querySelectorAll(".zone.sel").forEach(el=>el.classList.remove("sel"));
+  if(sel<0) return;
+  const row=list.querySelector('.zone[data-zi="'+sel+'"]');
+  if(row) row.classList.add("sel");
+}
+// Pure selection change — NOT a document mutation. Deliberately skips
+// drawList() (see applySelRowHighlight) and autoSave() (selecting a stop
+// changes nothing to persist). The few callers that actually add/remove a
+// zone run a full render() themselves before setting `sel`. renderSources()
+// still runs here: `sel` drives the selected corridor's rings and the
+// on-map highlight colour.
+function selectZone(i){
+  sel=i;
+  renderSources();
+  applySelRowHighlight();
+  if(sel>=0&&zones[sel]) refreshHandles(zones[sel]); else clearHandles();
+  refreshProps();
+}
 function refreshProps(){
   const box=document.getElementById("props");
   if(sel<0 || !zones[sel]){ box.style.display="none"; pAudioStopPlay(); return; }
@@ -4110,7 +4137,7 @@ document.getElementById("pVoice").addEventListener("change",()=>{ if(sel<0)retur
 document.getElementById("pSpeak").onclick=()=>{ const t=document.getElementById("pSay").value.trim();
   if(!t)return; simTTS(t, sel>=0?zones[sel].ttsVoice:null); };
 document.getElementById("pDone").onclick=()=>{ selectZone(-1); };
-document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); selectZone(-1); };
+document.getElementById("pDelete").onclick=()=>{ if(sel<0)return; zones.splice(sel,1); sel=-1; render(); refreshProps(); };
 
 /* ============================================================
    Map-match corridors — the subset of the app-scoped Corridor library
@@ -4339,7 +4366,8 @@ async function importCorridorFromLibrary(corridorId){
     z.folderId=focusedStopFolderId||null;
     zones.push(z);
     _corrCenterCache.delete(corridorId);
-    selectZone(zones.length-1);
+    // New zone — full render() (tree rebuild + autoSave), then select it.
+    sel=zones.length-1; render(); refreshProps();
   }catch(e){ alert("Add corridor failed: "+e.message); }
 }
 
@@ -4502,7 +4530,7 @@ function folderMatchesSearchDeep(node){
 }
 function buildZoneRow(i){
   const z=zones[i];
-  const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":"");
+  const d=document.createElement("div"); d.className="zone"+(i===sel?" sel":""); d.dataset.zi=i;
   const cue=z.movingAudio?"ambient":(z.shape.type==="tripline"?"cross":(z.fires==="dwell"?"linger":"arrive"));
   const hzBadge=zoneIsHazard(z)?'<span style="color:var(--hazard);font-size:10px;margin-left:3px;vertical-align:middle">⚠</span>':'';
   const coBadge=(z.codeObjects&&z.codeObjects.length)?'<span title="'+z.codeObjects.length+' code object'+(z.codeObjects.length===1?'':'s')+' attached" style="font-size:10px;margin-left:3px;vertical-align:middle">🧩'+(z.codeObjects.length>1?'×'+z.codeObjects.length:'')+'</span>':'';
