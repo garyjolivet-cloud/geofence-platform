@@ -60,6 +60,9 @@ async function cleanupLiveZones(env) {
   }
   // Prune stale presence rows (walkers gone more than 60s ago)
   await env.DB.prepare("DELETE FROM presence WHERE updated_at < ?").bind(Date.now() - 60000).run().catch(() => {});
+  // Same 60s window for Ridge Quest's friend-tracking presence (see the
+  // "friends list + opt-in live location share" route block).
+  await env.DB.prepare("DELETE FROM player_presence WHERE updated_at < ?").bind(Date.now() - 60000).run().catch(() => {});
 }
 
 // RECORD retention sweep: deletes unlocked, ended sessions (and their
@@ -1031,8 +1034,12 @@ async function api(request, env, url) {
     // A missing/failed row reads as "on," matching the column's DEFAULT 1
     // (fail open, not closed, for a purely visual feature).
     const appRow = await env.DB.prepare("SELECT fog_enabled FROM app WHERE id=?").bind(P.appId).first().catch(() => null);
+    // share_until drives the "Share my location with friends today" toggle —
+    // the client needs its current value on boot to paint the toggle right.
+    const acctRow = await env.DB.prepare("SELECT share_until FROM player_account WHERE id=?").bind(P.playerId).first().catch(() => null);
     return json({ id: P.playerId, email: P.email, displayName: P.displayName, appId: P.appId,
-                  fogEnabled: !(appRow && appRow.fog_enabled === 0) }, 200, AC);
+                  fogEnabled: !(appRow && appRow.fog_enabled === 0),
+                  shareUntil: (acctRow && acctRow.share_until) || null }, 200, AC);
   }
   // --- Ridge Quest: Google Sign-In ---
   // Looks up by google_sub first; falls back to matching (app_id, email) to
@@ -1205,6 +1212,11 @@ async function api(request, env, url) {
       // live, D1_ERROR: FOREIGN KEY constraint failed), not just leaves
       // orphaned data behind like the others technically could.
       env.DB.prepare("DELETE FROM player_day_activity_stats WHERE player_id=?").bind(P.playerId),
+      // Friends list + live-location share (2026-09) — plain columns, no FK,
+      // so these wouldn't block the delete, but leaving them behind would
+      // keep a removed player in other people's friend lists.
+      env.DB.prepare("DELETE FROM player_friend WHERE player_lo=? OR player_hi=?").bind(P.playerId, P.playerId),
+      env.DB.prepare("DELETE FROM player_presence WHERE player_id=?").bind(P.playerId),
       env.DB.prepare("DELETE FROM player_account WHERE id=?").bind(P.playerId)
     ]);
     return json({ ok: true, forgotten: P.playerId }, 200, AC);
@@ -1549,6 +1561,218 @@ async function api(request, env, url) {
     ).bind(row.playerId, row.appId, row.date, row.seasonId, row.activity, row.points, row.verticalM, row.distanceM, row.runsCount));
     if (batch.length) await env.DB.batch(batch);
     return json({ ok: true, rows: rows.length }, 200, AC);
+  }
+
+  // --- Ridge Quest: friends list + opt-in live-location share (2026-09) ---
+  // A persistent, per-resort friends list (add by email OR personal invite
+  // link, accept/decline/remove) plus an opt-in daily location share that
+  // draws friends' dots on the "My map" screen.
+  //
+  // player_presence is the anonymous `presence` table
+  // (migrations/0005_presence.sql) moved behind playerAuth() and scoped to
+  // accepted friendships; cleanupLiveZones() prunes it on the same 60s
+  // window. NEVER returns email — same rule as the leaderboards above
+  // (leaderboardName() gives a "Skier ABCD" fallback for a null name).
+  //
+  // The daily opt-in is enforced SERVER-side by player_account.share_until:
+  // POST /api/presence is refused unless it's in the future, and
+  // GET /api/presence/friends returns nothing unless the CALLER's own
+  // share_until is live too — strict mutual, "no share, no see".
+  function questEndOfDay(nowMs) {
+    // Next Golden-BC local midnight as epoch ms. Fixed UTC-7, non-DST —
+    // the exact same simplification questDateBucket() makes (D1 has no tz
+    // database); named so the assumption is visible, not buried.
+    const shifted = new Date(nowMs + QUEST_DAY_BUCKET_OFFSET_H * 3600000);
+    const localMidnightUTC = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
+    return localMidnightUTC - QUEST_DAY_BUCKET_OFFSET_H * 3600000 + 24 * 3600000;
+  }
+  // player_friend stores the pair sorted (lo = min by string, hi = max) so a
+  // request and its reverse collapse onto one UNIQUE row and "my friends" is
+  // a single (player_lo=? OR player_hi=?) scan.
+  function friendPair(a, b) { return a < b ? { lo: a, hi: b } : { lo: b, hi: a }; }
+
+  // POST /api/friends/request  body { email } | { inviteToken:"<playerId>.<hex>" }
+  if (path === "/api/friends/request" && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    let targetId = null;
+    if (b.inviteToken) {
+      const s = String(b.inviteToken);
+      const dot = s.indexOf(".");
+      const wantId = dot > 0 ? s.slice(0, dot) : "";
+      const wantTok = dot > 0 ? s.slice(dot + 1) : "";
+      const row = (wantId && wantTok) ? await env.DB.prepare(
+        "SELECT id FROM player_account WHERE id=? AND app_id=? AND invite_token=?"
+      ).bind(wantId, P.appId, wantTok).first().catch(() => null) : null;
+      if (!row) return json({ error: "invalid or expired invite link" }, 400, AC);
+      targetId = row.id;
+    } else {
+      const email = (b.email || "").toLowerCase().trim();
+      if (!email) return json({ error: "email or inviteToken required" }, 400, AC);
+      const row = await env.DB.prepare(
+        "SELECT id FROM player_account WHERE app_id=? AND email=?"
+      ).bind(P.appId, email).first().catch(() => null);
+      // No account enumeration — an unknown email is indistinguishable from
+      // a sent request (same rule as POST /api/players/forgot-password).
+      if (!row) return json({ ok: true, status: "pending" }, 200, AC);
+      targetId = row.id;
+    }
+    if (targetId === P.playerId) return json({ error: "you can't add yourself" }, 400, AC);
+    const { lo, hi } = friendPair(P.playerId, targetId);
+    const existing = await env.DB.prepare(
+      "SELECT id,status,requested_by FROM player_friend WHERE player_lo=? AND player_hi=?"
+    ).bind(lo, hi).first().catch(() => null);
+    if (existing) {
+      // Reverse-direction pending request + this one → both asked → friends.
+      if (existing.status === "pending" && existing.requested_by !== P.playerId) {
+        await env.DB.prepare("UPDATE player_friend SET status='accepted', accepted_at=? WHERE id=?")
+          .bind(Date.now(), existing.id).run();
+        return json({ ok: true, status: "accepted" }, 200, AC);
+      }
+      return json({ ok: true, status: existing.status }, 200, AC);
+    }
+    await env.DB.prepare(
+      "INSERT INTO player_friend (id,app_id,player_lo,player_hi,status,requested_by,created_at) VALUES (?,?,?,?,'pending',?,?)"
+    ).bind(crypto.randomUUID(), P.appId, lo, hi, P.playerId, Date.now()).run();
+    return json({ ok: true, status: "pending" }, 200, AC);
+  }
+
+  // GET /api/friends → { friends:[{playerId,name,online,sharing}], incoming:[...], outgoing:[...] }
+  if (path === "/api/friends" && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const now = Date.now();
+    const { results } = await env.DB.prepare(
+      `SELECT f.status, f.requested_by,
+              CASE WHEN f.player_lo=? THEN f.player_hi ELSE f.player_lo END AS other_id,
+              p.display_name, p.share_until, pr.updated_at AS presence_at
+       FROM player_friend f
+       JOIN player_account p ON p.id = (CASE WHEN f.player_lo=? THEN f.player_hi ELSE f.player_lo END)
+       LEFT JOIN player_presence pr ON pr.player_id = p.id
+       WHERE f.player_lo=? OR f.player_hi=?`
+    ).bind(P.playerId, P.playerId, P.playerId, P.playerId).all();
+    const friends = [], incoming = [], outgoing = [];
+    for (const r of (results || [])) {
+      const entry = { playerId: r.other_id, name: leaderboardName({ display_name: r.display_name, player_id: r.other_id }) };
+      if (r.status === "accepted") {
+        friends.push({ ...entry,
+          online: !!(r.presence_at && r.presence_at > now - 60000),
+          sharing: !!(r.share_until && r.share_until > now) });
+      } else if (r.requested_by === P.playerId) {
+        outgoing.push(entry);
+      } else {
+        incoming.push(entry);
+      }
+    }
+    return json({ friends, incoming, outgoing }, 200, AC);
+  }
+
+  // GET /api/friends/invite → { inviteUrl } — lazily mints a stable token.
+  if (path === "/api/friends/invite" && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const row = await env.DB.prepare("SELECT invite_token FROM player_account WHERE id=?").bind(P.playerId).first().catch(() => null);
+    let tok = row && row.invite_token;
+    if (!tok) {
+      tok = randomHex(12);
+      await env.DB.prepare("UPDATE player_account SET invite_token=? WHERE id=?").bind(tok, P.playerId).run();
+    }
+    const inviteUrl = appUrl(env, "/quest", request)
+      + "?app=" + encodeURIComponent(P.appId)
+      + "&addfriend=" + encodeURIComponent(P.playerId + "." + tok);
+    return json({ inviteUrl }, 200, AC);
+  }
+
+  // POST /api/friends/:otherId/accept | /decline
+  const mfac = path.match(/^\/api\/friends\/([^/]+)\/(accept|decline)$/);
+  if (mfac && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const otherId = decodeURIComponent(mfac[1]);
+    const { lo, hi } = friendPair(P.playerId, otherId);
+    const row = await env.DB.prepare(
+      "SELECT id,status,requested_by FROM player_friend WHERE player_lo=? AND player_hi=?"
+    ).bind(lo, hi).first().catch(() => null);
+    if (!row || row.status !== "pending") return json({ error: "no pending request" }, 404, AC);
+    if (mfac[2] === "accept") {
+      if (row.requested_by === P.playerId) return json({ error: "that's your own request" }, 400, AC);
+      await env.DB.prepare("UPDATE player_friend SET status='accepted', accepted_at=? WHERE id=?").bind(Date.now(), row.id).run();
+      return json({ ok: true }, 200, AC);
+    }
+    // decline — either party of a still-pending row may cancel it.
+    await env.DB.prepare("DELETE FROM player_friend WHERE id=?").bind(row.id).run();
+    return json({ ok: true }, 200, AC);
+  }
+
+  // DELETE /api/friends/:otherId — remove an accepted friend (either side).
+  const mfd = path.match(/^\/api\/friends\/([^/]+)$/);
+  if (mfd && method === "DELETE") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const { lo, hi } = friendPair(P.playerId, decodeURIComponent(mfd[1]));
+    await env.DB.prepare("DELETE FROM player_friend WHERE player_lo=? AND player_hi=?").bind(lo, hi).run();
+    return json({ ok: true }, 200, AC);
+  }
+
+  // POST /api/share  { on:true|false } — arm/disarm today's location share.
+  if (path === "/api/share" && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    const shareUntil = b.on ? questEndOfDay(Date.now()) : null;
+    await env.DB.prepare("UPDATE player_account SET share_until=? WHERE id=?").bind(shareUntil, P.playerId).run();
+    // Turning it off drops the live dot now, so friends lose it immediately
+    // rather than at the next 60s cron sweep.
+    if (!shareUntil) await env.DB.prepare("DELETE FROM player_presence WHERE player_id=?").bind(P.playerId).run().catch(() => {});
+    return json({ ok: true, shareUntil }, 200, AC);
+  }
+
+  // POST /api/presence  { lat, lon, heading?, acc? } — upsert own live dot.
+  if (path === "/api/presence" && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    if (b.lat == null || b.lon == null) return json({ error: "lat, lon required" }, 400, AC);
+    const acct = await env.DB.prepare("SELECT share_until FROM player_account WHERE id=?").bind(P.playerId).first().catch(() => null);
+    if (!(acct && acct.share_until && acct.share_until > Date.now()))
+      return json({ error: "location sharing is off" }, 403, AC);
+    await env.DB.prepare(
+      "INSERT INTO player_presence (player_id,app_id,lat,lon,heading,accuracy,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(player_id) DO UPDATE SET lat=excluded.lat,lon=excluded.lon,heading=excluded.heading,accuracy=excluded.accuracy,updated_at=excluded.updated_at"
+    ).bind(P.playerId, P.appId, b.lat, b.lon, b.heading == null ? null : b.heading, b.acc == null ? null : b.acc, Date.now()).run();
+    return json({ ok: true }, 200, AC);
+  }
+
+  // GET /api/presence/friends → { friends:[{playerId,name,lat,lon,heading,acc,updatedAt}] }
+  if (path === "/api/presence/friends" && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const now = Date.now();
+    // Strict mutual — you only see friends on a day you're sharing too.
+    const self = await env.DB.prepare("SELECT share_until FROM player_account WHERE id=?").bind(P.playerId).first().catch(() => null);
+    if (!(self && self.share_until && self.share_until > now)) return json({ friends: [] }, 200, AC);
+    const { results } = await env.DB.prepare(
+      `SELECT pr.player_id, pr.lat, pr.lon, pr.heading, pr.accuracy, pr.updated_at, p.display_name
+       FROM player_friend f
+       JOIN player_account p ON p.id = (CASE WHEN f.player_lo=? THEN f.player_hi ELSE f.player_lo END)
+       JOIN player_presence pr ON pr.player_id = p.id
+       WHERE f.status='accepted' AND (f.player_lo=? OR f.player_hi=?)
+         AND p.share_until > ? AND pr.updated_at > ?`
+    ).bind(P.playerId, P.playerId, P.playerId, now, now - 60000).all();
+    const friends = (results || []).map(r => ({
+      playerId: r.player_id,
+      name: leaderboardName({ display_name: r.display_name, player_id: r.player_id }),
+      lat: r.lat, lon: r.lon, heading: r.heading, acc: r.accuracy, updatedAt: r.updated_at
+    }));
+    return json({ friends }, 200, AC);
   }
 
   // --- users: list ---
@@ -1949,9 +2173,10 @@ async function api(request, env, url) {
     // same set as POST /api/players/:id/forget) or a deleted workspace
     // leaves orphan player_account rows, and a stale google_sub then blocks
     // that person signing up anywhere else.
-    for (const t of ["player_session", "quest_run", "player_fog_cell", "player_day_stats", "player_day_activity_stats"]) {
+    for (const t of ["player_session", "quest_run", "player_fog_cell", "player_day_stats", "player_day_activity_stats", "player_presence"]) {
       await env.DB.prepare(`DELETE FROM ${t} WHERE player_id IN (SELECT id FROM player_account WHERE app_id=?)`).bind(aid).run().catch(() => {});
     }
+    await env.DB.prepare("DELETE FROM player_friend WHERE app_id=?").bind(aid).run().catch(() => {});
     await env.DB.prepare("DELETE FROM consent WHERE playerId IN (SELECT id FROM player_account WHERE app_id=?)").bind(aid).run().catch(() => {});
     await env.DB.prepare("DELETE FROM player_account WHERE app_id=?").bind(aid).run();
     await env.DB.prepare("DELETE FROM app WHERE id=?").bind(aid).run();

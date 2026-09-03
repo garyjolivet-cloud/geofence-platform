@@ -97,6 +97,16 @@
   .runDiamond i{width:9px;height:9px;background:#111;border:1.4px solid #eef3f0;
     transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#e5484d}
+  /* Friends — invite box + live map labels + transient toast */
+  .inviteBox{display:flex;flex-direction:column;align-items:center;gap:10px;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:16px;margin-top:10px}
+  .inviteBox img{background:#fff;border-radius:8px;padding:6px}
+  .inviteBox input{width:100%;font-size:12px;color:var(--ice)}
+  .friendLabel{font:700 13px/1 "Barlow Condensed",system-ui,sans-serif;letter-spacing:.3px;white-space:nowrap;pointer-events:none;
+    text-shadow:0 0 2px #0a1018,0 0 3px #0a1018,0 1px 3px #0a1018}
+  #rqToast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--slate);border:1px solid var(--rim);
+    color:var(--snow);border-radius:10px;padding:10px 16px;font-family:"Barlow Condensed";font-size:13px;letter-spacing:.3px;
+    opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:3000;max-width:80vw;text-align:center}
+  #rqToast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
 </head>
 <body>
@@ -118,6 +128,14 @@ let RQ_APP_ID = new URLSearchParams(location.search).get("app") || null;
 const RQ_GOOGLE_CLIENT_ID = "228254697293-80gino7h5nfbbth1tlui3ndided7bjr8.apps.googleusercontent.com";
 const app = document.getElementById("app");
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+// Small transient toast — no such helper existed; used by the friends flow
+// (invite-link copied, request sent) where a full screen swap would be too heavy.
+function rqToast(msg){
+  let t = document.getElementById("rqToast");
+  if(!t){ t = document.createElement("div"); t.id = "rqToast"; document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(rqToast._t); rqToast._t = setTimeout(()=>{ t.classList.remove("show"); }, 3200);
+}
 
 /* ---- session storage — deliberately separate keys from the staff
    RoleGate session (localStorage["gp.session"]). Players are a wholly
@@ -516,6 +534,17 @@ const IS_SIM_MODE = new URLSearchParams(location.search).get("sim") === "1";
 // boot(). Gates ONLY renderFogMap()'s visual layers; Quest._revealFog()'s H3
 // tracking and POST /api/fog-cells persistence are never gated by this.
 let RQ_FOG_ENABLED = true;
+// "Share my location with friends today" state — player_account.share_until
+// (epoch ms) mirrored client-side: set by boot() from /api/players/me and by
+// Home's toggle (POST /api/share). While it's in the future AND tracking is
+// running, Quest.onShare piggybacks the fix stream to POST /api/presence.
+// rqLastShareAt throttles that POST to ~7s (matches geofence-engine's ping).
+let RQ_SHARE_UNTIL = null;
+let rqLastShareAt = 0;
+// Friends checked for live map tracking — capped, persisted like rq.activity.
+const RQ_MAX_TRACK = 6;
+function getTrackFriends(){ try{ return JSON.parse(localStorage.getItem("rq.trackFriends")||"[]"); }catch(e){ return []; } }
+function setTrackFriends(ids){ localStorage.setItem("rq.trackFriends", JSON.stringify(ids.slice(0, RQ_MAX_TRACK))); }
 
 const QUEST_TUNING = {
   MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
@@ -631,6 +660,7 @@ const Quest = {
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
   onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
   onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
+  onShare: null,        // callback(p) — same p as onPosition; set by renderHome to POST /api/presence (throttled) while sharing-with-friends is on. Independent of onPosition so it survives Home<->Map navigation.
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
   onCoverage: null,     // R9 — callback(corridorName, pct, passed) — fired once per band exit (whether it logged a run or was discarded), so a partial/clipped crossing isn't silent the way a below-threshold discard otherwise would be
 
@@ -719,6 +749,7 @@ const Quest = {
     this._tickViewpoints(p);
     if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t});
     if(this.onPosition) this.onPosition(p);   // live avatar on an open map
+    if(this.onShare) this.onShare(p);         // share own position with friends (throttled inside)
   },
 
   // ---- DEV/TEST-ONLY: simulate a walk without real GPS -----------------
@@ -1022,6 +1053,8 @@ function renderHome(){
     +'<button class="ghost" id="btnMap">My map</button>'
     +'<p class="scrollhint" id="exploredPct" style="margin:6px 0 10px"></p>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
+    +'<button class="ghost" id="btnFriends">Friends</button>'
+    +'<button class="ghost" id="btnShare"></button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<button class="ghost" id="btnConditions">Check conditions again</button>'
     +'<button class="ghost" id="btnSwitchResort">Switch resort</button>'
@@ -1149,10 +1182,41 @@ function renderHome(){
   }
   document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
+  document.getElementById("btnFriends").onclick=()=>renderFriends();
+  // "Share my location with friends today" — POST /api/share sets/clears
+  // share_until server-side; RQ_SHARE_UNTIL mirrors it so the label + the
+  // Quest.onShare gate below stay right without a round-trip.
+  const shareBtn=document.getElementById("btnShare");
+  function paintShareBtn(){
+    const on = RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now();
+    shareBtn.textContent = on ? "Sharing my location with friends — tap to stop" : "Share my location with friends today";
+    shareBtn.style.borderColor = on ? "var(--coral)" : "";
+  }
+  paintShareBtn();
+  shareBtn.onclick=async()=>{
+    const turningOn = !(RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now());
+    shareBtn.disabled=true;
+    try{
+      const j = await api("/api/share", {method:"POST", body:JSON.stringify({on:turningOn})});
+      RQ_SHARE_UNTIL = j.shareUntil || null;
+      rqToast(turningOn ? "Sharing until tonight" : "Location sharing off");
+    }catch(e){ rqToast(e.message); }
+    finally{ shareBtn.disabled=false; paintShareBtn(); }
+  };
+  // Piggyback the fix stream (no second watchPosition). Guarded by
+  // RQ_SHARE_UNTIL and throttled; the POST itself is refused server-side
+  // unless share_until is live, so a stale RQ_SHARE_UNTIL just wastes one call.
+  Quest.onShare = (p)=>{
+    if(!(RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now())) return;
+    const now = Date.now();
+    if(now - rqLastShareAt < 7000) return;
+    rqLastShareAt = now;
+    api("/api/presence", {method:"POST", body:JSON.stringify({lat:p.lat, lon:p.lon, heading:p.headingTravel, acc:p.acc})}).catch(()=>{});
+  };
   document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
   document.getElementById("btnSwitchResort").onclick=()=>{ Quest.stop(); renderWorkspacePicker(); };
   document.getElementById("btnLogout").onclick=async()=>{
-    Quest.stop();
+    Quest.stop(); Quest.onShare=null;
     try{ await api("/api/players/logout",{method:"POST"}); }catch(e){}
     clearSession(); renderAuth("login");
   };
@@ -1227,6 +1291,140 @@ async function renderLeaderboard(mode, activityFilter){
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load the leaderboard.</div>';
   }
+}
+
+/* ============================== FRIENDS ==============================
+   Persistent per-resort friends list (add by email or personal invite
+   link, accept/decline/remove) + the daily "share my location" toggle
+   also lives on Home. Friends checked here (max RQ_MAX_TRACK) are drawn
+   live on "My map" — see renderFogMap's friends layer. The checked set
+   persists in localStorage["rq.trackFriends"], same idea as rq.activity.
+   Visibility is STRICT MUTUAL server-side: you only see a friend on a day
+   you're BOTH sharing (GET /api/presence/friends returns [] otherwise). */
+async function renderFriends(){
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Friends</h2>'
+    +'<p class="lead">Add friends by email or your invite link. On a day you’re <em>both</em> sharing, up to '+RQ_MAX_TRACK+' checked friends show live on your map.</p>'
+    +'<div id="friendsErr"></div>'
+    +'<label for="fAddEmail">Add a friend by email</label>'
+    +'<div style="display:flex;gap:8px"><input id="fAddEmail" type="email" autocomplete="off" placeholder="friend@email.com" style="flex:1">'
+      +'<button class="ghost" id="fAddBtn" style="width:auto;margin:0;white-space:nowrap">Send</button></div>'
+    +'<button class="ghost" id="fInviteBtn">Show my invite link</button>'
+    +'<div id="fInviteBox"></div>'
+    +'<div id="fRequests"></div>'
+    +'<div class="runlist"><h3>Your friends</h3><div id="fList"><div class="empty">Loading…</div></div></div>'
+    +'<button class="ghost" id="fBack">← Back</button>'
+    +'</div>';
+  document.getElementById("fBack").onclick=renderHome;
+  const errEl=document.getElementById("friendsErr");
+  const showErr=(m)=>{ errEl.innerHTML='<div class="err">'+esc(m)+'</div>'; };
+
+  document.getElementById("fAddBtn").onclick=async()=>{
+    const email=(document.getElementById("fAddEmail").value||"").trim();
+    if(!email){ showErr("Enter an email address."); return; }
+    errEl.innerHTML="";
+    try{
+      await api("/api/friends/request", {method:"POST", body:JSON.stringify({email})});
+      document.getElementById("fAddEmail").value="";
+      // Deliberately vague — the server never confirms whether that email
+      // has an account here (no enumeration), so neither does this.
+      rqToast("If they play here, a request is on its way");
+      loadFriends();
+    }catch(e){ showErr(e.message); }
+  };
+
+  document.getElementById("fInviteBtn").onclick=async()=>{
+    const box=document.getElementById("fInviteBox");
+    box.innerHTML='<div class="empty">Loading…</div>';
+    try{
+      const j = await api("/api/friends/invite");
+      const url = j.inviteUrl;
+      box.innerHTML =
+        '<div class="inviteBox">'
+        +'<img alt="Invite QR code" width="180" height="180" src="https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=12&ecc=L&data='+encodeURIComponent(url)+'">'
+        +'<input id="fInviteUrl" type="text" readonly value="'+esc(url)+'">'
+        +'<div style="display:flex;gap:8px">'
+          +'<button class="ghost" id="fCopyBtn" style="margin:0">Copy link</button>'
+          +(navigator.share ? '<button class="ghost" id="fShareBtn" style="margin:0">Share…</button>' : '')
+        +'</div></div>';
+      document.getElementById("fCopyBtn").onclick=()=>{
+        const inp=document.getElementById("fInviteUrl"); inp.focus(); inp.select();
+        const done=()=>rqToast("Link copied");
+        if(navigator.clipboard) navigator.clipboard.writeText(url).then(done, ()=>{ try{ document.execCommand("copy"); done(); }catch(e){} });
+        else { try{ document.execCommand("copy"); done(); }catch(e){} }
+      };
+      const sb=document.getElementById("fShareBtn");
+      if(sb) sb.onclick=()=>navigator.share({title:"Add me on Ridge Quest", url}).catch(()=>{});
+    }catch(e){ box.innerHTML='<div class="err">'+esc(e.message)+'</div>'; }
+  };
+
+  async function loadFriends(){
+    const reqEl=document.getElementById("fRequests");
+    const listEl=document.getElementById("fList");
+    if(!listEl) return; // navigated away
+    let j;
+    try{ j = await api("/api/friends"); }
+    catch(e){ listEl.innerHTML='<div class="empty">Couldn’t load your friends.</div>'; return; }
+
+    const inc=j.incoming||[], out=j.outgoing||[];
+    reqEl.innerHTML = (inc.length||out.length)
+      ? '<div class="runlist"><h3>Requests</h3>'
+        + inc.map(r=>'<div class="runrow" style="flex-wrap:wrap"><span class="name">'+esc(r.name)+'</span>'
+            +'<button class="ghost fAccept" data-id="'+esc(r.playerId)+'" style="width:auto;margin:0;padding:6px 12px">Accept</button>'
+            +'<button class="ghost fDecline" data-id="'+esc(r.playerId)+'" style="width:auto;margin:0;padding:6px 12px">Decline</button></div>').join("")
+        + out.map(r=>'<div class="runrow" style="flex-wrap:wrap"><span class="name">'+esc(r.name)+'</span><span class="meta">waiting…</span>'
+            +'<button class="ghost fDecline" data-id="'+esc(r.playerId)+'" style="width:auto;margin:0;padding:6px 12px">Cancel</button></div>').join("")
+        + '</div>'
+      : "";
+    reqEl.querySelectorAll(".fAccept").forEach(b=>b.onclick=async()=>{
+      try{ await api("/api/friends/"+encodeURIComponent(b.dataset.id)+"/accept",{method:"POST"}); loadFriends(); }catch(e){ showErr(e.message); }
+    });
+    reqEl.querySelectorAll(".fDecline").forEach(b=>b.onclick=async()=>{
+      try{ await api("/api/friends/"+encodeURIComponent(b.dataset.id)+"/decline",{method:"POST"}); loadFriends(); }catch(e){ showErr(e.message); }
+    });
+
+    const friends=j.friends||[];
+    // Drop any tracked id that's no longer a friend, then persist the pruned set.
+    setTrackFriends(getTrackFriends().filter(id=>friends.some(f=>f.playerId===id)));
+    const tracked=getTrackFriends();
+    if(!friends.length){ listEl.innerHTML='<div class="empty">No friends yet — add one above.</div>'; return; }
+    listEl.innerHTML = friends.map(f=>{
+      const dot = f.online ? 'var(--go)' : 'var(--fog)';
+      const hint = f.sharing ? 'sharing today' : (f.online ? 'online' : 'offline');
+      return '<div class="runrow" style="flex-wrap:wrap">'
+        +'<input type="checkbox" class="fTrack" data-id="'+esc(f.playerId)+'"'+(tracked.includes(f.playerId)?' checked':'')
+          +' style="width:16px;height:16px;flex:0 0 auto;accent-color:var(--coral)">'
+        +'<span class="name">'+esc(f.name)
+          +'<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:'+dot+';margin-left:7px;vertical-align:middle"></span></span>'
+        +'<span class="meta">'+hint+'</span>'
+        +'<button class="ghost fRemove" data-id="'+esc(f.playerId)+'" style="width:auto;margin:0;padding:6px 10px">Remove</button>'
+        +'</div>';
+    }).join("");
+    function paintChecks(){
+      const boxes=[...listEl.querySelectorAll(".fTrack")];
+      const n=boxes.filter(b=>b.checked).length;
+      boxes.forEach(b=>{ b.disabled = (!b.checked && n>=RQ_MAX_TRACK); });
+    }
+    paintChecks();
+    listEl.querySelectorAll(".fTrack").forEach(b=>b.onclick=()=>{
+      let t=getTrackFriends();
+      if(b.checked){
+        if(t.length>=RQ_MAX_TRACK){ b.checked=false; rqToast("Track up to "+RQ_MAX_TRACK+" friends"); return; }
+        if(!t.includes(b.dataset.id)) t.push(b.dataset.id);
+      } else {
+        t=t.filter(id=>id!==b.dataset.id);
+      }
+      setTrackFriends(t);
+      paintChecks();
+    });
+    listEl.querySelectorAll(".fRemove").forEach(b=>b.onclick=async()=>{
+      if(!confirm("Remove this friend? You’ll stop seeing each other on the map.")) return;
+      try{ await api("/api/friends/"+encodeURIComponent(b.dataset.id),{method:"DELETE"}); loadFriends(); }
+      catch(e){ showErr(e.message); }
+    });
+  }
+  loadFriends();
 }
 
 /* =========================== FOG MAP (R2) ===========================
@@ -1455,6 +1653,11 @@ function renderFogMap(){
     document.getElementById("fogBack").onclick=()=>{ Quest.onPosition=null; renderHome(); };
     return;
   }
+  // Live friends layer state — the ≤RQ_MAX_TRACK checked in the Friends
+  // screen, polled every 5s. Declared out here so the #fogBack handler
+  // (bound before the map, on purpose — see below) can tear them down.
+  let friendPoll=null;
+  const friendMarkers=new Map(); // playerId -> maplibregl.Marker (name label)
   // R11 — completion % is a number derived from tracking (Quest.fogCells),
   // not a fog VISUAL — deliberately NOT gated behind RQ_FOG_ENABLED the way
   // the legend below is, matching R5's own contract that fog tracking never
@@ -1473,7 +1676,12 @@ function renderFogMap(){
   // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
   // exception here aborts the script before the button's handler is ever
   // attached, leaving a dead "← Back" button with no way out of the map.
-  document.getElementById("fogBack").onclick=()=>{ Quest.onFogUpdated=null; Quest.onPosition=null; renderHome(); };
+  document.getElementById("fogBack").onclick=()=>{
+    Quest.onFogUpdated=null; Quest.onPosition=null;
+    if(friendPoll){ clearInterval(friendPoll); friendPoll=null; }
+    friendMarkers.forEach(m=>m.remove()); friendMarkers.clear();
+    renderHome();
+  };
   try{
     const map = new maplibregl.Map({
       container:"fogMap",
@@ -1541,6 +1749,66 @@ function renderFogMap(){
     // nulling Quest.onPosition, same lifecycle as onFogUpdated.
     const here = HereMarker.attach(map, { follow:'edge' });
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat, headingDeg:p.headingTravel, accM:p.acc });
+
+    // --- Live friends ---------------------------------------------------
+    // GET /api/presence/friends every 5s (same cadence as the tour
+    // engine's walker poll). It only ever returns friends who are sharing
+    // today AND fresh, and returns [] unless YOU'RE sharing too (strict
+    // mutual, enforced server-side). We further keep just the ≤6 checked in
+    // the Friends screen. Names are HTML markers, not a symbol layer — the
+    // raster basemap has no glyphs (same reason drawAllRuns uses markers).
+    const trackIds = getTrackFriends();
+    if(trackIds.length){
+      const FRIEND_COLORS = ["#ff6a3d","#38e0a6","#8fb6d4","#c9a4ff","#ffd166","#ff5d8f"];
+      const colorFor = (id)=>{ let h=0; for(let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0; return FRIEND_COLORS[h%FRIEND_COLORS.length]; };
+      const STALE_MS = 45000;
+      function drawFriends(list){
+        const fresh = (list||[]).filter(f=>trackIds.includes(f.playerId));
+        const now = Date.now();
+        const src = map.getSource("friends");
+        if(src) src.setData({ type:"FeatureCollection", features: fresh.map(f=>({
+          type:"Feature",
+          properties:{ color:colorFor(f.playerId), stale:(now-f.updatedAt > STALE_MS)?1:0 },
+          geometry:{ type:"Point", coordinates:[f.lon, f.lat] }
+        })) });
+        const seen=new Set();
+        fresh.forEach(f=>{
+          seen.add(f.playerId);
+          const ageMin = Math.floor((now-f.updatedAt)/60000);
+          let m = friendMarkers.get(f.playerId);
+          if(!m){
+            const el=document.createElement("div"); el.className="friendLabel";
+            m=new maplibregl.Marker({ element:el, anchor:"bottom", offset:[0,-9] });
+            m.setLngLat([f.lon,f.lat]).addTo(map);
+            friendMarkers.set(f.playerId, m);
+          } else {
+            m.setLngLat([f.lon,f.lat]);
+          }
+          const el=m.getElement();
+          el.textContent = f.name + (ageMin>=1 ? ' · '+ageMin+'m ago' : '');
+          el.style.color = colorFor(f.playerId);
+          el.style.opacity = (now-f.updatedAt > STALE_MS) ? "0.4" : "1";
+        });
+        friendMarkers.forEach((m,id)=>{ if(!seen.has(id)){ m.remove(); friendMarkers.delete(id); } });
+      }
+      const pollFriends = async ()=>{
+        try{ const j = await api("/api/presence/friends"); drawFriends(j.friends); }
+        catch(e){ /* transient — next tick retries */ }
+      };
+      map.on("load", ()=>{
+        if(!map.getSource("friends")){
+          map.addSource("friends", { type:"geojson", data:{ type:"FeatureCollection", features:[] } });
+          map.addLayer({ id:"friends-dot", type:"circle", source:"friends", paint:{
+            "circle-radius":7,
+            "circle-color":["get","color"],
+            "circle-opacity":["case",["==",["get","stale"],1],0.35,0.95],
+            "circle-stroke-width":2, "circle-stroke-color":"#0a1018"
+          }});
+        }
+        pollFriends();
+        if(!friendPoll) friendPoll = setInterval(pollFriends, 5000);
+      });
+    }
   }catch(e){
     document.getElementById("fogMap").outerHTML =
       '<div class="msg" style="padding-top:120px">Map couldn’t load (connection or device issue) — try again from a better signal.</div>';
@@ -1583,12 +1851,22 @@ async function boot(){
     clearSession(); renderAuth("login"); return;
   }
   RQ_FOG_ENABLED = me.fogEnabled !== false;
+  RQ_SHARE_UNTIL = me.shareUntil || null;
   // Session/reconciliation: player_account is unique per (app_id,email),
   // not globally — switching workspace means switching account. If the
   // session's own appId no longer matches the currently-resolved
   // RQ_APP_ID (e.g. just picked a different resort), there's no cross-app
   // account linking by design — force fresh login/signup under the new app.
   if(me.appId !== RQ_APP_ID){ clearSession(); renderAuth("login"); return; }
+  // A friend-invite link (?addfriend=<playerId>.<token>) — fire the request
+  // once now that we know we're signed into the right resort, then strip the
+  // param so a refresh doesn't re-send it.
+  const addFriendTok = new URLSearchParams(location.search).get("addfriend");
+  if(addFriendTok){
+    try{ await api("/api/friends/request", {method:"POST", body:JSON.stringify({inviteToken:addFriendTok})}); rqToast("Friend request sent"); }
+    catch(e){ rqToast(e.message); }
+    try{ const u=new URL(location.href); u.searchParams.delete("addfriend"); history.replaceState(null,"",u); }catch(e){}
+  }
   const gateOk = await runGate();
   if(!gateOk) return; // runGate's own screens handle re-entry
   renderConditions(renderHome);
