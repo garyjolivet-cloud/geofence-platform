@@ -2761,7 +2761,7 @@ async function api(request, env, url) {
       // Reflect the live owner — a project may have moved clients since this
       // bundle was published, and the stored JSON would otherwise be stale.
       const ownerRow = await env.DB.prepare(
-        "SELECT p.orgId AS orgId, p.quest_activities AS questActivities, p.terrain_biome AS terrainBiome, p.season AS season, a.tile_art_enabled AS tileArtEnabled " +
+        "SELECT p.orgId AS orgId, p.quest_activities AS questActivities, p.terrain_biome AS terrainBiome, p.season AS season, a.tile_art_enabled AS tileArtEnabled, a.three_d_enabled AS threeDEnabled " +
         "FROM project p LEFT JOIN app a ON a.id = p.appId WHERE p.id=?"
       ).bind(pid).first();
       if (ownerRow) bundle.orgId = ownerRow.orgId;
@@ -2769,6 +2769,11 @@ async function api(request, env, url) {
       // orgId/questActivities: an app-level toggle + two project-level
       // settings, neither part of the published bundle JSON itself.
       bundle.tileArtEnabled = !!(ownerRow && ownerRow.tileArtEnabled);
+      // 3D terrain toggle — the Fence Editor also denormalizes this into the
+      // published JSON at publish time, but inject the live value here too
+      // (same pattern as tileArtEnabled) so Ridge Quest's "My map" picks it
+      // up without waiting for a republish.
+      bundle.threeDEnabled = !!(ownerRow && ownerRow.threeDEnabled);
       bundle.terrainBiome = (ownerRow && ownerRow.terrainBiome) || null;
       bundle.season = (ownerRow && ownerRow.season) || null;
       // R12 — the per-project activity-relevance filter isn't part of the

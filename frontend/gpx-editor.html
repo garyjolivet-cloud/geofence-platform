@@ -9,6 +9,7 @@
 <script src="top-nav.js"></script>
 <script src="corridor-tree.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script src="terrain-3d.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script>RoleGate.require(['admin','operator']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -48,6 +49,10 @@
   #map{position:absolute;inset:0}
   #baseSel{position:absolute;top:10px;right:10px;z-index:5;width:auto;
            background:rgba(20,29,43,.92);cursor:pointer}
+  #tiltBtn{position:absolute;top:44px;right:10px;z-index:5;width:auto;cursor:pointer;
+           background:rgba(20,29,43,.92);color:var(--snow);border:1px solid var(--rim);
+           border-radius:6px;padding:5px 12px;font-family:"Barlow Condensed";
+           font-size:12px;text-transform:uppercase;letter-spacing:.4px}
 
   .side{width:300px;flex:0 0 auto;border-left:1px solid var(--rim);display:flex;flex-direction:column;min-height:0;
         background:rgba(255,255,255,.01);overflow-y:auto;padding:12px;resize:horizontal;min-width:240px;max-width:60vw}
@@ -107,6 +112,7 @@
       <option value="streets">Streets</option>
       <option value="sat">Satellite</option>
     </select>
+    <button id="tiltBtn" type="button" title="Tilt the map into 3D" style="display:none">Tilt</button>
   </div>
 
   <div class="side">
@@ -291,6 +297,7 @@ function filterImpossibleJumps(pts, maxSpeedMps){
 
 /* ---- state ---- */
 let appId=null;
+let threeDOn=false;  // workspace 3D-terrain flag for the current appId — when on, the map carries persistent DEM terrain + a Tilt toggle
 let basePoints=[];   // current baseline (post most-recent structural edit), may include tMs
 let points=[];       // active/displayed set — basePoints, or filterImpossibleJumps(basePoints) when the filter is on
 let filterOn=true, filterAvailable=false;
@@ -423,7 +430,9 @@ document.getElementById("backfillElevBtn").onclick=()=>{
       if(e!=null) got++;
       return [p[0],p[1],e!=null?Math.round(e):null,p[3]];
     });
-    map.setTerrain(null);
+    // Restore whatever the 3D toggle wants — clear terrain if it's off,
+    // keep it (with sky) if the workspace has 3D on.
+    Terrain3D.setEnabled(map, threeDOn, { sky:true });
     btn.disabled=false; btn.textContent="Backfill Elevation from Terrain";
     if(!got){ alert("Couldn't look up elevation for this track — the terrain tiles may not have finished loading. Try again."); return; }
     // Hold-nearest-known fill (forward then back) for any point the DEM
@@ -520,19 +529,39 @@ document.getElementById("baseSel").onchange=e=>{
   map.setLayoutProperty("base","visibility",sat?"none":"visible");
   map.setLayoutProperty("sat","visibility",sat?"visible":"none");
 };
-map.addControl(new maplibregl.NavigationControl());
+document.getElementById("tiltBtn").onclick=()=>Terrain3D.toggleTilt(map);
+
+// Reads the current workspace's 3D-terrain flag (app.three_d_enabled, aliased
+// threeDEnabled by GET /api/apps) and turns persistent DEM terrain on/off to
+// match. Called when a project is picked and again once the map has loaded
+// (either can happen first). The map opens flat — you tilt on demand with the
+// Tilt button — so point editing isn't fighting a pitched camera.
+async function apply3D(){
+  threeDOn=false;
+  if(appId){
+    try{
+      const r=await fetch("/api/apps",{headers:{authorization:"Bearer "+getToken()}});
+      const a=(r.ok?(await r.json()).apps:[]).find(x=>x.id===appId);
+      threeDOn=!!(a&&a.threeDEnabled);
+    }catch(e){}
+  }
+  const tiltBtn=document.getElementById("tiltBtn");
+  if(tiltBtn) tiltBtn.style.display=threeDOn?"":"none";
+  if(mapReady) Terrain3D.setEnabled(map, threeDOn, { sky:true });
+}
+map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.on("load",()=>{
   mapReady=true;
+  apply3D();  // a project may already be selected before the map finished loading
   // A resize() requested while the map was still mid-initialization (style/
   // sprite/glyphs not yet loaded) is deferred here rather than dropped —
   // see showGpxScreen()'s comment for why resize() is needed at all.
   if(resizePending){ resizePending=false; map.resize(); }
-  // Terrain DEM source for the Backfill Elevation button below — same free
-  // Terrarium tile convention already used in fence-editor.html/
-  // geofence-sim.html/geofence-engine.html/field-recorder.html/record.html.
-  // Not set as the active terrain by default (setTerrain() below is only
-  // called for the duration of a backfill query, then cleared right after)
-  // — this file has no 3D/tilt mode, so the map should never visibly tilt.
+  // Terrain DEM source — used both by the Backfill Elevation button and,
+  // when the workspace 3D flag is on, by apply3D()'s persistent terrain.
+  // Terrain3D (terrain-3d.js) would add this itself, but the map has one
+  // load handler so adding it here keeps the ordering obvious. Same free
+  // Terrarium tiles every other 3D map surface uses.
   map.addSource("terrain-dem",{type:"raster-dem",
     tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
     tileSize:256,encoding:"terrarium",maxzoom:15});
@@ -918,6 +947,7 @@ let _pendingCorridorId = new URLSearchParams(location.search).get("corridor") ||
 async function enterProject(id, proj){
   appId = (proj && proj.appId) || null;
   if(!appId) appId = await resolveAppIdFallback(id);
+  apply3D();
   document.getElementById("hdrCrumb").textContent = (proj&&proj.name)||id;
   loadedFrom=null;
   resetRunDetails();
@@ -932,7 +962,7 @@ if(window.TopNav){
   TopNav.init({
     navEl: document.getElementById("topNav"),
     active: "gpx",
-    onCompanyChange: ()=>{ appId=null; showNoProject(); },
+    onCompanyChange: ()=>{ appId=null; apply3D(); showNoProject(); },
     onProjectChange: (id, proj)=>{ if(id) enterProject(id, proj); else showNoProject(); }
   });
 }
