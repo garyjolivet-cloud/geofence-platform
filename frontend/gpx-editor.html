@@ -603,10 +603,13 @@ function renderMapLine(){
   if(map.getSource("track")) map.getSource("track").setData(geojson);
   else{
     map.addSource("track",{type:"geojson",data:geojson});
-    map.addLayer({id:"track-line",type:"line",source:"track",paint:{"line-color":"#ff6a3d","line-width":4}});
+    // Kept as an invisible layer only — it's the beforeId anchor for
+    // trimSel-line and applyWinter, and (line-opacity 0) a hit target.
+    // The visible corridor is the shared stack below, identical to the
+    // Fence Editor's Edit map.
+    map.addLayer({id:"track-line",type:"line",source:"track",paint:{"line-color":"#ff6a3d","line-width":4,"line-opacity":0}});
     // Shared corridor renderer — width band + piste-glow, grade colour, no
-    // dashes. Drawn UNDER the orange authoring line (which stays as the
-    // "you're editing this" affordance). Same stack as every other surface.
+    // dashes. Same stack every other surface uses.
     TileFog.addCorridorLayers(map,{source:"track",id:"track",before:"track-line"});
   }
   if(coords.length){
