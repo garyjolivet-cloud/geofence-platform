@@ -465,6 +465,7 @@
 <script src="/audio-tree.js"></script>
 <script src="/asset-tree.js"></script>
 <script src="/corridor-tree.js"></script>
+<script src="/terrain-3d.js"></script>
 </head>
 <body>
 <div id="crossToolNav"></div>
@@ -1322,6 +1323,20 @@ function updateTerrain(){
     renderSources();
     if(_threeDOn) map.once("idle",renderSources);
   }
+}
+// Winter map treatment — project.season, same trigger every map surface uses.
+// _season is seeded from the bundle in loadFromPlatform and kept current by
+// the #tileSeason change handler; also re-run from updateAssetPaletteVisibility
+// (a 3D-flag change) since the DEM layers depend on it. Same map instance is
+// used by Test Mode, so this covers it.
+let _season=null;
+function updateWinter(){
+  if(typeof Terrain3D==="undefined") return;
+  const go=()=>{
+    if(_season==="winter") Terrain3D.applyWinter(map,{dem:_threeDOn, beforeId:"terrain-preview-fill"});
+    else Terrain3D.clearWinter(map);
+  };
+  (map.isStyleLoaded && map.isStyleLoaded()) ? go() : map.once("idle",go);
 }
 document.getElementById("tiltBtn").onclick=()=>{
   map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
@@ -3374,6 +3389,7 @@ function updateAssetPaletteVisibility(){
   // packing here, now that #assetPalette's real display/width is known.
   if(typeof applyPanelVisibility==="function") applyPanelVisibility();
   updateTerrain();
+  updateWinter();
   if(sel>=0){
     document.getElementById("pAltSection").style.display=(_threeDOn && zones[sel].shape.type==="circle")?"block":"none";
     document.getElementById("pAltUseTerrain").style.display=_visitorsFlyOn?"none":"";
@@ -3534,6 +3550,8 @@ document.getElementById("tileSeason")?.addEventListener("change",async()=>{
     });
     if(!r.ok){ const e=await r.json().catch(()=>({})); alert("couldn't save season: "+(e.error||r.status)); }
   }catch(e){ alert("couldn't save season: "+e.message); }
+  _season = sel.value || null;   // live-update the map (authoring + Test Mode)
+  updateWinter();
 });
 
 // Flat sanity-check colors only — the real art only ever renders in
@@ -5214,8 +5232,14 @@ async function loadFromPlatform(id){
     }
     const b=await r.json();
     _currentProjectId=id;
+    // Season reaches the bundle via live-owner injection; capture it for the
+    // winter map treatment and seed the ⚙-popover select (which otherwise
+    // only fills when the popover is first opened).
+    _season = b.season || null;
+    { const ss=document.getElementById("tileSeason"); if(ss) ss.value = _season || ""; }
     document.getElementById("out").value=JSON.stringify(b,null,2);
     document.getElementById("importBtn").click();
+    updateWinter();
     _publishedSnapshot=JSON.stringify(zones); // baseline for the leave-Edit publish prompt — a freshly-loaded project isn't "dirty" just because it has zones
     document.getElementById("projCrumb").textContent=b.name||id;
     await Promise.all([_appsLoaded,_clientsLoaded]);

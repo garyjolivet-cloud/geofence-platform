@@ -298,6 +298,7 @@ function filterImpossibleJumps(pts, maxSpeedMps){
 /* ---- state ---- */
 let appId=null;
 let threeDOn=false;  // workspace 3D-terrain flag for the current appId — when on, the map carries persistent DEM terrain + a Tilt toggle
+let projSeason=null; // current project's season — 'winter' applies the winter map treatment (same trigger as every other map view)
 let basePoints=[];   // current baseline (post most-recent structural edit), may include tMs
 let points=[];       // active/displayed set — basePoints, or filterImpossibleJumps(basePoints) when the filter is on
 let filterOn=true, filterAvailable=false;
@@ -549,10 +550,21 @@ async function apply3D(){
   if(tiltBtn) tiltBtn.style.display=threeDOn?"":"none";
   if(mapReady) Terrain3D.setEnabled(map, threeDOn, { sky:true });
 }
+// Winter map treatment — recolors the imagery layer ("sat"; "base" here is the
+// street map) when the project's season is 'winter'. Same trigger as every
+// other map view.
+function updateWinter(){
+  if(typeof Terrain3D==="undefined" || !mapReady) return;
+  if(projSeason==="winter")
+    Terrain3D.applyWinter(map,{dem:threeDOn, basemapLayerId:"sat", beforeId: map.getLayer("track-line")?"track-line":undefined});
+  else
+    Terrain3D.clearWinter(map);
+}
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.on("load",()=>{
   mapReady=true;
   apply3D();  // a project may already be selected before the map finished loading
+  updateWinter();
   // A resize() requested while the map was still mid-initialization (style/
   // sprite/glyphs not yet loaded) is deferred here rather than dropped —
   // see showGpxScreen()'s comment for why resize() is needed at all.
@@ -932,22 +944,27 @@ function showNoProject(){
   document.getElementById("gpxScreen").classList.remove("show");
   document.getElementById("scrubBar").classList.remove("show");
 }
-async function resolveAppIdFallback(id){
+// Returns the project's row from the org list ({appId, season, ...}) — used
+// both to recover appId when TopNav didn't hand us one and to read season.
+async function resolveProjectRow(id){
   try{
     const r=await fetch("/api/projects?org="+encodeURIComponent(currentOrg()),{headers:{authorization:"Bearer "+getToken()}});
     const j=r.ok?await r.json():{projects:[]};
-    const p=(j.projects||[]).find(x=>x.id===id);
-    if(p&&p.appId) return p.appId;
-  }catch(e){}
-  return null;
+    return (j.projects||[]).find(x=>x.id===id) || null;
+  }catch(e){ return null; }
 }
 // Consumed once — a /gpx-editor?...&corridor=<id> deep-link (from the Fence
 // Editor's "Edit shape in GPX Editor" button) opens straight onto that row.
 let _pendingCorridorId = new URLSearchParams(location.search).get("corridor") || null;
 async function enterProject(id, proj){
   appId = (proj && proj.appId) || null;
-  if(!appId) appId = await resolveAppIdFallback(id);
+  projSeason = (proj && proj.season) || null;
+  if(!appId || !proj){
+    const row = await resolveProjectRow(id);
+    if(row){ appId = appId || row.appId || null; projSeason = row.season || null; }
+  }
   apply3D();
+  updateWinter();
   document.getElementById("hdrCrumb").textContent = (proj&&proj.name)||id;
   loadedFrom=null;
   resetRunDetails();
@@ -962,7 +979,7 @@ if(window.TopNav){
   TopNav.init({
     navEl: document.getElementById("topNav"),
     active: "gpx",
-    onCompanyChange: ()=>{ appId=null; apply3D(); showNoProject(); },
+    onCompanyChange: ()=>{ appId=null; projSeason=null; apply3D(); updateWinter(); showNoProject(); },
     onProjectChange: (id, proj)=>{ if(id) enterProject(id, proj); else showNoProject(); }
   });
 }

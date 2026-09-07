@@ -658,7 +658,7 @@ const Quest = {
   ref: null,            // [lat,lon] project reference point (R2 map center) — set by loadCorridors() regardless of whether any corridor exists
   allowedActivities: null, // R12: this project's activity-relevance filter — null=all, else array of activity strings — set by loadCorridors()
   threeDEnabled: false, // workspace 3D-terrain flag (bundle.threeDEnabled, injected server-side) — gates 3D terrain on "My map"
-  season: null,         // project.season (bundle.season, injected server-side) — 'summer' turns OFF My map's winter treatment; anything else keeps it (default-on for this ski game)
+  season: null,         // project.season (bundle.season, injected server-side) — My map applies the winter treatment only when this is 'winter' (same rule as every other map view)
   states: {},           // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
   fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
   viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
@@ -1677,7 +1677,7 @@ function renderFogMap(){
   // fresh one is built every time "My map" opens.
   let mapInstance=null;
   const use3D = !!Quest.threeDEnabled;
-  const winter = Quest.season !== "summer"; // default-on for the ski map
+  const winter = Quest.season === "winter"; // uniform trigger across every map view
   // R11 — completion % is a number derived from tracking (Quest.fogCells),
   // not a fog VISUAL — deliberately NOT gated behind RQ_FOG_ENABLED the way
   // the legend below is, matching R5's own contract that fog tracking never

@@ -11,6 +11,7 @@
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
+<script src="/terrain-3d.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <!-- Live 3D AR-object preview (Phase 3, trigger-based show/hide) — same
      module fence-editor.html already uses, ported here so a simulated walk
@@ -797,6 +798,17 @@ function updateTerrain(){
     if(on) map.once("idle",refreshZones);
   }
 }
+// Winter map treatment — same project.season trigger as every map surface.
+// Re-run from setBase()'s styledata callback too (setStyle wipes it).
+function updateWinter(){
+  if(typeof Terrain3D==="undefined") return;
+  const go=()=>{
+    if(BUNDLE.season==="winter") Terrain3D.applyWinter(map,{dem:!!BUNDLE.threeDEnabled, beforeId:"fence-fill"});
+    else Terrain3D.clearWinter(map);
+  };
+  // idle (not load) — fires again after setBase()'s setStyle() too.
+  (map.isStyleLoaded && map.isStyleLoaded()) ? go() : map.once("idle",go);
+}
 document.getElementById("btnTilt").onclick=()=>{
   map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
 };
@@ -1345,6 +1357,7 @@ function loadBundle(b,srcLabel,pid){
   document.getElementById("bundleText").value = JSON.stringify(b,null,2);
   refreshZones(); fitToData();
   updateTerrain(); // each loaded bundle carries its own threeDEnabled
+  updateWinter();  // ...and its own season
   refreshArPreviewSim();
   log("ev-sys","loaded "+(b.name||"bundle")+" — "+BUNDLE.zones.length+" zones ("+(srcLabel||"")+")");
 }
@@ -1531,6 +1544,7 @@ function setBase(k){ map.setStyle(styleFor(k));
     // marker of its own to check against.
     addTerrainSource();
     updateTerrain();
+    updateWinter(); // setStyle() wiped the basemap recolor + winter layers too
   });
   ["btnSat","btnTopo","btnOSM"].forEach(id=>document.getElementById(id).classList.remove("on"));
   document.getElementById({sat:"btnSat",topo:"btnTopo",osm:"btnOSM"}[k]).classList.add("on");

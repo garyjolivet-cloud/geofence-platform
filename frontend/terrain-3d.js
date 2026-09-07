@@ -6,9 +6,11 @@
      ensureSource(map),            // add the DEM source if it isn't there yet
      setEnabled(map, on, opts),    // opts: { exaggeration = 1, sky = false }
      toggleTilt(map, hi = 60),     // ease pitch between flat and `hi`
-     applyWinter(map, opts),       // opts: { dem = false } — wintry recolor of
-                                   //   the raster basemap + (dem) DEM hillshade
-                                   //   / elevation snowline + cool wash + grain
+     applyWinter(map, opts),       // opts: { dem=false, basemapLayerId="base",
+                                   //   beforeId } — blue-white raster-color
+                                   //   recolor of the basemap + (dem) DEM
+                                   //   hillshade / elevation snowline / winter
+                                   //   sky + a faint wash + grain
      clearWinter(map),             // undo applyWinter
    }
 
@@ -92,6 +94,20 @@
   var GRAIN_IMG_ID = "winter-grain";
   var WINTER_LAYERS = ["winter-relief", "winter-hillshade", "winter-wash", "winter-grain"];
   var WORLD_RING = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]];
+  // basemap raster layers a surface might use — reset by clearWinter.
+  var BASEMAP_LAYER_IDS = ["base", "sat"];
+  // Blue-white recolor ramp for MapLibre's `raster-color` (5.x raster
+  // colorization): the basemap's luminance -> a snow palette. Dark (forest)
+  // -> cold slate; bright (rock / clearings / lying snow) -> white.
+  var WINTER_RAMP = [
+    "interpolate", ["linear"], ["raster-value"],
+    0.00, "#3f4f68",
+    0.32, "#6b7f98",
+    0.55, "#a9bccf",
+    0.78, "#dbe6f0",
+    1.00, "#f6faff"
+  ];
+  var LUMA_MIX = [0.2126, 0.7152, 0.0722, 0]; // Rec.709; also MapLibre's default
 
   // Cooler, more overcast variant of SKY for a winter alpine sky.
   var WINTER_SKY = {
@@ -128,28 +144,36 @@
     catch (e) { /* an unsupported layer type shouldn't kill the rest */ }
   }
 
-  // opts.dem === true  -> also add DEM hillshade + elevation snowline (needs
-  //                       the Terrarium raster-dem source, i.e. 3D is on) and
-  //                       switch to the winter sky.
+  // opts: { dem = false, basemapLayerId = "base", beforeId }
+  //   dem === true   -> also add DEM hillshade + elevation snowline (needs the
+  //                     Terrarium raster-dem source, i.e. 3D is on) + winter sky.
+  //   basemapLayerId -> which raster layer to recolor ("sat" on gpx-editor).
+  //   beforeId       -> insert the flat winter layers below this layer; if
+  //                     omitted, fall back to Ridge Quest's own layer ids.
   function applyWinter(map, opts) {
     if (!map) return;
     opts = opts || {};
+    var baseId = opts.basemapLayerId || "base";
 
-    // 1. recolor the satellite in place — kills summer greens/browns, lifts
-    //    toward a snow-field tone, keeps the imagery legible.
-    if (map.getLayer("base")) {
+    // 1. Blue-white recolor of the basemap raster (option B). raster-color
+    //    remaps the imagery's luminance through WINTER_RAMP: greens/browns ->
+    //    cold slate, bright ground (rock / clearings / lying snow) -> white.
+    if (map.getLayer(baseId)) {
       try {
-        map.setPaintProperty("base", "raster-saturation", -0.55);
-        map.setPaintProperty("base", "raster-brightness-min", 0.10);
-        map.setPaintProperty("base", "raster-contrast", -0.06);
+        map.setPaintProperty(baseId, "raster-color", WINTER_RAMP);
+        map.setPaintProperty(baseId, "raster-color-mix", LUMA_MIX);
+        map.setPaintProperty(baseId, "raster-color-range", [0, 1]);
+        map.setPaintProperty(baseId, "raster-saturation", 0);
       } catch (e) {}
     }
 
-    // 2. where the winter layers slot: above the satellite, below the shroud /
-    //    run network, whichever renderFogMap branch ran.
-    var anchor = ["shroud-fill", "runLines-halo", "fog-fill"].filter(function (id) {
+    // 2. where the flat winter layers slot: above the satellite, below the
+    //    surface's own content. Callers pass beforeId; Ridge Quest's layers
+    //    are the fallback. A stale/missing anchor -> append.
+    var anchor = opts.beforeId || ["shroud-fill", "runLines-halo", "fog-fill"].filter(function (id) {
       return map.getLayer(id);
     })[0];
+    if (anchor && !map.getLayer(anchor)) anchor = undefined;
 
     // 3. a world-covering polygon to hang the flat overlays on.
     if (!map.getSource(WINTER_SRC_ID)) {
@@ -182,10 +206,10 @@
       }, anchor);
     }
 
-    // 5. icy cast.
+    // 5. very light unifying cast (the recolor already carries the palette).
     _add(map, {
       id: "winter-wash", type: "fill", source: WINTER_SRC_ID,
-      paint: { "fill-color": "#dbe7f4", "fill-opacity": 0.16 }
+      paint: { "fill-color": "#dbe7f4", "fill-opacity": 0.06 }
     }, anchor);
 
     // 6. faint wind-drift grain.
@@ -206,13 +230,17 @@
     WINTER_LAYERS.forEach(function (id) { if (map.getLayer(id)) { try { map.removeLayer(id); } catch (e) {} } });
     if (map.getSource(WINTER_SRC_ID)) { try { map.removeSource(WINTER_SRC_ID); } catch (e) {} }
     if (map.hasImage && map.hasImage(GRAIN_IMG_ID)) { try { map.removeImage(GRAIN_IMG_ID); } catch (e) {} }
-    if (map.getLayer("base")) {
+    // reset every basemap raster layer a surface might have touched.
+    BASEMAP_LAYER_IDS.forEach(function (id) {
+      if (!map.getLayer(id)) return;
       try {
-        map.setPaintProperty("base", "raster-saturation", 0);
-        map.setPaintProperty("base", "raster-brightness-min", 0);
-        map.setPaintProperty("base", "raster-contrast", 0);
+        map.setPaintProperty(id, "raster-color", null);
+        map.setPaintProperty(id, "raster-color-mix", LUMA_MIX);
+        map.setPaintProperty(id, "raster-saturation", 0);
+        map.setPaintProperty(id, "raster-brightness-min", 0);
+        map.setPaintProperty(id, "raster-contrast", 0);
       } catch (e) {}
-    }
+    });
   }
 
   window.Terrain3D = {

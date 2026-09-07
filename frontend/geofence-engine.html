@@ -138,6 +138,7 @@
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
 <script src="/here-marker.js"></script>
+<script src="/terrain-3d.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -2007,6 +2008,19 @@ const MapView = {
       _vextCache.clear();
     }
   },
+  // Winter map treatment — driven by the same project.season flag every map
+  // surface uses. Called from loadProject alongside updateTerrain(); guarded
+  // for style-not-ready the same way. beforeId 'stop-cone' keeps the winter
+  // recolor/overlays below the tour content.
+  updateWinter(){
+    if(typeof Terrain3D==='undefined' || !this.map) return;
+    const go=()=>{
+      if(BUNDLE.season==='winter') Terrain3D.applyWinter(this.map,{dem:!!BUNDLE.threeDEnabled, beforeId:'stop-cone'});
+      else Terrain3D.clearWinter(this.map);
+    };
+    if(this.map.isStyleLoaded && this.map.isStyleLoaded()) go();
+    else this.map.once('load', go);
+  },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
   onFix(p, nowMs, pick){
     // AR view (3D-mode plan, Phase 2) is open — stop MapLibre's per-tick
@@ -2536,6 +2550,7 @@ EngineKokoro.tryLoad();
     if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
     if(!HUD.pos) MapView.recenter(b.ref);
     MapView.updateTerrain();
+    MapView.updateWinter();
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
       // minGain/curve dropped: the fade curve is now the fixed, shared
       // fadeGain()/FADE_DB_RANGE, not a per-project tunable.
@@ -2557,6 +2572,7 @@ EngineKokoro.tryLoad();
       if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
       if(!HUD.pos) MapView.recenter(b.ref);
     MapView.updateTerrain();
+    MapView.updateWinter();
       if(document.getElementById('simZones')) buildSimZones();
       HUD.log('ev-sys','offline — loaded '+(b.name||pid)+' v'+(b.bundleVersion||'?')+' from saved copy');
     }catch(_){ HUD.log('ev-warn','offline and saved copy unreadable — using built-in bundle'); } }

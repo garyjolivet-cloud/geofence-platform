@@ -146,8 +146,10 @@ function fakeMapWithBase(pitch) {
 (function testApplyWinter2D() {
   const m = fakeMapWithBase();
   T.applyWinter(m, { dem: false });
-  assert(m._paint["base"]["raster-saturation"] < 0, "applyWinter desaturates the base raster, got " + m._paint["base"]["raster-saturation"]);
-  assert(m._paint["base"]["raster-brightness-min"] > 0, "applyWinter lifts base brightness-min");
+  const rc = m._paint["base"]["raster-color"];
+  assert(Array.isArray(rc) && rc[0] === "interpolate", "applyWinter sets a raster-color ramp on the basemap (option B)");
+  assert(JSON.stringify(rc).includes('["raster-value"]'), "the ramp interpolates over raster-value");
+  assert(Array.isArray(m._paint["base"]["raster-color-mix"]), "sets raster-color-mix (luma weights)");
   assert(!!m.getSource("winter-src"), "applyWinter adds the world-rect winter-src source");
   assert(!!m.getLayer("winter-wash"), "applyWinter adds winter-wash");
   assert(!!m.getLayer("winter-grain"), "applyWinter adds winter-grain");
@@ -155,6 +157,22 @@ function fakeMapWithBase(pitch) {
   const gi = m._images["winter-grain"].img;
   assert(gi && gi.width === 128 && gi.height === 128 && gi.data.length === 128 * 128 * 4, "grain image is 128x128 RGBA");
   assert(!m.getLayer("winter-hillshade") && !m.getLayer("winter-relief"), "no DEM layers in 2D mode (dem:false)");
+})();
+
+(function testApplyWinterBasemapLayerIdOption() {
+  const m = fakeMap();
+  m._layers["sat"] = { id: "sat", type: "raster", source: "sat" };
+  m._layers["base"] = { id: "base", type: "raster", source: "base" }; // e.g. gpx-editor's street layer
+  T.applyWinter(m, { dem: false, basemapLayerId: "sat" });
+  assert(Array.isArray(m._paint["sat"] && m._paint["sat"]["raster-color"]), "recolors the layer named by basemapLayerId");
+  assert(!(m._paint["base"] && m._paint["base"]["raster-color"]), "does not touch the other raster layer");
+})();
+
+(function testApplyWinterBeforeIdOption() {
+  const m = fakeMapWithBase();
+  m.addLayer({ id: "track-line", type: "line", source: "t" });
+  T.applyWinter(m, { dem: false, beforeId: "track-line" });
+  assert(m.getLayer("winter-wash").__before === "track-line", "winter layers honour an explicit beforeId");
 })();
 
 (function testApplyWinter3D() {
@@ -203,6 +221,7 @@ function fakeMapWithBase(pitch) {
     assert(!m.getLayer(id), "clearWinter removes " + id));
   assert(!m.getSource("winter-src"), "clearWinter removes winter-src");
   assert(!m.hasImage("winter-grain"), "clearWinter removes the grain image");
+  assert(m._paint["base"]["raster-color"] === null, "clearWinter clears the raster-color ramp");
   assert(m._paint["base"]["raster-saturation"] === 0, "clearWinter resets base raster-saturation to 0");
 })();
 
