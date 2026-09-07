@@ -2148,6 +2148,12 @@ function renderSourcesInner(){
             corridor:true,widthM:(s.widthM>0?s.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((s.coords[0]||[0,0])[1]),
             col:_cst.col,halo:_cst.halo,tier:_cst.tier},
           geometry:{type:"LineString",coordinates:s.coords}});
+        // ◆ / ◆◆ badge at the run's top for black / double-black — same as
+        // the Ridge Quest run map and Test Mode.
+        const _bt=(SIM_RUN_STYLE_DIFF[z.difficulty||""]||{}).tier||"";
+        if(_bt && s.coords && s.coords.length)
+          feats.push({type:"Feature",properties:{kind:"corrbadge",tier:_bt},
+            geometry:{type:"Point",coordinates:s.coords[0]}});
       }
     }
     // label — in Test Mode a corridor already shows its name via the
@@ -2277,8 +2283,15 @@ map.on("load",()=>{
   map.addLayer({id:"trip-hit",type:"fill",source:"fences",filter:["==","kind","triphit"],
      paint:{"fill-opacity":0}});
   map.addLayer({id:"fence-lbl",type:"symbol",source:"fences",filter:["==","kind","label"],
-     layout:{"text-field":["get","name"],"text-size":11,"text-offset":[0,1.2],"text-font":["Open Sans Regular"]},
-     paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.4}});
+     layout:{"text-field":["get","name"],"text-size":15,"text-offset":[0,1.1],"text-font":["Open Sans Regular"]},
+     paint:{"text-color":"#eef4fb","text-halo-color":"#0a1018","text-halo-width":1.8}});
+  // ◆ / ◆◆ badge at the top of black / double-black corridors (matches the
+  // Ridge Quest run map + Test Mode).
+  map.addLayer({id:"corr-badge",type:"symbol",source:"fences",filter:["==","kind","corrbadge"],
+     layout:{"text-field":["case",["==",["get","tier"],"dblack"],"◆◆","◆"],"text-size":15,
+             "text-font":["Open Sans Bold"],"text-allow-overlap":true,"text-offset":[0,-0.4]},
+     paint:{"text-color":["case",["==",["get","tier"],"dblack"],"#ff6f91","#eef3f0"],
+            "text-halo-color":"#0c140f","text-halo-width":2.2}});
   // small speaker badge — shown whenever the stop (or path) has a clip
   // assigned (zoneAudioField)
   map.addLayer({id:"audio-lbl",type:"symbol",source:"fences",
