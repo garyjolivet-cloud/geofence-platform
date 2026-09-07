@@ -658,6 +658,7 @@ const Quest = {
   ref: null,            // [lat,lon] project reference point (R2 map center) — set by loadCorridors() regardless of whether any corridor exists
   allowedActivities: null, // R12: this project's activity-relevance filter — null=all, else array of activity strings — set by loadCorridors()
   threeDEnabled: false, // workspace 3D-terrain flag (bundle.threeDEnabled, injected server-side) — gates 3D terrain on "My map"
+  season: null,         // project.season (bundle.season, injected server-side) — 'summer' turns OFF My map's winter treatment; anything else keeps it (default-on for this ski game)
   states: {},           // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
   fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
   viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
@@ -690,6 +691,9 @@ const Quest = {
       // on, renderFogMap() drapes the fog/runs over DEM terrain and opens
       // the map pitched.
       this.threeDEnabled = !!bundle.threeDEnabled;
+      // Same live-owner injection — 'summer' | 'winter' | null. My map applies
+      // its winter treatment unless this is explicitly 'summer'.
+      this.season = bundle.season || null;
       this.corridors = (bundle.zones||[]).map(z=>{
         const target = (z.layers||[]).find(l=>l.kind==="target" && l.geometry && l.geometry.type==="corridor");
         if(!target) return null;
@@ -1673,6 +1677,7 @@ function renderFogMap(){
   // fresh one is built every time "My map" opens.
   let mapInstance=null;
   const use3D = !!Quest.threeDEnabled;
+  const winter = Quest.season !== "summer"; // default-on for the ski map
   // R11 — completion % is a number derived from tracking (Quest.fogCells),
   // not a fog VISUAL — deliberately NOT gated behind RQ_FOG_ENABLED the way
   // the legend below is, matching R5's own contract that fog tracking never
@@ -1766,6 +1771,11 @@ function renderFogMap(){
       map.addLayer({ id:"fog-line", type:"line", source:"fog",
         paint:{ "line-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "line-width":1.5, "line-opacity":0.8 } });
     });
+    // Winter look for the ski map — GPU-cheap raster recolor + (in 3D) a DEM
+    // hillshade / elevation snowline + a cool wash + faint grain, all static.
+    // Registered LAST so shroud-fill / runLines-* already exist for the helper
+    // to anchor beneath (it's defensive about ordering regardless).
+    if(winter) map.on("load", ()=>{ Terrain3D.applyWinter(map, { dem: use3D }); });
     // Live redraw as new cells get revealed WHILE this screen is open
     // (tracking may already be running from Home) — cleared on back-out so
     // a later fix, after navigating away, doesn't try to touch a torn-down

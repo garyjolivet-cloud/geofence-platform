@@ -28,14 +28,28 @@ const T = sandbox.window.Terrain3D;
 function fakeMap(initialPitch) {
   return {
     _sources: {}, _terrain: undefined, _sky: undefined, _pitch: initialPitch || 0,
-    _eases: [],
+    _eases: [], _layers: {}, _paint: {}, _images: {},
     getSource(id) { return this._sources[id]; },
     addSource(id, spec) { this._sources[id] = spec; },
+    removeSource(id) { delete this._sources[id]; },
     setTerrain(t) { this._terrain = t; },
     setSky(s) { this._sky = s; },
     getPitch() { return this._pitch; },
-    easeTo(opts) { this._eases.push(opts); if (opts.pitch != null) this._pitch = opts.pitch; }
+    easeTo(opts) { this._eases.push(opts); if (opts.pitch != null) this._pitch = opts.pitch; },
+    getLayer(id) { return this._layers[id]; },
+    addLayer(layer, beforeId) { this._layers[layer.id] = layer; layer.__before = beforeId; },
+    removeLayer(id) { delete this._layers[id]; },
+    setPaintProperty(layerId, prop, val) { (this._paint[layerId] || (this._paint[layerId] = {}))[prop] = val; },
+    hasImage(id) { return !!this._images[id]; },
+    addImage(id, img, opts) { this._images[id] = { img: img, opts: opts }; },
+    removeImage(id) { delete this._images[id]; }
   };
+}
+// a fakeMap that already has the "base" raster layer, like renderFogMap's style
+function fakeMapWithBase(pitch) {
+  const m = fakeMap(pitch);
+  m._layers["base"] = { id: "base", type: "raster", source: "base" };
+  return m;
 }
 
 /* ================================ tests ================================ */
@@ -43,7 +57,7 @@ function fakeMap(initialPitch) {
 (function testApiShape() {
   assert(T && typeof T === "object", "window.Terrain3D is defined");
   assert(T.DEM_ID === "terrain-dem", "DEM_ID is 'terrain-dem' (matches the 6 existing copies), got " + T.DEM_ID);
-  ["ensureSource", "setEnabled", "toggleTilt"].forEach(fn =>
+  ["ensureSource", "setEnabled", "toggleTilt", "applyWinter", "clearWinter"].forEach(fn =>
     assert(typeof T[fn] === "function", "Terrain3D." + fn + " is a function"));
 })();
 
@@ -127,6 +141,69 @@ function fakeMap(initialPitch) {
   assert(worker.includes("bundle.threeDEnabled = !!(ownerRow && ownerRow.threeDEnabled)"),
     "bundle GET injects bundle.threeDEnabled from the live owner row");
   assert(gate.indexOf("threeDEnabled") > -1, "the injection sits in the live-owner block");
+})();
+
+(function testApplyWinter2D() {
+  const m = fakeMapWithBase();
+  T.applyWinter(m, { dem: false });
+  assert(m._paint["base"]["raster-saturation"] < 0, "applyWinter desaturates the base raster, got " + m._paint["base"]["raster-saturation"]);
+  assert(m._paint["base"]["raster-brightness-min"] > 0, "applyWinter lifts base brightness-min");
+  assert(!!m.getSource("winter-src"), "applyWinter adds the world-rect winter-src source");
+  assert(!!m.getLayer("winter-wash"), "applyWinter adds winter-wash");
+  assert(!!m.getLayer("winter-grain"), "applyWinter adds winter-grain");
+  assert(m.hasImage("winter-grain"), "applyWinter registers the winter-grain image");
+  const gi = m._images["winter-grain"].img;
+  assert(gi && gi.width === 128 && gi.height === 128 && gi.data.length === 128 * 128 * 4, "grain image is 128x128 RGBA");
+  assert(!m.getLayer("winter-hillshade") && !m.getLayer("winter-relief"), "no DEM layers in 2D mode (dem:false)");
+})();
+
+(function testApplyWinter3D() {
+  const m = fakeMapWithBase();
+  m.addSource("terrain-dem", { type: "raster-dem" });
+  T.applyWinter(m, { dem: true });
+  assert(!!m.getLayer("winter-hillshade"), "dem:true adds winter-hillshade");
+  assert(!!m.getLayer("winter-relief"), "dem:true adds winter-relief");
+  assert(m.getLayer("winter-hillshade").source === "terrain-dem", "hillshade reads the DEM source");
+  assert(m.getLayer("winter-relief").source === "terrain-dem", "color-relief reads the DEM source");
+  assert(m.getLayer("winter-hillshade").type === "hillshade", "winter-hillshade is a hillshade layer");
+  assert(m.getLayer("winter-relief").type === "color-relief", "winter-relief is a color-relief layer");
+  assert(m._sky && typeof m._sky === "object", "dem:true switches to the winter sky");
+})();
+
+(function testApplyWinter3DNoDemSourceSkipsDemLayers() {
+  const m = fakeMapWithBase();               // dem:true but no terrain-dem source present
+  T.applyWinter(m, { dem: true });
+  assert(!m.getLayer("winter-hillshade") && !m.getLayer("winter-relief"),
+    "dem:true but no raster-dem source -> DEM layers skipped (2D stays DEM-free)");
+  assert(!!m.getLayer("winter-wash"), "the cheap layers still apply");
+})();
+
+(function testApplyWinterAnchorsBelowShroud() {
+  const m = fakeMapWithBase();
+  m.addLayer({ id: "shroud-fill", type: "fill", source: "shroud" });
+  T.applyWinter(m, { dem: false });
+  assert(m.getLayer("winter-wash").__before === "shroud-fill", "winter-wash is inserted before shroud-fill");
+})();
+
+(function testApplyWinterIdempotent() {
+  const m = fakeMapWithBase();
+  T.applyWinter(m, { dem: false });
+  const img1 = m._images["winter-grain"];
+  T.applyWinter(m, { dem: false });          // second call
+  assert(m._images["winter-grain"] === img1, "a second applyWinter doesn't re-add the grain image");
+  assert(Object.keys(m._layers).filter(k => k.startsWith("winter-")).length === 2, "no duplicate winter layers on re-apply");
+})();
+
+(function testClearWinter() {
+  const m = fakeMapWithBase();
+  m.addSource("terrain-dem", { type: "raster-dem" });
+  T.applyWinter(m, { dem: true });
+  T.clearWinter(m);
+  ["winter-relief", "winter-hillshade", "winter-wash", "winter-grain"].forEach(id =>
+    assert(!m.getLayer(id), "clearWinter removes " + id));
+  assert(!m.getSource("winter-src"), "clearWinter removes winter-src");
+  assert(!m.hasImage("winter-grain"), "clearWinter removes the grain image");
+  assert(m._paint["base"]["raster-saturation"] === 0, "clearWinter resets base raster-saturation to 0");
 })();
 
 console.log(pass + " passed, " + fail + " failed");
