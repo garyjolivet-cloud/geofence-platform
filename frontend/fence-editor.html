@@ -377,7 +377,7 @@
   .runDiamond{display:flex;gap:3px;pointer-events:none}
   .runDiamond i{width:12px;height:12px;background:#111;border:2px solid #eef3f0;
                 transform:rotate(45deg);display:block}
-  .runDiamond.dbl i{border-color:#e5484d}
+  .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
   /* map drag handles */
   .map-handle{width:14px;height:14px;border-radius:50%;border:2px solid #fff;cursor:grab;
               box-shadow:0 0 0 3px rgba(0,0,0,.55);transition:transform .1s;position:relative}
@@ -2288,10 +2288,9 @@ map.on("load",()=>{
   // ◆ / ◆◆ badge at the top of black / double-black corridors (matches the
   // Ridge Quest run map + Test Mode).
   map.addLayer({id:"corr-badge",type:"symbol",source:"fences",filter:["==","kind","corrbadge"],
-     layout:{"text-field":["case",["==",["get","tier"],"dblack"],"◆◆","◆"],"text-size":15,
+     layout:{"text-field":["case",["==",["get","tier"],"dblack"],"◆◆","◆"],"text-size":16,
              "text-font":["Open Sans Bold"],"text-allow-overlap":true,"text-offset":[0,-0.4]},
-     paint:{"text-color":["case",["==",["get","tier"],"dblack"],"#ff6f91","#eef3f0"],
-            "text-halo-color":"#0c140f","text-halo-width":2.2}});
+     paint:{"text-color":"#0b0e13","text-halo-color":"#eef3f0","text-halo-width":2.4}});
   // small speaker badge — shown whenever the stop (or path) has a clip
   // assigned (zoneAudioField)
   map.addLayer({id:"audio-lbl",type:"symbol",source:"fences",
