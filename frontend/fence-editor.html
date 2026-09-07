@@ -1336,7 +1336,11 @@ function updateWinter(){
     if(_season==="winter") Terrain3D.applyWinter(map,{dem:_threeDOn, beforeId:"terrain-preview-fill"});
     else Terrain3D.clearWinter(map);
   };
-  (map.isStyleLoaded && map.isStyleLoaded()) ? go() : map.once("idle",go);
+  // NOT map.once("idle") — this editor's many frequently-re-setData()'d
+  // GeoJSON sources (fences/draft/walkpath/fenceCorr/…) keep the map from
+  // ever settling to "idle", so the recolor used to land ~30s late. Once
+  // map.on("load") has fired the style is ready enough for setPaintProperty.
+  (map.loaded && map.loaded()) ? go() : map.once("load",go);
 }
 document.getElementById("tiltBtn").onclick=()=>{
   map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});

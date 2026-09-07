@@ -975,7 +975,11 @@ function zonesGeoJSON(){
           // Shared corridor renderer — width band + piste-glow, grade colour,
           // NO dashes. Same stack as every other surface (see tile-fog.js).
           const _cc=g.path.map(c=>[c[1],c[0]]);
-          const _cs=TileFog.corridorStyle({difficulty:g.difficulty,activityType:g.activityType,runType:g.runType});
+          // difficulty/runType/activityType live on the ZONE, not the baked
+          // geometry (confirmed in a real bundle) — g.* is just a fallback.
+          const _cs=TileFog.corridorStyle({difficulty:g.difficulty!=null?g.difficulty:z.difficulty,
+            activityType:g.activityType!=null?g.activityType:z.activityType,
+            runType:g.runType!=null?g.runType:z.runType});
           feats.push({type:"Feature",properties:Object.assign({},props,{corridor:true,
               widthM:(g.widthM>0?g.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((_cc[0]||[0,0])[1]),
               col:_cs.col,halo:_cs.halo,tier:_cs.tier}),
