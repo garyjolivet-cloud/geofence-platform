@@ -12,7 +12,7 @@
      addressed by immutable per-clip URLs, so there's nothing to invalidate.
    activate cleanup also runs OUTSIDE waitUntil so claim()/control is never
    held up by cache deletion. */
-const PAGE_CACHE = 'gp-offline-v27';
+const PAGE_CACHE = 'gp-offline-v28';
 const AUDIO_CACHE = 'gp-audio';
 const KEEP = new Set([PAGE_CACHE, AUDIO_CACHE]);
 
@@ -22,7 +22,7 @@ self.addEventListener('activate', e => {
   // Take control right away; don't make it wait on cache deletion.
   e.waitUntil(self.clients.claim());
   // Best-effort, non-blocking: drop any cache that isn't one we keep
-  // (old gp-offline-v27N from previous deploys).
+  // (old gp-offline-v28N from previous deploys).
   caches.keys()
     .then(keys => Promise.all(keys.filter(k => !KEEP.has(k)).map(k => caches.delete(k))))
     .catch(() => {});

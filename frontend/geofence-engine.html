@@ -33,6 +33,15 @@
   h1,.disp{font-family:"Black Han Sans",sans-serif; font-weight:400}
   .cond{font-family:"Barlow Condensed",sans-serif}
   #map{position:fixed; inset:0; z-index:0; background:var(--night)}
+  /* Corridor run name + ◆/◆◆ badge (HTML markers — the raster basemap has no
+     glyphs). Kept in sync with ridge-quest.html / fence-editor.html. */
+  .runLabel{font:700 clamp(20px,5vw,28px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
+    letter-spacing:.02em;white-space:nowrap;pointer-events:none;
+    text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 4px #0c140f}
+  .runDiamond{display:flex;gap:3px;pointer-events:none}
+  .runDiamond i{width:13px;height:13px;background:#0b0e13;border:2px solid #eef3f0;
+    transform:rotate(45deg);display:block}
+  .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
   .wrap{position:fixed; left:0; right:0; bottom:0; margin:0 auto;
         max-width:430px; width:100%; z-index:10;
         max-height:60vh; overflow-y:auto;
@@ -1941,7 +1950,7 @@ function cachedVextFeatures(zoneId,centerLonLat,radiusM,altM,tol){
 }
 
 const MapView = {
-  map:null, centered:false, here:null,
+  map:null, centered:false, here:null, _corridorMarkers:[],
   TERRAIN_SOURCE_ID:'terrain-dem',
   init(){
     this.map=new maplibregl.Map({
@@ -2037,20 +2046,37 @@ const MapView = {
   // Called on each bundle (re)load and once from the map-load handler.
   setCorridorRuns(b){
     if(!this.map || !this.map.getSource('corridorRuns') || !b) return;
+    const DIFF_TIER={black:'black','double-black':'dblack'};
     const feats=[];
+    // name + ◆/◆◆ badge are HTML markers (raster basemap has no glyphs) —
+    // same as ridge-quest drawAllRuns() / Test Mode. Rebuilt each call.
+    this._corridorMarkers.forEach(m=>{ try{ m.remove(); }catch(e){} });
+    this._corridorMarkers=[];
     (b.zones||[]).forEach(z=>{
       if(Array.isArray(z.path) && z.path.length>=2) return; // moving-audio path, not a run
       const tgt=(z.layers||[]).find(l=>l.geometry && l.geometry.type==='corridor');
       const g=tgt && tgt.geometry;
       if(!g || !Array.isArray(g.path) || g.path.length<2) return;
       const cc=g.path.map(p=>[p[1],p[0]]); // [lat,lon] -> [lon,lat]
-      const st=TileFog.corridorStyle({difficulty:g.difficulty!=null?g.difficulty:z.difficulty,
+      const diff=(g.difficulty!=null?g.difficulty:z.difficulty)||'';
+      const st=TileFog.corridorStyle({difficulty:diff,
         activityType:g.activityType!=null?g.activityType:z.activityType,
         runType:g.runType!=null?g.runType:z.runType});
       feats.push({type:'Feature',properties:{corridor:true,
         widthM:(g.widthM>0?g.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((cc[0]||[0,0])[1]),
         col:st.col,halo:st.halo,tier:st.tier},
         geometry:{type:'LineString',coordinates:cc}});
+      // name at the run's midpoint
+      const mid=cc[Math.floor(cc.length/2)];
+      const lbl=document.createElement('div'); lbl.className='runLabel'; lbl.textContent=z.name||'Run';
+      this._corridorMarkers.push(new maplibregl.Marker({element:lbl,anchor:'center'}).setLngLat(mid).addTo(this.map));
+      // ◆ / ◆◆ badge at the top, keyed on DIFFICULTY only
+      const bt=DIFF_TIER[diff]||'';
+      if(bt){
+        const bd=document.createElement('div'); bd.className='runDiamond'+(bt==='dblack'?' dbl':'');
+        bd.innerHTML=bt==='dblack'?'<i></i><i></i>':'<i></i>';
+        this._corridorMarkers.push(new maplibregl.Marker({element:bd,anchor:'bottom',offset:[0,-4]}).setLngLat(cc[0]).addTo(this.map));
+      }
     });
     this.map.getSource('corridorRuns').setData(fc(feats));
   },
