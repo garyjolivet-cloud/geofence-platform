@@ -371,11 +371,11 @@
   .av-dot{width:16px;height:16px;border-radius:50%;background:var(--coral);border:2px solid #fff;
           box-shadow:0 0 0 5px rgba(255,106,61,.25);cursor:grab}
   /* Test Mode corridor name label — matches the live Ridge Quest run map */
-  .runLabel{font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
+  .runLabel{font:700 clamp(15px,1.5vw,20px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
             letter-spacing:.02em;white-space:nowrap;pointer-events:none;
-            text-shadow:0 0 2px #0c140f,0 0 2px #0c140f,0 1px 3px #0c140f}
-  .runDiamond{display:flex;gap:2px;pointer-events:none}
-  .runDiamond i{width:9px;height:9px;background:#111;border:1.4px solid #eef3f0;
+            text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 4px #0c140f}
+  .runDiamond{display:flex;gap:3px;pointer-events:none}
+  .runDiamond i{width:12px;height:12px;background:#111;border:2px solid #eef3f0;
                 transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#e5484d}
   /* map drag handles */
@@ -6357,7 +6357,9 @@ function _rebuildSimCorridorMarkers(){
     const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
     const el=document.createElement("div"); el.className="runLabel"; el.textContent=c.name;
     simCorridorLabels.push(new maplibregl.Marker({element:el,anchor:"center"}).setLngLat([mid[1],mid[0]]).addTo(map));
-    const tier=simRunStyleFor(c).tier;
+    // ◆ / ◆◆ badge keyed on DIFFICULTY only (mirror of ridge-quest) — an
+    // activityType made simRunStyleFor() return tier:"" and drop the badge.
+    const tier=(SIM_RUN_STYLE_DIFF[c.difficulty||""]||{}).tier||"";
     if(tier){
       const bd=document.createElement("div"); bd.className="runDiamond"+(tier==="dblack"?" dbl":"");
       bd.innerHTML=tier==="dblack"?"<i></i><i></i>":"<i></i>";

@@ -531,6 +531,7 @@ document.getElementById("baseSel").onchange=e=>{
   const sat=e.target.value==="sat";
   map.setLayoutProperty("base","visibility",sat?"none":"visible");
   map.setLayoutProperty("sat","visibility",sat?"visible":"none");
+  updateWinter(); // re-anchor / re-apply the winter recolor onto the now-visible basemap
 };
 document.getElementById("tiltBtn").onclick=()=>Terrain3D.toggleTilt(map);
 
@@ -988,6 +989,15 @@ async function enterProject(id, proj){
   if(!appId || !proj){
     const row = await resolveProjectRow(id);
     if(row){ appId = appId || row.appId || null; projSeason = row.season || null; }
+  }
+  // Fallback: the org-scoped /api/projects list can come back empty (wrong
+  // org resolved, or not authed for it) — the public bundle always carries
+  // the injected season, same trigger every other map view uses.
+  if(projSeason == null){
+    try{
+      const br = await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle", {cache:"no-store"});
+      if(br.ok){ const bj = await br.json(); projSeason = bj.season || null; }
+    }catch(e){}
   }
   apply3D();
   updateWinter();
