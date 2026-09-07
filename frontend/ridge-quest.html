@@ -24,6 +24,9 @@
      here when the workspace's 3D flag is on; the older map surfaces still
      carry their own copy of this. -->
 <script src="/terrain-3d.js"></script>
+<!-- Shared corridor renderer (width band + piste-glow). Side-effect-free
+     IIFE; only TileFog.addCorridorLayers / .pxPerMeterAtZ0 are used here. -->
+<script src="/tile-fog.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -1597,32 +1600,22 @@ function drawAllRuns(map){
   if(!cors.length) return;
   const feats = cors.map(c=>{
     const st = runStyleFor(c);
+    const latRef = (c.path && c.path[0] && c.path[0][0]) || Quest.ref[0];
     return {
       type:"Feature",
       properties:{ name:c.name||"Run", difficulty:c.difficulty||"", activityType:c.activityType||"",
                    runType:c.runType||"run", lengthM:Math.round(c.lengthM||0),
-                   col:st.col, halo:st.halo, dash:st.dash, tier:st.tier },
+                   col:st.col, halo:st.halo, dash:st.dash, tier:st.tier,
+                   // shared corridor renderer (width band + piste-glow, no dashes)
+                   corridor:true, widthM:(c.widthM>0?c.widthM:10), pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(latRef) },
       geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
     };
   });
   map.addSource("runLines", { type:"geojson", data:{ type:"FeatureCollection", features:feats } });
-  map.addLayer({ id:"runLines-halo", type:"line", source:"runLines",
-    layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":["get","halo"], "line-width":_runW(8,14,22), "line-blur":6, "line-opacity":0.6 } });
-  map.addLayer({ id:"runLines-casing", type:"line", source:"runLines",
-    layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":"#05070b", "line-opacity":0.9, "line-width":_runW(3.5,6.5,10) } });
-  map.addLayer({ id:"runLines-core", type:"line", source:"runLines", filter:["==",["get","dash"],""],
-    layout:{ "line-cap":"round","line-join":"round" },
-    paint:{ "line-color":["get","col"], "line-width":_runW(1.8,3,4.5) } });
-  Object.keys(RUN_DASH).forEach(k=>{
-    map.addLayer({ id:"runLines-core-"+k, type:"line", source:"runLines", filter:["==",["get","dash"],k],
-      layout:{ "line-cap":"butt","line-join":"round" },
-      paint:{ "line-color":["get","col"], "line-width":_runW(1.8,3,4.5), "line-dasharray":RUN_DASH[k] } });
-  });
-  map.addLayer({ id:"runLines-hot", type:"line", source:"runLines", filter:["==",["get","tier"],"dblack"],
-    layout:{ "line-cap":"round" },
-    paint:{ "line-color":"#ff5a5f", "line-width":_runW(1,1.6,2.4) } });
+  // Width band + halo + casing + solid grade core + double-black hot line —
+  // one shared implementation used on every surface (see tile-fog.js). NO
+  // dashes: activity used to be shown by line-dasharray, now by colour only.
+  TileFog.addCorridorLayers(map, { source:"runLines", id:"runLines" });
   // Invisible fat hit target for the tap popup (covers every core variant).
   map.addLayer({ id:"runLines-hit", type:"line", source:"runLines",
     paint:{ "line-color":"#000", "line-opacity":0, "line-width":14 } });

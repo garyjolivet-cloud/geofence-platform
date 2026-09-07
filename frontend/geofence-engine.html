@@ -360,7 +360,9 @@ function extractTileCorridorsFromBundle(b){
       return;
     }
     const tgt=(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
-    if(tgt) out.push({coords:tgt.geometry.path.map(p=>[p[1],p[0]]),activityType:z.activityType||"hike"});
+    if(tgt) out.push({coords:tgt.geometry.path.map(p=>[p[1],p[0]]),
+      activityType:(tgt.geometry.activityType||z.activityType||"hike"),
+      widthM:(tgt.geometry.widthM>0?tgt.geometry.widthM:undefined)});
   });
   return out;
 }
@@ -1960,6 +1962,13 @@ const MapView = {
         paint:{'line-color':['get','color'],'line-width':3,'line-opacity':0.55,'line-dasharray':[1,1.4]}});
       this.setWalkPaths(WALKING_PATHS); // in case loadWalkingPaths() already ran before this source existed
 
+      // Corridor runs — grade-coloured width band + piste-glow, the shared
+      // stack every other surface uses (see tile-fog.js). This page never
+      // drew corridor zones before; a corridor was purely a trigger band.
+      this.map.addSource('corridorRuns',{type:'geojson',data:fc([])});
+      TileFog.addCorridorLayers(this.map,{source:'corridorRuns',id:'corridorRuns'});
+      this.setCorridorRuns(BUNDLE); // in case the bundle loaded before this source existed
+
       // 3D Mode terrain (3D-mode plan, Step 3) — same free, no-auth
       // Terrarium DEM source as fence-editor.html. This page has no
       // basemap switcher at all (confirmed during scoping — nothing here
@@ -1982,6 +1991,27 @@ const MapView = {
       properties:{id:p.id, color:WP_COLOR_PALETTE[i%WP_COLOR_PALETTE.length]},
       geometry:{type:'LineString', coordinates:p.latlon.map(ll=>[ll[1],ll[0]])}
     }))));
+  },
+  // Draw every corridor zone as a grade-coloured run (shared renderer).
+  // Called on each bundle (re)load and once from the map-load handler.
+  setCorridorRuns(b){
+    if(!this.map || !this.map.getSource('corridorRuns') || !b) return;
+    const feats=[];
+    (b.zones||[]).forEach(z=>{
+      if(Array.isArray(z.path) && z.path.length>=2) return; // moving-audio path, not a run
+      const tgt=(z.layers||[]).find(l=>l.geometry && l.geometry.type==='corridor');
+      const g=tgt && tgt.geometry;
+      if(!g || !Array.isArray(g.path) || g.path.length<2) return;
+      const cc=g.path.map(p=>[p[1],p[0]]); // [lat,lon] -> [lon,lat]
+      const st=TileFog.corridorStyle({difficulty:g.difficulty!=null?g.difficulty:z.difficulty,
+        activityType:g.activityType!=null?g.activityType:z.activityType,
+        runType:g.runType!=null?g.runType:z.runType});
+      feats.push({type:'Feature',properties:{corridor:true,
+        widthM:(g.widthM>0?g.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((cc[0]||[0,0])[1]),
+        col:st.col,halo:st.halo,tier:st.tier},
+        geometry:{type:'LineString',coordinates:cc}});
+    });
+    this.map.getSource('corridorRuns').setData(fc(feats));
   },
   // BUNDLE.threeDEnabled is denormalized into the published bundle by
   // fence-editor.html's exportBundle() (3D-mode plan, architecture note B)
@@ -2544,6 +2574,7 @@ EngineKokoro.tryLoad();
       HUD.log('ev-warn','no stops published for this project yet'); return; }
     BUNDLE=b; Geofencer.reset(); GPSFilter.reset(); HUD.prev=null;
     loadWalkingPaths(b);
+    MapView.setCorridorRuns(b);
     initTileArt(b,pid);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
@@ -2566,6 +2597,7 @@ EngineKokoro.tryLoad();
     if(cached){ try{ const b=JSON.parse(cached);
       BUNDLE=b; Geofencer.reset(); GPSFilter.reset(); HUD.prev=null;
       loadWalkingPaths(b);
+      MapView.setCorridorRuns(b);
       initTileArt(b,pid);
       if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());

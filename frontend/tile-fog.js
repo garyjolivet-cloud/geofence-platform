@@ -25,7 +25,10 @@
  *     cell + its k=1 ring (same "torch radius" Ridge Quest uses), POSTs new
  *     cells, re-renders. Call from the position tick loop (HUD.onFix etc).
  *   TileFog.renderCorridors(corridors)            -> corridors:
- *     [{coords:[[lon,lat],...], activityType}]. Caches this corridor set
+ *     [{coords:[[lon,lat],...], activityType, widthM?}]. `widthM` (the
+ *     corridor row's real width_m, optional) sizes the ribbon when > 0,
+ *     otherwise it falls back to ACTIVITY_WIDTH_M[activityType].
+ *     Caches this corridor set
  *     and (re-)draws only the ribbon segments whose H3 cell is currently
  *     revealed -- per direct product feedback (2026-08-26), a corridor
  *     should reveal progressively as the visitor passes through each hex,
@@ -112,6 +115,130 @@ function isRevealed(h3Cell){ return (fogCells.get(h3Cell) || 0) >= 2; }
 // latitude span is negligible at this app's zoom range (13-18, see
 // CLAUDE.md's zoom-level survey).
 function pxPerMeterAtZ0(lat){ return 1 / (156543.03392 * Math.cos(lat * Math.PI / 180)); }
+
+// ===================================================================
+// Shared corridor rendering (width band + piste-glow). Used by EVERY
+// surface that draws a corridor: fence-editor (Edit map + Test Mode),
+// geofence-engine, geofence-sim, ridge-quest, map-paint, gpx-editor.
+// One implementation here, per the "no verbatim mirror" rule this file
+// already follows -- previously each surface styled corridors its own
+// way (dashed coral line in the editors/sim, difficulty-coloured
+// piste-glow with per-activity line-dasharray in ridge-quest, nothing
+// at all in the engine). Now identical everywhere, and NO dashes.
+// ===================================================================
+
+// Grade -> core colour + glow colour + double-black "tier". A verbatim
+// port of the old ridge-quest.html runStyleFor(), minus the dash.
+// Callers pass { difficulty, activityType, runType }.
+const RUN_STYLE_DIFF = {
+  "green":        { col: "#57e06f", halo: "#22c246", tier: "" },
+  "blue":         { col: "#6bb6ff", halo: "#2f86ff", tier: "" },
+  "black":        { col: "#ffffff", halo: "#89b4ff", tier: "black" },
+  "double-black": { col: "#ffffff", halo: "#ff6f91", tier: "dblack" },
+  "":             { col: "#ffd166", halo: "#ffab1f", tier: "" }   // no difficulty set
+};
+const RUN_STYLE_ACT = {
+  "xcountry":     { col: "#cbb0ff", halo: "#9a63ff" },
+  "bike":         { col: "#ffab5e", halo: "#ff7a1a" },
+  "walking_city": { col: "#bcd8ee", halo: "#79b3dc" },
+  "hike":         { col: "#b3e37f", halo: "#63c23a" }
+};
+function corridorStyle(c){
+  c = c || {};
+  const act = c.activityType || (c.runType === "hike" ? "hike" : "");
+  if(RUN_STYLE_ACT[act]){ const s = RUN_STYLE_ACT[act]; return { col: s.col, halo: s.halo, tier: "" }; }
+  if(c.runType === "lift") return { col: "#c2cec9", halo: "#8ea79c", tier: "" };
+  const d = RUN_STYLE_DIFF[c.difficulty || ""] || RUN_STYLE_DIFF[""];
+  return { col: d.col, halo: d.halo, tier: d.tier };
+}
+
+// Real-world-width `line-width` expression -- the exact Web-Mercator
+// metres->pixels curve documented on tile-corridors-line below, factored
+// out so the width band and the tile-art ribbon share ONE copy. A feature
+// carries `widthM` (metres) and `pxPerMeterAtZ0` (from pxPerMeterAtZ0()).
+// MUST stay ONE zoom-based interpolate subexpression -- never wrap the
+// return value in another max()/interpolate (see the long note below).
+//   floor:"ribbon" -> the textured ribbon's original visible floors
+//   floor:"band"   -> gentler floors, for a translucent band that has a
+//                     solid grade centre line drawn over it
+const WIDTH_FLOORS = { ribbon: [1, 4, 10, 18, 30, 60, 120], band: [0, 2, 3, 4, 6, 10, 20] };
+const WIDTH_STOPS  = [ [0, 1], [12, 4096], [16, 65536], [18, 262144], [20, 1048576], [22, 4194304], [24, 16777216] ];
+function realWidthExpr(opts){
+  opts = opts || {};
+  const wp = opts.widthProp || "widthM";
+  const pp = opts.pxProp || "pxPerMeterAtZ0";
+  const floors = WIDTH_FLOORS[opts.floor] || WIDTH_FLOORS.ribbon;
+  const expr = ["interpolate", ["exponential", 2], ["zoom"]];
+  WIDTH_STOPS.forEach((s, i) => {
+    const scaled = s[1] === 1
+      ? ["*", ["get", wp], ["get", pp]]
+      : ["*", ["get", wp], ["get", pp], s[1]];
+    expr.push(s[0], ["max", scaled, floors[i]]);
+  });
+  return expr;
+}
+
+// Cosmetic (screen-pixel) glow widths ramped by zoom -- mirrors the old
+// ridge-quest _runW(a,b,c) / fence-editor _simRunW(a,b,c).
+function runW(a, b, c){ return ["interpolate", ["linear"], ["zoom"], 12, a, 15, b, 18, c]; }
+
+// Add the shared corridor layer stack to `map`, reading from an existing
+// GeoJSON source whose corridor features carry:
+//   corridor:true, widthM:<metres>, pxPerMeterAtZ0:<pxPerMeterAtZ0(refLat)>,
+//   col:<core colour>, halo:<glow colour>, tier:"" | "dblack"
+// Layers bottom->top: width band, glow halo, dark casing, solid grade
+// core, double-black hot line. `id` prefixes the layer names (so one map
+// can host more than one corridor source); `before` is an optional
+// beforeId. Idempotent -- safe to call again after a setStyle() wipe.
+function addCorridorLayers(map, o){
+  o = o || {};
+  const src = o.source;
+  const pfx = o.id || (src + "-c");
+  const before = o.before;
+  if(!src || map.getLayer(pfx + "-core")) return;
+  // A corridor feature must be flagged AND carry a real widthM -- lets a
+  // surface flag a corridor purely as a hit target (no widthM) without it
+  // getting a band drawn (the Fence Editor does this in Test Mode, where
+  // the Test-Mode runLines stack already draws the glow).
+  const only = ["all", ["==", ["get", "corridor"], true], ["has", "widthM"]];
+  const col  = ["coalesce", ["get", "col"], "#ff6a3d"];
+  const halo = ["coalesce", ["get", "halo"], col];
+  // Optional core-colour override (e.g. the Fence Editor turns the selected
+  // corridor's centre line green). Other surfaces just use the grade colour.
+  const coreCol = o.coreColor || col;
+  const add = (def) => { try { map.addLayer(def, before); } catch(e){ console.warn("TileFog.addCorridorLayers:", def.id, e && e.message); } };
+  add({ id: pfx + "-width", type: "line", source: src, filter: only,
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": col, "line-opacity": 0.20, "line-blur": 0,
+      "line-width": realWidthExpr({ floor: "band" }) } });
+  add({ id: pfx + "-halo", type: "line", source: src, filter: only,
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": halo, "line-opacity": 0.6, "line-blur": 6, "line-width": runW(8, 14, 22) } });
+  add({ id: pfx + "-casing", type: "line", source: src, filter: only,
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": "#05070b", "line-opacity": 0.9, "line-width": runW(3.5, 6.5, 10) } });
+  add({ id: pfx + "-core", type: "line", source: src, filter: only,
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": coreCol, "line-width": runW(1.8, 3, 4.5) } });
+  add({ id: pfx + "-hot", type: "line", source: src,
+    filter: ["all", ["==", ["get", "corridor"], true], ["has", "widthM"], ["==", ["get", "tier"], "dblack"]],
+    layout: { "line-cap": "round" },
+    paint: { "line-color": "#ff5a5f", "line-width": runW(1, 1.6, 2.4) } });
+}
+
+// Build the shared per-feature props for a corridor LineString. `latRef`
+// is the corridor's first-point latitude. `meta` is { difficulty,
+// activityType, runType, widthM }.
+function corridorFeatureProps(latRef, meta){
+  meta = meta || {};
+  const st = corridorStyle(meta);
+  return {
+    corridor: true,
+    widthM: (typeof meta.widthM === "number" && meta.widthM > 0) ? meta.widthM : 10,
+    pxPerMeterAtZ0: pxPerMeterAtZ0(latRef || 0),
+    col: st.col, halo: st.halo, tier: st.tier
+  };
+}
 
 // The generated tile PNGs are ~1024px, authored as dense repeating
 // micro-patterns (many small trees/rocks/etc baked into one image, meant to
@@ -216,15 +343,7 @@ async function attachToMap(map, opts){
           // now explicitly raised to 24 too) so both the true-width math
           // and the floor keep growing all the way to a genuinely
           // close-up, ground-level-ish view.
-          "line-width": ["interpolate", ["exponential", 2], ["zoom"],
-            0,  ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"]], 1],
-            12, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 4096], 4],
-            16, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 65536], 10],
-            18, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 262144], 18],
-            20, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 1048576], 30],
-            22, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 4194304], 60],
-            24, ["max", ["*", ["get", "widthM"], ["get", "pxPerMeterAtZ0"], 16777216], 120]
-          ]
+          "line-width": realWidthExpr({ floor: "ribbon" })
         } });
     });
   }
@@ -350,7 +469,8 @@ function buildRevealedCorridorFeatures(){
     const activity = c.activityType || "hike";
     const key = tileKey(ACTIVITY_TERRAIN_TYPE[activity] || ACTIVITY_TERRAIN_TYPE.hike, 0);
     if(!tileUrlByKey.has(key)) return;
-    const props = { tileKey: key, widthM: ACTIVITY_WIDTH_M[activity] || 2, pxPerMeterAtZ0: pxPerMeterAtZ0(c.coords[0][1]) };
+    const widthM = (typeof c.widthM === "number" && c.widthM > 0) ? c.widthM : (ACTIVITY_WIDTH_M[activity] || 2);
+    const props = { tileKey: key, widthM: widthM, pxPerMeterAtZ0: pxPerMeterAtZ0(c.coords[0][1]) };
     const dense = densifyLine(c.coords, REVEAL_SAMPLE_INTERVAL_M);
     let seg = null;
     dense.forEach(pt => {
@@ -410,6 +530,7 @@ function reveal(lat, lon, acc, accuracyCapM){
 }
 
 global.TileFog = { load, attachToMap, reveal, renderCorridors, isRevealed,
-  setCells, redraw, ACTIVITY_WIDTH_M, ACTIVITY_TERRAIN_TYPE };
+  setCells, redraw, ACTIVITY_WIDTH_M, ACTIVITY_TERRAIN_TYPE,
+  pxPerMeterAtZ0, realWidthExpr, runW, corridorStyle, addCorridorLayers, corridorFeatureProps };
 
 })(typeof window !== "undefined" ? window : globalThis);

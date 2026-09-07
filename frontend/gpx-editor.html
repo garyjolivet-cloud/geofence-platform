@@ -10,6 +10,8 @@
 <script src="corridor-tree.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <script src="terrain-3d.js"></script>
+<!-- Shared corridor renderer (width band + piste-glow). Side-effect-free IIFE. -->
+<script src="tile-fog.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script>RoleGate.require(['admin','operator']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -580,18 +582,32 @@ map.on("load",()=>{
   scheduleRenderMapLine();
 });
 
+function _gpxCorridorMeta(){
+  return {
+    difficulty: (document.getElementById("gpxDifficulty")||{}).value || null,
+    runType: (document.getElementById("gpxRunType")||{}).value || "run",
+    activityType: (document.getElementById("gpxActivityType")||{}).value || "hike",
+    widthM: Math.max(2, +(document.getElementById("gpxWidth")||{}).value || 10)
+  };
+}
 function renderMapLine(){
   if(!mapReady) return;
   const coords=points.map(p=>[p[0],p[1]]);
   // A LineString needs >=2 positions — under that, use an empty
   // FeatureCollection instead so MapLibre never sees an invalid geometry.
   const geojson = coords.length>=2
-    ? {type:"Feature",geometry:{type:"LineString",coordinates:coords}}
+    ? {type:"Feature",
+       properties:TileFog.corridorFeatureProps((coords[0]||[0,0])[1], _gpxCorridorMeta()),
+       geometry:{type:"LineString",coordinates:coords}}
     : {type:"FeatureCollection",features:[]};
   if(map.getSource("track")) map.getSource("track").setData(geojson);
   else{
     map.addSource("track",{type:"geojson",data:geojson});
     map.addLayer({id:"track-line",type:"line",source:"track",paint:{"line-color":"#ff6a3d","line-width":4}});
+    // Shared corridor renderer — width band + piste-glow, grade colour, no
+    // dashes. Drawn UNDER the orange authoring line (which stays as the
+    // "you're editing this" affordance). Same stack as every other surface.
+    TileFog.addCorridorLayers(map,{source:"track",id:"track",before:"track-line"});
   }
   if(coords.length){
     // setLngLat() before addTo(), not after — a fresh Marker's _lngLat is
@@ -641,6 +657,13 @@ function renderMapLine(){
   }
   updateSelVisuals();
 }
+
+// Run-details edits (grade / type / activity / width) restyle the live
+// preview — the shared corridor renderer reads them off the track feature.
+["gpxDifficulty","gpxRunType","gpxActivityType","gpxWidth"].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el) el.addEventListener("input", scheduleRenderMapLine);
+});
 
 /* ---- trim/delete selection playhead (map side) — a highlighted sub-line
    plus start/end markers so dragging the Trim/Delete range sliders shows

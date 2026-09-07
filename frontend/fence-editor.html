@@ -2125,12 +2125,31 @@ function renderSourcesInner(){
       feats.push({type:"Feature",properties:{kind:"triphit",zIdx:i},
         geometry:{type:"Polygon",coordinates:[rectRing(s.from,s.to,TRIPLINE_HIT_HALF_WIDTH_M)]}});
     }
-    // Corridor — rendered as a plain line via the existing fence-line layer,
-    // same as tripline. The width number (owned by the linked library row) is
-    // shown in the line's label; no buffered-width fill. A moving-audio
-    // corridor uses the dashed "moving" style and drops the width label.
-    else if(s.type==="corridor") feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:isMovingCorridor?z.name:(z.name+" ("+(s.widthM||10)+"m)"),isPath:isMovingCorridor},
-        geometry:{type:"LineString",coordinates:s.coords}});
+    // Corridor. A moving-audio corridor keeps the plain "moving" line (cyan,
+    // an ambient sound path, not a run). Every other corridor now renders
+    // through the shared width-band + piste-glow stack (TileFog.addCorridorLayers
+    // -> "fenceCorr-*" layers), identical to Test Mode / Ridge Quest / the
+    // engine. It stays a kind:"line" feature too, drawn invisibly by
+    // fence-line (line-opacity 0 when corridor==true) purely so the existing
+    // click/mousedown hit-testing on "fence-line" still selects it.
+    else if(s.type==="corridor"){
+      if(isMovingCorridor){
+        feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name,isPath:true},
+          geometry:{type:"LineString",coordinates:s.coords}});
+      } else if(simMode){
+        // Test Mode: the runLines stack already draws the glow; here the
+        // corridor is just an invisible hit target (corridor:true, no widthM
+        // -> fence-line opacity 0, fenceCorr-* skips it).
+        feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,isPath:false,corridor:true},
+          geometry:{type:"LineString",coordinates:s.coords}});
+      } else {
+        const _cst=TileFog.corridorStyle({difficulty:z.difficulty,activityType:z.activityType,runType:z.runType});
+        feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name+" ("+(s.widthM||10)+"m)",isPath:false,
+            corridor:true,widthM:(s.widthM>0?s.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((s.coords[0]||[0,0])[1]),
+            col:_cst.col,halo:_cst.halo,tier:_cst.tier},
+          geometry:{type:"LineString",coordinates:s.coords}});
+      }
+    }
     // label — in Test Mode a corridor already shows its name via the
     // piste-glow .runLabel marker, so skip this second (offset, dim) copy.
     if(!(simMode && s.type==="corridor")){
@@ -2242,7 +2261,15 @@ map.on("load",()=>{
      paint:{"line-color":["case",["get","sel"],"#38e0a6",["get","isHazard"],"#ff2f4e","#ff6a3d"],"line-width":2}});
   map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==","kind","line"],
      paint:{"line-color":["case",["get","sel"],"#38e0a6",["get","isPath"],"#8fd6ff","#ff6a3d"],"line-width":3.2,
+            // real corridors are drawn by the fenceCorr-* stack below; keep them
+            // here only as an invisible hit target so selection still works.
+            "line-opacity":["case",["get","corridor"],0,1],
             "line-dasharray":["case",["get","isPath"],["literal",[3,1.5]],["literal",[2,1.2]]]}});
+  // Shared corridor renderer — width band + piste-glow, grade-coloured,
+  // NO dashes. Same stack as Test Mode / Ridge Quest / engine / sim /
+  // map-paint / gpx-editor. Selected corridor's core turns green.
+  TileFog.addCorridorLayers(map,{source:"fences",id:"fenceCorr",
+    coreColor:["case",["get","sel"],"#38e0a6",["coalesce",["get","col"],"#ff6a3d"]]});
   // Invisible wider click target for tripline (see TRIPLINE_HIT_HALF_WIDTH_M) —
   // fill-opacity 0 so it's never seen, but still hit-tested like any other
   // fill layer, giving the whole line's length a forgiving click area
@@ -6271,7 +6298,7 @@ let simAmbientMarkers={}, simAmbientTimer=null;
 // player will see it. Kept a verbatim mirror of ridge-quest.html's
 // RUN_STYLE_* / RUN_DASH / runStyleFor(); update both together.
 let simCorridorLabels=[]; // name + diamond HTML markers
-const SIM_RUN_LAYERS=["runLines-halo","runLines-casing","runLines-core","runLines-core-xc","runLines-core-bike","runLines-core-foot","runLines-core-lift","runLines-hot","runLines-hit"];
+const SIM_RUN_LAYERS=["runLines-width","runLines-halo","runLines-casing","runLines-core","runLines-hot","runLines-hit"];
 const SIM_RUN_STYLE_DIFF={
   "green":        {col:"#57e06f",halo:"#22c246",tier:""},
   "blue":         {col:"#6bb6ff",halo:"#2f86ff",tier:""},
@@ -6360,31 +6387,23 @@ function refreshSimCorridorLabels(){
     if(!Array.isArray(path) || path.length<2) return null;
     let lm=0; for(let i=1;i<path.length;i++) lm+=SimGeo.hav(path[i-1],path[i]);
     return {name:z.name||"Run",difficulty:z.difficulty||"",runType:z.runType||"run",
-            activityType:z.activityType||"",path,lengthM:lm};
+            activityType:z.activityType||"",path,lengthM:lm,widthM:(tgt.geometry.widthM||10)};
   }).filter(Boolean);
   if(!cors.length) return;
   const feats=cors.map(c=>{
     const st=simRunStyleFor(c);
     return {type:"Feature",
       properties:{name:c.name,difficulty:c.difficulty,activityType:c.activityType,runType:c.runType,
-                  lengthM:Math.round(c.lengthM),col:st.col,halo:st.halo,dash:st.dash,tier:st.tier},
+                  lengthM:Math.round(c.lengthM),col:st.col,halo:st.halo,dash:st.dash,tier:st.tier,
+                  // shared corridor renderer (width band + piste-glow, no dashes)
+                  corridor:true,widthM:(c.widthM>0?c.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(c.path[0][0])},
       geometry:{type:"LineString",coordinates:c.path.map(p=>[p[1],p[0]])}}; // [lat,lon] -> [lon,lat]
   });
   map.addSource("runLines",{type:"geojson",data:{type:"FeatureCollection",features:feats}});
-  map.addLayer({id:"runLines-halo",type:"line",source:"runLines",layout:{"line-cap":"round","line-join":"round"},
-    paint:{"line-color":["get","halo"],"line-width":_simRunW(8,14,22),"line-blur":6,"line-opacity":0.6}});
-  map.addLayer({id:"runLines-casing",type:"line",source:"runLines",layout:{"line-cap":"round","line-join":"round"},
-    paint:{"line-color":"#05070b","line-opacity":0.9,"line-width":_simRunW(3.5,6.5,10)}});
-  map.addLayer({id:"runLines-core",type:"line",source:"runLines",filter:["==",["get","dash"],""],
-    layout:{"line-cap":"round","line-join":"round"},
-    paint:{"line-color":["get","col"],"line-width":_simRunW(1.8,3,4.5)}});
-  Object.keys(SIM_RUN_DASH).forEach(k=>{
-    map.addLayer({id:"runLines-core-"+k,type:"line",source:"runLines",filter:["==",["get","dash"],k],
-      layout:{"line-cap":"butt","line-join":"round"},
-      paint:{"line-color":["get","col"],"line-width":_simRunW(1.8,3,4.5),"line-dasharray":SIM_RUN_DASH[k]}});
-  });
-  map.addLayer({id:"runLines-hot",type:"line",source:"runLines",filter:["==",["get","tier"],"dblack"],
-    layout:{"line-cap":"round"},paint:{"line-color":"#ff5a5f","line-width":_simRunW(1,1.6,2.4)}});
+  // Width band + halo + casing + solid grade core + hot line — one shared
+  // implementation, identical to ridge-quest's "My map" (see tile-fog.js).
+  // NO dashes (activity shown by colour, not line-dasharray).
+  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines"});
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
     paint:{"line-color":"#000","line-opacity":0,"line-width":14}});
   _simRunCors=cors;

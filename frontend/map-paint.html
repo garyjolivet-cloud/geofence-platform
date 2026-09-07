@@ -294,12 +294,9 @@ function ensureOverlayLayers(){
   // actual routes. Added first so the region / hover / manual overlays stay
   // on top of it.
   map.addSource("corridor-ref",{type:"geojson",data:EMPTY});
-  map.addLayer({id:"corridor-ref-casing",type:"line",source:"corridor-ref",
-    layout:{"line-cap":"round","line-join":"round"},
-    paint:{"line-color":"#0a1018","line-width":5,"line-opacity":0.5}});
-  map.addLayer({id:"corridor-ref-line",type:"line",source:"corridor-ref",
-    layout:{"line-cap":"round","line-join":"round"},
-    paint:{"line-color":"#ff6a3d","line-width":2.5,"line-dasharray":[1.5,1]}});
+  // Shared corridor renderer — width band + piste-glow, grade colour, no
+  // dashes. Same stack as every other surface (see tile-fog.js).
+  TileFog.addCorridorLayers(map,{source:"corridor-ref",id:"corridor-ref"});
   map.addSource("region-poly",{type:"geojson",data:EMPTY});
   map.addLayer({id:"region-poly-fill",type:"fill",source:"region-poly",paint:{"fill-color":"#ffc24d","fill-opacity":0.08}});
   map.addLayer({id:"region-poly-line",type:"line",source:"region-poly",paint:{"line-color":"#ffc24d","line-width":2,"line-dasharray":[2,1.5]}});
@@ -339,20 +336,29 @@ async function loadTerrain(refLatLon){
 /* ---- corridor reference overlay (project's corridor/path centrelines) ---- */
 function bundleCorridorLines(){
   const out=[];
-  const add=coords=>{ if(Array.isArray(coords) && coords.length>=2) out.push(coords.map(p=>[p[0],p[1]])); };
+  const add=(coords,meta)=>{ if(Array.isArray(coords) && coords.length>=2) out.push({coords:coords.map(p=>[p[0],p[1]]), meta:meta||{}}); };
   (projectZones||[]).forEach(z=>{
     (z.layers||[]).forEach(l=>{
       const g=l&&l.geometry;
-      if(g && (g.type==="corridor"||g.type==="path")) add(g.path||g.coords);
+      if(g && (g.type==="corridor"||g.type==="path"))
+        add(g.path||g.coords,{difficulty:g.difficulty!=null?g.difficulty:z.difficulty,
+          activityType:g.activityType!=null?g.activityType:z.activityType,
+          runType:g.runType!=null?g.runType:z.runType, widthM:g.widthM});
     });
-    if(z.shape && (z.shape.type==="corridor"||z.shape.type==="path")) add(z.shape.coords);
+    if(z.shape && (z.shape.type==="corridor"||z.shape.type==="path"))
+      add(z.shape.coords,{difficulty:z.difficulty,activityType:z.activityType,runType:z.runType,widthM:z.shape.widthM});
   });
   return out;
 }
 function renderCorridorRef(){
   const chk=document.getElementById("showCorridorsChk");
   const on = chk ? chk.checked : true;
-  setData("corridor-ref", fc(on ? bundleCorridorLines().map(c=>lineFeat(c)) : []));
+  const feats = on ? bundleCorridorLines().map(c=>({
+    type:"Feature",
+    properties:TileFog.corridorFeatureProps((c.coords[0]||[0,0])[1], c.meta),
+    geometry:{type:"LineString",coordinates:c.coords}
+  })) : [];
+  setData("corridor-ref", fc(feats));
 }
 function fitToContent(ref){
   const hs=[...cells.keys()];

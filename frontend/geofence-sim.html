@@ -830,8 +830,10 @@ map.on("load",()=>{
       "line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
       "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
   map.addLayer({id:"fence-line",type:"line",source:"fences",
-    filter:["==",["geometry-type"],"LineString"],
+    filter:["all",["==",["geometry-type"],"LineString"],["!=",["get","corridor"],true]],
     paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+  // Shared corridor renderer — width band + piste-glow, no dashes.
+  TileFog.addCorridorLayers(map,{source:"fences",id:"fenceCorr"});
   // Vertical-extent shadow ring + label (item A, 2026-08-14) — see
   // zonesGeoJSON()'s own comment on the "vext" feature it pushes. The
   // "vext" feature is itself a Polygon (a circleRing), so fence-fill/
@@ -969,8 +971,16 @@ function zonesGeoJSON(){
           feats.push({type:"Feature",properties:props,geometry:{type:"Polygon",coordinates:[ring]}}); }
         else if(g.type==="tripline")
           feats.push({type:"Feature",properties:props,geometry:{type:"LineString",coordinates:[[g.from[1],g.from[0]],[g.to[1],g.to[0]]]}});
-        else if(g.type==="corridor")
-          feats.push({type:"Feature",properties:props,geometry:{type:"LineString",coordinates:g.path.map(c=>[c[1],c[0]])}});
+        else if(g.type==="corridor"){
+          // Shared corridor renderer — width band + piste-glow, grade colour,
+          // NO dashes. Same stack as every other surface (see tile-fog.js).
+          const _cc=g.path.map(c=>[c[1],c[0]]);
+          const _cs=TileFog.corridorStyle({difficulty:g.difficulty,activityType:g.activityType,runType:g.runType});
+          feats.push({type:"Feature",properties:Object.assign({},props,{corridor:true,
+              widthM:(g.widthM>0?g.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((_cc[0]||[0,0])[1]),
+              col:_cs.col,halo:_cs.halo,tier:_cs.tier}),
+            geometry:{type:"LineString",coordinates:_cc}});
+        }
       }
     });
   });
@@ -1328,7 +1338,9 @@ function extractTileCorridorsFromBundle(b){
       return;
     }
     const tgt=(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
-    if(tgt) out.push({coords:tgt.geometry.path.map(p=>[p[1],p[0]]),activityType:z.activityType||"hike"});
+    if(tgt) out.push({coords:tgt.geometry.path.map(p=>[p[1],p[0]]),
+      activityType:(tgt.geometry.activityType||z.activityType||"hike"),
+      widthM:(tgt.geometry.widthM>0?tgt.geometry.widthM:undefined)});
   });
   return out;
 }
@@ -1501,8 +1513,9 @@ function setBase(k){ map.setStyle(styleFor(k));
       map.addLayer({id:"fence-out",type:"line",source:"fences",filter:["all",["==",["geometry-type"],"Polygon"],["!=",["get","kind"],"vext"]],
         paint:{"line-color":phaseColor(),"line-width":["case",["==",["get","kind"],"target"],2.4,1.2],
           "line-dasharray":["case",["==",["get","kind"],"general"],["literal",[2,2]],["literal",[1,0]]]}});
-      map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["==",["geometry-type"],"LineString"],
+      map.addLayer({id:"fence-line",type:"line",source:"fences",filter:["all",["==",["geometry-type"],"LineString"],["!=",["get","corridor"],true]],
         paint:{"line-color":phaseColor(),"line-width":3.4,"line-dasharray":[2,1.4]}});
+      TileFog.addCorridorLayers(map,{source:"fences",id:"fenceCorr"});
       map.addLayer({id:"vext-ring",type:"line",source:"fences",filter:["==","kind","vext"],
         paint:{"line-color":"#ffc24d","line-width":1.4,"line-dasharray":[3,2],"line-opacity":0.8}});
       map.addLayer({id:"vext-vol",type:"fill-extrusion",source:"fences",
