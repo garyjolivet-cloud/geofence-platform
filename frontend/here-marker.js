@@ -19,6 +19,22 @@
    opts.follow  true | 'edge' | false   (default true; 'edge' = smart-follow
                 but skip the first-fix centre, so a page that fitBounds()es its
                 own framing keeps it)
+   opts.bounds  [[minLon,minLat],[maxLon,maxLat]]  — the project's content
+                bbox. When set, a fix outside that box grown by opts.bufferM
+                hides the marker + accuracy ring and suppresses ALL follow
+                (including the first-fix centre); the page's own framing is
+                left untouched so the user can still pan/zoom the project.
+                null (default) = no gate. Refresh via the returned setBounds().
+   opts.bufferM metres to grow opts.bounds by before the in/out test
+                (default SITE_BUFFER_M = 10000).
+   opts.onSite  fn(inSite:boolean, isInitial:boolean) — called once on the
+                first fix (isInitial=true) and again on every on-site<->off-site
+                transition. Use it to pause/resume the page's own
+                position-driven work (fog reveal, triggers, position sharing, …).
+
+   Also exported: HereMarker.withinBounds(bounds, lat, lon, bufferM) — the
+   same pure in/out predicate, for filtering OTHER people's positions
+   (friends / walkers) to the project box.
 */
 (function () {
   "use strict";
@@ -27,6 +43,8 @@
   var HIDE_ACC_OVER_M = 120; // above this the fix is too loose to bother drawing a ring
   var INTERACT_COOLDOWN_MS = 2000;
   var FOLLOW_INSET = 0.6; // re-centre when the dot leaves the inner 60% box
+  var SITE_BUFFER_M = 10000;   // default margin around the project content bbox
+  var SITE_ENTER_FACTOR = 0.9; // hysteresis: must get 10% inside the buffer to flip back on-site
 
   var _stylesInjected = false;
   function injectStyles() {
@@ -35,6 +53,7 @@
     var css = ""
       + ".hm{width:26px;height:26px;pointer-events:none;will-change:transform}"
       + ".hm--pending{visibility:hidden}"
+      + ".hm--offsite{display:none}"
       + ".hm-dot{position:absolute;left:50%;top:50%;width:16px;height:16px;transform:translate(-50%,-50%);"
       +   "border-radius:50%;background:var(--hm-color,#2f7dff);border:2px solid #fff;"
       +   "box-shadow:0 0 0 4px rgba(47,125,255,.20),0 1px 3px rgba(0,0,0,.4)}"
@@ -125,6 +144,30 @@
     state.handlers = null;
   }
 
+  // Pure in/out test: is (lat,lon) inside `bounds` grown by `bufferM` metres?
+  // bounds = [[minLon,minLat],[maxLon,maxLat]]. Falsy/degenerate bounds -> true
+  // (gate disabled). Exported so pages can filter other people's positions.
+  function withinBounds(bounds, lat, lon, bufferM) {
+    if (!bounds || !bounds[0] || !bounds[1]) return true;
+    if (typeof lat !== "number" || typeof lon !== "number" || !isFinite(lat) || !isFinite(lon)) return true;
+    if (bufferM == null) bufferM = SITE_BUFFER_M;
+    var minLon = bounds[0][0], minLat = bounds[0][1], maxLon = bounds[1][0], maxLat = bounds[1][1];
+    var midLat = (minLat + maxLat) / 2;
+    var dLat = bufferM / 111320;
+    var dLon = bufferM / (111320 * Math.max(0.01, Math.cos(midLat * D2R)));
+    return lon >= minLon - dLon && lon <= maxLon + dLon
+        && lat >= minLat - dLat && lat <= maxLat + dLat;
+  }
+
+  // Self-marker gate with hysteresis: once off-site you must get 10% inside
+  // the buffer to be counted on-site again, so a fix jittering on the edge
+  // doesn't flicker the marker / the page's on-site flag.
+  function withinSite(state, lat, lon) {
+    if (!state.bounds) return true;
+    var buf = state.inSite ? state.bufferM : state.bufferM * SITE_ENTER_FACTOR;
+    return withinBounds(state.bounds, lat, lon, buf);
+  }
+
   function maybeFollow(state, map, lon, lat) {
     if (state.follow === false) return;
     if (!state.firstFixDone) {
@@ -146,7 +189,11 @@
     var state = {
       map: map, color: color, follow: (opts.follow === undefined ? true : opts.follow),
       marker: null, wedgeEl: null, ready: false, firstFixDone: false,
-      userInteracting: false, lastInteractionAt: 0, removed: false, pending: null, handlers: null
+      userInteracting: false, lastInteractionAt: 0, removed: false, pending: null, handlers: null,
+      bounds: opts.bounds || null,
+      bufferM: (opts.bufferM == null ? SITE_BUFFER_M : opts.bufferM),
+      onSite: (typeof opts.onSite === "function" ? opts.onSite : null),
+      inSite: true, siteInit: false
     };
 
     var built = buildElement(color);
@@ -165,6 +212,25 @@
     });
 
     function applyUpdate(a) {
+      // Site gate — is this fix inside the project box + buffer?
+      var onSiteNow = withinSite(state, a.lat, a.lon);
+      if (!state.siteInit || onSiteNow !== state.inSite) {
+        var initial = !state.siteInit;
+        state.siteInit = true;
+        state.inSite = onSiteNow;
+        // onSite(inSite, isInitial) — isInitial true only on the very first
+        // fix, so callers can skip transition-only work (e.g. GPSFilter.reset).
+        if (state.onSite) { try { state.onSite(onSiteNow, initial); } catch (e) {} }
+      }
+      if (!onSiteNow) {
+        // Off-site: no marker, no accuracy ring, and NO follow (incl. first fix).
+        state.marker.getElement().classList.add("hm--offsite");
+        var s0 = map.getSource("hm-accuracy");
+        if (s0) s0.setData({ type: "FeatureCollection", features: [] });
+        return;
+      }
+      state.marker.getElement().classList.remove("hm--offsite");
+
       state.marker.setLngLat([a.lon, a.lat]);
       state.marker.getElement().classList.remove("hm--pending");
 
@@ -209,8 +275,11 @@
       state.pending = null;
     }
 
-    return { update: update, remove: remove };
+    // Refresh the content bbox after a bundle (re)load without re-attaching.
+    function setBounds(b) { state.bounds = b || null; }
+
+    return { update: update, remove: remove, setBounds: setBounds };
   }
 
-  window.HereMarker = { attach: attach };
+  window.HereMarker = { attach: attach, withinBounds: withinBounds, SITE_BUFFER_M: SITE_BUFFER_M };
 })();

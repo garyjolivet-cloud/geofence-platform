@@ -854,7 +854,11 @@ function initMap(){
       layout:{"text-field":["get","label"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-1.2]},
       paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.5}});
     // Live "you are here" directional avatar (replaces the old flat gps-dot).
-    here = HereMarker.attach(map, { follow:true });
+    // Site gate (wider buffer — you may record just outside existing zones):
+    // a fix well outside the project box hides the avatar and stops the map
+    // chasing it. Recording itself is NOT paused (deliberate — it's an
+    // authoring tool).
+    here = HereMarker.attach(map, { follow:true, bounds: frContentBounds(), bufferM: 15000 });
     refreshMap();
     refreshPublishedZones();
     // updateTerrain() at the top of this handler ran before vext-vol/
@@ -900,6 +904,7 @@ async function loadPublishedBundle(){
     threeDEnabled = !!b.threeDEnabled;
     updateTerrain();
     refreshPublishedZones(); renderStopList();
+    here?.setBounds(frContentBounds());   // now that publishedZones is populated
     if(warn) warn.style.display="none";
   }catch(e){
     if(warn) warn.style.display="flex";
@@ -907,6 +912,26 @@ async function loadPublishedBundle(){
   return {ref, bundleVersion};
 }
 function retryBundleLoad(){ loadPublishedBundle(); }
+
+// Bounding box of the project + what's been recorded so far, as
+// [[minLon,minLat],[maxLon,maxLat]] for HereMarker's site gate. All coords
+// are [lat,lon]. null (=> gate disabled) until there's something to bound.
+function frContentBounds(){
+  let mnLa=Infinity,mnLo=Infinity,mxLa=-Infinity,mxLo=-Infinity,n=0;
+  const add=(la,lo)=>{ if(typeof la==='number'&&typeof lo==='number'&&isFinite(la)&&isFinite(lo)){
+    if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(lo<mnLo)mnLo=lo; if(lo>mxLo)mxLo=lo; n++; } };
+  (publishedZones||[]).forEach(z=>{
+    if(Array.isArray(z.center)) add(z.center[0],z.center[1]);
+    (z.layers||[]).forEach(l=>{ const g=l&&l.geometry; if(!g) return;
+      if(Array.isArray(g.path)) g.path.forEach(pt=>Array.isArray(pt)&&add(pt[0],pt[1]));
+      if(Array.isArray(g.from)) add(g.from[0],g.from[1]);
+      if(Array.isArray(g.to)) add(g.to[0],g.to[1]);
+      if(Array.isArray(g.coords)) g.coords.forEach(pt=>Array.isArray(pt)&&add(pt[0],pt[1])); });
+  });
+  (stops||[]).concat(liveStops||[]).forEach(s=>add(s.lat,s.lon));
+  if(n<1) return null;
+  return [[mnLo,mnLa],[mxLo,mxLa]];
+}
 
 function refreshPublishedZones(){
   if(!map||!map.isStyleLoaded()) return;
@@ -995,11 +1020,14 @@ function startPresencePoll(pid){
       const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/presence',{cache:'no-store'});
       if(!r.ok) return;
       const {walkers}=await r.json();
-      const features=(walkers||[]).map(w=>({
-        type:"Feature",
-        properties:{label:w.label||"Walker"},
-        geometry:{type:"Point",coordinates:[w.lon,w.lat]}
-      }));
+      const _wb=frContentBounds();
+      const features=(walkers||[])
+        .filter(w=>HereMarker.withinBounds(_wb, w.lat, w.lon))   // only walkers inside the project box + buffer
+        .map(w=>({
+          type:"Feature",
+          properties:{label:w.label||"Walker"},
+          geometry:{type:"Point",coordinates:[w.lon,w.lat]}
+        }));
       map.getSource("walkers")?.setData({type:"FeatureCollection",features});
     }catch(e){}
   },5000);

@@ -1642,7 +1642,7 @@ let _arOpenZoneId=null;
 // every single GPS fix once a zone's already been preloaded.
 const _arPreloadedZones=new Set();
 const HUD = {
-  pos:null, prev:null, fixes:0,
+  pos:null, prev:null, fixes:0, offsite:false,
   el(id){ return document.getElementById(id); },
   log(cls,msg){ const l=this.el('log'); const t=new Date().toLocaleTimeString();
                 const d=document.createElement('div'); d.className=cls;
@@ -1655,9 +1655,24 @@ const HUD = {
     const sm=GPSFilter.push(fix);
     lastSmoothed=sm;
     TravelHeading.update(sm.speed, sm.headingTravel);
-    if(BUNDLE.tileArtEnabled&&typeof TileFog!=='undefined') TileFog.reveal(sm.lat,sm.lon,sm.acc,60);
     this.fixes++;
     const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
+    // Feed the "you are here" avatar FIRST — its site gate flips HUD.offsite
+    // (via MapView.onSiteChange) and this is what keeps re-evaluating the
+    // boundary so the tour resumes when the device comes back into range.
+    MapView.here?.update({ lon:sm.lon, lat:sm.lat,
+      headingDeg:(typeof TravelHeading!=='undefined' ? TravelHeading.heading : null), accM:sm.acc });
+    if(HUD.offsite){
+      // Off the site: no triggers, no fog reveal, no voices, no guidance —
+      // just a plain position readout. Everything resumes on the next
+      // on-site fix (GPSFilter is reset on that transition).
+      this.el('vAcc').innerHTML = fix.acc.toFixed(0)+' <small>m</small>';
+      this.el('vFix').textContent = this.fixes;
+      this.el('coord').textContent='📍 '+p.lat.toFixed(6)+', '+p.lon.toFixed(6)+'  ·  away from the tour';
+      this.pos=p;
+      return;
+    }
+    if(BUNDLE.tileArtEnabled&&typeof TileFog!=='undefined') TileFog.reveal(sm.lat,sm.lon,sm.acc,60);
     checkHazardAhead(p, TravelHeading.heading, sm.speed, fix.t);
     const active=Geofencer.update(p,this.prev,fix.t);
     this.prev=p; this.pos=p;
@@ -1823,6 +1838,28 @@ function destPoint(center, distM, bearingDeg){   // center=[lon,lat] -> [lon,lat
 }
 function LonLat(latLon){ return [latLon[1], latLon[0]]; }   // [lat,lon] -> [lon,lat]
 function fc(features){ return {type:'FeatureCollection', features}; }
+// Bounding box of everything the tour occupies, as [[minLon,minLat],[maxLon,maxLat]]
+// for HereMarker's site gate (a fix outside this box + buffer -> no marker,
+// no map-follow, position-driven work paused). All bundle coords are [lat,lon].
+function zonesContentBounds(){
+  let mnLa=Infinity,mnLo=Infinity,mxLa=-Infinity,mxLo=-Infinity,n=0;
+  const add=(la,lo)=>{ if(typeof la==='number'&&typeof lo==='number'&&isFinite(la)&&isFinite(lo)){
+    if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(lo<mnLo)mnLo=lo; if(lo>mxLo)mxLo=lo; n++; } };
+  if(Array.isArray(BUNDLE.ref)) add(BUNDLE.ref[0], BUNDLE.ref[1]);
+  (BUNDLE.zones||[]).forEach(z=>{
+    if(Array.isArray(z.center)) add(z.center[0], z.center[1]);
+    if(Array.isArray(z.path)) z.path.forEach(pt=>Array.isArray(pt)&&add(pt[0],pt[1]));
+    (z.layers||[]).forEach(l=>{
+      const g=l&&l.geometry; if(!g) return;
+      if(Array.isArray(g.path)) g.path.forEach(pt=>Array.isArray(pt)&&add(pt[0],pt[1]));
+      if(Array.isArray(g.from)) add(g.from[0],g.from[1]);
+      if(Array.isArray(g.to)) add(g.to[0],g.to[1]);
+      if(Array.isArray(g.coords)) g.coords.forEach(pt=>Array.isArray(pt)&&add(pt[0],pt[1]));
+    });
+  });
+  if(n<1 || (mnLa===0&&mxLa===0&&mnLo===0&&mxLo===0)) return null;
+  return [[mnLo,mnLa],[mxLo,mxLa]];
+}
 function circleRing(centerLonLat, radiusM, n){   // centerLonLat=[lon,lat] -> ring of [lon,lat]
   n=n||48;
   const [lon,lat]=centerLonLat, out=[];
@@ -1920,7 +1957,11 @@ const MapView = {
     this.map.on('load', ()=>{
       // Live "you are here" directional avatar (dot + heading wedge + GPS
       // accuracy ring, smart-follow) — shared with Ridge Quest + Field Recorder.
-      this.here = HereMarker.attach(this.map, { follow:true });
+      // Site gate: a fix >10 km outside the tour's bbox hides the avatar,
+      // stops the map chasing it, and pauses position-driven work (onSite).
+      this.here = HereMarker.attach(this.map, { follow:true,
+        bounds: zonesContentBounds(), bufferM: 10000,
+        onSite: (on)=>MapView.onSiteChange(on) });
 
       // Every stop's marker, simplified to just two elements: a grey
       // "speaker cone" gradient disc (full-volume radius) and a blue ring
@@ -2052,6 +2093,18 @@ const MapView = {
     else this.map.once('load', go);
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
+  // Fired by HereMarker when the device crosses the tour bbox + buffer.
+  onSiteChange(on, isInitial){
+    HUD.offsite = !on;
+    if(on){
+      // On a genuine off-site -> on-site transition, re-seed the EKF so the
+      // first on-site fix isn't smoothed from a far-away seed (rubber-band).
+      if(!isInitial && typeof GPSFilter!=='undefined') GPSFilter.reset();
+    } else if(this.map){
+      // Snap the map back to the tour if it had already followed the device away.
+      this.map.jumpTo({center:LonLat(BUNDLE.ref), zoom:16});
+    }
+  },
   onFix(p, nowMs, pick){
     // AR view (3D-mode plan, Phase 2) is open — stop MapLibre's per-tick
     // GeoJSON setData() work, not just its hidden canvas, so two live WebGL
@@ -2059,9 +2112,8 @@ const MapView = {
     // work on mobile Safari at once.
     if(typeof ARView!=='undefined' && ARView.isOpen()) return;
     if(!this.map || !this.map.isStyleLoaded()) return;
-    this.here?.update({ lon:p.lon, lat:p.lat,
-      headingDeg:(typeof TravelHeading!=='undefined' ? TravelHeading.heading : null),
-      accM:p.acc });
+    // this.here.update() is now driven upstream in HUD.onFix (before the
+    // HUD.offsite gate) so the site boundary keeps re-evaluating.
 
     // Every stop's marker shows regardless of distance from the visitor —
     // no stopVisibilityRadiusM proximity gate.
@@ -2580,6 +2632,7 @@ EngineKokoro.tryLoad();
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
     if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
     if(!HUD.pos) MapView.recenter(b.ref);
+    MapView.here?.setBounds(zonesContentBounds());
     MapView.updateTerrain();
     MapView.updateWinter();
     if(b.spatialTuning){ const t=SpatialVoice.tuning,st=b.spatialTuning;
@@ -2603,6 +2656,7 @@ EngineKokoro.tryLoad();
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
       if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
       if(!HUD.pos) MapView.recenter(b.ref);
+      MapView.here?.setBounds(zonesContentBounds());
     MapView.updateTerrain();
     MapView.updateWinter();
       if(document.getElementById('simZones')) buildSimZones();
@@ -2645,6 +2699,7 @@ function hotPatchZones(newZones){
   for(const z of added) BUNDLE.zones.push(z);
   // Remove expired live zones (have expiresAt and no longer in server list)
   BUNDLE.zones=BUNDLE.zones.filter(z=>!z.expiresAt||newIds.has(z.id));
+  MapView.here?.setBounds(zonesContentBounds());   // live stops can widen the site box
   if(added.length){
     HUD.log('ev-sys',added.length+' live stop'+(added.length>1?'s':'')+' from guide');
     try{ SpatialVoice.ensure(); }catch(e){}

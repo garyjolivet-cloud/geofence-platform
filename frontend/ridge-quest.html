@@ -658,6 +658,7 @@ const QGeo = {
 
 const Quest = {
   corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,lengthM,ref}]
+  _offsite: false,     // set by the "My map" HereMarker site gate — true => device is >10 km outside the run network; _onFix pauses ticks/fog/sharing
   ref: null,            // [lat,lon] project reference point (R2 map center) — set by loadCorridors() regardless of whether any corridor exists
   allowedActivities: null, // R12: this project's activity-relevance filter — null=all, else array of activity strings — set by loadCorridors()
   threeDEnabled: false, // workspace 3D-terrain flag (bundle.threeDEnabled, injected server-side) — gates 3D terrain on "My map"
@@ -761,11 +762,17 @@ const Quest = {
     const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy||30, t:pos.timestamp||Date.now(),
                   alt: c.altitude!=null ? c.altitude : null, altAcc: c.altitudeAccuracy!=null ? c.altitudeAccuracy : null };
     const p = GPSFilter.push(fix);
+    // Feed the avatar FIRST — its site gate flips Quest._offsite and keeps
+    // re-evaluating the boundary so tracking resumes on return.
+    if(this.onPosition) this.onPosition(p);   // live avatar on an open map
+    if(Quest._offsite){
+      if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t, offsite:true});
+      return;   // off the run network: no corridor ticks, no fog reveal, no sharing
+    }
     this.corridors.forEach(corridor=>this._tick(corridor, p, this.selectedActivity));
     this._revealFog(p, fix.acc);
     this._tickViewpoints(p);
     if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t});
-    if(this.onPosition) this.onPosition(p);   // live avatar on an open map
     if(this.onShare) this.onShare(p);         // share own position with friends (throttled inside)
   },
 
@@ -1542,6 +1549,24 @@ function questCompletionPct(previewCells, fogCells){
 // _revealFog() has no proximity check — is never cropped out even though it
 // isn't part of that union on its own). Falls back to null (caller keeps
 // the old fixed ref/zoom view) only when the project has neither.
+// bbox of just the authored project content ([[minLon,minLat],[maxLon,maxLat]]) —
+// corridor paths + viewpoints + ref, NO revealed fog. Used for HereMarker's
+// site gate (a fix / friend outside this + buffer isn't shown) and as the
+// base for questMapBounds().
+function questContentBounds(){
+  const ll=[];
+  Quest.corridors.forEach(c=>(c.path||[]).forEach(([lat,lon])=>ll.push([lon,lat])));
+  (Quest.viewpoints||[]).forEach(v=>{ if(Array.isArray(v.center)) ll.push([v.center[1], v.center[0]]); });
+  if(Array.isArray(Quest.ref)) ll.push([Quest.ref[1], Quest.ref[0]]);
+  if(!ll.length) return null;
+  let minLon=Infinity,maxLon=-Infinity,minLat=Infinity,maxLat=-Infinity;
+  ll.forEach(([lon,lat])=>{
+    if(lon<minLon)minLon=lon; if(lon>maxLon)maxLon=lon;
+    if(lat<minLat)minLat=lat; if(lat>maxLat)maxLat=lat;
+  });
+  if(minLat===0&&maxLat===0&&minLon===0&&maxLon===0) return null;
+  return [[minLon,minLat],[maxLon,maxLat]];
+}
 function questMapBounds(){
   const lonlats=[];
   Quest.corridors.forEach(c=>(c.path||[]).forEach(([lat,lon])=>lonlats.push([lon,lat])));
@@ -1784,7 +1809,13 @@ function renderFogMap(){
     // walks off screen. Driven from _onFix -> Quest.onPosition (real fixes
     // and ?sim=1 "Simulate walk" both). Torn down by the #fogBack handler
     // nulling Quest.onPosition, same lifecycle as onFogUpdated.
-    const here = HereMarker.attach(map, { follow:'edge' });
+    // Site gate: a fix >10 km outside the run network hides the avatar,
+    // stops the map chasing it, and pauses fog reveal / corridor ticks /
+    // position sharing (Quest._offsite, set in the onSite callback).
+    const QBOUNDS = questContentBounds();
+    const here = HereMarker.attach(map, { follow:'edge',
+      bounds: QBOUNDS, bufferM: 10000,
+      onSite: (on, initial)=>{ Quest._offsite = !on; if(on && !initial) GPSFilter.reset(); } });
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat, headingDeg:p.headingTravel, accM:p.acc });
 
     // --- Live friends ---------------------------------------------------
@@ -1800,7 +1831,10 @@ function renderFogMap(){
       const colorFor = (id)=>{ let h=0; for(let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0; return FRIEND_COLORS[h%FRIEND_COLORS.length]; };
       const STALE_MS = 45000;
       function drawFriends(list){
-        const fresh = (list||[]).filter(f=>trackIds.includes(f.playerId));
+        // A friend is only drawn when THEY are inside the run network + 10 km
+        // (same box as the self site gate).
+        const fresh = (list||[]).filter(f=>trackIds.includes(f.playerId)
+          && HereMarker.withinBounds(QBOUNDS, f.lat, f.lon));
         const now = Date.now();
         const src = map.getSource("friends");
         if(src) src.setData({ type:"FeatureCollection", features: fresh.map(f=>({
