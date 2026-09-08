@@ -7,10 +7,10 @@
 <script src="role-gate.js"></script>
 <script src="/kalman-filter.js"></script>
 <script src="/ble-gps.js"></script>
-<script src="code-objects.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script src="/here-marker.js"></script>
+<script src="tile-fog.js"></script>
 <style>
 :root{--night:#0a1018;--slate:#141d2b;--slate2:#1b2738;--rim:#26344a;
       --coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;
@@ -89,20 +89,15 @@ html,body{height:100%;background:var(--night);color:var(--snow);
 #mapWrap{flex:1;position:relative;overflow:hidden;min-height:0}
 #map{position:absolute;inset:0}
 
-/* stop panel */
-#stopPanel{flex-shrink:0;max-height:130px;overflow-y:auto;background:var(--slate);
-  border-top:1px solid var(--rim);display:none;flex-direction:column}
-#stopPanel.show{display:flex}
-.sp-row{display:flex;align-items:center;gap:8px;padding:7px 12px;
-  border-bottom:1px solid rgba(255,255,255,.04);flex-shrink:0}
-.sp-row:last-child{border-bottom:none}
-.sp-dot{font-size:9px;flex-shrink:0}
-.sp-name{flex:1;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sp-countdown{font-size:12px;color:var(--fog);flex-shrink:0;min-width:38px;text-align:right}
-.sp-play{background:none;border:1px solid var(--rim);border-radius:6px;
-  color:var(--ice);font-size:11px;padding:3px 9px;cursor:pointer;flex-shrink:0;
-  font-family:"Barlow Condensed"}
-.sp-play:hover{border-color:var(--ice)}
+/* Corridor run name + ◆/◆◆ badge (HTML markers — the raster basemap has no
+   glyphs). Kept in sync with geofence-engine.html / ridge-quest.html. */
+.runLabel{font:700 clamp(15px,4vw,24px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
+  letter-spacing:.02em;white-space:nowrap;pointer-events:none;
+  text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 4px #0c140f}
+.runDiamond{display:flex;gap:3px;pointer-events:none}
+.runDiamond i{width:13px;height:13px;background:#0b0e13;border:2px solid #eef3f0;
+  transform:rotate(45deg);display:block}
+.runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
 
 /* footer */
 #ftr{flex-shrink:0;background:var(--slate);border-top:1px solid var(--rim);
@@ -216,13 +211,11 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     </div>
   </div>
   <div id="mapWrap"><div id="map"></div></div>
-  <div id="stopPanel"></div>
   <div id="ftr">
     <div id="ftrBtns">
       <button class="fbt" id="btnMark" disabled>📍 Mark Stop</button>
       <button class="fbt" id="btnRec"  disabled>⏺ Record</button>
       <button class="fbt" id="btnLive" disabled>🎙 Start Stop</button>
-      <button class="fbt" id="btnCodeObj">🧩 Code</button>
     </div>
     <div id="pathBtns" style="display:none;align-items:center;gap:8px">
       <button class="fbt" id="btnPathToggle" onclick="togglePathRecording()">➰ Start Corridor</button>
@@ -266,12 +259,6 @@ const asClient = _qs.get("asClient") || null;
 
 function orgQueryParam(){
   return (_me && _me.role === 'admin' && asClient) ? 'org=' + encodeURIComponent(asClient) : '';
-}
-// Same org resolution as orgQueryParam(), for CodeObjects' entitlement-gated
-// list — admin previewing "as client" sees that client's library, everyone
-// else (including guides) sees their own org's.
-function currentOrgId(){
-  return (_me && _me.role === 'admin' && asClient) ? asClient : (_me && _me.orgId) || null;
 }
 function applyPreviewBanner(){
   if (!_me || _me.role !== 'admin' || !asClient) return;
@@ -396,11 +383,11 @@ let recordBuffer     = [];    // {lat,lon,acc,heading,ts} points not yet flushed
 let recordStartedAt  = null;
 let recordLastFlushAt = 0;
 let liveStops     = [];     // successfully published live stops (in-memory for this session)
-let currentLiveStop = null; // the stop object currently mid-recording in Live mode, if any — lets
-                             // the guide attach a code object before "Stop Recording" finalizes it
 let liveNum       = 0;      // auto-increment counter for live stop names
 let publishedZones = [];    // the project's real published tour stops (fence-editor zones) — reference layer, not editable here
 let projSpatialRangeM = null, projSpatialClearM = null;  // project-wide audio-fade defaults, for the blue-ring/grey-cone stop marker
+let _corridorMarkers = [];  // HTML .runLabel / .runDiamond markers for published corridor runs — rebuilt by setCorridorRuns()
+let _corridorRunsKey = null; // dirty-check so setCorridorRuns() can be called cheaply from the per-fix refresh path
 let signalOk      = true;
 let db, map;
 // 3D Mode terrain (3D-mode plan, Step 4) — set from the published bundle's
@@ -852,6 +839,24 @@ function initMap(){
     map.addLayer({id:"walker-lbl",type:"symbol",source:"walkers",
       layout:{"text-field":["get","label"],"text-size":11,"text-anchor":"bottom","text-offset":[0,-1.2]},
       paint:{"text-color":"#ffc24d","text-halo-color":"#0a1018","text-halo-width":1.5}});
+
+    // Published corridor / walking-path runs — grade-coloured width band +
+    // piste-glow, the one shared renderer every other surface uses (see
+    // tile-fog.js / geofence-engine.html setCorridorRuns). This map never
+    // drew corridor stops before; a corridor was invisible here.
+    map.addSource("corridorRuns",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    TileFog.addCorridorLayers(map,{source:"corridorRuns",id:"corridorRuns"});
+    // Legacy top-level zo.path moving-audio corridors — a plain dashed line,
+    // same paint as geofence-engine.html's own 'walkpath-line'.
+    map.addSource("walkpath",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addLayer({id:"walkpath-line",type:"line",source:"walkpath",
+      paint:{"line-color":"#8fb6d4","line-width":3,"line-opacity":0.55,"line-dasharray":[1,1.4]}});
+    // Live trace of a corridor being recorded right now (Corridor mode).
+    map.addSource("pathTrace",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addLayer({id:"pathTrace-line",type:"line",source:"pathTrace",
+      layout:{"line-join":"round"},
+      paint:{"line-color":"#ff6a3d","line-width":3,"line-dasharray":[2,2]}});
+
     // Live "you are here" directional avatar (replaces the old flat gps-dot).
     // Site gate (wider buffer — you may record just outside existing zones):
     // a fix well outside the project box hides the avatar and stops the map
@@ -860,6 +865,7 @@ function initMap(){
     here = HereMarker.attach(map, { follow:true, bounds: frContentBounds(), bufferM: 15000 });
     refreshMap();
     refreshPublishedZones();
+    setCorridorRuns(publishedZones);
     // updateTerrain() at the top of this handler ran before vext-vol/
     // vext-ring existed (they're registered further down in this same
     // handler) — re-run now that they do, so a project whose bundle
@@ -873,9 +879,71 @@ function initMap(){
     // (base map tiles still fetching), so the very first attempt above can
     // silently no-op. A couple of delayed retries catch that without waiting
     // on a location fix that might not come for a while.
-    setTimeout(refreshPublishedZones, 2000);
-    setTimeout(refreshPublishedZones, 6000);
+    setTimeout(()=>{ refreshPublishedZones(); setCorridorRuns(publishedZones); }, 2000);
+    setTimeout(()=>{ refreshPublishedZones(); setCorridorRuns(publishedZones); }, 6000);
   });
+}
+
+/* ── published corridor / walking-path runs (shared piste-glow renderer) ──
+   Mirrors geofence-engine.html's setCorridorRuns() — same target-layer
+   detection, same TileFog stack, same HTML .runLabel / .runDiamond markers.
+   Guarded by _corridorRunsKey so it's safe to call from the per-fix
+   refreshPublishedZones() path without rebuilding markers every GPS tick. */
+const _CORR_DIFF_TIER = {black:"black","double-black":"dblack"};
+function _corridorTargetGeom(z){
+  if(Array.isArray(z.path) && z.path.length>=2) return null; // moving-audio path, drawn by walkpath-line
+  const tgt=(z.layers||[]).find(l=>l.geometry && l.geometry.type==="corridor");
+  const g=tgt && tgt.geometry;
+  return (g && Array.isArray(g.path) && g.path.length>=2) ? g : null;
+}
+function setCorridorRuns(zones){
+  if(!map || !map.getSource("corridorRuns") || !Array.isArray(zones)) return;
+  const runs=[];
+  zones.forEach(z=>{ const g=_corridorTargetGeom(z); if(g) runs.push({z,g}); });
+  const key=JSON.stringify(runs.map(({z,g})=>[z.id,z.name,
+    g.difficulty??z.difficulty,g.activityType??z.activityType,g.runType??z.runType,
+    g.widthM,g.path.length,g.path[0],g.path[g.path.length-1]]));
+  if(key===_corridorRunsKey) return;
+  _corridorRunsKey=key;
+
+  _corridorMarkers.forEach(m=>{ try{ m.remove(); }catch(e){} });
+  _corridorMarkers=[];
+  const feats=runs.map(({z,g})=>{
+    const cc=g.path.map(p=>[p[1],p[0]]);                        // [lat,lon] -> [lon,lat]
+    const diff=(g.difficulty!=null?g.difficulty:z.difficulty)||"";
+    const st=TileFog.corridorStyle({difficulty:diff,
+      activityType:g.activityType!=null?g.activityType:z.activityType,
+      runType:g.runType!=null?g.runType:z.runType});
+    const mid=cc[Math.floor(cc.length/2)];
+    const lbl=document.createElement("div"); lbl.className="runLabel"; lbl.textContent=z.name||"Run";
+    _corridorMarkers.push(new maplibregl.Marker({element:lbl,anchor:"center"}).setLngLat(mid).addTo(map));
+    const tier=_CORR_DIFF_TIER[diff]||"";
+    if(tier){
+      const bd=document.createElement("div"); bd.className="runDiamond"+(tier==="dblack"?" dbl":"");
+      bd.innerHTML=tier==="dblack"?"<i></i><i></i>":"<i></i>";
+      _corridorMarkers.push(new maplibregl.Marker({element:bd,anchor:"bottom",offset:[0,-4]}).setLngLat(cc[0]).addTo(map));
+    }
+    return {type:"Feature",properties:{corridor:true,
+      widthM:(g.widthM>0?g.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((cc[0]||[0,0])[1]),
+      col:st.col,halo:st.halo,tier:st.tier},
+      geometry:{type:"LineString",coordinates:cc}};
+  });
+  map.getSource("corridorRuns").setData({type:"FeatureCollection",features:feats});
+
+  const wpFeats=zones.filter(z=>Array.isArray(z.path) && z.path.length>=2).map(z=>({
+    type:"Feature",properties:{id:z.id},
+    geometry:{type:"LineString",coordinates:z.path.map(p=>[p[1],p[0]])}
+  }));
+  map.getSource("walkpath")?.setData({type:"FeatureCollection",features:wpFeats});
+}
+
+/* Live trace of the corridor currently being recorded (Corridor mode). */
+function refreshPathTrace(){
+  if(!map || !map.getSource("pathTrace")) return;
+  const feats = pathPoints.length>=2
+    ? [{type:"Feature",properties:{},geometry:{type:"LineString",coordinates:pathPoints.map(p=>[p.lon,p.lat])}}]
+    : [];
+  map.getSource("pathTrace").setData({type:"FeatureCollection",features:feats});
 }
 
 // Field recorder is often used on a weak trail/resort signal, so a single-shot
@@ -902,7 +970,7 @@ async function loadPublishedBundle(){
     projSpatialClearM = b.spatialClearM!=null ? b.spatialClearM : null;
     threeDEnabled = !!b.threeDEnabled;
     updateTerrain();
-    refreshPublishedZones(); renderStopList();
+    refreshPublishedZones(); setCorridorRuns(publishedZones);
     here?.setBounds(frContentBounds());   // now that publishedZones is populated
     if(warn) warn.style.display="none";
   }catch(e){
@@ -942,8 +1010,7 @@ function refreshPublishedZones(){
     audioFeats.push(...cachedStopAudioFeatures(z.id,z.center[0],z.center[1],farM,clearM));
     const tgt=(z.layers||[]).find(l=>l.kind==="target");
     if(!tgt) return;
-    const coSuffix = (z.codeObjects && z.codeObjects.length) ? " 🧩"+(z.codeObjects.length>1?"×"+z.codeObjects.length:"") : "";
-    const labelName = z.name+coSuffix;
+    const labelName = z.name;
     if(tgt.radiusM!=null){
       feats.push({type:"Feature",properties:{name:labelName},
         geometry:{type:"Polygon",coordinates:[circleRing(z.center[0],z.center[1],tgt.radiusM)]}});
@@ -982,25 +1049,21 @@ function refreshPublishedZones(){
   });
   map.getSource("published-zones")?.setData({type:"FeatureCollection",features:feats});
   map.getSource("stop-audio")?.setData({type:"FeatureCollection",features:audioFeats});
-  renderStopList();
+  setCorridorRuns(publishedZones);
 }
 
 function refreshMap(){
   if(!map||!map.isStyleLoaded()) return;
   const now = Date.now();
-  // Reuses the existing name-label text layer for the 🧩 marker (no new
-  // MapLibre layer/sprite needed) — same badge convention as Fence Editor's
-  // stop list, just rendered into the map label instead of a separate chip.
-  const coSuffix = s => (s.codeObjects && s.codeObjects.length) ? " 🧩"+(s.codeObjects.length>1?"×"+s.codeObjects.length:"") : "";
   const allFeatures = [
     ...stops.map(s=>({
       type:"Feature",
-      properties:{name:s.name+coSuffix(s), hasClip:!!s.clipId, isLive:false},
+      properties:{name:s.name, hasClip:!!s.clipId, isLive:false},
       geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||12)]}
     })),
     ...liveStops.filter(s=>s.expiresAt>now).map(s=>({
       type:"Feature",
-      properties:{name:s.name+coSuffix(s), hasClip:true, isLive:true},
+      properties:{name:s.name, hasClip:true, isLive:true},
       geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||25)]}
     }))
   ];
@@ -1032,87 +1095,15 @@ function startPresencePoll(pid){
   },5000);
 }
 
-/* ── stop panel ─────────────────────────────────────── */
-function renderStopList(){
-  const panel = document.getElementById("stopPanel");
-  const now = Date.now();
-
-  // Live stops, then every locally recorded stop, then already-published stops
-  // this session hasn't touched — the panel itself already scrolls
-  // (#stopPanel, max-height:130px), so there's no need to window this down.
-  // Published stops are shown (not just drawn on the map) and playable so
-  // they read as real, active content, not just a faint backdrop.
-  const activeLive = liveStops.filter(s => s.expiresAt > now);
-  const localIds = new Set(stops.map(s=>s.id));
-  const published = publishedZones
-    .filter(z=>z.center && !localIds.has(z.id))
-    .map(z=>({id:z.id, name:z.name, audioUrl:z.audioUrl, _published:true}));
-  const allItems = [
-    ...activeLive.map(s=>({...s, _live:true})),
-    ...stops.map(s=>({...s, _live:false})),
-    ...published
-  ];
-
-  if(!allItems.length){ panel.classList.remove("show"); return; }
-  panel.classList.add("show");
-
-  panel.innerHTML = allItems.map(s => {
-    const audioUrl = s._live || s._published ? s.audioUrl : clips.find(c=>c.id===s.clipId&&c.audioUrl)?.audioUrl;
-    const playBtn  = audioUrl
-      ? `<button class="sp-play" onclick="playStopAudio('${escJs(audioUrl)}')">▶</button>`
-      : "";
-    const coBadge = (s.codeObjects && s.codeObjects.length)
-      ? `<span title="${s.codeObjects.length} code object${s.codeObjects.length===1?"":"s"} attached">🧩${s.codeObjects.length>1?"×"+s.codeObjects.length:""}</span>`
-      : "";
-    // Only locally-held stops (not yet finalized live, not already published)
-    // are editable here — those go through openCodeObjectPickerForId().
-    const coBtn = (!s._live && !s._published)
-      ? `<button class="sp-play" title="Code objects" onclick="openCodeObjectPickerForId('${escJs(s.id)}')">🧩</button>`
-      : "";
-    if(s._live){
-      const rem  = Math.max(0, s.expiresAt - now);
-      const mins = Math.floor(rem/60000);
-      const secs = String(Math.floor((rem%60000)/1000)).padStart(2,"0");
-      return `<div class="sp-row">
-        <span class="sp-dot" style="color:var(--hazard)">⬤</span>
-        <span class="sp-name">${esc(s.name)} ${coBadge}</span>
-        <span class="sp-countdown" data-expires="${s.expiresAt}">${mins}:${secs}</span>
-        ${playBtn}
-      </div>`;
-    } else if(s._published){
-      return `<div class="sp-row">
-        <span class="sp-dot" style="color:var(--ice)" title="Already published">◈</span>
-        <span class="sp-name">${esc(s.name)} ${coBadge}</span>
-        <span class="sp-countdown"></span>
-        ${playBtn}
-      </div>`;
-    } else {
-      return `<div class="sp-row">
-        <span class="sp-dot" style="color:var(--go)">●</span>
-        <span class="sp-name">${esc(s.name)} ${coBadge}</span>
-        <span class="sp-countdown"></span>
-        ${coBtn}${playBtn}
-      </div>`;
-    }
-  }).join("");
-}
-
-// Tick countdowns every second, remove expired
+// Prune expired live stops from the in-memory array once a second. (This used
+// to be a side effect of ticking the removed stop-list countdown DOM nodes.)
+// refreshMap()/buildProximityCandidates() already range-check expiresAt, so
+// this only keeps the array + frContentBounds() from carrying dead entries.
 setInterval(()=>{
   const now = Date.now();
-  let changed = false;
-  document.querySelectorAll(".sp-countdown[data-expires]").forEach(el=>{
-    const rem = Math.max(0, parseInt(el.dataset.expires) - now);
-    if(rem === 0){
-      liveStops = liveStops.filter(s => s.expiresAt > now - 1000);
-      changed = true;
-    } else {
-      const mins = Math.floor(rem/60000);
-      const secs = String(Math.floor((rem%60000)/1000)).padStart(2,"0");
-      el.textContent = `${mins}:${secs}`;
-    }
-  });
-  if(changed){ renderStopList(); refreshMap(); }
+  const before = liveStops.length;
+  liveStops = liveStops.filter(s => s.expiresAt > now - 1000);
+  if(liveStops.length !== before) refreshMap();
 }, 1000);
 
 // iOS blocks .play() calls that don't originate from a direct user tap.
@@ -1208,12 +1199,14 @@ function togglePathRecording(){
     document.getElementById("btnPathToggle").textContent = "➰ Start Corridor";
     document.getElementById("btnPathSave").style.display = pathPoints.length>=2 ? "" : "none";
     setStatus(pathPoints.length+" point(s) recorded — review and save, or start again");
+    refreshPathTrace();
   } else {
     pathPoints = [];
     pathRecording = true;
     document.getElementById("btnPathToggle").textContent = "⏹ Stop Corridor";
     document.getElementById("btnPathSave").style.display = "none";
     updatePathStatsUI();
+    refreshPathTrace();
     setStatus("Recording corridor…");
   }
 }
@@ -1302,10 +1295,68 @@ async function savePathRecording(){
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.error||r.statusText);
     setStatus('Saved corridor "'+name+'" ('+filtered.length+' pts, '+(distanceM/1000).toFixed(2)+' km'+((gainM||lossM)?', ▲'+gainM+'m ▼'+lossM+'m':'')+')');
+    const savedPath=smoothed.map(p=>[p.lat,p.lon]);   // [lat,lon] for the bundle zone
     pathPoints=[];
     document.getElementById("btnPathSave").style.display="none";
     updatePathStatsUI();
+    refreshPathTrace();
+    if(j.id && confirm('Add "'+name+'" to this project now so it publishes?\n\n(Difficulty / run type can be set later in the GPX or Fence Editor.)')){
+      await addCorridorToProject(j, name, widthM, savedPath);
+    }
   }catch(e){ alert("Save failed: "+e.message); }
+}
+
+// Merge a freshly-recorded corridor into the project's published bundle as a
+// linked-corridor stop (zone.corridorId set) — matches fence-editor.html's
+// importCorridorFromLibrary() shape so reconcileLinkedCorridors() picks it up
+// as geometry-read-only on the next Fence Editor open.
+async function addCorridorToProject(row, name, widthM, path){
+  const token=getToken();
+  if(!token){ setStatus("No API token — can't add to project"); return; }
+  const geom={type:"corridor",path,widthM,difficulty:null,runType:"run",activityType:"hike"};
+  const zone={
+    id:uid(), name,
+    corridorId:row.id, corridorRev:row.updatedAt||null,
+    difficulty:null, runType:"run", activityType:"hike",
+    layers:[{kind:"target",geometry:geom}],
+    triggers:[{event:"enter",action:"play"},{event:"exit",action:"fadeout"}]
+  };
+  try{
+    await mergeZonesIntoBundle(projId, session?.name||projId, token, [zone]);
+    publishedZones=[...publishedZones.filter(z=>z.id!==zone.id), zone];
+    refreshPublishedZones(); setCorridorRuns(publishedZones);
+    here?.setBounds(frContentBounds());
+    setStatus('✓ "'+name+'" added to the project');
+    touchSession();
+  }catch(e){ alert("Couldn't add to project: "+e.message+"\n\nThe corridor is still saved in the library."); }
+}
+
+// Pull the live bundle, keep every zone this set doesn't replace (by id), append
+// the new ones, PUT it back. Same merge-not-replace contract doPublish() needs —
+// this project may hold Fence-Editor content Field Recorder knows nothing about.
+async function mergeZonesIntoBundle(pid, pname, token, newZones){
+  let base={};
+  try{
+    const gb=await fetch(`/api/projects/${encodeURIComponent(pid)}/bundle`,{cache:"no-store"});
+    if(gb.ok) base=await gb.json();
+  }catch(e){ /* first publish */ }
+  const existing=Array.isArray(base.zones)?base.zones:[];
+  const newIds=new Set(newZones.map(z=>z.id));
+  const zones=[...existing.filter(z=>!newIds.has(z.id)), ...newZones];
+  const bp=await fetch(`/api/projects/${encodeURIComponent(pid)}/bundle`,{
+    method:"PUT",
+    headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},
+    body:JSON.stringify({...base, name:pname, zones, version:1})
+  });
+  if(!bp.ok) throw new Error("bundle PUT "+bp.status+" "+(await bp.text().catch(()=>"")).slice(0,80));
+  try{
+    const bpj=await bp.json();
+    if(bpj.version!=null && session && session.projId===pid){
+      session.lastSeenBundleVersion=bpj.version;
+      await dbPut("sessions", session);
+    }
+  }catch(e){}
+  return zones;
 }
 
 /* ── RECORD: DVR-style GPS session capture (patrol sweeps, freeride runs,
@@ -1590,7 +1641,6 @@ function updateModeUI(){
   document.getElementById("btnMark").style.display = isLive ? "none" : "flex";
   document.getElementById("btnRec").style.display  = isLive ? "none" : "flex";
   document.getElementById("btnLive").style.display = isLive ? "flex" : "none";
-  renderStopList();
 }
 
 /* ── permissions ────────────────────────────────────── */
@@ -1633,7 +1683,7 @@ async function initPermissions(){
       // (item D, 3D-mode plan) — the elevation profile below still simply
       // treats a path with no altitude data at all as "no elevation
       // available" rather than guessing.
-      if(pathRecording){ pathPoints.push({lat,lon,acc,alt:resolveAlt((altitude!=null&&!isNaN(altitude))?altitude:null),t:pos.timestamp}); updatePathStatsUI(); }
+      if(pathRecording){ pathPoints.push({lat,lon,acc,alt:resolveAlt((altitude!=null&&!isNaN(altitude))?altitude:null),t:pos.timestamp}); updatePathStatsUI(); refreshPathTrace(); }
       // RECORD capture runs off recordSessionId, independent of which footer
       // tab is currently visible (recordMode) — starting a session and then
       // switching to Persistent/Live/Path to do other work must not stop it.
@@ -1706,7 +1756,6 @@ async function saveClip(){
     lastStop.clipId = clip.id;
     await dbPut("stops", lastStop);
     refreshMap();
-    renderStopList();
     setStatus("✓ "+lastStop.name+" — audio saved");
   } else {
     setStatus("✓ Clip saved — tap Mark Stop to assign a location");
@@ -1755,7 +1804,6 @@ async function startLiveStop(){
   mediaRec.onstop = async () => { bCtx.close().catch(()=>{}); await finishLiveStop(stop); };
   mediaRec.start(1000);
 
-  currentLiveStop = stop;
   liveRecState = "recording";
   updateLiveBtn();
   setStatus("⏺ Recording "+stop.name+"…");
@@ -1799,7 +1847,6 @@ async function finishLiveStop(stop){
     if(!zr.ok) throw new Error("zone publish "+zr.status);
 
     liveStops.push(stop);
-    renderStopList();
     refreshMap();
     const _dm=Math.floor(liveTtlMs/60000), _ds=String(Math.floor((liveTtlMs%60000)/1000)).padStart(2,'0');
     setStatus("✓ "+stop.name+" LIVE — "+_dm+":"+_ds);
@@ -1810,7 +1857,6 @@ async function finishLiveStop(stop){
     setStatus("Queued — will upload when signal returns");
   } finally {
     liveRecState = "idle";
-    if (currentLiveStop === stop) currentLiveStop = null;
     updateLiveBtn();
   }
 }
@@ -1826,8 +1872,7 @@ function buildLiveZone(stop){
     layers:     [{kind:"general",radiusM:genR},{kind:"target",radiusM:stop.radiusM||25}],
     triggers:   [{event:"enter",action:"play"},{event:"exit",action:"fadeout"}],
     audioUrl:   stop.audioUrl,
-    expiresAt:  stop.expiresAt,
-    ...(stop.codeObjects && stop.codeObjects.length ? {codeObjects:stop.codeObjects} : {})
+    expiresAt:  stop.expiresAt
   };
 }
 
@@ -1894,7 +1939,6 @@ async function retryQueue(){
 
       await dbDelete("live_queue",entry.id);
       liveStops.push(entry.stop);
-      renderStopList();
       refreshMap();
       updateQueueBadge();
     }catch(e){ /* still offline */ }
@@ -2026,7 +2070,6 @@ document.getElementById("btnMark").onclick = () => {
       stops.push(stop); lastStop = stop;
       await dbPut("stops", stop);
       refreshMap();
-      renderStopList();
       map.flyTo({center:[stop.lon,stop.lat],zoom:17});
       setStatus("📍 "+name+(stop.bearingDeg!=null?" · "+stop.bearingDeg+"°":"")+" — tap Record to capture audio");
       document.getElementById("btnPub").disabled = false;
@@ -2110,10 +2153,9 @@ async function doPublish(pid, pname, token){
       triggers:[{event:"enter",action:"play"},{event:"exit",action:"fadeout"}],
       ...(cl?{audioUrl:cl.audioUrl}:{}),
       // Re-recording a stop here rebuilds it from this minimal field-recorder
-      // model, which knows nothing about pipeline/codeObjects — without this,
-      // republishing silently wipes out anything attached from Fence Editor.
-      ...(s.codeObjects && s.codeObjects.length ? {codeObjects:s.codeObjects}
-          : existing && existing.codeObjects ? {codeObjects:existing.codeObjects} : {}),
+      // model, which knows nothing about pipeline/codeObjects — carry over
+      // whatever the Fence Editor attached so republishing doesn't wipe it.
+      ...(existing && existing.codeObjects ? {codeObjects:existing.codeObjects} : {}),
       ...(existing && existing.pipeline ? {pipeline:existing.pipeline} : {})
     };
   });
@@ -2139,7 +2181,7 @@ async function doPublish(pid, pname, token){
     }
   }catch(e){}
   setProg("Done! "+myStops.length+" stops live",1);
-  setTimeout(()=>{ closeSheet(); setStatus("✓ Published — "+myStops.length+" stops live"); renderStopList(); }, 800);
+  setTimeout(()=>{ closeSheet(); setStatus("✓ Published — "+myStops.length+" stops live"); }, 800);
 }
 
 function setProg(msg,frac){
@@ -2163,42 +2205,6 @@ function openSheet(title, html, onConfirm, confirmLabel="✓ Save", keepOpen=fal
 function closeSheet(){ document.getElementById("sheet").classList.remove("open"); }
 document.getElementById("sheet").onclick = e => { if(e.target===document.getElementById("sheet")) closeSheet(); };
 
-/* ── code objects: tap-to-attach (drag is awkward one-handed in the field,
-   so this reuses the existing bottom sheet instead of code-objects.js's
-   floating palette — same CodeObjects.attach/detach/fetchList underneath,
-   just a touch-first list instead of drag cards) ──────────────────────── */
-async function openCodeObjectPicker(stopLike){
-  if(!stopLike){ setStatus("Mark or start a stop first"); return; }
-  const org = currentOrgId();
-  if(!org){ setStatus("No customer resolved — can't load code objects"); return; }
-  const list = await CodeObjects.fetchList(org, getToken);
-  if(!list.length){
-    openSheet("🧩 Code Objects", '<div class="empty-hint">No code objects available for this client yet.</div>', async()=>{}, "Close");
-    return;
-  }
-  const html = list.map(o => {
-    const checked = (stopLike.codeObjects||[]).some(co=>co.objectId===o.id);
-    return `<label style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #1a2433">
-      <input type="checkbox" data-oid="${esc(o.id)}" ${checked?"checked":""} style="width:20px;height:20px">
-      <span>${esc(o.icon)} ${esc(o.name)}</span>
-    </label>`;
-  }).join("");
-  openSheet("🧩 "+esc(stopLike.name||"Stop"), html, async () => {
-    document.querySelectorAll("#sheetContent input[type=checkbox]").forEach(cb => {
-      if(cb.checked) CodeObjects.attach(stopLike, cb.dataset.oid, CodeObjects.latestVersion(cb.dataset.oid), {});
-      else CodeObjects.detach(stopLike, cb.dataset.oid);
-    });
-    if(stops.includes(stopLike)) await dbPut("stops", stopLike);
-    renderStopList();
-  }, "✓ Save");
-}
-document.getElementById("btnCodeObj").onclick = () => {
-  openCodeObjectPicker((liveMode && currentLiveStop) ? currentLiveStop : lastStop);
-};
-function openCodeObjectPickerForId(id){
-  openCodeObjectPicker(stops.find(s=>s.id===id));
-}
-
 function setStatus(msg){ document.getElementById("status").textContent = msg; }
 
 async function touchSession(){
@@ -2217,7 +2223,6 @@ async function clearCurrentSession(){
   stops=[]; clips=[]; liveStops=[]; lastStop=null; session=null;
   document.getElementById("btnPub").disabled=true;
   refreshMap();
-  renderStopList();
   setStatus("Session cleared");
   // publishedZones (the project's real published stops) is a reference layer,
   // not local session data — the confirm dialog above promises "published
@@ -2330,7 +2335,7 @@ async function init(){
   initConnectivity();
   initMap();
   map.on("load", () => {
-    map.resize(); refreshMap(); renderStopList();
+    map.resize(); refreshMap(); setCorridorRuns(publishedZones);
     // Center on the tour's own location immediately — don't leave the map
     // sitting at the [0,0] world-view default while waiting on a GPS fix,
     // which may be slow, denied, or never arrive at all.
