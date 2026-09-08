@@ -912,8 +912,10 @@
   // Start saving the camera on every idle move, and immediately restore the
   // saved one if there is a saved one. Returns true when a saved view was
   // applied, so the caller can skip its own initial fitBounds/flyTo.
-  // opts.restorePitch === false keeps the restored camera flat (GPX Editor
-  // deliberately opens flat for point editing).
+  // opts.restorePitch === false / opts.restoreBearing === false keep the
+  // restored camera flat / north-up (GPX Editor opens flat and north-up for
+  // point editing — it only wants the pan/zoom carried over, not the
+  // orientation another tool may have left in the shared slot).
   function persistMapView(map, pid, opts){
     if(!map || !pid) return false;
     // Read the pid off the map each save, not a closure — GPX Editor swaps
@@ -925,7 +927,8 @@
     }
     var v = readMapView(pid);
     if(!v) return false;
-    map.jumpTo({ center:[v.lng, v.lat], zoom:v.zoom, bearing:v.bearing || 0,
+    map.jumpTo({ center:[v.lng, v.lat], zoom:v.zoom,
+      bearing:(opts && opts.restoreBearing === false) ? 0 : (v.bearing || 0),
       pitch:(opts && opts.restorePitch === false) ? 0 : (v.pitch || 0) });
     return true;
   }
