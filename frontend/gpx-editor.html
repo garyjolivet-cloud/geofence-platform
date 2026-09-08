@@ -111,8 +111,8 @@
 
   <div id="mapWrap"><div id="map"></div>
     <select id="baseSel" title="Basemap">
+      <option value="sat" selected>Satellite</option>
       <option value="streets">Streets</option>
-      <option value="sat">Satellite</option>
     </select>
     <button id="tiltBtn" type="button" title="Tilt the map into 3D" style="display:none">Tilt</button>
   </div>
@@ -521,18 +521,24 @@ const map=new maplibregl.Map({
     // track / trim-selection layers added on top later never get dropped
     // (swapping the whole style would). Esri only — OSM tiles send no CORS
     // headers (see project memory).
+    // Satellite is the default (matches the Fence Editor's Edit map); Streets
+    // is opt-in via #baseSel.
     layers:[
-      {id:"base",type:"raster",source:"base"},
-      {id:"sat",type:"raster",source:"sat",layout:{visibility:"none"}}
+      {id:"base",type:"raster",source:"base",layout:{visibility:"none"}},
+      {id:"sat",type:"raster",source:"sat"}
     ]},
   center:[-117.0547,51.3027], zoom:12
 });
-document.getElementById("baseSel").onchange=e=>{
-  const sat=e.target.value==="sat";
+function applyBasemapChoice(){
+  const sat=document.getElementById("baseSel").value==="sat";
   map.setLayoutProperty("base","visibility",sat?"none":"visible");
   map.setLayoutProperty("sat","visibility",sat?"visible":"none");
   updateWinter(); // re-anchor / re-apply the winter recolor onto the now-visible basemap
-};
+}
+document.getElementById("baseSel").onchange=applyBasemapChoice;
+// A browser restoring a prior <select> value on reload (bfcache/autofill) can
+// leave the dropdown and the visible layer disagreeing — sync once on load.
+map.on("load",applyBasemapChoice);
 document.getElementById("tiltBtn").onclick=()=>Terrain3D.toggleTilt(map);
 
 // Reads the current workspace's 3D-terrain flag (app.three_d_enabled, aliased
