@@ -882,6 +882,55 @@
   function setCompany(id){ if(window.ClientPicker) window.ClientPicker.set(id); }
   function resolveCompany(){ return window.ClientPicker ? window.ClientPicker.resolve() : ""; }
 
+  // ---- Per-project map camera persistence -----------------------------
+  // Edit / GPX Editor / Map Paint are each a full page load, and every one
+  // reframes its map on load (fitBounds to the zones / track). Hopping
+  // between them via the tool links above therefore threw away your pan and
+  // zoom every time — this module's whole reason for being ("switching
+  // tools ... doesn't mean losing your place") but for the map too.
+  // sessionStorage: scoped to this tab, cleared when it closes — it's "where
+  // I was just looking", not a durable preference.
+  function _mapViewKey(pid){ return "gp.mapview." + (pid || ""); }
+  function saveMapView(map, pid){
+    if(!map || !pid) return;
+    try{
+      var c = map.getCenter();
+      sessionStorage.setItem(_mapViewKey(pid), JSON.stringify({
+        lng:+c.lng.toFixed(6), lat:+c.lat.toFixed(6),
+        zoom:+map.getZoom().toFixed(3),
+        bearing:Math.round(map.getBearing()), pitch:Math.round(map.getPitch())
+      }));
+    }catch(e){}
+  }
+  function readMapView(pid){
+    if(!pid) return null;
+    try{
+      var v = JSON.parse(sessionStorage.getItem(_mapViewKey(pid)) || "null");
+      return (v && isFinite(v.lng) && isFinite(v.lat) && isFinite(v.zoom)) ? v : null;
+    }catch(e){ return null; }
+  }
+  // Start saving the camera on every idle move, and immediately restore the
+  // saved one if there is a saved one. Returns true when a saved view was
+  // applied, so the caller can skip its own initial fitBounds/flyTo.
+  // opts.restorePitch === false keeps the restored camera flat (GPX Editor
+  // deliberately opens flat for point editing).
+  function persistMapView(map, pid, opts){
+    if(!map || !pid) return false;
+    // Read the pid off the map each save, not a closure — GPX Editor swaps
+    // projects without a page reload, so a captured pid would go stale.
+    map.__gpMapViewPid = pid;
+    if(!map.__gpMapViewBound){
+      map.__gpMapViewBound = true;
+      map.on("moveend", function(){ saveMapView(map, map.__gpMapViewPid); });
+    }
+    var v = readMapView(pid);
+    if(!v) return false;
+    map.jumpTo({ center:[v.lng, v.lat], zoom:v.zoom, bearing:v.bearing || 0,
+      pitch:(opts && opts.restorePitch === false) ? 0 : (v.pitch || 0) });
+    return true;
+  }
+
   window.TopNav = { getCompany, setCompany, resolveCompany, getProject, setProject, resolveProject,
-    getPendingProject, setPendingProject, clearPendingProject, init };
+    getPendingProject, setPendingProject, clearPendingProject, init,
+    saveMapView, readMapView, persistMapView };
 })();

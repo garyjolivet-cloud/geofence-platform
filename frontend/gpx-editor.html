@@ -1006,6 +1006,10 @@ async function enterProject(id, proj){
   resetRunDetails();
   setBase([], {resetHistory:true});
   showGpxScreen();
+  // Jump back to wherever this project's map was last left in another tool
+  // this session (Edit / Map Paint) so nav-hopping doesn't reorient it. A
+  // corridor deep-link (openTreeItem below) still fits that corridor after.
+  window.TopNav && TopNav.persistMapView && TopNav.persistMapView(map, id, {restorePitch:false});
   if(!appId){ document.getElementById("gpxTreeHost").innerHTML='<div class="hint">couldn\'t determine this project\'s workspace</div>'; return; }
   gpxTree.refresh({appId});
   if(_pendingCorridorId){ const cid=_pendingCorridorId; _pendingCorridorId=null; openTreeItem({ id: cid }); }

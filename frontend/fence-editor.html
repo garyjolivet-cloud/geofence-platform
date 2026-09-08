@@ -5282,6 +5282,10 @@ async function loadFromPlatform(id){
     { const ss=document.getElementById("tileSeason"); if(ss) ss.value = _season || ""; }
     document.getElementById("out").value=JSON.stringify(b,null,2);
     document.getElementById("importBtn").click();
+    // importBtn's handler flyTo's zones[0]; if we were already looking
+    // somewhere on this project in another tool this session, jump back
+    // there instead so hopping Edit<->GPX Editor doesn't reorient the map.
+    window.TopNav && TopNav.persistMapView && TopNav.persistMapView(map, id);
     updateWinter();
     _publishedSnapshot=JSON.stringify(zones); // baseline for the leave-Edit publish prompt — a freshly-loaded project isn't "dirty" just because it has zones
     document.getElementById("projCrumb").textContent=b.name||id;
