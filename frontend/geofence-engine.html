@@ -2111,16 +2111,22 @@ const MapView = {
   // recolor/overlays below the tour content.
   updateWinter(){
     if(typeof Terrain3D==='undefined' || !this.map) return;
+    const map=this.map;
     const go=()=>{
-      if(BUNDLE.season==='winter') Terrain3D.applyWinter(this.map,{dem:!!BUNDLE.threeDEnabled, beforeId:'stop-cone'});
-      else Terrain3D.clearWinter(this.map);
+      if(BUNDLE.season==='winter') Terrain3D.applyWinter(map,{dem:!!BUNDLE.threeDEnabled, beforeId:'stop-cone'});
+      else Terrain3D.clearWinter(map);
     };
-    // NOT isStyleLoaded()/once('load') — this page's many re-setData()'d
-    // sources (fences-style geojson, corridorRuns, hm-accuracy, walkpath…)
-    // keep isStyleLoaded() flapping false long after 'load' has fired, so
-    // once('load',…) would never run and the recolor never landed. map.loaded()
-    // latches true once the initial load is done and doesn't flap.
-    (this.map.loaded && this.map.loaded()) ? go() : this.map.once('load', go);
+    // applyWinter() needs the STYLE ready (getLayer/addSource/setPaintProperty).
+    // Can't wait on 'load' — loadProject() usually calls this after 'load' has
+    // already fired, so once('load',…) is a dead branch. And both
+    // isStyleLoaded() and loaded() flap back to false on this map's constant
+    // per-tick setData()s, so a one-shot check races. Poll the style-ready
+    // flag, then run regardless (applyWinter's own try/catches cover a miss).
+    if(map.isStyleLoaded && map.isStyleLoaded()){ go(); return; }
+    let tries=0;
+    const iv=setInterval(()=>{
+      if((map.isStyleLoaded && map.isStyleLoaded()) || ++tries>40){ clearInterval(iv); go(); }
+    },150);
   },
   recenter(ref){ if(this.map) this.map.jumpTo({center:LonLat(ref), zoom:16}); },
   // Fired by HereMarker when the device crosses the tour bbox + buffer.

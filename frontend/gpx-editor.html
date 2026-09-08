@@ -566,10 +566,19 @@ async function apply3D(){
 // other map view.
 function updateWinter(){
   if(typeof Terrain3D==="undefined" || !mapReady) return;
-  if(projSeason==="winter")
-    Terrain3D.applyWinter(map,{dem:threeDOn, basemapLayerId:"sat", beforeId: map.getLayer("track-line")?"track-line":undefined});
-  else
-    Terrain3D.clearWinter(map);
+  const go=()=>{
+    if(projSeason==="winter")
+      Terrain3D.applyWinter(map,{dem:threeDOn, basemapLayerId:"sat", beforeId: map.getLayer("track-line")?"track-line":undefined});
+    else
+      Terrain3D.clearWinter(map);
+  };
+  // applyWinter() addSource()s — needs the style ready. isStyleLoaded() can
+  // still read false right after 'load'; poll, then run regardless.
+  if(map.isStyleLoaded && map.isStyleLoaded()){ go(); return; }
+  let tries=0;
+  const iv=setInterval(()=>{
+    if((map.isStyleLoaded && map.isStyleLoaded()) || ++tries>40){ clearInterval(iv); go(); }
+  },150);
 }
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.on("load",async ()=>{

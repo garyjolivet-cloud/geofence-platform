@@ -419,15 +419,21 @@ function onTiltClick(){
 // Winter map treatment — same project.season flag every other map surface
 // uses (ridge-quest / geofence-engine / -sim / fence-editor / gpx-editor).
 // beforeId 'published-fill' keeps the recolor + snow overlays below the tour
-// content. Not isStyleLoaded() (this page's many re-setData()'d sources keep
-// it flapping false) — map.loaded() latches true after the first load.
+// content. Poll for a style-ready flag rather than waiting on 'load' (which
+// has usually already fired by the time loadPublishedBundle() calls this) or
+// trusting a one-shot isStyleLoaded()/loaded() (both flap false on this
+// map's per-fix setData()s).
 function updateWinter(){
   if(typeof Terrain3D==='undefined' || !map) return;
   const go=()=>{
     if(projSeason==='winter') Terrain3D.applyWinter(map,{dem:!!threeDEnabled, beforeId:'published-fill'});
     else Terrain3D.clearWinter(map);
   };
-  (map.loaded && map.loaded()) ? go() : map.once('load', go);
+  if(map.isStyleLoaded && map.isStyleLoaded()){ go(); return; }
+  let tries=0;
+  const iv=setInterval(()=>{
+    if((map.isStyleLoaded && map.isStyleLoaded()) || ++tries>40){ clearInterval(iv); go(); }
+  },150);
 }
 
 // BLE barometer (item D, 3D-mode plan, rescoped 2026-08-14) — the highest-
