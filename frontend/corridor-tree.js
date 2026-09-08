@@ -29,6 +29,12 @@
 //     selectable: false,         // show a leading checkbox per row
 //     isSelected: (item) => bool,
 //     onToggle: (item, checked) => {},
+//     renamable: false,          // with readOnly:true, add "✎ Rename" to the
+//                                //   per-row ⋯ menu (no Move / New subfolder).
+//     deletable: false,          // with readOnly:true, add "🗑 Delete" to the
+//                                //   per-row ⋯ menu (corridor + non-root folder).
+//                                //   Both flags are ignored when readOnly:false
+//                                //   (the ⋯ menu already has the full set).
 //     onError: (msg) => {},      // defaults to alert()
 //   });
 //   tree.refresh({ appId: newAppId });
@@ -302,18 +308,33 @@
       state.selected = sel;
     }
 
+    // In a full (readOnly:false) mount the row menu has Rename / Move to… /
+    // Delete (+ New subfolder for folders). A readOnly mount can still opt into
+    // a trimmed menu — Rename and/or Delete only — via opts.renamable /
+    // opts.deletable (Fence Editor's Corridors palette; folder *organisation*
+    // stays in the GPX Editor per the authoring split).
+    function menuHasRename() { return !opts.readOnly || opts.renamable; }
+    function menuHasDelete() { return !opts.readOnly || opts.deletable; }
+    function rowHasMenu() { return !opts.readOnly || opts.renamable || opts.deletable; }
+
     function renderItemMenu(anchorBtn, item) {
       closeMenu();
       const menu = document.createElement("div"); menu.className = "gt-menu";
-      const renameBtn = document.createElement("button"); renameBtn.className = "gt-menu-item"; renameBtn.textContent = "✎ Rename";
-      renameBtn.onclick = e => { e.stopPropagation(); closeMenu(); const nameEl = anchorBtn.closest(".gt-row").querySelector(".gt-name"); flipToInput(nameEl, item.name, v => renameItem(item.kind, item.id, v)); };
-      menu.appendChild(renameBtn);
-      const moveBtn = document.createElement("button"); moveBtn.className = "gt-menu-item"; moveBtn.textContent = "📁 Move to…";
-      moveBtn.onclick = e => { e.stopPropagation(); openPicker(moveBtn, { kind: item.kind, onPick: t => moveItem(item.kind, item.id, t) }); };
-      menu.appendChild(moveBtn);
-      const delBtn = document.createElement("button"); delBtn.className = "gt-menu-item danger"; delBtn.textContent = "🗑 Delete";
-      delBtn.onclick = e => { e.stopPropagation(); closeMenu(); deleteItem(item.kind, item.id, item.name); };
-      menu.appendChild(delBtn);
+      if (menuHasRename()) {
+        const renameBtn = document.createElement("button"); renameBtn.className = "gt-menu-item"; renameBtn.textContent = "✎ Rename";
+        renameBtn.onclick = e => { e.stopPropagation(); closeMenu(); const nameEl = anchorBtn.closest(".gt-row").querySelector(".gt-name"); flipToInput(nameEl, item.name, v => renameItem(item.kind, item.id, v)); };
+        menu.appendChild(renameBtn);
+      }
+      if (!opts.readOnly) {
+        const moveBtn = document.createElement("button"); moveBtn.className = "gt-menu-item"; moveBtn.textContent = "📁 Move to…";
+        moveBtn.onclick = e => { e.stopPropagation(); openPicker(moveBtn, { kind: item.kind, onPick: t => moveItem(item.kind, item.id, t) }); };
+        menu.appendChild(moveBtn);
+      }
+      if (menuHasDelete()) {
+        const delBtn = document.createElement("button"); delBtn.className = "gt-menu-item danger"; delBtn.textContent = "🗑 Delete";
+        delBtn.onclick = e => { e.stopPropagation(); closeMenu(); deleteItem(item.kind, item.id, item.name); };
+        menu.appendChild(delBtn);
+      }
       anchorBtn.parentElement.appendChild(menu);
       state.openMenu = menu;
     }
@@ -321,20 +342,29 @@
     function renderFolderMenu(anchorBtn, node, kind) {
       closeMenu();
       const menu = document.createElement("div"); menu.className = "gt-menu";
-      const newSub = document.createElement("button"); newSub.className = "gt-menu-item"; newSub.textContent = "＋ New subfolder";
-      newSub.onclick = e => { e.stopPropagation(); closeMenu(); createFolder(kind, node.id, "New folder"); };
-      menu.appendChild(newSub);
-      if (node.id) {
-        const renameBtn = document.createElement("button"); renameBtn.className = "gt-menu-item"; renameBtn.textContent = "✎ Rename";
-        renameBtn.onclick = e => { e.stopPropagation(); closeMenu(); const nameEl = anchorBtn.closest(".gt-row").querySelector(".gt-name"); flipToInput(nameEl, node.name, v => renameFolder(kind, node.id, v)); };
-        menu.appendChild(renameBtn);
-        const moveBtn = document.createElement("button"); moveBtn.className = "gt-menu-item"; moveBtn.textContent = "📁 Move to…";
-        moveBtn.onclick = e => { e.stopPropagation(); openPicker(moveBtn, { kind, excludeFolderId: node.id, onPick: t => moveFolder(kind, node.id, t) }); };
-        menu.appendChild(moveBtn);
-        const delBtn = document.createElement("button"); delBtn.className = "gt-menu-item danger"; delBtn.textContent = "🗑 Delete";
-        delBtn.onclick = e => { e.stopPropagation(); closeMenu(); deleteFolder(kind, node.id, node.name); };
-        menu.appendChild(delBtn);
+      if (!opts.readOnly) {
+        const newSub = document.createElement("button"); newSub.className = "gt-menu-item"; newSub.textContent = "＋ New subfolder";
+        newSub.onclick = e => { e.stopPropagation(); closeMenu(); createFolder(kind, node.id, "New folder"); };
+        menu.appendChild(newSub);
       }
+      if (node.id) {
+        if (menuHasRename()) {
+          const renameBtn = document.createElement("button"); renameBtn.className = "gt-menu-item"; renameBtn.textContent = "✎ Rename";
+          renameBtn.onclick = e => { e.stopPropagation(); closeMenu(); const nameEl = anchorBtn.closest(".gt-row").querySelector(".gt-name"); flipToInput(nameEl, node.name, v => renameFolder(kind, node.id, v)); };
+          menu.appendChild(renameBtn);
+        }
+        if (!opts.readOnly) {
+          const moveBtn = document.createElement("button"); moveBtn.className = "gt-menu-item"; moveBtn.textContent = "📁 Move to…";
+          moveBtn.onclick = e => { e.stopPropagation(); openPicker(moveBtn, { kind, excludeFolderId: node.id, onPick: t => moveFolder(kind, node.id, t) }); };
+          menu.appendChild(moveBtn);
+        }
+        if (menuHasDelete()) {
+          const delBtn = document.createElement("button"); delBtn.className = "gt-menu-item danger"; delBtn.textContent = "🗑 Delete";
+          delBtn.onclick = e => { e.stopPropagation(); closeMenu(); deleteFolder(kind, node.id, node.name); };
+          menu.appendChild(delBtn);
+        }
+      }
+      if (!menu.children.length) return; // nothing to show (readOnly root folder)
       anchorBtn.parentElement.appendChild(menu);
       state.openMenu = menu;
     }
@@ -367,8 +397,11 @@
       meta.textContent = (item.widthM != null ? "⌀" + item.widthM + "m " : "") + fmtKm(item.distanceM);
       row.appendChild(icon); row.appendChild(name); row.appendChild(meta);
       row.onclick = () => { if (opts.onPick) opts.onPick(item); };
-      if (!opts.readOnly) {
-        const moreBtn = document.createElement("button"); moreBtn.className = "gt-btn"; moreBtn.textContent = "⋯"; moreBtn.title = "Rename, move, or delete";
+      if (rowHasMenu()) {
+        const moreBtn = document.createElement("button"); moreBtn.className = "gt-btn"; moreBtn.textContent = "⋯";
+        moreBtn.title = !opts.readOnly ? "Rename, move, or delete"
+          : (opts.renamable && opts.deletable) ? "Rename or delete"
+          : opts.deletable ? "Delete" : "Rename";
         moreBtn.onclick = e => { e.stopPropagation(); renderItemMenu(moreBtn, item); };
         row.appendChild(moreBtn);
       }
@@ -389,7 +422,7 @@
       const name = document.createElement("span"); name.className = "gt-name"; name.textContent = labelOverride || node.name;
       row.appendChild(chevron); row.appendChild(icon); row.appendChild(name);
 
-      if (!opts.readOnly) {
+      if (rowHasMenu() && (!opts.readOnly || (node.id && !isRoot))) {
         const moreBtn = document.createElement("button"); moreBtn.className = "gt-btn"; moreBtn.textContent = "⋯";
         moreBtn.onclick = e => { e.stopPropagation(); renderFolderMenu(moreBtn, node, kind); };
         row.appendChild(moreBtn);

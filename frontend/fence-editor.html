@@ -4025,11 +4025,13 @@ function doAudioRefresh(){
 const gpxTree=CorridorTree.mount(document.getElementById("gpxTreeHost"),{
   appId: afAppId(),
   getToken,
-  readOnly:true,
+  readOnly:true,     // move/reshape/run-details stay in the GPX Editor (authoring split)…
+  renamable:true,    // …but quick rename + delete of a library corridor are allowed from here
+  deletable:true,
   selectable:true,
   isSelected: it=>selectedWalkingPathIds.includes(it.id),
   onToggle: (it,on)=>toggleWalkingPath(it.id,on),
-  onError: ()=>{}, // drag-source only — nothing here can fail loudly enough to need a popup
+  onError: (m)=>{ const st=document.getElementById("status"); if(st) st.textContent=m; },
   onPick: item=>importCorridorFromLibrary(item.id)
 });
 document.getElementById("gpxRefresh").onclick=()=>gpxTree.refresh({appId:afAppId()});
