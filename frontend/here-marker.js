@@ -239,7 +239,12 @@
         state.wedgeEl.style.opacity = "0";
       } else {
         state.wedgeEl.style.opacity = "1";
-        state.wedgeEl.style.transform = "rotate(" + h + "deg)";
+        // Unwrap the angle so a 359deg -> 1deg step rotates +2deg, not
+        // -358deg — otherwise the CSS transition whips the wedge all the
+        // way round every time the heading crosses north.
+        var prev = state.wedgeRot || 0;
+        state.wedgeRot = prev + (((h - (prev % 360)) + 540) % 360 - 180);
+        state.wedgeEl.style.transform = "rotate(" + state.wedgeRot + "deg)";
       }
 
       var src = map.getSource("hm-accuracy");

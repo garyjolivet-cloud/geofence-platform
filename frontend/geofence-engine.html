@@ -147,6 +147,7 @@
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
 <script src="/here-marker.js"></script>
+<script src="/device-heading.js"></script>
 <script src="/terrain-3d.js"></script>
 </head>
 <body>
@@ -904,6 +905,9 @@ const Audio = {
       document.body.appendChild(el); el.play().catch(()=>{});
       this.silenceEl=el;
     }catch(e){} }
+    // Same real user gesture — ask for the compass permission iOS needs to
+    // drive the "you are here" arrow (harmless no-op elsewhere).
+    if(window.DeviceHeading) DeviceHeading.start();
     if(this.unlocked) return;
     try{ const u=new SpeechSynthesisUtterance(" "); u.volume=0; speechSynthesis.speak(u); this.unlocked=true; }catch(e){}
   },
@@ -1670,7 +1674,10 @@ const HUD = {
     // (via MapView.onSiteChange) and this is what keeps re-evaluating the
     // boundary so the tour resumes when the device comes back into range.
     MapView.here?.update({ lon:sm.lon, lat:sm.lat,
-      headingDeg:(typeof TravelHeading!=='undefined' ? TravelHeading.heading : null), accM:sm.acc });
+      // Which way the phone is POINTING (device compass) when we have it;
+      // fall back to travel heading (direction of movement) otherwise.
+      headingDeg:((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading
+                  : (typeof TravelHeading!=='undefined' ? TravelHeading.heading : null)), accM:sm.acc });
     if(HUD.offsite){
       // Off the site: no triggers, no fog reveal, no voices, no guidance —
       // just a plain position readout. Everything resumes on the next
@@ -2541,6 +2548,7 @@ function startGPS(){
   if(!navigator.geolocation){ HUD.log('ev-warn','no geolocation on this device'); return; }
   HUD.el('pill').textContent='GPS'; HUD.el('pill').className='pill live';
   if(watchId!==null) return;   // already watching — pill CTA + drawer's Start GPS button both call startGPS()
+  if(window.DeviceHeading) DeviceHeading.start();   // compass for the "you are here" arrow (this call is inside the Start-GPS gesture)
   HUD.log('ev-sys','GPS started — walk the stops');
   watchId=navigator.geolocation.watchPosition(
     // coords.altitude/altitudeAccuracy are raw phone-GPS altitude (noisy —

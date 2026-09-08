@@ -10,6 +10,7 @@
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script src="/here-marker.js"></script>
+<script src="/device-heading.js"></script>
 <script src="tile-fog.js"></script>
 <script src="/terrain-3d.js"></script>
 <style>
@@ -1035,7 +1036,10 @@ function refreshMap(){
   map.getSource("zones")?.setData({type:"FeatureCollection",features:allFeatures});
   if(lastSmoothed && here) here.update({
     lon:lastSmoothed.lon, lat:lastSmoothed.lat,
-    headingDeg:(headingBuffer.length ? circularMean(headingBuffer) : lastSmoothed.headingTravel),
+    // Device compass (which way the phone points) when available; else the
+    // GPS travel heading (which way you're moving).
+    headingDeg:((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading
+                : (headingBuffer.length ? circularMean(headingBuffer) : lastSmoothed.headingTravel)),
     accM:lastSmoothed.acc });
 }
 
@@ -1129,6 +1133,9 @@ function unlockAudioPlayback(){
   // out of the non-gesture watchPosition callback — same restriction class,
   // same re-arm-on-every-tap treatment.
   try{ speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); }catch(e){}
+  // Same real tap — grab the compass permission iOS needs for the "you are
+  // here" arrow.
+  if(window.DeviceHeading) DeviceHeading.start();
 }
 
 let _playingUrl = null;
@@ -1626,6 +1633,11 @@ async function initPermissions(){
   document.getElementById("btnRec").disabled  = false;
   document.getElementById("btnLive").disabled = false;
   setStatus("GPS…");
+
+  // Compass for the "you are here" arrow — attaches straight away where no
+  // permission prompt is needed (Android/desktop); on iOS this no-ops until
+  // the first screen tap runs unlockAudioPlayback(), which retries it.
+  if(window.DeviceHeading) DeviceHeading.start();
 
   navigator.geolocation.watchPosition(
     pos => {

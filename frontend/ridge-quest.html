@@ -20,6 +20,7 @@
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script src="/here-marker.js"></script>
+<script src="/device-heading.js"></script>
 <!-- Shared 3D DEM-terrain wiring (Terrarium DEM + setTerrain + tilt). Used
      here when the workspace's 3D flag is on; the older map surfaces still
      carry their own copy of this. -->
@@ -1177,6 +1178,7 @@ function renderHome(){
     } else {
       statusEl.textContent="waiting for GPS…";
       coverageEl.textContent="";
+      if(window.DeviceHeading) DeviceHeading.start();  // compass for the "you are here" arrow — this tap is the iOS permission gesture
       const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity, onCoverage);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
@@ -1816,7 +1818,11 @@ function renderFogMap(){
     const here = HereMarker.attach(map, { follow:'edge',
       bounds: QBOUNDS, bufferM: 10000,
       onSite: (on, initial)=>{ Quest._offsite = !on; if(on && !initial) GPSFilter.reset(); } });
-    Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat, headingDeg:p.headingTravel, accM:p.acc });
+    Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,
+      // Device compass (which way the phone points) when we have it, else
+      // the GPS travel heading (which way you're moving).
+      headingDeg:((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading : p.headingTravel),
+      accM:p.acc });
 
     // --- Live friends ---------------------------------------------------
     // GET /api/presence/friends every 5s (same cadence as the tour
