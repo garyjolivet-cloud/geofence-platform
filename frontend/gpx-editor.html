@@ -536,9 +536,6 @@ function applyBasemapChoice(){
   updateWinter(); // re-anchor / re-apply the winter recolor onto the now-visible basemap
 }
 document.getElementById("baseSel").onchange=applyBasemapChoice;
-// A browser restoring a prior <select> value on reload (bfcache/autofill) can
-// leave the dropdown and the visible layer disagreeing — sync once on load.
-map.on("load",applyBasemapChoice);
 document.getElementById("tiltBtn").onclick=()=>Terrain3D.toggleTilt(map);
 
 // Reads the current workspace's 3D-terrain flag (app.three_d_enabled, aliased
@@ -558,6 +555,11 @@ async function apply3D(){
   const tiltBtn=document.getElementById("tiltBtn");
   if(tiltBtn) tiltBtn.style.display=threeDOn?"":"none";
   if(mapReady) Terrain3D.setEnabled(map, threeDOn, { sky:true });
+  // threeDOn is only known now (async /api/apps) — re-run the winter treatment
+  // so its DEM hillshade / snowline / winter-sky layers get added too, not
+  // just the flat raster recolor that an earlier updateWinter() (threeDOn
+  // still false, terrain-dem source not added yet) could manage on its own.
+  updateWinter();
 }
 // Winter map treatment — recolors the imagery layer ("sat"; "base" here is the
 // street map) when the project's season is 'winter'. Same trigger as every
@@ -570,23 +572,26 @@ function updateWinter(){
     Terrain3D.clearWinter(map);
 }
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
-map.on("load",()=>{
+map.on("load",async ()=>{
   mapReady=true;
-  apply3D();  // a project may already be selected before the map finished loading
-  updateWinter();
+  // Sync basemap visibility to #baseSel (a browser can restore a prior
+  // dropdown value on reload, leaving it disagreeing with the style default).
+  applyBasemapChoice();
+  // Terrain DEM source FIRST — apply3D()'s terrain and updateWinter()'s DEM
+  // hillshade/snowline layers both need it present. Used by Backfill
+  // Elevation too. Same free Terrarium tiles every other 3D map surface uses.
+  map.addSource("terrain-dem",{type:"raster-dem",
+    tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+    tileSize:256,encoding:"terrarium",maxzoom:15});
   // A resize() requested while the map was still mid-initialization (style/
   // sprite/glyphs not yet loaded) is deferred here rather than dropped —
   // see showGpxScreen()'s comment for why resize() is needed at all.
   if(resizePending){ resizePending=false; map.resize(); }
-  // Terrain DEM source — used both by the Backfill Elevation button and,
-  // when the workspace 3D flag is on, by apply3D()'s persistent terrain.
-  // Terrain3D (terrain-3d.js) would add this itself, but the map has one
-  // load handler so adding it here keeps the ordering obvious. Same free
-  // Terrarium tiles every other 3D map surface uses.
-  map.addSource("terrain-dem",{type:"raster-dem",
-    tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
-    tileSize:256,encoding:"terrarium",maxzoom:15});
   scheduleRenderMapLine();
+  updateWinter();  // flat raster recolor now; DEM layers after apply3D resolves
+  // await so threeDOn is resolved before the full winter treatment runs
+  // (apply3D itself calls updateWinter() again at its end).
+  await apply3D();
 });
 
 function _gpxCorridorMeta(){
