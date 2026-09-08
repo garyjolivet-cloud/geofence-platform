@@ -832,6 +832,9 @@ function initMap(){
     // chasing it. Recording itself is NOT paused (deliberate — it's an
     // authoring tool).
     here = HereMarker.attach(map, { follow:true, bounds: frContentBounds(), bufferM: 15000 });
+    // Real-time compass -> needle, off the orientation event (not the GPS-fix
+    // cadence). Marker lives for the page, so no unsubscribe needed.
+    if(window.DeviceHeading) DeviceHeading.onChange(h=>here && here.setHeading(h));
     refreshMap();
     refreshPublishedZones();
     setCorridorRuns(publishedZones);

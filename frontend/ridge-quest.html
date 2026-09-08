@@ -1699,6 +1699,9 @@ function renderFogMap(){
   // map.remove() on the way out — the map is heavier with DEM terrain and a
   // fresh one is built every time "My map" opens.
   let mapInstance=null;
+  // DeviceHeading.onChange unsubscribe — declared out here so the #fogBack
+  // handler (bound before the map) can call it; reassigned once the marker exists.
+  let _unbindHeading = function(){};
   const use3D = !!Quest.threeDEnabled;
   const winter = Quest.season === "winter"; // uniform trigger across every map view
   // R11 — completion % is a number derived from tracking (Quest.fogCells),
@@ -1722,6 +1725,7 @@ function renderFogMap(){
   // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{
     Quest.onFogUpdated=null; Quest.onPosition=null;
+    _unbindHeading();
     if(friendPoll){ clearInterval(friendPoll); friendPoll=null; }
     friendMarkers.forEach(m=>m.remove()); friendMarkers.clear();
     if(mapInstance){ try{ mapInstance.remove(); }catch(e){} mapInstance=null; }
@@ -1818,6 +1822,10 @@ function renderFogMap(){
     const here = HereMarker.attach(map, { follow:'edge',
       bounds: QBOUNDS, bufferM: 10000,
       onSite: (on, initial)=>{ Quest._offsite = !on; if(on && !initial) GPSFilter.reset(); } });
+    // Real-time compass -> needle, off the orientation event. This screen is
+    // rebuilt each time "My map" opens, so _unbindHeading (declared above) is
+    // called in the #fogBack teardown.
+    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange(h=>here.setHeading(h));
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,
       // Device compass (which way the phone points) when we have it, else
       // the GPS travel heading (which way you're moving).

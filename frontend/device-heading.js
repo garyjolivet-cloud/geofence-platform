@@ -29,16 +29,22 @@
   var listening = false;
   var raw = null, smooth = null;
   var subs = [];
-  var EMA = 0.25;
   var API = { start: start, onChange: onChange, heading: null, supported: supported, active: false };
 
-  function onChange(fn) { if (typeof fn === "function") subs.push(fn); }
+  // Returns an unsubscribe fn (Ridge Quest tears its map down and rebuilds it).
+  function onChange(fn) {
+    if (typeof fn !== "function") return function () {};
+    subs.push(fn);
+    return function () { var i = subs.indexOf(fn); if (i >= 0) subs.splice(i, 1); };
+  }
 
-  // Circular EMA — blends toward `next` along the shortest arc so a reading
-  // near the 0/360 wrap doesn't yank the average the long way round.
-  function circEma(next, prev, a) {
+  // Adaptive circular smoothing — snap on a deliberate turn (big delta),
+  // smooth out magnetometer jitter when roughly steady. Keeps the arrow
+  // feeling immediate (à la Trailforks) without the raw needle wobble.
+  function circSmooth(next, prev) {
     if (prev == null) return next;
     var d = ((next - prev + 540) % 360) - 180;
+    var a = Math.abs(d) > 22 ? 0.65 : 0.28;
     return (prev + a * d + 360) % 360;
   }
 
@@ -65,7 +71,7 @@
     }
     if (h == null || !isFinite(h)) return;
     raw = (h % 360 + 360) % 360;
-    smooth = circEma(raw, smooth, EMA);
+    smooth = circSmooth(raw, smooth);
     API.heading = smooth;
     API.active = true;
     emit();

@@ -1978,6 +1978,10 @@ const MapView = {
       this.here = HereMarker.attach(this.map, { follow:true,
         bounds: zonesContentBounds(), bufferM: 10000,
         onSite: (on)=>MapView.onSiteChange(on) });
+      // Real-time compass -> needle, straight off the orientation event (not
+      // throttled to the GPS-fix cadence). Marker lives for the page, so no
+      // unsubscribe needed.
+      if(window.DeviceHeading) DeviceHeading.onChange(h=>MapView.here && MapView.here.setHeading(h));
 
       // Every stop's marker, simplified to just two elements: a grey
       // "speaker cone" gradient disc (full-volume radius) and a blue ring

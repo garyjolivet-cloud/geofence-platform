@@ -51,17 +51,23 @@
     if (_stylesInjected) return;
     _stylesInjected = true;
     var css = ""
-      + ".hm{width:26px;height:26px;pointer-events:none;will-change:transform}"
+      + ".hm{width:40px;height:40px;pointer-events:none;will-change:transform}"
       + ".hm--pending{visibility:hidden}"
       + ".hm--offsite{display:none}"
       + ".hm-dot{position:absolute;left:50%;top:50%;width:16px;height:16px;transform:translate(-50%,-50%);"
       +   "border-radius:50%;background:var(--hm-color,#2f7dff);border:2px solid #fff;"
       +   "box-shadow:0 0 0 4px rgba(47,125,255,.20),0 1px 3px rgba(0,0,0,.4)}"
-      + ".hm-wedge{position:absolute;left:50%;top:50%;width:0;height:0;transform-origin:0 0;"
-      +   "transition:opacity .25s linear,transform .15s linear;"
-      +   "border-left:9px solid transparent;border-right:9px solid transparent;"
-      +   "border-bottom:16px solid var(--hm-color,#2f7dff);margin-left:-9px;margin-top:-22px;opacity:0;"
-      +   "filter:drop-shadow(0 0 2px rgba(0,0,0,.35))}";
+      // Full-size layer centred on the dot; rotates about its own centre so
+      // the needle swings AROUND the blue dot like a compass. No CSS
+      // transform transition — the JS pushes updates straight from the
+      // orientation event, and a transition would only add lag.
+      + ".hm-wedge{position:absolute;inset:0;transform-origin:50% 50%;"
+      +   "transition:opacity .2s linear;opacity:0}"
+      + ".hm-wedge::before{content:'';position:absolute;left:50%;top:-1px;"
+      +   "transform:translateX(-50%);width:0;height:0;"
+      +   "border-left:7px solid transparent;border-right:7px solid transparent;"
+      +   "border-bottom:12px solid var(--hm-color,#2f7dff);"
+      +   "filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}";
     var s = document.createElement("style");
     s.textContent = css;
     document.head.appendChild(s);
@@ -234,18 +240,9 @@
       state.marker.setLngLat([a.lon, a.lat]);
       state.marker.getElement().classList.remove("hm--pending");
 
-      var h = a.headingDeg;
-      if (h == null || !isFinite(h)) {
-        state.wedgeEl.style.opacity = "0";
-      } else {
-        state.wedgeEl.style.opacity = "1";
-        // Unwrap the angle so a 359deg -> 1deg step rotates +2deg, not
-        // -358deg — otherwise the CSS transition whips the wedge all the
-        // way round every time the heading crosses north.
-        var prev = state.wedgeRot || 0;
-        state.wedgeRot = prev + (((h - (prev % 360)) + 540) % 360 - 180);
-        state.wedgeEl.style.transform = "rotate(" + state.wedgeRot + "deg)";
-      }
+      // headingDeg omitted from an update() call -> leave the wedge alone
+      // (a compass-fed page drives it via setHeading() at event rate).
+      if (a.headingDeg !== undefined) setWedge(a.headingDeg);
 
       var src = map.getSource("hm-accuracy");
       if (!src) { ensureAccuracyLayers(map, state.color); src = map.getSource("hm-accuracy"); }
@@ -261,12 +258,31 @@
       maybeFollow(state, map, a.lon, a.lat);
     }
 
+    // Rotate the needle to `deg` (true-north). Unwrapped so a 359->1 step is
+    // +2deg, never -358 (a whole-circle whip). null/NaN hides it.
+    function setWedge(deg) {
+      if (!state.wedgeEl) return;
+      if (deg == null || !isFinite(deg)) { state.wedgeEl.style.opacity = "0"; return; }
+      state.wedgeEl.style.opacity = "1";
+      var prev = state.wedgeRot || 0;
+      state.wedgeRot = prev + (((deg - (prev % 360)) + 540) % 360 - 180);
+      state.wedgeEl.style.transform = "rotate(" + state.wedgeRot + "deg)";
+    }
+
     function update(a) {
       if (state.removed || !a) return;
       var lon = a.lon, lat = a.lat;
       if (typeof lon !== "number" || typeof lat !== "number" || !isFinite(lon) || !isFinite(lat)) return;
       state.pending = a;
       if (state.ready) applyUpdate(a);
+    }
+
+    // High-frequency heading-only path — call straight from a compass
+    // (DeviceHeading.onChange), independent of the GPS-fix cadence. Cheap:
+    // one style write, no source setData / follow.
+    function setHeading(deg) {
+      if (state.removed) return;
+      if (!state.marker.getElement().classList.contains("hm--offsite")) setWedge(deg);
     }
 
     function remove() {
@@ -283,7 +299,7 @@
     // Refresh the content bbox after a bundle (re)load without re-attaching.
     function setBounds(b) { state.bounds = b || null; }
 
-    return { update: update, remove: remove, setBounds: setBounds };
+    return { update: update, setHeading: setHeading, remove: remove, setBounds: setBounds };
   }
 
   window.HereMarker = { attach: attach, withinBounds: withinBounds, SITE_BUFFER_M: SITE_BUFFER_M };
