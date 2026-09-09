@@ -1,0 +1,31 @@
+-- Ridge Quest: rework "vertical metres" so the headline day/season total no
+-- longer depends on noisy phone GPS altitude.
+--
+-- Two independent changes ship together (see the build plan):
+--
+--   Layer 1 (no schema) — a run's vertical for POINTS now comes from the
+--   corridor's authored descent (corridor.elev_loss_m, published into the
+--   bundle as geometry.descentM) scaled by the R9 coverage fraction, not
+--   last.alt - first.alt. quest_run.vertical_m keeps its column and meaning
+--   ("the vertical this run scored on"); only its provenance changed.
+--
+--   Layer 2 (this migration) — a NEW per-day running total measured by
+--   subtraction between authored "elevation checkpoint" circle zones the
+--   skier passes (lift tops/bottoms, ridge tops). Maintained client-side in
+--   ridge-quest.html (_tickCheckpoints, guarded last-known-elevation) and
+--   POSTed to POST /api/quest-day-vertical, which upserts with MAX() —
+--   monotonic within a day, retry- and second-device-safe, same upgrade-only
+--   trust model as player_fog_cell.
+--
+-- checkpoint_vertical_m is kept SEPARATE from vertical_m: vertical_m stays
+-- the run-summed number that feeds questPoints and the per-activity
+-- leaderboard "m vert"; checkpoint_vertical_m is what "Vertical today" / a
+-- new "This season" tile display.
+--
+-- player_day_stats has no inbound FK, so a plain ADD COLUMN with a DEFAULT is
+-- safe (no rebuild-and-swap — cf. feedback-d1-fk-rebuild-gotcha / migration
+-- 0044, which had to be a parallel table for exactly that reason). Being a
+-- column on an already-swept table, nothing new is needed in the
+-- right-to-delete batch, the app-cascade delete, or /api/nuke.
+
+ALTER TABLE player_day_stats ADD COLUMN checkpoint_vertical_m REAL NOT NULL DEFAULT 0;

@@ -1,7 +1,9 @@
 // Unit tests for Ridge Quest R1's corridor-crossing detector: the
 // signed-distance-to-corridor math (QGeo.corridorDist) and the
 // classification logic (direction via nearest-endpoint, ski/lift/hike
-// activity, duration gating) in frontend/ridge-quest.html.
+// activity, duration gating, and the vertical-for-points value — authored
+// corridor.descentM x coverage, else the legacy GPS-altitude delta) in
+// frontend/ridge-quest.html.
 //
 // Extracts the real QGeo object and the real classification body of
 // Quest._classifyAndLog straight out of the shipped file via vm, so this
@@ -187,7 +189,59 @@ function mkFix(lat, lon, tOffsetS, extra) {
     mkFix(51.300, -117.05, 40, { speed: 6 })
   ];
   const run = classify(straightRun, buffer, "ski", QGeo, QUEST_TUNING);
-  assert(run && run.verticalM === null, "vertical_m is null when no fix carried an altitude reading, got " + (run && run.verticalM));
+  assert(run && run.verticalM === null, "vertical_m is null when no fix carried an altitude reading (legacy fallback, corridor has no authored descentM), got " + (run && run.verticalM));
+})();
+
+// ---- authored-descent vertical: when the corridor carries descentM (the
+// library's elev_loss_m, baked into the bundle), a skied crossing scores on
+// that x coverage instead of a noisy GPS-altitude delta, and is never null. ----
+
+const straightRunWithDescent = Object.assign({}, straightRun, { descentM: 300 });
+const liftLineWithDescent = Object.assign({}, liftLine, { descentM: 250 });
+
+(function testAuthoredDescentDrivesVertical() {
+  let cov = null;
+  const self = { onCoverage: (n, pct) => { cov = pct; } };
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 6, alt: 9999 }), // altitude present but IGNORED once descentM is set
+    mkFix(51.300, -117.05, 40, { speed: 6, alt: 8888 })
+  ];
+  const run = classify.call(self, straightRunWithDescent, buffer, "ski", QGeo, QUEST_TUNING);
+  const expected = -Math.round(300 * cov);
+  assert(run && run.verticalM === expected, "verticalM = -round(descentM x coverage) for a skied run, got " + (run && run.verticalM) + " expected " + expected);
+  assert(run && run.verticalM < 0, "authored-descent verticalM is negative (a descent), got " + (run && run.verticalM));
+})();
+
+(function testAuthoredDescentNeverNullOnHike() {
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 1 }), // slow -> classifies hike, still scores on descentM
+    mkFix(51.305, -117.05, 60, { speed: 1 }),
+    mkFix(51.300, -117.05, 120, { speed: 1 })
+  ];
+  const run = classify(straightRunWithDescent, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "slow descent still classifies hike, got " + (run && run.activity));
+  assert(run && run.verticalM != null && run.verticalM < 0, "a hike on a corridor with authored descent is never null verticalM (fixes the old 0-points bug), got " + (run && run.verticalM));
+})();
+
+(function testLiftVerticalNullDespiteDescentM() {
+  const buffer = [
+    mkFix(51.300, -117.05, 0, { speed: 4, alt: 2000 }),
+    mkFix(51.310, -117.05, 300, { speed: 4, alt: 2250 })
+  ];
+  const run = classify(liftLineWithDescent, buffer, "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "lift", "still a lift ride, got " + (run && run.activity));
+  assert(run && run.verticalM === null, "a lift ride carries null verticalM regardless of the corridor's descentM (lift = transport, 0 pts), got " + (run && run.verticalM));
+})();
+
+(function testDistanceActivityVerticalNullDespiteDescentM() {
+  const buffer = [
+    mkFix(51.310, -117.05, 0, { speed: 5, alt: 2400 }),
+    mkFix(51.305, -117.05, 20, { speed: 5, alt: 2250 }),
+    mkFix(51.300, -117.05, 40, { speed: 5, alt: 2100 })
+  ];
+  const run = classify(straightRunWithDescent, buffer, "bike", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "bike", "bike selected classifies bike, got " + (run && run.activity));
+  assert(run && run.verticalM === null, "bike/drive/xcski score on distance, so verticalM is null even with an authored descentM, got " + (run && run.verticalM));
 })();
 
 // ---- R8: selectedActivity — manual player choice drives classification

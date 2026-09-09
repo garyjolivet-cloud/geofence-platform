@@ -73,6 +73,13 @@ if (!bucketM) { console.log("FAIL: could not extract questDateBucketClient from 
 // eslint-disable-next-line no-new-func
 const questDateBucketClient = new Function("date", bucketM[0].slice(bucketM[0].indexOf("{") + 1, -1));
 
+/* ---- questSeasonIdClient extracted verbatim from ridge-quest.html
+   (used by refreshStats() to sum "this season" from the /stats day rows) ---- */
+const seasonM = html.match(/function questSeasonIdClient\(date\)\{[\s\S]*?\n\}/);
+if (!seasonM) { console.log("FAIL: could not extract questSeasonIdClient from ridge-quest.html"); process.exit(1); }
+// eslint-disable-next-line no-new-func
+const questSeasonIdClient = new Function("date", seasonM[0].slice(seasonM[0].indexOf("{") + 1, -1));
+
 /* ---- questDateBucket ---- */
 
 (function testDateBucketNormalCase() {
@@ -103,6 +110,31 @@ const questDateBucketClient = new Function("date", bucketM[0].slice(bucketM[0].i
 
 (function testSeasonIdAtRolloverMonth() {
   assert(questSeasonId("2026-09-01T12:00:00.000Z") === "2026-2027", "September 1 itself rolls into the new season, got " + questSeasonId("2026-09-01T12:00:00.000Z"));
+})();
+
+/* ---- questSeasonIdClient mirrors the server + the "This season" vertical
+   sum refreshStats() does over the /stats day rows ---- */
+
+(function testSeasonIdClientMirrorsServer() {
+  for (const iso of ["2026-03-15T12:00:00.000Z", "2026-11-15T12:00:00.000Z", "2026-09-01T02:00:00.000Z", "2026-08-31T23:00:00.000Z"]) {
+    assert(questSeasonIdClient(new Date(iso)) === questSeasonId(iso),
+      "client and server season-id agree for " + iso + ", got client=" + questSeasonIdClient(new Date(iso)) + " server=" + questSeasonId(iso));
+  }
+})();
+
+(function testThisSeasonVerticalSum() {
+  // refreshStats(): seasonVert = days.filter(d => d.season_id === current)
+  //                                   .reduce((s,d) => s + (d.checkpoint_vertical_m||0), 0)
+  const now = new Date("2026-12-20T18:00:00.000Z");
+  const cur = questSeasonIdClient(now);
+  const days = [
+    { date: "2026-12-20", season_id: cur, checkpoint_vertical_m: 1200 },
+    { date: "2026-12-19", season_id: cur, checkpoint_vertical_m: 800 },
+    { date: "2026-12-18", season_id: cur }, // missing column -> treated as 0
+    { date: "2026-04-02", season_id: "2025-2026", checkpoint_vertical_m: 5000 } // previous season, excluded
+  ];
+  const seasonVert = days.filter(d => d.season_id === cur).reduce((s, d) => s + (d.checkpoint_vertical_m || 0), 0);
+  assert(seasonVert === 2000, "This-season vertical sums only the current season's checkpoint_vertical_m (missing = 0), got " + seasonVert);
 })();
 
 /* ---- questPoints ---- */

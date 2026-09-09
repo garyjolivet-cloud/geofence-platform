@@ -1462,9 +1462,42 @@ async function api(request, env, url) {
     if (!P || P.playerId !== decodeURIComponent(mps[1])) return json({ error: "not authenticated" }, 401, AC);
     if (!env.DB) return json({ error: "D1 not bound" }, 500);
     const { results } = await env.DB.prepare(
-      "SELECT date,season_id,points,vertical_m,runs_count,lift_rides,hikes FROM player_day_stats WHERE player_id=? ORDER BY date DESC LIMIT 200"
+      "SELECT date,season_id,points,vertical_m,checkpoint_vertical_m,runs_count,lift_rides,hikes FROM player_day_stats WHERE player_id=? ORDER BY date DESC LIMIT 200"
     ).bind(P.playerId).all();
     return json({ days: results || [] }, 200, AC);
+  }
+
+  // --- Ridge Quest: checkpoint-measured daily vertical ---
+  // The headline "Vertical today" / "This season" number. Unlike vertical_m
+  // (summed per logged run from each corridor's authored descent), this is a
+  // running total the CLIENT measures by subtraction between authored
+  // "elevation checkpoint" circle zones the skier passes (ridge-quest.html's
+  // _tickCheckpoints, with a guarded last-known-elevation). The server just
+  // persists the latest reported total, upgrade-only: MAX() makes this
+  // monotonic within a day and safe against retries, out-of-order posts, and
+  // a second device — same trust model as /api/fog-cells above. A dedicated
+  // route (not folded into /api/quest-runs) because the total must keep
+  // posting on a cadence while a skier merely rides lifts past checkpoints,
+  // even at a resort where no corridor crossing ever classifies.
+  if (path === "/api/quest-day-vertical" && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const b = await request.json().catch(() => ({}));
+    let v = Number(b.verticalM);
+    if (!Number.isFinite(v)) return json({ error: "verticalM (number) required" }, 400, AC);
+    v = Math.max(0, Math.min(100000, Math.round(v)));
+    const nowIso = new Date().toISOString();
+    const date = questDateBucket(nowIso);
+    const seasonId = questSeasonId(nowIso);
+    await env.DB.prepare(
+      `INSERT INTO player_day_stats
+         (player_id,app_id,date,season_id,points,vertical_m,runs_count,lift_rides,hikes,checkpoint_vertical_m)
+       VALUES (?,?,?,?,0,0,0,0,0,?)
+       ON CONFLICT(player_id,date) DO UPDATE SET
+         checkpoint_vertical_m=MAX(checkpoint_vertical_m,excluded.checkpoint_vertical_m)`
+    ).bind(P.playerId, P.appId, date, seasonId, v).run();
+    return json({ ok: true, date, checkpointVerticalM: v }, 200, AC);
   }
 
   // --- Ridge Quest R3-core: leaderboards ---

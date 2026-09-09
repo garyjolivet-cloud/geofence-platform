@@ -783,6 +783,28 @@
       </div>
     </div>
 
+    <!-- ── Elevation checkpoint (Ridge Quest, circle stops only) — a
+         known-elevation spot (lift top/bottom, ridge top) the skier passes
+         through. Ridge Quest measures "vertical descended" by subtracting
+         the elevations of successive checkpoints, instead of trusting noisy
+         phone GPS altitude. Fires per pass in ridge-quest.html's
+         _tickCheckpoints (guarded last-known-elevation), not a pipeline
+         block. Set the height by hand from a lift-spec / survey value, or
+         stamp it off the terrain DEM. ── -->
+    <div class="va-section" id="pElevCheckpointSection" style="display:none">
+      <div class="va-label">Elevation checkpoint (Ridge Quest)</div>
+      <label style="display:flex;align-items:center;gap:8px;margin:6px 0;text-transform:none;font-family:inherit;font-size:13px;color:inherit">
+        <input id="pIsElevCheckpoint" type="checkbox" style="width:auto;margin:0">
+        Known-elevation checkpoint (vertical measurement)
+      </label>
+      <div id="pElevCheckpointBody" style="display:none">
+        <label class="k">elevation at this spot (m)</label>
+        <input id="pCheckpointElevM" type="number" step="1" placeholder="metres above sea level">
+        <div class="row" style="margin-top:4px"><button id="pCheckpointUseTerrain" class="ghost" style="flex:1" type="button">⛰ use terrain height here</button></div>
+        <div class="hint" style="margin:4px 0 0">Needs at least two checkpoints in the project to do anything. Hand-set from a lift-spec sheet where you can; the DEM button is a fallback (±5–15 m, samples ground not a tower).</div>
+      </div>
+    </div>
+
     <!-- ── Hearing range — every stop gets its own full-volume override,
          not just path stops; leave blank to fall back to the project's
          shared default (Project Settings dot-badges). The fade-start
@@ -1934,6 +1956,15 @@ function makeZone(name,shape){
     // published bundle by zoneToEngine so Ridge Quest / engine / tile-fog
     // read them from the baked zone exactly as before.
     base.difficulty=null; base.runType="run"; base.activityType="hike";
+    // Authored descent (m) of this run, pulled read-only from the linked
+    // `corridor` row's elev_loss_m by reconcileLinkedCorridors /
+    // refreshCorridorShapeFromLibrary. Baked into the published bundle by
+    // zoneToEngine (geometry.descentM) so Ridge Quest scores a skied run on
+    // this exact drop x its coverage fraction instead of a noisy GPS-altitude
+    // delta. null until Backfill Elevation has been run on the row in the
+    // GPX Editor. See zoneToEngine/engineToZone/editorToSimBundle for the
+    // other 3 mirror locations this field must stay in sync with.
+    base.descentM=null;
     // "Moving audio" mode — when true, this corridor serializes to the
     // engine's moving-ambient-bed form (an audio source travels the line at
     // speedKmh) instead of a static trigger band. movementMode/speedKmh/
@@ -2786,7 +2817,8 @@ function refreshProps(){
     if(linked){
       const dl={green:"Green",blue:"Blue",black:"Black","double-black":"Double black"}[z.difficulty]||"— difficulty not set —";
       document.getElementById("pCorridorMeta").textContent=
-        dl+" · "+(z.runType||"run")+" · "+(z.activityType||"hike")+" · "+(z.shape.widthM||10)+" m wide";
+        dl+" · "+(z.runType||"run")+" · "+(z.activityType||"hike")+" · "+(z.shape.widthM||10)+" m wide"
+        +(z.descentM!=null?" · "+z.descentM+" m descent":" · descent not set (run Backfill Elevation in GPX Editor)");
     }
   }
   const isCircle=z.shape.type==="circle";
@@ -2797,6 +2829,13 @@ function refreshProps(){
     document.getElementById("pViewshedMaxDist").value=z.viewshedMaxDistM||2000;
     const n=(z.viewshedCells||[]).length;
     document.getElementById("pViewshedStatus").textContent=n?n+" cells revealed on entry":"Not yet computed.";
+  }
+  // Elevation checkpoint (Ridge Quest) — circle stops only, same as viewpoint.
+  document.getElementById("pElevCheckpointSection").style.display=isCircle?"block":"none";
+  if(isCircle){
+    document.getElementById("pIsElevCheckpoint").checked=!!z.isElevCheckpoint;
+    document.getElementById("pElevCheckpointBody").style.display=z.isElevCheckpoint?"block":"none";
+    document.getElementById("pCheckpointElevM").value=z.checkpointElevM??"";
   }
   // Hearing-range override — every stop type now, not just path.
   document.getElementById("pRangeClear").value=z.spatialClearM??"";
@@ -3294,6 +3333,25 @@ bindProp("pIsViewpoint",z=>{
 });
 bindProp("pViewshedMaxDist",z=>{ z.viewshedMaxDistM=Math.max(100,Math.min(4000,+document.getElementById("pViewshedMaxDist").value||2000)); });
 document.getElementById("pRecomputeViewshed").onclick=recomputeViewshed;
+bindProp("pIsElevCheckpoint",z=>{
+  z.isElevCheckpoint=document.getElementById("pIsElevCheckpoint").checked;
+  document.getElementById("pElevCheckpointBody").style.display=z.isElevCheckpoint?"block":"none";
+});
+bindProp("pCheckpointElevM",z=>{ const v=document.getElementById("pCheckpointElevM").value; z.checkpointElevM=v===""?null:Math.round(+v||0); });
+// Stamp the checkpoint elevation off the terrain DEM — verbatim clone of
+// #pAltUseTerrain above, writing z.checkpointElevM instead of z.altM.
+document.getElementById("pCheckpointUseTerrain").onclick=()=>{
+  if(sel<0) return;
+  const z=zones[sel];
+  if(!map.getTerrain()){ document.getElementById("status").textContent="turn on 3D Mode's terrain first (tilt the map — ⛰ Tilt, top right)"; return; }
+  const c=zoneCenterLonLat(z);
+  const elevM=map.queryTerrainElevation(c);
+  if(elevM==null){ document.getElementById("status").textContent="terrain not loaded here yet — pan/zoom near this stop, then try again"; return; }
+  z.checkpointElevM=Math.round(elevM);
+  document.getElementById("pCheckpointElevM").value=z.checkpointElevM;
+  autoSave();
+  document.getElementById("status").textContent="checkpoint elevation set to "+z.checkpointElevM+" m from terrain";
+};
 bindProp("pRangeClear",z=>{ const v=document.getElementById("pRangeClear").value; z.spatialClearM=v===""?null:Math.max(0,+v||0); });
 bindProp("pAltM",z=>{ const v=document.getElementById("pAltM").value; z.altM=v===""?null:+v||0; });
 bindProp("pAltTol",z=>{ const v=document.getElementById("pAltTol").value; z.altToleranceM=v===""?null:Math.max(0,+v||0); });
@@ -4471,7 +4529,7 @@ async function reconcileLinkedCorridors(){
     _corrCenterCache.clear();
     let changed=false;
     for(const z of corr){
-      if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; z.corridorRev=null; changed=true; } // deleted from library — keep the stop + its baked shape
+      if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; z.corridorRev=null; if(z.descentM!=null){ z.descentM=null; } changed=true; } // deleted from library — keep the stop + its baked shape
       if(!z.corridorId){
         const hit=_matchCorridorRow(rows, z);
         if(hit){ z.corridorId=hit.id; z.corridorRev=hit.updatedAt||null; changed=true; }
@@ -4484,6 +4542,8 @@ async function reconcileLinkedCorridors(){
       const nw=row.widthM||10; if(nw!==z.shape.widthM){ z.shape.widthM=nw; changed=true; }
       const nd=row.difficulty||null, nr=row.runType||"run", na=row.activityType||"hike";
       if(nd!==z.difficulty||nr!==z.runType||na!==z.activityType){ z.difficulty=nd; z.runType=nr; z.activityType=na; changed=true; }
+      const ndesc=row.elevLossM!=null?Math.round(row.elevLossM):null;
+      if(ndesc!==z.descentM){ z.descentM=ndesc; changed=true; }
       z.corridorRev=row.updatedAt||z.corridorRev;
     }
     if(changed){ render(); refreshProps(); }
@@ -4502,6 +4562,7 @@ async function refreshCorridorShapeFromLibrary(z){
     if(coords.length>=2) z.shape.coords=coords;
     z.shape.widthM=j.widthM||10;
     z.difficulty=j.difficulty||null; z.runType=j.runType||"run"; z.activityType=j.activityType||"hike";
+    z.descentM=j.elevLossM!=null?Math.round(j.elevLossM):null;
     z.corridorRev=j.updatedAt||z.corridorRev;
     _corrCenterCache.delete(z.corridorId);
     render(); refreshProps();
@@ -4877,7 +4938,7 @@ function zoneToEngine(z){
   else if(s.type==="tripline") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}];
   // Corridor — the geometry shape Geofencer/SimFencer's corridor primitive
   // reads (nearest-segment distance to the polyline, minus half of widthM).
-  else if(s.type==="corridor" && !movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"corridor",path:s.coords.map(LL),widthM:s.widthM||10}}];
+  else if(s.type==="corridor" && !movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"corridor",path:s.coords.map(LL),widthM:s.widthM||10,descentM:z.descentM!=null?Math.round(z.descentM):null}}];
   // Moving-audio corridor — no drawn shape of its own; both layers reuse
   // the approach radius as a plain circle at the current moving point.
   else if(s.type==="corridor" && movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:genR}];
@@ -4930,6 +4991,12 @@ function zoneToEngine(z){
     zo.isViewpoint=true;
     zo.viewshedMaxDistM=z.viewshedMaxDistM||2000;
     zo.viewshedCells=z.viewshedCells||[];
+  }
+  // Elevation checkpoint (Ridge Quest, circle stops only) — a known-elevation
+  // spot Ridge Quest subtracts between to measure vertical descended.
+  if(s.type==="circle" && z.isElevCheckpoint && typeof z.checkpointElevM==="number"){
+    zo.isElevCheckpoint=true;
+    zo.checkpointElevM=Math.round(z.checkpointElevM);
   }
   if(movingAudio){
     zo.path=s.coords.map(LL);
@@ -5132,11 +5199,17 @@ function engineToZone(zo){
   if(shape.type==="corridor"){
     z.difficulty=zo.difficulty||null; z.runType=zo.runType||"run";
     z.activityType=zo.activityType||"hike";
+    const tgtC=(zo.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
+    z.descentM=(tgtC&&tgtC.geometry.descentM!=null)?tgtC.geometry.descentM:null;
   }
   if(shape.type==="circle" && zo.isViewpoint){
     z.isViewpoint=true;
     z.viewshedMaxDistM=zo.viewshedMaxDistM||2000;
     z.viewshedCells=zo.viewshedCells||[];
+  }
+  if(shape.type==="circle" && zo.isElevCheckpoint && typeof zo.checkpointElevM==="number"){
+    z.isElevCheckpoint=true;
+    z.checkpointElevM=Math.round(zo.checkpointElevM);
   }
   z.audioM = zo.audibleFromM!=null?zo.audibleFromM:DEFAULTS.audioM;
   z.volume = zo.volume!=null?zo.volume:1;
@@ -6525,7 +6598,7 @@ function editorToSimBundle(){
     else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
     else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
     else if(movingAudio) targetLayer={kind:"target",radiusM:z.approachM||30};
-    else if(s.type==="corridor") targetLayer={kind:"target",geometry:{type:"corridor",path:s.coords.map(c=>[c[1],c[0]]),widthM:s.widthM||10}};
+    else if(s.type==="corridor") targetLayer={kind:"target",geometry:{type:"corridor",path:s.coords.map(c=>[c[1],c[0]]),widthM:s.widthM||10,descentM:z.descentM!=null?Math.round(z.descentM):null}};
     const triggers=[];
     if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true});
       else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true});}
@@ -6565,7 +6638,11 @@ function editorToSimBundle(){
       // so the 3 mirrors stay in sync" reasoning as difficulty/runType above.
       isViewpoint:s.type==="circle"?!!z.isViewpoint:false,
       viewshedMaxDistM:(s.type==="circle"&&z.isViewpoint)?(z.viewshedMaxDistM||2000):null,
-      viewshedCells:(s.type==="circle"&&z.isViewpoint)?(z.viewshedCells||[]):[]};
+      viewshedCells:(s.type==="circle"&&z.isViewpoint)?(z.viewshedCells||[]):[],
+      // Ridge Quest elevation checkpoint — same "not consumed by Test Mode,
+      // exported anyway so the mirrors stay in sync" reasoning as above.
+      isElevCheckpoint:(s.type==="circle"&&z.isElevCheckpoint&&typeof z.checkpointElevM==="number")?true:false,
+      checkpointElevM:(s.type==="circle"&&z.isElevCheckpoint&&typeof z.checkpointElevM==="number")?Math.round(z.checkpointElevM):null};
     if(movingAudio){
       out.path=s.coords.map(c=>[c[1],c[0]]);
       out.movingAudio=true;

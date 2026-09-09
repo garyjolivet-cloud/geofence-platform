@@ -191,6 +191,24 @@ const corridorLayer = {
     "engineToZone still restores z.difficulty / z.runType / z.activityType from the bundle");
 })();
 
+// ---- authored descent (Ridge Quest vertical rework) ----
+// A corridor's descent (the library's elev_loss_m) is baked into the target
+// geometry as descentM and read back on reload — a new per-corridor
+// geometry field, so per CLAUDE.md's verbatim-mirror rule it must appear in
+// zoneToEngine (publish), engineToZone (reload) AND editorToSimBundle
+// (Test Mode snapshot), or it silently drops from one path.
+(function testDescentMMirroredInAllThree() {
+  const zoneToEngine = extractMethodBody("function zoneToEngine(z){");
+  const engineToZone = extractMethodBody("function engineToZone(zo){");
+  const editorToSimBundle = extractMethodBody("function editorToSimBundle(){");
+  assert(/descentM:\s*z\.descentM\s*!=\s*null/.test(zoneToEngine.replace(/\s+/g, " ")),
+    "zoneToEngine bakes geometry.descentM from z.descentM");
+  assert(/z\.descentM\s*=\s*\(?tgtC?\b/.test(engineToZone.replace(/\s+/g, " ")) || /geometry\.descentM/.test(engineToZone),
+    "engineToZone restores z.descentM from the corridor geometry");
+  assert(/descentM:\s*z\.descentM\s*!=\s*null/.test(editorToSimBundle.replace(/\s+/g, " ")),
+    "editorToSimBundle carries geometry.descentM into the Test Mode snapshot");
+})();
+
 (function testCorridorEditingUiRemoved() {
   for (const gone of [
     'bindProp("pDifficulty"', 'bindProp("pRunType"', 'bindProp("pCorridorWidth"',

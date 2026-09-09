@@ -68,8 +68,8 @@
   .steps span{flex:1;height:4px;border-radius:2px;background:var(--rim)}
   .steps span.done{background:var(--go)}
   .steps span.active{background:var(--coral)}
-  .now{display:flex;gap:18px;margin-bottom:16px}
-  .now .stat{flex:1;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:12px;text-align:center}
+  .now{display:flex;gap:10px;margin-bottom:16px}
+  .now .stat{flex:1;min-width:0;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:12px 8px;text-align:center}
   .now .stat b{display:block;font-family:"Barlow Condensed";font-size:22px;color:var(--snow)}
   .now .stat span{font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px}
   .welcome{text-align:center;padding:20px 6px}
@@ -555,6 +555,14 @@ const RQ_MAX_TRACK = 6;
 function getTrackFriends(){ try{ return JSON.parse(localStorage.getItem("rq.trackFriends")||"[]"); }catch(e){ return []; } }
 function setTrackFriends(ids){ localStorage.setItem("rq.trackFriends", JSON.stringify(ids.slice(0, RQ_MAX_TRACK))); }
 
+// Elevation-checkpoint running total — persisted so an app reload mid-day
+// doesn't lose it. Shape: {day, total, lastElevM, lastAt, lastZoneId}, where
+// `day` is a questDateBucketClient() string; a different `day` on read means
+// a new ski day and the total resets. Same "persist like rq.activity" idea
+// as rq.trackFriends above.
+function getCheckpointVert(){ try{ return JSON.parse(localStorage.getItem("rq.checkpointVert")||"null"); }catch(e){ return null; } }
+function setCheckpointVert(o){ try{ localStorage.setItem("rq.checkpointVert", JSON.stringify(o)); }catch(e){} }
+
 const QUEST_TUNING = {
   MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
   MAX_DURATION_S: 5400,    // 90 min — something went wrong (GPS stuck in-band), discard
@@ -578,7 +586,11 @@ const QUEST_TUNING = {
   // testing, same as every other QUEST_TUNING constant.
   CORRIDOR_SAMPLE_STEP_M: 25,
   CORRIDOR_COMPLETION_PCT: 0.5,
-  CORRIDOR_GPS_TOLERANCE_M: 15
+  CORRIDOR_GPS_TOLERANCE_M: 15,
+  // --- Elevation checkpoints (headline vertical, _tickCheckpoints) ---
+  CHECKPOINT_RADIUS_M: 20,        // a pass-through spot on a lift/run line — a touch wider than VIEWPOINT_RADIUS_M since you're moving through it, not standing
+  CHECKPOINT_COOLDOWN_MS: 60000,  // per-checkpoint: a lingering GPS hit can't re-credit the same lap
+  CHECKPOINT_STALE_MS: 1200000    // 20 min — beyond this gap, two checkpoint elevations aren't one trustworthy descent (lunch, lift maze, overnight)
 };
 
 // R12 — the single source of truth for activity key->label, shared by
@@ -668,6 +680,10 @@ const Quest = {
   fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
   viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
   enteredViewpoints: new Set(), // zoneId set — a viewpoint grants once per session; the server's upgrade-only upsert makes a duplicate POST harmless but wasteful, so this avoids re-sending every fix while lingering at a viewpoint
+  checkpoints: [],       // [{zoneId,name,center:[lat,lon],elevM}] — authored known-elevation spots; _tickCheckpoints subtracts between them for the headline daily vertical
+  resortFullVerticalM: 0, // max(checkpointElevM) - min(checkpointElevM); 0 when <2 checkpoints => Layer 2 inert. Also the single-delta cap (a bigger drop between two hits = a missed checkpoint)
+  checkpointVert: null,  // {day,total,lastElevM,lastAt,lastZoneId} mirror of localStorage["rq.checkpointVert"]; loaded in start()
+  _cpCooldownUntil: {},  // zoneId -> ts; session-only per-checkpoint cooldown so one lingering pass can't re-credit a lap
   watchId: null,
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
   onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
@@ -675,11 +691,12 @@ const Quest = {
   onShare: null,        // callback(p) — same p as onPosition; set by renderHome to POST /api/presence (throttled) while sharing-with-friends is on. Independent of onPosition so it survives Home<->Map navigation.
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
   onCoverage: null,     // R9 — callback(corridorName, pct, passed) — fired once per band exit (whether it logged a run or was discarded), so a partial/clipped crossing isn't silent the way a below-threshold discard otherwise would be
+  onCheckpointVertical: null, // callback(totalM) — fired when _tickCheckpoints credits a descent, so Home's "Vertical today" tile ticks up live
 
   async loadCorridors(){
     try{
       const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
-      if(bundle.error){ this.corridors=[]; this.viewpoints=[]; return; }
+      if(bundle.error){ this.corridors=[]; this.viewpoints=[]; this.checkpoints=[]; this.resortFullVerticalM=0; return; }
       const ref = bundle.ref || [0,0];
       this.ref = ref;
       // R12 — the per-project "relevant activities" filter, injected
@@ -710,6 +727,12 @@ const Quest = {
                  // dash pattern on the fog-off "all runs" map. Authored in the Fence
                  // Editor; unused by scoring.
                  activityType:z.activityType||null,
+                 // Authored descent (m) for this run — the corridor library's
+                 // elev_loss_m, baked into geometry.descentM by the Fence
+                 // Editor. A skied crossing scores on this x its coverage
+                 // fraction, not a noisy GPS-altitude delta. null until
+                 // Backfill Elevation has been run on the row.
+                 descentM: target.geometry.descentM!=null ? target.geometry.descentM : null,
                  widthM:target.geometry.widthM||10, path, lengthM, ref };
       }).filter(Boolean);
       // R4 — Viewpoint zones: a plain circle stop flagged isViewpoint, with
@@ -718,7 +741,16 @@ const Quest = {
       // ([lat,lon], same convention every other zone here already uses).
       this.viewpoints = (bundle.zones||[]).filter(z=>z.isViewpoint && z.center && (z.viewshedCells||[]).length)
         .map(z=>({ zoneId:z.id, name:z.name||"Viewpoint", center:z.center, cells:z.viewshedCells }));
-    }catch(e){ this.corridors=[]; this.viewpoints=[]; }
+      // Elevation checkpoints — circle stops flagged isElevCheckpoint with a
+      // numeric checkpointElevM. _tickCheckpoints subtracts a skier's
+      // successive checkpoint elevations for the headline daily vertical.
+      // resortFullVerticalM (max-min) is both the "is Layer 2 usable" gate
+      // and the per-delta sanity cap.
+      this.checkpoints = (bundle.zones||[]).filter(z=>z.isElevCheckpoint && z.center && typeof z.checkpointElevM==="number")
+        .map(z=>({ zoneId:z.id, name:z.name||"Checkpoint", center:z.center, elevM:z.checkpointElevM }));
+      const _ce = this.checkpoints.map(c=>c.elevM);
+      this.resortFullVerticalM = _ce.length>=2 ? (Math.max.apply(null,_ce) - Math.min.apply(null,_ce)) : 0;
+    }catch(e){ this.corridors=[]; this.viewpoints=[]; this.checkpoints=[]; this.resortFullVerticalM=0; }
   },
 
   // R2 — loads the player's already-revealed cells once (session start /
@@ -741,6 +773,13 @@ const Quest = {
     // behavior, unchanged.
     this.selectedActivity = selectedActivity || "ski";
     this.states = {};
+    // Elevation-checkpoint running total: restore what was persisted (a
+    // reload mid-day resumes it); _tickCheckpoints resets it itself when the
+    // stored day-bucket no longer matches. Per-checkpoint cooldowns are
+    // session-only — a fresh session may legitimately re-hit a checkpoint.
+    this.checkpointVert = getCheckpointVert();
+    this._cpCooldownUntil = {};
+    this._cpLastPostAt = 0;
     GPSFilter.reset();
     if(!navigator.geolocation) return false;
     this.watchId = navigator.geolocation.watchPosition(
@@ -755,6 +794,9 @@ const Quest = {
   },
   stop(){
     if(this.watchId!=null){ navigator.geolocation.clearWatch(this.watchId); this.watchId=null; }
+    // Flush the checkpoint total one last time (unthrottled) so a session
+    // that ends between throttled posts still lands its final number.
+    if(this.checkpointVert && this.checkpointVert.total>0) this._reportCheckpointVertical(this.checkpointVert.total, true);
   },
   active(){ return this.watchId!=null; },
 
@@ -773,6 +815,7 @@ const Quest = {
     this.corridors.forEach(corridor=>this._tick(corridor, p, this.selectedActivity));
     this._revealFog(p, fix.acc);
     this._tickViewpoints(p);
+    this._tickCheckpoints(p);
     if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t});
     if(this.onShare) this.onShare(p);         // share own position with friends (throttled inside)
   },
@@ -865,6 +908,54 @@ const Quest = {
     }
   },
 
+  // Headline daily vertical, measured by SUBTRACTION between authored
+  // known-elevation checkpoints the skier passes — GPS altitude is never
+  // consulted. Keeps a guarded "last known elevation": each new checkpoint
+  // credits (lastElevM - thisElevM) to the day total if that's a descent,
+  // then re-anchors. Guards: only descent counts (a lift/bootpack up credits
+  // nothing); a single delta is capped at resortFullVerticalM (a bigger drop
+  // ⇒ a checkpoint was missed); a gap over CHECKPOINT_STALE_MS just
+  // re-anchors (lunch / lift maze / overnight aren't one descent); the total
+  // resets when the day-bucket rolls. Persisted so a mid-day reload resumes.
+  _tickCheckpoints(p){
+    if(this.resortFullVerticalM <= 0 || !this.checkpoints.length) return; // <2 checkpoints authored — Layer 2 inert
+    const now = p.t || Date.now();
+    const dayKey = questDateBucketClient(new Date(now));
+    let st = this.checkpointVert;
+    if(!st || st.day !== dayKey){
+      st = { day: dayKey, total: 0, lastElevM: null, lastAt: null, lastZoneId: null };
+      this.checkpointVert = st;
+    }
+    let credited = false;
+    for(const cp of this.checkpoints){
+      if(QGeo.haversineM([p.lat,p.lon], cp.center) > QUEST_TUNING.CHECKPOINT_RADIUS_M) continue;
+      if(now < (this._cpCooldownUntil[cp.zoneId] || 0)) continue;
+      this._cpCooldownUntil[cp.zoneId] = now + QUEST_TUNING.CHECKPOINT_COOLDOWN_MS;
+      if(st.lastElevM != null && st.lastZoneId !== cp.zoneId && (now - st.lastAt) <= QUEST_TUNING.CHECKPOINT_STALE_MS){
+        const drop = st.lastElevM - cp.elevM;                 // descent positive
+        if(drop > 0){ st.total += Math.min(drop, this.resortFullVerticalM); credited = true; }
+      }
+      st.lastElevM = cp.elevM; st.lastAt = now; st.lastZoneId = cp.zoneId;
+    }
+    setCheckpointVert(st);
+    if(credited){
+      if(this.onCheckpointVertical) this.onCheckpointVertical(st.total);
+      this._reportCheckpointVertical(st.total, true);
+    } else if(st.total > 0){
+      this._reportCheckpointVertical(st.total, false); // throttled keep-alive so a dropped credit-POST still lands
+    }
+  },
+
+  // POST the running day total. Throttled ~10s like the presence ping;
+  // `force` (a credit just happened, or stop()) bypasses the throttle. The
+  // server upserts with MAX(), so a dropped or out-of-order post is harmless.
+  _reportCheckpointVertical(totalM, force){
+    const now = Date.now();
+    if(!force && (now - (this._cpLastPostAt || 0) < 10000)) return;
+    this._cpLastPostAt = now;
+    api("/api/quest-day-vertical", { method:"POST", body: JSON.stringify({ verticalM: Math.round(totalM) }) }).catch(()=>{});
+  },
+
   // R2 — H3 disk-reveal: mark the fix's own cell plus its k=1 ring (7 cells,
   // ~200m across — the "torch radius" absorbing normal GPS jitter, per the
   // plan's Fog-of-World precedent) as state=2 ("Visible"). Confidence-gated
@@ -938,9 +1029,8 @@ const Quest = {
     const speeds = buffer.map(p=>p.speed||0);
     const avgSpeedMps = speeds.reduce((a,b)=>a+b,0)/speeds.length;
     const maxSpeedMps = Math.max.apply(null, speeds);
-    // Net vertical delta using the EKF's own smoothed altitude (null if no
-    // fix in this run ever carried a device altitude reading).
-    const verticalM = (first.alt!=null && last.alt!=null) ? (last.alt-first.alt) : null;
+    // verticalM (which feeds POINTS) is assigned after the activity block
+    // below — it depends on the classified activity.
 
     // R8 — selectedActivity is the player's own manual choice (Ski/Hike/
     // Bike/Drive on Home) and is now the PRIMARY driver of classification,
@@ -966,6 +1056,24 @@ const Quest = {
       activity = (descending && avgSpeedMps >= QUEST_TUNING.BIKE_SPEED_MIN_MPS) ? "bike" : "hike";
     } else {
       activity = (descending && avgSpeedMps >= QUEST_TUNING.SKI_SPEED_MIN_MPS) ? "ski" : "hike";
+    }
+
+    // Vertical for scoring. Ski/hike score on descent, so use the corridor's
+    // AUTHORED descent (corridor.descentM, the library's elev_loss_m) scaled
+    // by how much of the run was actually covered — deterministic, GPS-
+    // altitude-independent, and never null when the run has an authored
+    // descent (which killed the old "no altitude fix => 0 points" bug). Sign
+    // is negative to match every Math.abs() consumer downstream. Falls back
+    // to the legacy smoothed-GPS-altitude delta only for corridors with no
+    // authored descent yet. lift = transport (0 pts regardless); bike/drive/
+    // xcski score on distanceM, so vertical is deliberately null for them.
+    let verticalM;
+    if(activity==="lift" || activity==="bike" || activity==="drive" || activity==="xcski"){
+      verticalM = null;
+    } else if(corridor.descentM != null){
+      verticalM = -Math.round(corridor.descentM * coverage);
+    } else {
+      verticalM = (first.alt!=null && last.alt!=null) ? (last.alt-first.alt) : null;
     }
 
     const run = {
@@ -996,6 +1104,14 @@ function fmtDuration(s){
 // to the server.
 function questDateBucketClient(date){
   return new Date(date.getTime()-7*3600000).toISOString().slice(0,10);
+}
+// Mirrors worker.js's questSeasonId() exactly (same fixed -7h shift, Sept
+// rollover): used client-side only to sum "this season" from the /stats
+// day rows, not for anything sent to the server.
+function questSeasonIdClient(date){
+  const d = new Date(date.getTime()-7*3600000);
+  const y = d.getUTCFullYear(), m = d.getUTCMonth()+1;
+  return m>=9 ? (y+"-"+(y+1)) : ((y-1)+"-"+y);
 }
 function runRowHtml(r){
   const activity = r.activity;
@@ -1041,7 +1157,7 @@ async function refreshStats(playerId){
     const days = j.days||[];
     const byDate = {}; days.forEach(d=>{ byDate[d.date]=d; });
     const todayKey = questDateBucketClient(new Date());
-    const today = byDate[todayKey] || { points:0, vertical_m:0 };
+    const today = byDate[todayKey] || { points:0, checkpoint_vertical_m:0 };
     let streak=0, cursor=new Date();
     for(;;){
       const key = questDateBucketClient(cursor);
@@ -1050,10 +1166,19 @@ async function refreshStats(playerId){
       streak++;
       cursor = new Date(cursor.getTime()-24*3600000);
     }
+    // Headline vertical is checkpoint-measured (see Quest._tickCheckpoints),
+    // not the run-summed vertical_m — the latter still feeds points and the
+    // per-activity leaderboard "m vert". "This season" sums the same
+    // checkpoint column across the current season's day rows (the /stats
+    // response already carries a whole season, ~200 rows max).
+    const seasonId = questSeasonIdClient(new Date());
+    const seasonVert = days.filter(d=>d.season_id===seasonId)
+                           .reduce((sum,d)=>sum+(d.checkpoint_vertical_m||0), 0);
     tilesEl.innerHTML =
       '<div class="now">'
       +'<div class="stat"><b>'+Math.round(today.points||0)+'</b><span>Points today</span></div>'
-      +'<div class="stat"><b>'+Math.round(Math.abs(today.vertical_m||0))+'m</b><span>Vertical today</span></div>'
+      +'<div class="stat vtoday"><b>'+Math.round(Math.abs(today.checkpoint_vertical_m||0))+'m</b><span>Vertical today</span></div>'
+      +'<div class="stat"><b>'+Math.round(seasonVert)+'m</b><span>This season</span></div>'
       +'</div>';
     if(streakEl) streakEl.textContent = streak>0 ? streak+"-day streak" : "";
   }catch(e){
@@ -1134,6 +1259,12 @@ function renderHome(){
   Quest.onSaveError = (name)=>{
     if(!coverageEl) return;
     coverageEl.textContent = name+" — couldn't save to the server (check your connection); this run may not count.";
+  };
+  // Live-tick the "Vertical today" tile as checkpoints credit descent, so it
+  // moves during a session instead of only on the next refreshStats().
+  Quest.onCheckpointVertical = (totalM)=>{
+    const el = document.querySelector('#statsTiles .vtoday b');
+    if(el) el.textContent = Math.round(totalM)+'m';
   };
   // R8 — manual activity choice, remembered across visits so re-selecting
   // "Bike" every session isn't required. Buttons are disabled while
