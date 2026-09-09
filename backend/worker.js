@@ -836,7 +836,8 @@ export default {
       "/invite": "/invite.html",
       "/walk": "/geofence-engine.html",
       "/clients": "/clients.html",
-      "/quest": "/ridge-quest.html"
+      "/quest": "/ridge-quest.html",
+      "/quest-help": "/ridge-quest-help.html"
     };
     const clean = url.pathname.replace(/\/+$/, "");
     // Client-scoped login, e.g. /c/chase-life/login — same login.html, the

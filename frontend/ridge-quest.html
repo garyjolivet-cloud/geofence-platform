@@ -39,6 +39,8 @@
   .glyph::after{content:"";position:absolute;inset:10px;border-radius:50%;border:2px solid #1a0d07}
   header h1{font-family:"Black Han Sans";font-weight:400;font-size:19px;margin:0}
   header p{margin:0;font-family:"Barlow Condensed";font-size:11.5px;letter-spacing:1.1px;text-transform:uppercase;color:var(--fog)}
+  .helpBtn{margin-left:auto;flex:0 0 auto;width:32px;height:32px;border:1px solid var(--rim);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1;text-decoration:none;color:var(--ice);background:var(--slate)}
+  .helpBtn:hover{border-color:var(--coral)}
   .card{background:linear-gradient(180deg,var(--slate),#10192640);border:1px solid var(--rim);border-radius:18px;padding:24px}
   h2{font-family:"Barlow Condensed";font-weight:600;font-size:22px;margin:0 0 6px}
   p.lead{color:var(--ice);font-size:14px;line-height:1.5;margin:0 0 18px}
@@ -120,7 +122,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><div class="glyph"></div><div><h1>Ridge Quest</h1><p>Fog-of-war terrain game</p></div></header>
+  <header><div class="glyph"></div><div><h1>Ridge Quest</h1><p>Fog-of-war terrain game</p></div><a class="helpBtn" href="/quest-help" target="_blank" rel="noopener" title="How to play Ridge Quest" aria-label="How to play Ridge Quest">&#8505;&#65039;</a></header>
   <div id="app"></div>
 </div>
 
