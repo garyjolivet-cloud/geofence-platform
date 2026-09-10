@@ -6,6 +6,7 @@
 <title>Field</title>
 <script src="role-gate.js"></script>
 <script src="/kalman-filter.js"></script>
+<script src="/speed-guard.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
@@ -1657,6 +1658,9 @@ async function initPermissions(){
       lastSmoothed = (typeof GPSFilter!=='undefined')
         ? GPSFilter.push({lat,lon,acc,t:pos.timestamp})
         : {lat,lon,acc,headingTravel:null};
+      // "Eyes up" moving-speed blank (shared /speed-guard.js) — recording
+      // keeps running underneath; purely visual.
+      if(typeof SpeedGuard!=='undefined') SpeedGuard.consider(lastSmoothed);
       // altitude is null on many devices/browsers (no barometer, or a fix that
       // hasn't resolved vertical position yet); resolveAlt() upgrades this to
       // a connected BLE dongle's real barometric reading when one's recent
@@ -1686,9 +1690,13 @@ async function initPermissions(){
     err => setStatus("GPS: "+err.message),
     {enableHighAccuracy:true,maximumAge:2000,timeout:30000}
   );
+  if(typeof SpeedGuard!=='undefined'){
+    SpeedGuard.configure({ noticeText: "Field Recorder hides the screen while you're moving — check it while stopped." });
+    SpeedGuard.noteStarted();
+  }
 }
 
-window.addEventListener("pagehide",()=>{ micStream?.getTracks().forEach(t=>t.stop()); });
+window.addEventListener("pagehide",()=>{ micStream?.getTracks().forEach(t=>t.stop()); if(typeof SpeedGuard!=='undefined') SpeedGuard.reset(); });
 
 /* ── persistent record ──────────────────────────────── */
 const btnRec = document.getElementById("btnRec");

@@ -143,6 +143,7 @@
 <script src="/pipeline-runtime.js"></script>
 <script src="/tour-state.js"></script>
 <script src="/kalman-filter.js"></script>
+<script src="/speed-guard.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
@@ -1678,6 +1679,7 @@ const HUD = {
       // fall back to travel heading (direction of movement) otherwise.
       headingDeg:((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading
                   : (typeof TravelHeading!=='undefined' ? TravelHeading.heading : null)), accM:sm.acc });
+    if(typeof SpeedGuard!=='undefined') SpeedGuard.consider(sm);   // "eyes up" moving-speed blank — every fix, before the off-site return
     if(HUD.offsite){
       // Off the site: no triggers, no fog reveal, no voices, no guidance —
       // just a plain position readout. Everything resumes on the next
@@ -2567,6 +2569,7 @@ function startGPS(){
                   altSource:"gps"}),
     err=>HUD.log('ev-warn','GPS error: '+err.message),
     {enableHighAccuracy:true, maximumAge:0, timeout:15000});
+  if(typeof SpeedGuard!=='undefined') SpeedGuard.noteStarted();   // one-time "screen hides while moving" notice
 }
 
 function tickSim(){ HUD.onFix({lat:simPos[0],lon:simPos[1],acc:5,t:Date.now()}); }
@@ -2601,6 +2604,10 @@ function toggleSim(){
   // unconditional reset already done on every bundle (re)load.
   if(watchId){navigator.geolocation.clearWatch(watchId);watchId=null;}
   GPSFilter.reset(); Geofencer.reset(); HUD.prev=null;
+  // Sim nudges jump the position ~5 m per tap (reads as a high EKF speed), so
+  // suppress the "eyes up" blank in sim — ?guard=1 forces it back on for
+  // on-device testing.
+  if(typeof SpeedGuard!=='undefined'){ SpeedGuard.configure({suppressed:simMode}); SpeedGuard.reset(); }
   if(simMode){
     Audio.unlock(); Audio.unlocked=true;
     Clarity.init(); if(Clarity.ctx && Clarity.ctx.state==='suspended') Clarity.ctx.resume();

@@ -13,6 +13,9 @@
 <!-- R1: shared GPS smoothing module, same EKF every other GPS-consuming
      page in this codebase already loads. Reused as-is, not modified. -->
 <script src="/kalman-filter.js"></script>
+<!-- Shared "eyes up" moving-speed screen guard (window.SpeedGuard) — also
+     loaded by geofence-engine.html and field-recorder.html. -->
+<script src="/speed-guard.js"></script>
 <!-- R2: H3 geo-indexing (disk-reveal math) and MapLibre (personal fog-map
      rendering) — same MapLibre version geofence-engine.html/fence-editor.html
      already use elsewhere in this codebase. -->
@@ -118,25 +121,9 @@
     color:var(--snow);border-radius:10px;padding:10px 16px;font-family:"Barlow Condensed";font-size:13px;letter-spacing:.3px;
     opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:3000;max-width:80vw;text-align:center}
   #rqToast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-  /* "Eyes up" safety blank — full-viewport, above everything (toast is 3000,
-     fog map overlay is 1000). Opaque so whatever's underneath is truly hidden;
-     no dismiss control (see SpeedGuard). */
-  #rqEyesUp{position:fixed;inset:0;z-index:4000;background:var(--night);
-    display:none;flex-direction:column;align-items:center;justify-content:center;
-    text-align:center;padding:32px;pointer-events:auto;-webkit-tap-highlight-color:transparent;
-    overscroll-behavior:contain;touch-action:none}
-  #rqEyesUp.show{display:flex}
-  #rqEyesUp .euInner{max-width:34ch}
-  #rqEyesUp .euHead{font-family:"Barlow Condensed",system-ui,sans-serif;font-weight:700;
-    text-transform:uppercase;letter-spacing:.06em;line-height:.95;margin:0 0 18px;
-    font-size:clamp(46px,15vw,96px);color:var(--coral)}
-  #rqEyesUp .euBody{font-family:"Barlow Condensed",system-ui,sans-serif;
-    font-size:clamp(18px,5vw,26px);color:var(--snow);margin:0 0 20px}
-  #rqEyesUp .euConsent{font-size:13px;line-height:1.5;color:var(--ice);margin:0 0 22px}
-  #rqEyesUp .euResume{font-family:"Barlow Condensed",system-ui,sans-serif;text-transform:uppercase;
-    letter-spacing:.4px;font-size:13px;color:var(--fog);margin:0}
-  #rqEyesUp .euSpeed{font-family:"Barlow Condensed",system-ui,sans-serif;font-size:12px;
-    color:var(--fog);opacity:.7;margin:8px 0 0;min-height:1em}
+  /* The "eyes up" moving-speed blank overlay (#sgOverlay) injects its own
+     CSS from /speed-guard.js — it reads this page's --night/--coral/etc.
+     tokens where present, with standalone fallbacks elsewhere. */
 </style>
 </head>
 <body>
@@ -697,116 +684,12 @@ const QGeo = {
   }
 };
 
-/* ===================== "EYES UP" SPEED GUARD =====================
-   Safety lockout: when EKF speed shows the player is moving (skiing /
-   biking / walking), blank the screen with a full-viewport warning and
-   restore it once they've been stopped for a few seconds — enforcing the
-   liability-waiver line "Never operate this app while in motion".
-
-   Purely visual. consider(p) is called from _onFix on EVERY fix (before
-   the _offsite early return) and from renderFogMap's own watch when the
-   map is open without a tracking session — it never throws and never
-   changes game state, so tracking / fog reveal / corridor + checkpoint
-   detection / friend sharing all keep running underneath.
-
-   Hysteresis: blocks instantly on one fix over SPEED_GUARD_BLOCK_MPS;
-   clears only after speed stays under SPEED_GUARD_CLEAR_MPS continuously
-   for SPEED_GUARD_CLEAR_DWELL_MS, timed by fix p.t deltas (deterministic,
-   survives tab throttling). Lift rides are exempt (see _onLift). */
-const SpeedGuard = {
-  _blocked: false,
-  _clearSince: null,   // p.t of the first fix in the current continuous below-CLEAR streak
-  _lastSpeed: 0,
-  _lastT: null,
-  _toastShown: false,
-
-  _q(name){ try{ return new URLSearchParams(location.search).get(name); }catch(e){ return null; } },
-  enabled(){
-    if(QUEST_TUNING.SPEED_GUARD_ENABLED === false) return false;
-    if(this._q("guard") === "0") return false;              // undocumented escape hatch (passenger / staff)
-    if(IS_SIM_MODE && this._q("guard") !== "1") return false; // ?sim=1 alone keeps the sim-walk verification unblanked
-    return true;
-  },
-
-  // Lift exemption — self-contained (reads Quest.corridors, not Quest.states),
-  // so it works whether tracking is running or only renderFogMap's own watch
-  // is. Only exempts when actually moving at lift speed: a walker on the lift
-  // line is slower and still gets warned; a terminal crawl is slow so the
-  // normal clear-dwell shows the map anyway.
-  _onLift(p){
-    if(p.speed < QUEST_TUNING.SPEED_GUARD_LIFT_MIN_MPS) return false;
-    if(typeof Quest === "undefined" || !Quest.corridors) return false;
-    for(const c of Quest.corridors){
-      if(c.runType !== "lift" || !c.path || c.path.length < 2) continue;
-      if(QGeo.corridorDist([p.lat, p.lon], c, c.ref) < 0) return true;
-    }
-    return false;
-  },
-
-  consider(p){
-    if(!this.enabled()) return;
-    if(!p || typeof p.speed !== "number" || typeof p.t !== "number") return;
-    // A long gap between fixes (backgrounded tab, GPS loss) isn't "held still" —
-    // don't let one post-resume slow fix satisfy the whole dwell.
-    if(this._lastT != null && p.t - this._lastT > QUEST_TUNING.SPEED_GUARD_MAX_FIX_GAP_MS) this._clearSince = null;
-    this._lastT = p.t; this._lastSpeed = p.speed;
-    const onLift = this._onLift(p);
-    if(!this._blocked){
-      if(p.speed > QUEST_TUNING.SPEED_GUARD_BLOCK_MPS && !onLift) this._block();
-      return;
-    }
-    if(p.speed >= QUEST_TUNING.SPEED_GUARD_CLEAR_MPS && !onLift){
-      this._clearSince = null; this._render(); return;   // still moving — reset the dwell
-    }
-    if(this._clearSince == null) this._clearSince = p.t;
-    else if(p.t - this._clearSince >= QUEST_TUNING.SPEED_GUARD_CLEAR_DWELL_MS){ this._unblock(); return; }
-    this._render();
-  },
-
-  _block(){
-    this._blocked = true; this._clearSince = null;
-    if(navigator.vibrate) navigator.vibrate(150);   // once, on the transition only
-    this._maybeToast();                              // fallback for the map-only path where start() never ran
-    this._show(); this._render();
-  },
-  _unblock(){ this._blocked = false; this._clearSince = null; this._hide(); },
-  reset(){ this._blocked = false; this._clearSince = null; this._lastT = null; this._hide(); },
-  noteTrackingStarted(){ this._maybeToast(); },
-  _maybeToast(){
-    if(this._toastShown) return;
-    this._toastShown = true;
-    rqToast("Ridge Quest hides the screen while you're moving — check it while stopped.");
-  },
-
-  _el(){
-    let d = document.getElementById("rqEyesUp");
-    if(!d){
-      d = document.createElement("div");
-      d.id = "rqEyesUp";
-      d.setAttribute("role", "alert");
-      d.setAttribute("aria-live", "assertive");
-      d.innerHTML =
-        '<div class="euInner">'
-        +'<div class="euHead">Eyes up</div>'
-        +'<p class="euBody">Don’t look at your screen while moving. Stop to check the map.</p>'
-        +'<p class="euConsent">Looking at a screen reduces your awareness of terrain, obstacles, '
-          +'and other people. Only check the app while safely stopped, off to the side of a trail.</p>'
-        +'<p class="euResume" id="euResume"></p>'
-        +'<p class="euSpeed" id="euSpeed"></p>'
-        +'</div>';
-      document.body.appendChild(d);
-    }
-    return d;
-  },
-  _show(){ this._el().classList.add("show"); },
-  _hide(){ const d = document.getElementById("rqEyesUp"); if(d) d.classList.remove("show"); },
-  _render(){
-    const r = document.getElementById("euResume");
-    const s = document.getElementById("euSpeed");
-    if(r) r.textContent = this._clearSince != null ? "Stopped — hold still…" : "Screen returns a few seconds after you stop.";
-    if(s) s.textContent = (this._blocked && this._clearSince == null) ? (Math.round(this._lastSpeed * 3.6) + " km/h") : "";
-  }
-};
+/* The "eyes up" moving-speed screen guard is the shared window.SpeedGuard
+   module (/speed-guard.js). It's configured just before boot() below:
+   QUEST_TUNING.SPEED_GUARD_* thresholds, rqToast for the one-time notice,
+   IS_SIM_MODE suppression, and a lift-exemption predicate over
+   Quest.corridors. _onFix / Quest.start / Quest.stop / renderFogMap's own
+   watch call SpeedGuard.consider / noteStarted / reset. */
 
 const Quest = {
   corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,lengthM,ref}]
@@ -929,7 +812,7 @@ const Quest = {
       err=>{ if(this.onStatus) this.onStatus({ok:false, message: err && err.message ? err.message : "location error (code "+(err&&err.code)+")"}); },
       { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
     );
-    SpeedGuard.noteTrackingStarted();   // one-time "screen hides while moving" toast, shown before any movement
+    SpeedGuard.noteStarted();   // one-time "screen hides while moving" toast, shown before any movement
     return true;
   },
   stop(){
@@ -2256,6 +2139,32 @@ async function boot(){
   if(!gateOk) return; // runGate's own screens handle re-entry
   renderConditions(renderHome);
 }
+
+// --- "Eyes up" moving-speed screen guard (shared /speed-guard.js) ---
+SpeedGuard.configure({
+  enabled: QUEST_TUNING.SPEED_GUARD_ENABLED,
+  blockMps: QUEST_TUNING.SPEED_GUARD_BLOCK_MPS,
+  clearMps: QUEST_TUNING.SPEED_GUARD_CLEAR_MPS,
+  clearDwellMs: QUEST_TUNING.SPEED_GUARD_CLEAR_DWELL_MS,
+  maxFixGapMs: QUEST_TUNING.SPEED_GUARD_MAX_FIX_GAP_MS,
+  suppressed: IS_SIM_MODE,   // ?sim=1 alone keeps the sim-walk verification unblanked; ?sim=1&guard=1 exercises it
+  onNotice: rqToast,
+  noticeText: "Ridge Quest hides the screen while you're moving — check it while stopped."
+});
+// Lift exemption — self-contained over Quest.corridors (works tracked or on
+// renderFogMap's own watch). Only exempts at lift speed: a walker on the
+// lift line is slower and still warned; a terminal crawl is slow so the
+// clear-dwell shows the map anyway.
+SpeedGuard.setExemptFn(function(p){
+  if(p.speed < QUEST_TUNING.SPEED_GUARD_LIFT_MIN_MPS) return false;
+  if(!Quest.corridors) return false;
+  for(const c of Quest.corridors){
+    if(c.runType !== "lift" || !c.path || c.path.length < 2) continue;
+    if(QGeo.corridorDist([p.lat, p.lon], c, c.ref) < 0) return true;
+  }
+  return false;
+});
+
 boot();
 </script>
 </body>
