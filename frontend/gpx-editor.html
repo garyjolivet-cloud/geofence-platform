@@ -105,6 +105,11 @@
       <button id="importBtn" class="ghost" title="Import a GPX file">&#8593; Import</button>
       <button id="treeRefreshBtn" class="ghost" title="Refresh">&#8635;</button>
     </div>
+    <div class="railHead" style="border-bottom:1px solid var(--rim)">
+      <label class="k" style="flex:1;display:flex;align-items:center;gap:6px;margin:0;cursor:pointer">
+        <input type="checkbox" id="showAllCorr" checked> show every corridor on the map
+      </label>
+    </div>
     <input type="file" id="importInput" accept=".gpx,application/gpx+xml" style="display:none">
     <div id="gpxTreeHost"></div>
   </div>
@@ -307,6 +312,12 @@ let filterOn=true, filterAvailable=false;
 let cumLens=[0], cumGain=[0], cumLoss=[0];
 let bounds=null;
 let loadedFrom=null; // {kind:'corridor', id, name, widthM} once opened from/saved to the tree — widthM is always a number (the trigger-band width; default 10)
+// --- "see every corridor on the map" overlay ---
+let allCorridors=[];               // [{id,name,points,widthM,difficulty,runType,activityType}] — the whole workspace library, geometry included
+let projectCorridorIds=new Set();  // ids the current project actually uses (from its published bundle) — these render bright + labelled
+let overlayOn=true;                // #showAllCorr toggle
+let _baselineSig=null;             // corrSig() captured on load/save — isDirty() compares against it
+const _corrLabels=new Map();       // corridorId -> maplibregl.Marker (name label)
 let undoStack=[];    // snapshots of basePoints from before each structural edit (Trim/Delete/Reverse) — lets Undo reverse one if the result isn't liked; cleared whenever a different track is opened, since undoing across tracks makes no sense
 let mapReady=false, playheadMarker=null, resizePending=false, renderQueued=false;
 // setBase()->recompute() and map's own "load" handler can each independently
@@ -605,6 +616,17 @@ map.on("load",async ()=>{
   // into a pitched view. Enabling terrain / a saved cross-tool camera must
   // not sneak a pitch or rotation in on load.
   map.setPitch(0); map.setBearing(0);
+  // Click any dim overlay line to load that corridor (guarding unsaved edits).
+  // Delegated listeners are fine to register before the layer exists.
+  map.on("click","allCorridors-hit",e=>{
+    const f=e.features && e.features[0];
+    if(f && f.properties) pickCorridorById(f.properties.id);
+  });
+  map.on("mouseenter","allCorridors-hit",()=>{ map.getCanvas().style.cursor="pointer"; });
+  map.on("mouseleave","allCorridors-hit",()=>{ map.getCanvas().style.cursor = addMode ? "crosshair" : ""; });
+  // If a project was entered before the map finished loading, its overlay
+  // fetch already ran — (re)draw it now that layers can be added.
+  if(allCorridors.length) renderAllCorridors();
 });
 
 function _gpxCorridorMeta(){
@@ -684,6 +706,9 @@ function renderMapLine(){
     }
   }
   updateSelVisuals();
+  // renderMapLine (re)creates the edited corridor's `track`/`track-line`
+  // stack; keep the all-corridors overlay beneath it.
+  if(map.getSource("allCorridors")) ensureOverlayLayers();
 }
 
 // Run-details edits (grade / type / activity / width) restyle the live
@@ -848,10 +873,13 @@ function resetRunDetails(){
 }
 document.getElementById("newCorridorBtn").onclick=()=>{
   if(!appId){ alert("Pick a company and project first."); return; }
+  if(!confirmDiscardIfDirty()) return;
   loadedFrom=null;
   resetRunDetails();
   document.getElementById("hdrCrumb").textContent="New corridor — click the map";
   setBase([], {resetHistory:true});   // clears addMode; re-armed on the next line
+  captureBaseline();
+  renderAllCorridors();   // no active corridor now — show them all
   setAddMode("end");
 };
 
@@ -864,11 +892,14 @@ document.getElementById("importInput").onchange=async()=>{
   const input=document.getElementById("importInput");
   const f=input.files[0]; input.value="";
   if(!f) return;
+  if(!confirmDiscardIfDirty()) return;
   try{
     const text=await f.text();
     const {points:parsed}=parseGPX(text);
     loadedFrom=null;
     setBase(parsed, {resetHistory:true});
+    captureBaseline();
+    renderAllCorridors();
   }catch(e){ alert("Import failed: "+e.message); }
 };
 
@@ -888,6 +919,8 @@ async function openTreeItem(item){
     document.getElementById("gpxWidth").value = (j.widthM != null ? j.widthM : 10);
     updateHdrCrumb();
     setBase(pts, {resetHistory:true});
+    captureBaseline();
+    renderAllCorridors();   // drop the now-active corridor from the dim overlay
   }catch(e){ alert("Open failed: "+e.message); }
 }
 function updateHdrCrumb(){
@@ -904,15 +937,145 @@ function runDetailsPayload(){
   };
 }
 
+/* ---- unsaved-changes guard ---- */
+// A cheap signature of the working corridor — its geometry baseline plus the
+// Run details block. Captured whenever a corridor is loaded or saved; any
+// later divergence means there are unsaved edits. Only ever compared on a
+// corridor SWITCH / page unload, never per keystroke.
+function corrSig(){ try{ return JSON.stringify([basePoints, runDetailsPayload()]); }catch(e){ return null; } }
+function captureBaseline(){ _baselineSig = corrSig(); }
+function isDirty(){ return _baselineSig != null && corrSig() !== _baselineSig; }
+function confirmDiscardIfDirty(){
+  if(!isDirty()) return true;
+  return confirm("Discard unsaved changes to " + ((loadedFrom && loadedFrom.name) || "this corridor") + "?");
+}
+window.addEventListener("beforeunload", e=>{ if(isDirty()){ e.preventDefault(); e.returnValue=""; } });
+
+// Load a corridor by id, guarding unsaved edits first. Used by both the map
+// click handler and the rail tree row click.
+function pickCorridorById(id){
+  if(loadedFrom && loadedFrom.id === id) return;   // already the working corridor
+  if(!confirmDiscardIfDirty()) return;
+  openTreeItem({ id });
+}
+
+/* ---- "every corridor on the map" overlay ---- */
+// One GeoJSON source (`allCorridors`) drawn UNDER the bright edited `track`
+// line: every workspace corridor except the one being edited, coloured by
+// grade, with the corridors this project actually uses rendered bright +
+// labelled and the rest dimmed. Click any line to load it (pickCorridorById).
+async function loadAllCorridors(){
+  if(!appId){ allCorridors=[]; renderAllCorridors(); return; }
+  try{
+    const r=await fetch("/api/corridor?appId="+encodeURIComponent(appId)+"&withPoints=1",
+      {headers:{authorization:"Bearer "+getToken()}});
+    if(!r.ok) throw new Error(r.statusText);
+    const j=await r.json();
+    allCorridors=(j.corridors||[]).filter(c=>Array.isArray(c.points) && c.points.length>=2);
+  }catch(e){ allCorridors=[]; }
+  renderAllCorridors();
+  maybeFitAll();
+}
+// Pure — the FeatureCollection for the overlay. Exported shape is unit-tested.
+function corridorsToFC(list, activeId, mineSet){
+  const features=[];
+  (list||[]).forEach(c=>{
+    if(!c || c.id===activeId || !Array.isArray(c.points) || c.points.length<2) return;
+    features.push({ type:"Feature",
+      properties:{ id:c.id, name:c.name||"Corridor",
+        difficulty:c.difficulty||"", runType:c.runType||"run",
+        mine: (mineSet && mineSet.has(c.id)) ? 1 : 0 },
+      geometry:{ type:"LineString", coordinates:c.points.map(p=>[p[0],p[1]]) } });
+  });
+  return { type:"FeatureCollection", features };
+}
+const _GRADE_COLOR=["match",["get","difficulty"],
+  "green","#57e06f","blue","#6bb6ff","black","#dfe3ea","double-black","#ff6f91","#c2cec9"];
+function ensureOverlayLayers(){
+  if(!mapReady) return false;
+  if(!map.getSource("allCorridors")){
+    map.addSource("allCorridors",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addLayer({id:"allCorridors-casing",type:"line",source:"allCorridors",
+      layout:{"line-cap":"round","line-join":"round"},
+      paint:{"line-color":"#0a0f17","line-opacity":0.5,
+        "line-width":["interpolate",["linear"],["zoom"],11,3,16,7]}});
+    map.addLayer({id:"allCorridors-line",type:"line",source:"allCorridors",
+      layout:{"line-cap":"round","line-join":"round"},
+      paint:{"line-color":_GRADE_COLOR,
+        "line-width":["case",["==",["get","mine"],1],3.5,1.8],
+        "line-opacity":["case",["==",["get","mine"],1],0.95,0.38]}});
+    map.addLayer({id:"allCorridors-hit",type:"line",source:"allCorridors",
+      paint:{"line-color":"#000","line-opacity":0,"line-width":16}});
+  }
+  // Keep the whole overlay beneath the edited corridor's stack — that stack
+  // is the invisible `track-line` PLUS the TileFog `track-*` piste-glow
+  // layers, all created lazily by renderMapLine. Anchor on the lowest
+  // `track`-prefixed layer so the dim overlay never covers the bright line.
+  // moveLayer is a no-op when already in place.
+  const anchor = ((map.getStyle().layers||[]).find(l=>l.id && l.id.indexOf("track")===0)||{}).id;
+  if(anchor){
+    ["allCorridors-casing","allCorridors-line","allCorridors-hit"].forEach(id=>{
+      if(map.getLayer(id)) map.moveLayer(id, anchor);
+    });
+  }
+  return true;
+}
+function renderAllCorridors(){
+  if(!ensureOverlayLayers()) return;
+  const activeId = loadedFrom && loadedFrom.id;
+  const fc = corridorsToFC(allCorridors, activeId, projectCorridorIds);
+  map.getSource("allCorridors").setData(fc);
+  const vis = overlayOn ? "visible" : "none";
+  ["allCorridors-casing","allCorridors-line","allCorridors-hit"].forEach(id=>{
+    if(map.getLayer(id)) map.setLayoutProperty(id,"visibility",vis);
+  });
+  // Name labels — HTML markers (the raster style has no glyphs). Label every
+  // corridor this project uses; label the rest only when the library is
+  // small. Hard cap so a huge workspace can't spawn hundreds of DOM nodes.
+  _corrLabels.forEach(m=>m.remove()); _corrLabels.clear();
+  if(overlayOn){
+    const labelOthers = allCorridors.length <= 40;
+    let n=0;
+    for(const c of allCorridors){
+      if(c.id===activeId) continue;
+      const mine = projectCorridorIds.has(c.id);
+      if(!mine && !labelOthers) continue;
+      if(n++ >= 60) break;
+      const mid = c.points[Math.floor(c.points.length/2)];
+      const el = document.createElement("div");
+      el.textContent = c.name || "Corridor";
+      el.style.cssText = "font:600 12px/1 'Barlow Condensed',system-ui,sans-serif;white-space:nowrap;"
+        + "color:"+(mine?"#eef4fb":"#9fb2c6")+";text-shadow:0 0 3px #0a0f17,0 0 3px #0a0f17;"
+        + "pointer-events:none;opacity:"+(mine?"1":"0.75");
+      _corrLabels.set(c.id, new maplibregl.Marker({element:el,anchor:"center"})
+        .setLngLat([mid[0],mid[1]]).addTo(map));
+    }
+  }
+}
+// Frame the whole network on first entry — but never override a corridor
+// deep-link or a camera already positioned somewhere meaningful.
+function maybeFitAll(){
+  if(!mapReady || _pendingCorridorId || !allCorridors.length) return;
+  if(map.getZoom() >= 8) return;
+  let minLon=Infinity,minLat=Infinity,maxLon=-Infinity,maxLat=-Infinity;
+  allCorridors.forEach(c=>c.points.forEach(p=>{
+    if(p[0]<minLon)minLon=p[0]; if(p[0]>maxLon)maxLon=p[0];
+    if(p[1]<minLat)minLat=p[1]; if(p[1]>maxLat)maxLat=p[1];
+  }));
+  if(!isFinite(minLon) || (minLon===maxLon && minLat===maxLat)) return;
+  map.fitBounds([[minLon,minLat],[maxLon,maxLat]],{padding:60,animate:false,linear:true});
+}
+
 /* ---- tree mount ---- */
 const gpxTree=CorridorTree.mount(document.getElementById("gpxTreeHost"),{
   appId:null,
   getToken,
   readOnly:false,
   onError:msg=>alert(msg),
-  onPick: openTreeItem
+  onPick: item=>pickCorridorById(item.id)
 });
-document.getElementById("treeRefreshBtn").onclick=()=>gpxTree.refresh({appId});
+document.getElementById("treeRefreshBtn").onclick=()=>{ gpxTree.refresh({appId}); loadAllCorridors(); };
+document.getElementById("showAllCorr").onchange=function(){ overlayOn=this.checked; renderAllCorridors(); };
 
 /* ---- save ---- */
 function currentTotals(){
@@ -936,7 +1099,9 @@ document.getElementById("saveBtn").onclick=async()=>{
   try{
     await patchJson("/api/corridor/"+loadedFrom.id,{points:flatPoints,distanceM,elevGainM,elevLossM,...rd});
     Object.assign(loadedFrom, rd);
+    captureBaseline();
     gpxTree.refresh({appId});
+    loadAllCorridors();
     alert("Saved.");
   }catch(e){ alert("Save failed: "+e.message); }
 };
@@ -956,7 +1121,9 @@ document.getElementById("saveAsBtn").onclick=async()=>{
     loadedFrom={kind:"corridor", id:j.id, name, ...rd};
     updateHdrCrumb();
     document.getElementById("saveBtn").disabled=false;
+    captureBaseline();
     gpxTree.refresh({appId});
+    loadAllCorridors();
   }catch(e){ alert("Save failed: "+e.message); }
 };
 
@@ -1014,28 +1181,39 @@ async function enterProject(id, proj){
     const row = await resolveProjectRow(id);
     if(row){ appId = appId || row.appId || null; projSeason = row.season || null; }
   }
-  // Fallback: the org-scoped /api/projects list can come back empty (wrong
-  // org resolved, or not authed for it) — the public bundle always carries
-  // the injected season, same trigger every other map view uses.
-  if(projSeason == null){
-    try{
-      const br = await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle", {cache:"no-store"});
-      if(br.ok){ const bj = await br.json(); projSeason = bj.season || null; }
-    }catch(e){}
-  }
+  // The published bundle gives us the project's season (fallback when the
+  // org-scoped /api/projects list came back empty) AND which corridors this
+  // project actually uses — linked corridor stops + the map-match set — so
+  // the map overlay can render those bright and the rest dim.
+  projectCorridorIds = new Set();
+  try{
+    const br = await fetch("/api/projects/"+encodeURIComponent(id)+"/bundle", {cache:"no-store"});
+    if(br.ok){
+      const bj = await br.json();
+      if(projSeason == null) projSeason = bj.season || null;
+      (bj.zones||[]).forEach(z=>{ if(z && z.corridorId) projectCorridorIds.add(z.corridorId); });
+      (bj.mapMatchCorridorIds||[]).forEach(cid=>projectCorridorIds.add(cid));
+    }
+  }catch(e){}
   apply3D();
   updateWinter();
   document.getElementById("hdrCrumb").textContent = (proj&&proj.name)||id;
   loadedFrom=null;
   resetRunDetails();
   setBase([], {resetHistory:true});
+  captureBaseline();
   showGpxScreen();
   // Jump back to wherever this project's map was last left in another tool
   // this session (Edit / Map Paint) so nav-hopping doesn't reorient it. A
   // corridor deep-link (openTreeItem below) still fits that corridor after.
   window.TopNav && TopNav.persistMapView && TopNav.persistMapView(map, id, {restorePitch:false, restoreBearing:false});
-  if(!appId){ document.getElementById("gpxTreeHost").innerHTML='<div class="hint">couldn\'t determine this project\'s workspace</div>'; return; }
+  if(!appId){
+    document.getElementById("gpxTreeHost").innerHTML='<div class="hint">couldn\'t determine this project\'s workspace</div>';
+    allCorridors=[]; renderAllCorridors();
+    return;
+  }
   gpxTree.refresh({appId});
+  loadAllCorridors();   // draws every workspace corridor on the map (fits the network unless a deep-link takes over)
   if(_pendingCorridorId){ const cid=_pendingCorridorId; _pendingCorridorId=null; openTreeItem({ id: cid }); }
 }
 
