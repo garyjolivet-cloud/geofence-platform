@@ -36,6 +36,14 @@
     "binding": "AI"
   },
   "triggers": {
-    "crons": ["*/5 * * * *", "0 * * * *", "0 15 * * *"]
+    // */30 (was */5): presence rows are filtered by freshness at read time
+    //   (GET /api/presence, /api/presence/friends both `WHERE updated_at > ?`),
+    //   so the cleanup DELETEs are pure table-size housekeeping — running them
+    //   6x less often has no user-facing effect. cleanupOldRecordings is
+    //   day-granularity anyway.
+    // 0 */6 (was 0 *): the weather cache only feeds a game's Conditions screen
+    //   + LLM context; 6h-stale is fine and there's a manual POST /api/weather
+    //   refresh. scrapeWeather() also self-skips deep summer (see scheduled()).
+    "crons": ["*/30 * * * *", "0 */6 * * *", "0 15 * * *"]
   }
 }

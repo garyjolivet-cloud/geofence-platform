@@ -73,6 +73,15 @@ async function cleanupLiveZones(env) {
 // incident survive this sweep. Capped per tick so a project that just
 // enabled retention on a long capture history can't try to delete a huge
 // backlog in one statement.
+// audit_log is append-only and was never trimmed — every corridor/folder/key
+// CRUD writes a permanent row. Keep 90 days (the /api/audit view only ever
+// reads the last 200 rows anyway). ts is an ISO string; idx_audit_log_ts
+// covers the range scan.
+async function pruneAuditLog(env) {
+  const cutoff = new Date(Date.now() - 90 * 86400000).toISOString();
+  await env.DB.prepare("DELETE FROM audit_log WHERE ts < ?").bind(cutoff).run().catch(() => {});
+}
+
 async function cleanupOldRecordings(env) {
   const now = Date.now();
   const { results: expired } = await env.DB.prepare(
@@ -350,6 +359,15 @@ async function copyAssetFolderSubtree(env, sourceFolderId, srcScope, srcScopeId,
   return newId;
 }
 
+// Northern-hemisphere ski months. The scheduled weather scrape self-skips
+// Jun/Jul/Aug — the resort has no snow data then and the scrape was just
+// burning an hourly external fetch + D1 write year-round. Manual
+// POST /api/weather still works any month; flip this if a summer
+// (bike-park) tour ever needs live conditions.
+function _weatherInSeason(d) {
+  const m = (d || new Date()).getUTCMonth(); // 0=Jan
+  return !(m >= 5 && m <= 7);
+}
 async function scrapeWeather(env) {
   const resp = await fetch('https://kickinghorseresort.com/conditions/advanced-weather-data/', {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GeofencePlatform/1.0)' },
@@ -865,19 +883,24 @@ export default {
     // hour's cache update or that day's 8am snow snapshot with no signal
     // anywhere in-app, only visible via Cloudflare's own exception logs.
     try {
-      if (event.cron === "*/5 * * * *") {
+      // Housekeeping tick (every 30 min — see wrangler.jsonc for why the
+      // cadence dropped from 5 min; presence reads already filter by
+      // freshness so the delay is invisible to users).
+      if (event.cron === "*/30 * * * *") {
         await cleanupLiveZones(env);
         await cleanupOldRecordings(env);
         return;
       }
       // At 15:00 UTC (8am MST): saveSnowSnapshot() already calls scrapeWeather()
       // internally — calling it again here would double-fetch the site and
-      // double-insert into weather_cache for the same reading.
+      // double-insert into weather_cache for the same reading. Also the one
+      // daily spot to trim the never-pruned audit_log.
       if (event.cron === "0 15 * * *") {
-        await saveSnowSnapshot(env);
-      } else {
-        // Every other hour: just update the real-time cache for Groq context
-        await scrapeWeather(env);
+        if (_weatherInSeason()) await saveSnowSnapshot(env);
+        await pruneAuditLog(env);
+      } else if (event.cron === "0 */6 * * *") {
+        // Every 6h in season: refresh the real-time weather cache.
+        if (_weatherInSeason()) await scrapeWeather(env);
       }
     } catch (e) {
       console.error("scheduled(" + event.cron + ") failed:", e.message);
