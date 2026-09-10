@@ -1659,7 +1659,10 @@ const HUD = {
   el(id){ return document.getElementById(id); },
   log(cls,msg){ const l=this.el('log'); const t=new Date().toLocaleTimeString();
                 const d=document.createElement('div'); d.className=cls;
-                d.textContent=t+'  '+msg; l.prepend(d); },
+                d.textContent=t+'  '+msg; l.prepend(d);
+                // Cap it — a long tour otherwise grows #log without bound
+                // (every enter/exit/trigger/warning appends a node forever).
+                while(l.childNodes.length>200) l.removeChild(l.lastChild); },
   posConf(acc,R){ if(R==null) return 2; return acc*1.0<R?3 : acc<R+15?2 : 1; },
 
   onFix(fix){               // fix = {lat,lon,acc,t[,heading][,alt,altAcc,altSource]}
@@ -2152,6 +2155,7 @@ const MapView = {
       this.map.jumpTo({center:LonLat(BUNDLE.ref), zoom:16});
     }
   },
+  _featsDrawn:false,   // stop-audio / zone-vext sources drawn at least once — a static tour then skips the per-fix rebuild
   onFix(p, nowMs, pick){
     // AR view (3D-mode plan, Phase 2) is open — stop MapLibre's per-tick
     // GeoJSON setData() work, not just its hidden canvas, so two live WebGL
@@ -2161,6 +2165,13 @@ const MapView = {
     if(!this.map || !this.map.isStyleLoaded()) return;
     // this.here.update() is now driven upstream in HUD.onFix (before the
     // HUD.offsite gate) so the site boundary keeps re-evaluating.
+
+    // The stop-audio / zone-vext features only change fix-to-fix for a
+    // path/moving stop (centerNow moves) or an altitude-gated stop (vext
+    // volume tracks terrain as DEM tiles stream in). For a plain tour they're
+    // static — rebuild + re-upload both GeoJSON sources once, then skip.
+    const dyn=(BUNDLE.zones||[]).some(z=>z.path||z.altM!=null);
+    if(!dyn && this._featsDrawn) return;
 
     // Every stop's marker shows regardless of distance from the visitor —
     // no stopVisibilityRadiusM proximity gate.
@@ -2183,6 +2194,7 @@ const MapView = {
     });
     this.map.getSource('stop-audio')?.setData(fc(audioFeats));
     this.map.getSource('zone-vext')?.setData(fc(vextFeats));
+    this._featsDrawn=true;
   }
 };
 MapView.init();
@@ -2720,23 +2732,40 @@ EngineKokoro.tryLoad();
 /* ---- live guide polling: hot-add ephemeral zones from a live guide ---- */
 let _pollVer=0, _pollLive=0, _pollFails=0;
 
+// Poll the bundle for live-guide changes. Full-bundle fetch on a metered
+// cellular connection, so back off (5s → up to 60s) while nothing is
+// changing, and snap back to 5s the moment the version / live-zone count
+// moves — most tours are unguided and were paying a 720/hr download for it.
+const _LIVE_POLL_MIN=5000, _LIVE_POLL_MAX=60000;
+let _livePollDelay=_LIVE_POLL_MIN;
 function startLivePoll(pid){
-  setInterval(async()=>{
+  const tick=async()=>{
+    let changed=false;
     try{
       const _guideParam=_activeLinkGuide?'?guide='+encodeURIComponent(_activeLinkGuide):'';
       const r=await fetch('/api/projects/'+encodeURIComponent(pid)+'/bundle'+_guideParam,{cache:'no-store'});
-      if(!r.ok){ _pollFails++; if(_pollFails>=3) showGuideBanner(); return; }
-      const b=await r.json();
-      _pollFails=0; hideGuideBanner();
-      const liveCount=b.liveZoneCount||0;
-      if(b.bundleVersion!==_pollVer||liveCount!==_pollLive){
-        _pollVer=b.bundleVersion; _pollLive=liveCount;
-        const now=Date.now();
-        const zones=(b.zones||[]).filter(z=>!z.expiresAt||z.expiresAt>now);
-        hotPatchZones(zones);
+      if(!r.ok){ _pollFails++; if(_pollFails>=3) showGuideBanner(); }
+      else{
+        const b=await r.json();
+        _pollFails=0; hideGuideBanner();
+        const liveCount=b.liveZoneCount||0;
+        if(b.bundleVersion!==_pollVer||liveCount!==_pollLive){
+          changed=true;
+          _pollVer=b.bundleVersion; _pollLive=liveCount;
+          const now=Date.now();
+          const zones=(b.zones||[]).filter(z=>!z.expiresAt||z.expiresAt>now);
+          hotPatchZones(zones);
+        }
       }
     }catch(e){ _pollFails++; if(_pollFails>=3) showGuideBanner(); }
-  }, 5000);
+    // Snap back to fast polling on any change or a fail streak (a live guide
+    // session just started / connectivity is flaky); otherwise ease off.
+    _livePollDelay = (changed || _pollFails>0)
+      ? _LIVE_POLL_MIN
+      : Math.min(Math.round(_livePollDelay*1.5), _LIVE_POLL_MAX);
+    setTimeout(tick, _livePollDelay);
+  };
+  setTimeout(tick, _LIVE_POLL_MIN);
 }
 
 function hotPatchZones(newZones){
@@ -2747,6 +2776,7 @@ function hotPatchZones(newZones){
   for(const z of added) BUNDLE.zones.push(z);
   // Remove expired live zones (have expiresAt and no longer in server list)
   BUNDLE.zones=BUNDLE.zones.filter(z=>!z.expiresAt||newIds.has(z.id));
+  MapView._featsDrawn=false;   // zone set changed — force one map-feature redraw
   MapView.here?.setBounds(zonesContentBounds());   // live stops can widen the site box
   if(added.length){
     HUD.log('ev-sys',added.length+' live stop'+(added.length>1?'s':'')+' from guide');

@@ -387,6 +387,8 @@ let recordLastFlushAt = 0;
 let liveStops     = [];     // successfully published live stops (in-memory for this session)
 let liveNum       = 0;      // auto-increment counter for live stop names
 let publishedZones = [];    // the project's real published tour stops (fence-editor zones) — reference layer, not editable here
+let _pubZonesDrawn = false;  // refreshPublishedZones() has drawn at least once — the per-fix retry then stops (reset on bundle reload)
+let _pathDistM = 0;          // running corridor-recording distance (m) — the per-fix path adds one segment instead of resumming all points
 let projSeason    = null;   // bundle.season ('winter'|'summer'|null) — drives the winter map recolor, same as every other map surface
 let _corridorMarkers = [];  // HTML .runLabel / .runDiamond markers for published corridor runs — rebuilt by setCorridorRuns()
 let _corridorRunsKey = null; // dirty-check so setCorridorRuns() can be called cheaply from the per-fix refresh path
@@ -939,6 +941,7 @@ async function loadPublishedBundle(){
     if(Array.isArray(b.ref)) ref=b.ref;
     bundleVersion = b.bundleVersion!=null ? b.bundleVersion : null;
     publishedZones=Array.isArray(b.zones)?b.zones:[];
+    _pubZonesDrawn=false; _frBoundsDirty=true;   // new zone set — force one redraw + a bounds recompute
     projSeason = b.season || null;
     threeDEnabled = !!b.threeDEnabled;
     updateTerrain();
@@ -956,7 +959,13 @@ function retryBundleLoad(){ loadPublishedBundle(); }
 // Bounding box of the project + what's been recorded so far, as
 // [[minLon,minLat],[maxLon,maxLat]] for HereMarker's site gate. All coords
 // are [lat,lon]. null (=> gate disabled) until there's something to bound.
+// Memoized — only the presence poll calls this on a timer, and the inputs
+// (publishedZones + marked/live stops) change rarely. Invalidated via
+// _frBoundsDirty on bundle load and on any stop add.
+let _frBoundsCache=null, _frBoundsDirty=true;
 function frContentBounds(){
+  if(!_frBoundsDirty) return _frBoundsCache;
+  _frBoundsDirty=false;
   let mnLa=Infinity,mnLo=Infinity,mxLa=-Infinity,mxLo=-Infinity,n=0;
   const add=(la,lo)=>{ if(typeof la==='number'&&typeof lo==='number'&&isFinite(la)&&isFinite(lo)){
     if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(lo<mnLo)mnLo=lo; if(lo>mxLo)mxLo=lo; n++; } };
@@ -969,8 +978,8 @@ function frContentBounds(){
       if(Array.isArray(g.coords)) g.coords.forEach(pt=>Array.isArray(pt)&&add(pt[0],pt[1])); });
   });
   (stops||[]).concat(liveStops||[]).forEach(s=>add(s.lat,s.lon));
-  if(n<1) return null;
-  return [[mnLo,mnLa],[mxLo,mxLa]];
+  _frBoundsCache = n<1 ? null : [[mnLo,mnLa],[mxLo,mxLa]];
+  return _frBoundsCache;
 }
 
 function refreshPublishedZones(){
@@ -1019,24 +1028,38 @@ function refreshPublishedZones(){
   });
   map.getSource("published-zones")?.setData({type:"FeatureCollection",features:feats});
   setCorridorRuns(publishedZones);
+  _pubZonesDrawn = true;   // stop the per-fix retry loop (see the watchPosition callback)
 }
 
+let _zonesSig=null;
 function refreshMap(){
   if(!map||!map.isStyleLoaded()) return;
   const now = Date.now();
-  const allFeatures = [
-    ...stops.map(s=>({
-      type:"Feature",
-      properties:{name:s.name, hasClip:!!s.clipId, isLive:false},
-      geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||12)]}
-    })),
-    ...liveStops.filter(s=>s.expiresAt>now).map(s=>({
-      type:"Feature",
-      properties:{name:s.name, hasClip:true, isLive:true},
-      geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||25)]}
-    }))
-  ];
-  map.getSource("zones")?.setData({type:"FeatureCollection",features:allFeatures});
+  const live = liveStops.filter(s=>s.expiresAt>now);
+  // Marked/live stops don't move — only rebuild the `zones` source (which
+  // regenerates a 32+ point circle polygon per stop + re-uploads the whole
+  // FeatureCollection) when the set actually changed. The "you are here"
+  // marker still updates every fix below.
+  const sig = JSON.stringify([
+    stops.map(s=>[s.lat,s.lon,s.radiusM||12,!!s.clipId,s.name]),
+    live.map(s=>[s.lat,s.lon,s.radiusM||25,s.name])
+  ]);
+  if(sig!==_zonesSig){
+    _zonesSig=sig;
+    const allFeatures = [
+      ...stops.map(s=>({
+        type:"Feature",
+        properties:{name:s.name, hasClip:!!s.clipId, isLive:false},
+        geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||12)]}
+      })),
+      ...live.map(s=>({
+        type:"Feature",
+        properties:{name:s.name, hasClip:true, isLive:true},
+        geometry:{type:"Polygon",coordinates:[circleRing(s.lat,s.lon,s.radiusM||25)]}
+      }))
+    ];
+    map.getSource("zones")?.setData({type:"FeatureCollection",features:allFeatures});
+  }
   if(lastSmoothed && here) here.update({
     lon:lastSmoothed.lon, lat:lastSmoothed.lat,
     // Device compass (which way the phone points) when available; else the
@@ -1064,7 +1087,7 @@ function startPresencePoll(pid){
         }));
       map.getSource("walkers")?.setData({type:"FeatureCollection",features});
     }catch(e){}
-  },5000);
+  },15000);   // was 5s — this is a staff authoring tool; other walkers are a nice-to-have overlay, not worth a 720/hr poll
 }
 
 // Prune expired live stops from the in-memory array once a second. (This used
@@ -1177,6 +1200,7 @@ function togglePathRecording(){
     refreshPathTrace();
   } else {
     pathPoints = [];
+    _pathDistM = 0; _pathElevTxt = "";
     pathRecording = true;
     document.getElementById("btnPathToggle").textContent = "⏹ Stop Corridor";
     document.getElementById("btnPathSave").style.display = "none";
@@ -1225,11 +1249,20 @@ function elevGainLoss(smoothedPoints, noiseFloorM){
   }
   return {gainM:Math.round(gainM), lossM:Math.round(lossM)};
 }
+let _pathElevTxt="";
 function updatePathStatsUI(){
   const el=document.getElementById("pathStats"); if(!el) return;
-  const km=(pathDistanceM(pathPoints)/1000).toFixed(2);
-  const {gainM,lossM}=elevGainLoss(smoothElevation(pathPoints));
-  el.textContent=pathPoints.length+" pts · "+km+" km"+((gainM||lossM)?" · ▲"+gainM+"m ▼"+lossM+"m":"");
+  // Distance: the running accumulator while recording (the per-fix path adds
+  // one segment); a full resum only when called outside recording.
+  const distM = pathRecording ? _pathDistM : pathDistanceM(pathPoints);
+  // Elevation gain/loss is a full-track O(n) smooth+scan with an n-object
+  // allocation — recompute only every 5th point (and always when not
+  // recording, or early on), reuse the last string otherwise.
+  if(!pathRecording || pathPoints.length<5 || pathPoints.length%5===0){
+    const {gainM,lossM}=elevGainLoss(smoothElevation(pathPoints));
+    _pathElevTxt = (gainM||lossM) ? " · ▲"+gainM+"m ▼"+lossM+"m" : "";
+  }
+  el.textContent=pathPoints.length+" pts · "+(distM/1000).toFixed(2)+" km"+_pathElevTxt;
 }
 // Drops any point implying a speed faster than humanly possible at walking/
 // hiking pace (default 8 m/s ≈ 29 km/h — generous enough to cover a brisk
@@ -1663,7 +1696,16 @@ async function initPermissions(){
       // (item D, 3D-mode plan) — the elevation profile below still simply
       // treats a path with no altitude data at all as "no elevation
       // available" rather than guessing.
-      if(pathRecording){ pathPoints.push({lat,lon,acc,alt:resolveAlt((altitude!=null&&!isNaN(altitude))?altitude:null),t:pos.timestamp}); updatePathStatsUI(); refreshPathTrace(); }
+      if(pathRecording){
+        const _prev=pathPoints[pathPoints.length-1];
+        const _np={lat,lon,acc,alt:resolveAlt((altitude!=null&&!isNaN(altitude))?altitude:null),t:pos.timestamp};
+        if(_prev) _pathDistM += haversineM(_prev.lat,_prev.lon,_np.lat,_np.lon);   // incremental — was an O(n) resum every fix
+        pathPoints.push(_np);
+        updatePathStatsUI();
+        // The full-track trace rebuild + GeoJSON re-upload is O(n); throttle
+        // it so a long recording isn't O(n^2). Stop-recording draws it in full.
+        if(pathPoints.length % 5 === 0) refreshPathTrace();
+      }
       // RECORD capture runs off recordSessionId, independent of which footer
       // tab is currently visible (recordMode) — starting a session and then
       // switching to Persistent/Live/Path to do other work must not stop it.
@@ -1674,11 +1716,12 @@ async function initPermissions(){
       }
       document.getElementById("btnMark").disabled = false;
       refreshMap();
-      // refreshPublishedZones() only ever got one shot (map 'load' event) and
-      // silently no-oped if the style wasn't fully loaded yet (slow tiles on
-      // a weak trail signal) — piggyback on every GPS fix, same as refreshMap,
-      // so it keeps retrying until it actually succeeds instead of just once.
-      refreshPublishedZones();
+      // Published zones are static per bundle — the per-fix call only existed
+      // to retry until the map style finished loading on a weak signal. Once
+      // it has actually drawn once, stop rebuilding + re-uploading the whole
+      // FeatureCollection every GPS tick; every real change (bundle reload,
+      // publish, resize, terrain toggle) still calls it explicitly.
+      if(!_pubZonesDrawn) refreshPublishedZones();
       checkProximityAudio(lastSmoothed.lat, lastSmoothed.lon);
       // First-fix map framing is handled by HereMarker's follow:true.
       if(first){ setStatus("Ready"); }
@@ -1826,7 +1869,7 @@ async function finishLiveStop(stop){
     });
     if(!zr.ok) throw new Error("zone publish "+zr.status);
 
-    liveStops.push(stop);
+    liveStops.push(stop); _frBoundsDirty=true;
     refreshMap();
     const _dm=Math.floor(liveTtlMs/60000), _ds=String(Math.floor((liveTtlMs%60000)/1000)).padStart(2,'0');
     setStatus("✓ "+stop.name+" LIVE — "+_dm+":"+_ds);
@@ -1918,7 +1961,7 @@ async function retryQueue(){
       if(!zr.ok) continue;
 
       await dbDelete("live_queue",entry.id);
-      liveStops.push(entry.stop);
+      liveStops.push(entry.stop); _frBoundsDirty=true;
       refreshMap();
       updateQueueBadge();
     }catch(e){ /* still offline */ }
@@ -2047,7 +2090,7 @@ document.getElementById("btnMark").onclick = () => {
       const r    = parseInt(document.getElementById("sRadius").value)||12;
       const stop = {id:uid(), projId, name, lat:lastPos.lat, lon:lastPos.lon, radiusM:r,
                     bearingDeg:circularMean(headingBuffer), clipId:null};
-      stops.push(stop); lastStop = stop;
+      stops.push(stop); lastStop = stop; _frBoundsDirty=true;
       await dbPut("stops", stop);
       refreshMap();
       map.flyTo({center:[stop.lon,stop.lat],zoom:17});

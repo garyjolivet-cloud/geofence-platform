@@ -1631,15 +1631,23 @@ function shroudFeatureCollection(){
 // player_fog_cell, so R4's viewpoint semantics (state=1 = "seen from a
 // viewpoint") stay exactly what they were; this is a third, visually
 // distinct layer, not a new fog state.
+// Memoized on Quest.corridors identity — the corridor set is built once per
+// project in loadCorridors() and never mutated, but this (resample every
+// path + h3-encode + gridDisk per sample) is heavy and was recomputed on
+// every renderHome() and every map open. Keyed on the array reference so a
+// project switch (fresh array) recomputes automatically.
+let _previewCellsCache = null, _previewCellsFor = null;
 function corridorPreviewCells(){
+  if(_previewCellsFor === Quest.corridors && _previewCellsCache) return _previewCellsCache;
   const cells = new Set();
-  if(typeof h3 === "undefined") return cells;
+  if(typeof h3 === "undefined") return cells;   // don't cache a degraded result
   Quest.corridors.forEach(corridor=>{
     QGeo.resamplePath(corridor.path, QUEST_TUNING.CORRIDOR_SAMPLE_STEP_M).forEach(([lat,lon])=>{
       const origin = h3.latLngToCell(lat, lon, QUEST_TUNING.FOG_RESOLUTION);
       h3.gridDisk(origin, 1).forEach(c=>cells.add(c));
     });
   });
+  _previewCellsCache = cells; _previewCellsFor = Quest.corridors;
   return cells;
 }
 // cells is optional — pass the already-computed Set when a caller (like
@@ -1856,8 +1864,10 @@ function renderFogMap(){
   // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
   // exception here aborts the script before the button's handler is ever
   // attached, leaving a dead "← Back" button with no way out of the map.
+  let _syncRaf=0;
   document.getElementById("fogBack").onclick=()=>{
     Quest.onFogUpdated=null; Quest.onPosition=null;
+    if(_syncRaf){ cancelAnimationFrame(_syncRaf); _syncRaf=0; }
     _unbindHeading();
     if(friendPoll){ clearInterval(friendPoll); friendPoll=null; }
     friendMarkers.forEach(m=>m.remove()); friendMarkers.clear();
@@ -1896,6 +1906,14 @@ function renderFogMap(){
       if(shroudSrc) shroudSrc.setData(shroudFeatureCollection());
       const src = map.getSource("fog");
       if(src) src.setData(fogFeatureCollection());
+    }
+    // Reveals arrive in bursts (a k=1 disk is 7 cells; a viewshed grant is
+    // hundreds). Each syncSource() rebuilds the whole shroud+fog GeoJSON from
+    // Quest.fogCells — O(cells) — so coalesce every burst into one rebuild
+    // per frame instead of one per revealed cell.
+    function scheduleSync(){
+      if(_syncRaf) return;
+      _syncRaf = requestAnimationFrame(()=>{ _syncRaf=0; try{ syncSource(); }catch(e){} });
     }
     map.on("load", ()=>{
       // R5 — admin-gated: fogFeatureCollection()/shroudFeatureCollection()
@@ -1942,7 +1960,7 @@ function renderFogMap(){
     // map instance. Left null when fog is admin-disabled: there's no source
     // to sync into (map.on("load") returned early above), and Quest itself
     // keeps tracking regardless — this only controls the redraw callback.
-    if(RQ_FOG_ENABLED) Quest.onFogUpdated = syncSource;
+    if(RQ_FOG_ENABLED) Quest.onFogUpdated = scheduleSync;
     // Live "you are here" directional avatar. follow:'edge' keeps the
     // fitBounds() run-network framing above and only re-centres if the player
     // walks off screen. Driven from _onFix -> Quest.onPosition (real fixes
