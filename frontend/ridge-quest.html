@@ -118,6 +118,25 @@
     color:var(--snow);border-radius:10px;padding:10px 16px;font-family:"Barlow Condensed";font-size:13px;letter-spacing:.3px;
     opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:3000;max-width:80vw;text-align:center}
   #rqToast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  /* "Eyes up" safety blank — full-viewport, above everything (toast is 3000,
+     fog map overlay is 1000). Opaque so whatever's underneath is truly hidden;
+     no dismiss control (see SpeedGuard). */
+  #rqEyesUp{position:fixed;inset:0;z-index:4000;background:var(--night);
+    display:none;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:32px;pointer-events:auto;-webkit-tap-highlight-color:transparent;
+    overscroll-behavior:contain;touch-action:none}
+  #rqEyesUp.show{display:flex}
+  #rqEyesUp .euInner{max-width:34ch}
+  #rqEyesUp .euHead{font-family:"Barlow Condensed",system-ui,sans-serif;font-weight:700;
+    text-transform:uppercase;letter-spacing:.06em;line-height:.95;margin:0 0 18px;
+    font-size:clamp(46px,15vw,96px);color:var(--coral)}
+  #rqEyesUp .euBody{font-family:"Barlow Condensed",system-ui,sans-serif;
+    font-size:clamp(18px,5vw,26px);color:var(--snow);margin:0 0 20px}
+  #rqEyesUp .euConsent{font-size:13px;line-height:1.5;color:var(--ice);margin:0 0 22px}
+  #rqEyesUp .euResume{font-family:"Barlow Condensed",system-ui,sans-serif;text-transform:uppercase;
+    letter-spacing:.4px;font-size:13px;color:var(--fog);margin:0}
+  #rqEyesUp .euSpeed{font-family:"Barlow Condensed",system-ui,sans-serif;font-size:12px;
+    color:var(--fog);opacity:.7;margin:8px 0 0;min-height:1em}
 </style>
 </head>
 <body>
@@ -592,7 +611,14 @@ const QUEST_TUNING = {
   // --- Elevation checkpoints (headline vertical, _tickCheckpoints) ---
   CHECKPOINT_RADIUS_M: 20,        // a pass-through spot on a lift/run line — a touch wider than VIEWPOINT_RADIUS_M since you're moving through it, not standing
   CHECKPOINT_COOLDOWN_MS: 60000,  // per-checkpoint: a lingering GPS hit can't re-credit the same lap
-  CHECKPOINT_STALE_MS: 1200000    // 20 min — beyond this gap, two checkpoint elevations aren't one trustworthy descent (lunch, lift maze, overnight)
+  CHECKPOINT_STALE_MS: 1200000,   // 20 min — beyond this gap, two checkpoint elevations aren't one trustworthy descent (lunch, lift maze, overnight)
+  // --- "Eyes up" speed guard (SpeedGuard) — blanks the screen while moving ---
+  SPEED_GUARD_ENABLED: true,          // master kill switch
+  SPEED_GUARD_BLOCK_MPS: 0.7,         // ~2.5 km/h: one fix over this blanks immediately
+  SPEED_GUARD_CLEAR_MPS: 0.5,         // ~1.8 km/h: EKF speed must sit under this…
+  SPEED_GUARD_CLEAR_DWELL_MS: 4000,   // …continuously this long (measured by fix p.t) to restore
+  SPEED_GUARD_MAX_FIX_GAP_MS: 15000,  // a longer gap between fixes resets the clear-dwell (backgrounded tab, GPS loss)
+  SPEED_GUARD_LIFT_MIN_MPS: 1.8       // on a runType:"lift" corridor AND at least this fast => exempt (a walker on the lift line is slower and still warned; a terminal crawl is slow so the map just shows)
 };
 
 // R12 — the single source of truth for activity key->label, shared by
@@ -668,6 +694,117 @@ const QGeo = {
       if(best <= halfWidth + toleranceM) covered++;
     });
     return samples.length ? covered/samples.length : 0;
+  }
+};
+
+/* ===================== "EYES UP" SPEED GUARD =====================
+   Safety lockout: when EKF speed shows the player is moving (skiing /
+   biking / walking), blank the screen with a full-viewport warning and
+   restore it once they've been stopped for a few seconds — enforcing the
+   liability-waiver line "Never operate this app while in motion".
+
+   Purely visual. consider(p) is called from _onFix on EVERY fix (before
+   the _offsite early return) and from renderFogMap's own watch when the
+   map is open without a tracking session — it never throws and never
+   changes game state, so tracking / fog reveal / corridor + checkpoint
+   detection / friend sharing all keep running underneath.
+
+   Hysteresis: blocks instantly on one fix over SPEED_GUARD_BLOCK_MPS;
+   clears only after speed stays under SPEED_GUARD_CLEAR_MPS continuously
+   for SPEED_GUARD_CLEAR_DWELL_MS, timed by fix p.t deltas (deterministic,
+   survives tab throttling). Lift rides are exempt (see _onLift). */
+const SpeedGuard = {
+  _blocked: false,
+  _clearSince: null,   // p.t of the first fix in the current continuous below-CLEAR streak
+  _lastSpeed: 0,
+  _lastT: null,
+  _toastShown: false,
+
+  _q(name){ try{ return new URLSearchParams(location.search).get(name); }catch(e){ return null; } },
+  enabled(){
+    if(QUEST_TUNING.SPEED_GUARD_ENABLED === false) return false;
+    if(this._q("guard") === "0") return false;              // undocumented escape hatch (passenger / staff)
+    if(IS_SIM_MODE && this._q("guard") !== "1") return false; // ?sim=1 alone keeps the sim-walk verification unblanked
+    return true;
+  },
+
+  // Lift exemption — self-contained (reads Quest.corridors, not Quest.states),
+  // so it works whether tracking is running or only renderFogMap's own watch
+  // is. Only exempts when actually moving at lift speed: a walker on the lift
+  // line is slower and still gets warned; a terminal crawl is slow so the
+  // normal clear-dwell shows the map anyway.
+  _onLift(p){
+    if(p.speed < QUEST_TUNING.SPEED_GUARD_LIFT_MIN_MPS) return false;
+    if(typeof Quest === "undefined" || !Quest.corridors) return false;
+    for(const c of Quest.corridors){
+      if(c.runType !== "lift" || !c.path || c.path.length < 2) continue;
+      if(QGeo.corridorDist([p.lat, p.lon], c, c.ref) < 0) return true;
+    }
+    return false;
+  },
+
+  consider(p){
+    if(!this.enabled()) return;
+    if(!p || typeof p.speed !== "number" || typeof p.t !== "number") return;
+    // A long gap between fixes (backgrounded tab, GPS loss) isn't "held still" —
+    // don't let one post-resume slow fix satisfy the whole dwell.
+    if(this._lastT != null && p.t - this._lastT > QUEST_TUNING.SPEED_GUARD_MAX_FIX_GAP_MS) this._clearSince = null;
+    this._lastT = p.t; this._lastSpeed = p.speed;
+    const onLift = this._onLift(p);
+    if(!this._blocked){
+      if(p.speed > QUEST_TUNING.SPEED_GUARD_BLOCK_MPS && !onLift) this._block();
+      return;
+    }
+    if(p.speed >= QUEST_TUNING.SPEED_GUARD_CLEAR_MPS && !onLift){
+      this._clearSince = null; this._render(); return;   // still moving — reset the dwell
+    }
+    if(this._clearSince == null) this._clearSince = p.t;
+    else if(p.t - this._clearSince >= QUEST_TUNING.SPEED_GUARD_CLEAR_DWELL_MS){ this._unblock(); return; }
+    this._render();
+  },
+
+  _block(){
+    this._blocked = true; this._clearSince = null;
+    if(navigator.vibrate) navigator.vibrate(150);   // once, on the transition only
+    this._maybeToast();                              // fallback for the map-only path where start() never ran
+    this._show(); this._render();
+  },
+  _unblock(){ this._blocked = false; this._clearSince = null; this._hide(); },
+  reset(){ this._blocked = false; this._clearSince = null; this._lastT = null; this._hide(); },
+  noteTrackingStarted(){ this._maybeToast(); },
+  _maybeToast(){
+    if(this._toastShown) return;
+    this._toastShown = true;
+    rqToast("Ridge Quest hides the screen while you're moving — check it while stopped.");
+  },
+
+  _el(){
+    let d = document.getElementById("rqEyesUp");
+    if(!d){
+      d = document.createElement("div");
+      d.id = "rqEyesUp";
+      d.setAttribute("role", "alert");
+      d.setAttribute("aria-live", "assertive");
+      d.innerHTML =
+        '<div class="euInner">'
+        +'<div class="euHead">Eyes up</div>'
+        +'<p class="euBody">Don’t look at your screen while moving. Stop to check the map.</p>'
+        +'<p class="euConsent">Looking at a screen reduces your awareness of terrain, obstacles, '
+          +'and other people. Only check the app while safely stopped, off to the side of a trail.</p>'
+        +'<p class="euResume" id="euResume"></p>'
+        +'<p class="euSpeed" id="euSpeed"></p>'
+        +'</div>';
+      document.body.appendChild(d);
+    }
+    return d;
+  },
+  _show(){ this._el().classList.add("show"); },
+  _hide(){ const d = document.getElementById("rqEyesUp"); if(d) d.classList.remove("show"); },
+  _render(){
+    const r = document.getElementById("euResume");
+    const s = document.getElementById("euSpeed");
+    if(r) r.textContent = this._clearSince != null ? "Stopped — hold still…" : "Screen returns a few seconds after you stop.";
+    if(s) s.textContent = (this._blocked && this._clearSince == null) ? (Math.round(this._lastSpeed * 3.6) + " km/h") : "";
   }
 };
 
@@ -792,6 +929,7 @@ const Quest = {
       err=>{ if(this.onStatus) this.onStatus({ok:false, message: err && err.message ? err.message : "location error (code "+(err&&err.code)+")"}); },
       { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
     );
+    SpeedGuard.noteTrackingStarted();   // one-time "screen hides while moving" toast, shown before any movement
     return true;
   },
   stop(){
@@ -799,6 +937,7 @@ const Quest = {
     // Flush the checkpoint total one last time (unthrottled) so a session
     // that ends between throttled posts still lands its final number.
     if(this.checkpointVert && this.checkpointVert.total>0) this._reportCheckpointVertical(this.checkpointVert.total, true);
+    SpeedGuard.reset();   // no more fixes coming — don't leave a blank with nothing to clear it
   },
   active(){ return this.watchId!=null; },
 
@@ -810,6 +949,7 @@ const Quest = {
     // Feed the avatar FIRST — its site gate flips Quest._offsite and keeps
     // re-evaluating the boundary so tracking resumes on return.
     if(this.onPosition) this.onPosition(p);   // live avatar on an open map
+    SpeedGuard.consider(p);                   // "eyes up" safety blank — every fix, before the _offsite return
     if(Quest._offsite){
       if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t, offsite:true});
       return;   // off the run network: no corridor ticks, no fog reveal, no sharing
@@ -1832,6 +1972,12 @@ function renderFogMap(){
   // map.remove() on the way out — the map is heavier with DEM terrain and a
   // fresh one is built every time "My map" opens.
   let mapInstance=null;
+  // "Eyes up" safety watch — the map screen renders (and is worth not staring
+  // at while moving) even with no Home tracking session, so when there's none
+  // we run our own lightweight watch purely to feed SpeedGuard + the avatar.
+  // Torn down by the #fogBack handler. Never coexists with Quest.start()'s
+  // watch (guarded on !Quest.active(); you can't start tracking from here).
+  let guardWatchId=null;
   // DeviceHeading.onChange unsubscribe — declared out here so the #fogBack
   // handler (bound before the map) can call it; reassigned once the marker exists.
   let _unbindHeading = function(){};
@@ -1861,6 +2007,8 @@ function renderFogMap(){
     _unbindHeading();
     if(friendPoll){ clearInterval(friendPoll); friendPoll=null; }
     friendMarkers.forEach(m=>m.remove()); friendMarkers.clear();
+    if(guardWatchId!=null){ navigator.geolocation.clearWatch(guardWatchId); guardWatchId=null; }
+    SpeedGuard.reset();   // no more fixes coming from this screen — don't strand a blank
     if(mapInstance){ try{ mapInstance.remove(); }catch(e){} mapInstance=null; }
     renderHome();
   };
@@ -1964,6 +2112,25 @@ function renderFogMap(){
       // the GPS travel heading (which way you're moving).
       headingDeg:((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading : p.headingTravel),
       accM:p.acc });
+
+    // "Eyes up" safety watch — only when no Home tracking session is feeding
+    // _onFix. Pushes through the same GPSFilter singleton (safe: the
+    // !Quest.active() guard means there's no other stream), feeds SpeedGuard
+    // and the avatar/site-gate. Torn down in the #fogBack handler above.
+    if(!Quest.active() && navigator.geolocation){
+      guardWatchId = navigator.geolocation.watchPosition(
+        pos=>{
+          const c = pos.coords;
+          const p = GPSFilter.push({ lat:c.latitude, lon:c.longitude, acc:c.accuracy||30,
+            t:pos.timestamp||Date.now(),
+            alt:c.altitude!=null?c.altitude:null, altAcc:c.altitudeAccuracy!=null?c.altitudeAccuracy:null });
+          SpeedGuard.consider(p);
+          if(Quest.onPosition) Quest.onPosition(p);
+        },
+        ()=>{},   // best-effort safety watch — a permission error just means no guard here
+        { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
+      );
+    }
 
     // --- Live friends ---------------------------------------------------
     // GET /api/presence/friends every 5s (same cadence as the tour
