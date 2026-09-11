@@ -129,7 +129,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><div class="glyph"></div><div><h1>Ridge Quest</h1><p>Fog-of-war terrain game</p></div><a class="helpBtn" href="/quest-help" target="_blank" rel="noopener" title="How to play Ridge Quest" aria-label="How to play Ridge Quest">&#8505;&#65039;</a></header>
+  <header><div class="glyph"></div><div><h1>Ridge Quest</h1><p>On-mountain tracking game</p></div><a class="helpBtn" href="/quest-help" target="_blank" rel="noopener" title="How to play Ridge Quest" aria-label="How to play Ridge Quest">&#8505;&#65039;</a></header>
   <div id="app"></div>
 </div>
 
@@ -230,7 +230,7 @@ function renderAuth(mode){
   app.innerHTML =
     '<div class="card">'
     +'<h2>'+(mode==="login"?"Log in":"Create your account")+'</h2>'
-    +'<p class="lead">Track every run, chute, bowl and ridge you ski — and reveal the mountain as you go.</p>'
+    +'<p class="lead">Track every run, chute, bowl and ridge you ski — earn points, and climb the leaderboard.</p>'
     +'<div id="authErr"></div>'
     +'<div id="googleBtn" style="margin:4px 0 4px;display:flex;justify-content:center"></div>'
     +'<div class="orDivider" id="orDivider">or</div>'
@@ -1199,7 +1199,7 @@ function renderHome(){
   app.innerHTML =
     '<div class="card welcome">'
     +'<p class="go">You’re in.</p>'
-    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Track runs, reveal the mountain, and climb the leaderboard.</p>'
+    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Track runs, earn points, and climb the leaderboard.</p>'
     +'<div id="statsTiles"></div>'
     +'<p class="scrollhint" id="statsStreak" style="margin-bottom:14px"></p>'
     +'<div class="activityPicker" id="activityPicker" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'
