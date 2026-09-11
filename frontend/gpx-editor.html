@@ -1113,12 +1113,25 @@ document.getElementById("saveAsBtn").onclick=async()=>{
   const name=(prompt("Name this corridor:", (loadedFrom&&loadedFrom.name)||"")||"").trim();
   if(!name) return;
   const rd=runDetailsPayload();
-  const target=gpxTree.getUploadTarget();
-  const folderId = target ? target.folderId : null;
+  const flatPoints=points.map(p=>[p[0],p[1],p[2]]);
   const {distanceM,elevGainM,elevLossM}=currentTotals();
+  // If a corridor with this name already lives in the workspace library,
+  // overwrite that row in place (PATCH) instead of POSTing a second corridor
+  // with the same name. Skip the match against the corridor we already have
+  // open — that's just a plain Save.
+  const existing=allCorridors.find(c=>c.name && c.name.trim().toLowerCase()===name.toLowerCase()
+                                      && !(loadedFrom && loadedFrom.id===c.id));
   try{
-    const j=await postJson("/api/corridor",{appId,name,points:points.map(p=>[p[0],p[1],p[2]]),folderId,distanceM,elevGainM,elevLossM,...rd});
-    loadedFrom={kind:"corridor", id:j.id, name, ...rd};
+    if(existing){
+      if(!confirm('A corridor named "'+existing.name+'" already exists. Overwrite it?')) return;
+      await patchJson("/api/corridor/"+existing.id,{points:flatPoints,distanceM,elevGainM,elevLossM,...rd});
+      loadedFrom={kind:"corridor", id:existing.id, name:existing.name, ...rd};
+    }else{
+      const target=gpxTree.getUploadTarget();
+      const folderId = target ? target.folderId : null;
+      const j=await postJson("/api/corridor",{appId,name,points:flatPoints,folderId,distanceM,elevGainM,elevLossM,...rd});
+      loadedFrom={kind:"corridor", id:j.id, name, ...rd};
+    }
     updateHdrCrumb();
     document.getElementById("saveBtn").disabled=false;
     captureBaseline();
