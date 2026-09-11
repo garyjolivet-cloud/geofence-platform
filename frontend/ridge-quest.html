@@ -1942,7 +1942,11 @@ function renderFogMap(){
     renderHome();
   };
   try{
-    const map = new maplibregl.Map({
+    // If the splash just played, open exactly where its flyby ended
+    // instead of the usual whole-network framing below — otherwise "My
+    // map" feels like an abrupt jump right after the splash. Reused for
+    // every "My map" open this session, not just the first.
+    const map = new maplibregl.Map(Object.assign({
       container:"fogMap",
       style:{ version:8,
         sources:{ base:{ type:"raster",
@@ -1950,11 +1954,13 @@ function renderFogMap(){
           tileSize:256, attribution:"Esri, Maxar" } },
         layers:[{ id:"base", type:"raster", source:"base" }] },
       center:[Quest.ref[1], Quest.ref[0]], zoom:13
-    });
+    }, _splashEndCamera ? { center:_splashEndCamera.center, zoom:_splashEndCamera.zoom, pitch:_splashEndCamera.pitch, bearing:_splashEndCamera.bearing } : {}));
     mapInstance = map;
     map.addControl(new maplibregl.NavigationControl({ visualizePitch:use3D }));
-    const initialBounds = questMapBounds();
-    if(initialBounds) map.fitBounds(initialBounds, { padding:70, maxZoom:17, duration:0 });
+    if(!_splashEndCamera){
+      const initialBounds = questMapBounds();
+      if(initialBounds) map.fitBounds(initialBounds, { padding:70, maxZoom:17, duration:0 });
+    }
     // 3D terrain (workspace flag). Terrarium DEM + a subtle sky, and the map
     // opens pitched so relief reads immediately. The #fogTilt button flattens
     // it back to 2D (native two-finger / ctrl-drag pitch also works). All the
@@ -1963,7 +1969,9 @@ function renderFogMap(){
       const reduced = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
       map.on("load", ()=>{
         Terrain3D.setEnabled(map, true, { sky:true });
-        map.easeTo({ pitch:60, duration: reduced ? 0 : 700 });
+        // Skip the forced pitch when we already opened at the splash's
+        // exact angle — easing to 60 here would visibly undo it.
+        if(!_splashEndCamera) map.easeTo({ pitch:60, duration: reduced ? 0 : 700 });
       });
       const tiltBtn = document.getElementById("fogTilt");
       if(tiltBtn) tiltBtn.onclick = ()=> Terrain3D.toggleTilt(map);
@@ -2142,6 +2150,15 @@ const SPLASH_WAYPOINTS = [
 const SPLASH_TOTAL_MS = 8000;
 const SPLASH_END_CARD_MS = 1500;
 let _splashPlayed = false;
+// Set once the splash's own map is torn down, to whatever camera it
+// actually ended on (captured live, not just assumed to be the last
+// waypoint — correct whether the flyby finished naturally or was
+// skipped). renderFogMap() ("My map") opens here instead of its usual
+// whole-network fitBounds framing, so leaving the splash doesn't feel
+// like an abrupt jump. Stays null (renderFogMap() falls back to its
+// normal framing) for reduced-motion sessions, where no splash map is
+// ever created.
+let _splashEndCamera = null;
 function playSplash(){
   return new Promise(resolve=>{
     const rm = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
@@ -2159,7 +2176,24 @@ function playSplash(){
       if(done) return; done=true;
       if(endTimer) clearTimeout(endTimer);
       if(captionTimer) clearInterval(captionTimer);
-      if(map){ try{ map.remove(); }catch(e){} }
+      if(map){
+        // Deterministic — NOT read back from the live map. Confirmed live
+        // (this session): map.easeTo()'s eased interpolation only actually
+        // advances once the map's render loop is ticking (tied to
+        // style/tile load), so on a slow connection — or an early skip —
+        // getCenter()/getPitch() can still report waypoint 0 even after
+        // every easeTo() call above has fired. "My map" opening at the
+        // wrong spot is worse than that transition being invisible, so
+        // this is always the last waypoint by design, never whatever the
+        // map's transform actually settled on. jumpTo (not easeTo) it on
+        // the live map too, so the splash's last visible frame matches —
+        // jumpTo sets the transform directly and doesn't depend on the
+        // render loop the way easeTo's interpolation does.
+        const last = SPLASH_WAYPOINTS[SPLASH_WAYPOINTS.length-1];
+        _splashEndCamera = { center:last.center.slice(), zoom:last.zoom, pitch:last.pitch, bearing:last.bearing };
+        try{ map.jumpTo(_splashEndCamera); }catch(e){}
+        try{ map.remove(); }catch(e){}
+      }
       overlay.remove();
       resolve();
     }
