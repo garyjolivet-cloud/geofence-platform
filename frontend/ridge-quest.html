@@ -107,6 +107,24 @@
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+  /* Splash — CPR Ridge flyby, real MapLibre/DEM render (same stack as
+     #fogMap), played once before boot()'s first real screen. z-index above
+     .fogMapOverlay (1000) and #rqToast (3000) since it's the very first
+     thing on screen. */
+  .splashOverlay{position:fixed;inset:0;z-index:5000;background:var(--night);overflow:hidden}
+  #splashMap{position:absolute;inset:0}
+  .splashSkip{position:absolute;top:14px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-family:"Barlow Condensed";font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase;cursor:pointer}
+  .splashCaption{position:absolute;left:0;right:0;bottom:14%;z-index:1;text-align:center;
+    font-family:"Barlow Condensed";font-weight:700;font-size:clamp(22px,6vw,34px);letter-spacing:.5px;text-transform:uppercase;
+    color:var(--snow);text-shadow:0 0 4px #0a1018,0 0 10px #0a1018,0 2px 6px #0a1018;
+    opacity:0;transform:translateY(6px);transition:opacity .25s ease,transform .25s ease;pointer-events:none}
+  .splashCaption.show{opacity:1;transform:translateY(0)}
+  .splashTitle{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+    background:rgba(10,16,24,0);opacity:0;transition:opacity .5s ease,background .5s ease;pointer-events:none}
+  .splashTitle.show{opacity:1;background:rgba(10,16,24,.55)}
+  .splashTitle h1{font-family:"Black Han Sans";font-weight:400;font-size:34px;color:var(--snow);margin:0}
+  .splashTitle p{font-family:"Barlow Condensed";font-size:13px;letter-spacing:1.2px;text-transform:uppercase;color:var(--coral);margin:0}
+  @media (prefers-reduced-motion:reduce){ .splashCaption,.splashTitle{transition:none} }
   /* "show all runs" overlay (fog + tile art both off) */
   .runLabel{font:700 clamp(22px,5.4vw,30px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
     letter-spacing:.02em;white-space:nowrap;pointer-events:none;
@@ -2093,7 +2111,131 @@ function renderFogMap(){
 }
 
 /* ============================== BOOT ============================== */
+/* ============================ SPLASH (CPR Ridge flyby) ============================
+   Plays once per page load, before boot()'s first real screen — a real
+   MapLibre render (same Esri satellite + Terrarium DEM stack renderFogMap()
+   uses, via Terrain3D) flying a fixed, hand-tuned camera sequence over CPR
+   Ridge with real corridor geometry, pulled once from the live bundle
+   (GET /api/projects/tour-mtgmj7nxhwmb/bundle) rather than fetched at
+   runtime — hardcoded here on purpose so the splash starts instantly with
+   no network dependency. _splashPlayed guards against boot()'s several
+   re-entries (after workspace/project pick, after login) replaying it
+   mid-session — it must fire exactly once per page load, not once per
+   boot() call. */
+const SPLASH_CORRIDORS = [
+  {name:"Marlys", path:[[51.277308,-117.075972],[51.277435,-117.076046],[51.277588,-117.076141],[51.277757,-117.076264],[51.277945,-117.076535],[51.278302,-117.076945],[51.278588,-117.077424],[51.278785,-117.077702]]},
+  {name:"Legs Right", path:[[51.278603,-117.074674],[51.278684,-117.074748],[51.278763,-117.074806],[51.278826,-117.074883],[51.27891,-117.075005],[51.278972,-117.075025],[51.279061,-117.075054],[51.279155,-117.075066],[51.279239,-117.075207],[51.27934,-117.075267],[51.279385,-117.075342],[51.279428,-117.075414],[51.279585,-117.075603],[51.279626,-117.075704],[51.279788,-117.075925]]},
+  {name:"PW", path:[[51.280159,-117.073172],[51.280089,-117.073405],[51.280256,-117.073505],[51.280371,-117.073474],[51.28056,-117.073784],[51.280649,-117.073935],[51.28077,-117.074112],[51.281131,-117.074442],[51.281261,-117.074565]]},
+  {name:"Boxy Entry", path:[[51.281288,-117.072342],[51.281352,-117.0724],[51.281476,-117.072546],[51.281628,-117.072575],[51.281795,-117.072767],[51.281887,-117.073115],[51.282018,-117.0732],[51.282064,-117.073266],[51.28218,-117.073387]]},
+  {name:"Torpedo Alley", path:[[51.277723,-117.074803],[51.277634,-117.074355],[51.277513,-117.073657],[51.277533,-117.073115],[51.277506,-117.07278],[51.277423,-117.072431],[51.277404,-117.07226]]},
+  {name:"Bowling Ball", path:[[51.27626,-117.076106],[51.276139,-117.075366],[51.275998,-117.074599],[51.275741,-117.073818],[51.275631,-117.073185]]}
+];
+// Hand-tuned live against the real map (Fence Editor, this same project) —
+// pitch/zoom kept at or below the values confirmed clean; pushing much
+// past pitch 76 / zoom 16.5 here starts exposing "no data yet" gaps at the
+// DEM/imagery resolution ceiling.
+const SPLASH_WAYPOINTS = [
+  {center:[-117.0752,51.2782], zoom:14.7, pitch:48, bearing:25,  holdMs:1100},
+  {center:[-117.0775,51.2803], zoom:16.3, pitch:73, bearing:58,  holdMs:1150},
+  {center:[-117.0745,51.2768], zoom:15.9, pitch:68, bearing:-25, holdMs:1150}
+];
+const SPLASH_TOTAL_MS = 4200;
+const SPLASH_END_CARD_MS = 800;
+let _splashPlayed = false;
+function playSplash(){
+  return new Promise(resolve=>{
+    const rm = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
+    const overlay = document.createElement("div");
+    overlay.className = "splashOverlay";
+    overlay.innerHTML =
+      '<div id="splashMap"></div>'
+      +'<div class="splashCaption" id="splashCaption"></div>'
+      +'<div class="splashTitle" id="splashTitle"><h1>Ridge Quest</h1><p>Kicking Horse &middot; CPR Ridge</p></div>'
+      +'<button class="splashSkip" id="splashSkip">Skip &rsaquo;</button>';
+    document.body.appendChild(overlay);
+
+    let map=null, endTimer=null, captionTimer=null, done=false;
+    function finish(){
+      if(done) return; done=true;
+      if(endTimer) clearTimeout(endTimer);
+      if(captionTimer) clearInterval(captionTimer);
+      if(map){ try{ map.remove(); }catch(e){} }
+      overlay.remove();
+      resolve();
+    }
+    document.getElementById("splashSkip").onclick=finish;
+
+    // Reduced motion: no camera animation, no map — just a brief branded
+    // pause, same spirit as terrain-3d.js's own reducedMotion() gating.
+    if(rm){ endTimer=setTimeout(finish, 600); return; }
+
+    map = new maplibregl.Map({
+      container:"splashMap",
+      style:{ version:8,
+        sources:{ base:{ type:"raster",
+          tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+          tileSize:256, attribution:"Esri, Maxar" } },
+        layers:[{ id:"base", type:"raster", source:"base" }] },
+      center:SPLASH_WAYPOINTS[0].center, zoom:SPLASH_WAYPOINTS[0].zoom,
+      pitch:SPLASH_WAYPOINTS[0].pitch, bearing:SPLASH_WAYPOINTS[0].bearing,
+      interactive:false, attributionControl:false
+    });
+    map.on("load", ()=>{
+      try{
+        Terrain3D.setEnabled(map, true, { sky:true });
+        map.addSource("splashCorridors", { type:"geojson", data:{ type:"FeatureCollection",
+          features: SPLASH_CORRIDORS.map(c=>({ type:"Feature", properties:{ name:c.name },
+            geometry:{ type:"LineString", coordinates:c.path.map(p=>[p[1],p[0]]) } })) } });
+        map.addLayer({ id:"splashCorridors-casing", type:"line", source:"splashCorridors",
+          paint:{ "line-color":"#1a0d07", "line-width":6, "line-opacity":0.5 } });
+        map.addLayer({ id:"splashCorridors-line", type:"line", source:"splashCorridors",
+          paint:{ "line-color":"#ff6a3d", "line-width":3 } });
+      }catch(e){} // offline/blocked tiles — splash still runs on its hard timer below
+    });
+
+    // Corridor name captions — an independent track from the camera moves
+    // (doesn't try to guarantee a name is under the camera at that instant;
+    // just cycles real CPR Ridge corridor names while the real flyby plays
+    // underneath). Fade out, swap text, fade in.
+    const capEl=document.getElementById("splashCaption");
+    let capIdx=-1;
+    function showNextCaption(){
+      capEl.classList.remove("show");
+      setTimeout(()=>{
+        capIdx++;
+        if(capIdx>=SPLASH_CORRIDORS.length) return;
+        capEl.textContent = SPLASH_CORRIDORS[capIdx].name;
+        capEl.classList.add("show");
+      }, 200);
+    }
+    const captionEvery = Math.round((SPLASH_TOTAL_MS-SPLASH_END_CARD_MS) / SPLASH_CORRIDORS.length);
+    showNextCaption();
+    captionTimer = setInterval(showNextCaption, captionEvery);
+
+    // Discrete camera cuts (not one continuous interpolated flight) — one
+    // easeTo per waypoint, matching every other easeTo in this codebase
+    // (terrain-3d.js's toggleTilt, etc.), which is always a single-step
+    // transition, never a chained multi-point path.
+    let t=0;
+    SPLASH_WAYPOINTS.forEach(wp=>{
+      setTimeout(()=>{ if(map) map.easeTo({ center:wp.center, zoom:wp.zoom, pitch:wp.pitch, bearing:wp.bearing, duration:600 }); }, t);
+      t += wp.holdMs;
+    });
+
+    // Hard cap regardless of tile-load state — a partially-loaded basemap
+    // is an acceptable look for a ~4s brand moment; boot() must never block
+    // on tiles.
+    endTimer = setTimeout(()=>{
+      if(captionTimer) clearInterval(captionTimer);
+      const titleEl=document.getElementById("splashTitle");
+      if(titleEl) titleEl.classList.add("show");
+      endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
+    }, SPLASH_TOTAL_MS - SPLASH_END_CARD_MS);
+  });
+}
+
 async function boot(){
+  if(!_splashPlayed){ _splashPlayed = true; await playSplash(); }
   // R7 resolution, in order: explicit URL params always win (unchanged from
   // before this phase) > a remembered rq.workspace pick > an existing
   // session's own appId (so a player who's already active before this
