@@ -2135,12 +2135,12 @@ const SPLASH_CORRIDORS = [
 // past pitch 76 / zoom 16.5 here starts exposing "no data yet" gaps at the
 // DEM/imagery resolution ceiling.
 const SPLASH_WAYPOINTS = [
-  {center:[-117.0752,51.2782], zoom:14.7, pitch:48, bearing:25,  holdMs:1100},
-  {center:[-117.0775,51.2803], zoom:16.3, pitch:73, bearing:58,  holdMs:1150},
-  {center:[-117.0745,51.2768], zoom:15.9, pitch:68, bearing:-25, holdMs:1150}
+  {center:[-117.0752,51.2782], zoom:14.7, pitch:48, bearing:25,  holdMs:2100},
+  {center:[-117.0775,51.2803], zoom:16.3, pitch:73, bearing:58,  holdMs:2200},
+  {center:[-117.0745,51.2768], zoom:15.9, pitch:68, bearing:-25, holdMs:2200}
 ];
-const SPLASH_TOTAL_MS = 4200;
-const SPLASH_END_CARD_MS = 800;
+const SPLASH_TOTAL_MS = 8000;
+const SPLASH_END_CARD_MS = 1500;
 let _splashPlayed = false;
 function playSplash(){
   return new Promise(resolve=>{
@@ -2218,7 +2218,7 @@ function playSplash(){
     // transition, never a chained multi-point path.
     let t=0;
     SPLASH_WAYPOINTS.forEach(wp=>{
-      setTimeout(()=>{ if(map) map.easeTo({ center:wp.center, zoom:wp.zoom, pitch:wp.pitch, bearing:wp.bearing, duration:600 }); }, t);
+      setTimeout(()=>{ if(map) map.easeTo({ center:wp.center, zoom:wp.zoom, pitch:wp.pitch, bearing:wp.bearing, duration:900 }); }, t);
       t += wp.holdMs;
     });
 
