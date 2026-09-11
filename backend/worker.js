@@ -1491,6 +1491,52 @@ async function api(request, env, url) {
     return json({ days: results || [] }, 200, AC);
   }
 
+  // --- Ridge Quest: personal chute lap counts ("Your Chutes") ---
+  // Aggregated in JS from quest_run, the same SELECT-then-bucket pattern
+  // /api/quest-backfill-activity-stats already uses below — quest_run has
+  // no date/season_id column of its own, only started_at, so the bucket
+  // has to be recomputed per row via questDateBucket()/questSeasonId().
+  // Grouped by zone_id (the published-bundle zone id — quest_run's only
+  // real corridor identifier; there's no corridor_id column) rather than
+  // run_name, so a renamed corridor doesn't split into two rows. Rows
+  // arrive newest-first, so the first row seen per zone_id already carries
+  // its current name/difficulty. Personal only — never aggregates across
+  // players — per product decision (no resort-wide chute popularity yet).
+  function aggregateChuteCounts(rows, bucketOf, targetBucket) {
+    const byZone = new Map();
+    for (const r of rows) {
+      if (bucketOf(r.started_at) !== targetBucket) continue;
+      const row = byZone.get(r.zone_id);
+      if (row) row.count++;
+      else byZone.set(r.zone_id, { zoneId: r.zone_id, name: r.run_name || "Chute", difficulty: r.difficulty, count: 1, lastSkiedAt: r.started_at });
+    }
+    return [...byZone.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }
+  const mpcd = path.match(/^\/api\/players\/([^/]+)\/chutes\/daily$/);
+  if (mpcd && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mpcd[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const date = url.searchParams.get("date") || questDateBucket(new Date().toISOString());
+    const { results } = await env.DB.prepare(
+      "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND run_type='chute' ORDER BY started_at DESC LIMIT 2000"
+    ).bind(P.playerId).all();
+    const chutes = aggregateChuteCounts(results || [], questDateBucket, date);
+    return json({ date, chutes }, 200, AC);
+  }
+  const mpcs = path.match(/^\/api\/players\/([^/]+)\/chutes\/season$/);
+  if (mpcs && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mpcs[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const seasonId = url.searchParams.get("seasonId") || questSeasonId(new Date().toISOString());
+    const { results } = await env.DB.prepare(
+      "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND run_type='chute' ORDER BY started_at DESC LIMIT 2000"
+    ).bind(P.playerId).all();
+    const chutes = aggregateChuteCounts(results || [], questSeasonId, seasonId);
+    return json({ seasonId, chutes }, 200, AC);
+  }
+
   // --- Ridge Quest: checkpoint-measured daily vertical ---
   // The headline "Vertical today" / "This season" number. Unlike vertical_m
   // (summed per logged run from each corridor's authored descent), this is a

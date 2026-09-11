@@ -90,6 +90,13 @@
   .runrow .badge.xcski{background:#c9a4ff;color:#1a0d3d}
   .runrow .name{flex:1;color:var(--snow)}
   .runrow .meta{color:var(--fog);font-size:12px;white-space:nowrap}
+  .chuteRow{background:var(--night);border:1px solid var(--rim);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13.5px}
+  .chuteTop{display:flex;align-items:center;gap:8px}
+  .chuteMark{flex:0 0 auto;font-size:11px;color:var(--snow);letter-spacing:-1px}
+  .chuteTop .name{flex:1;min-width:0;color:var(--snow);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chuteTop .count{flex:0 0 auto;font-weight:700;color:var(--coral)}
+  .chuteBar{height:4px;border-radius:2px;background:var(--rim);overflow:hidden;margin-top:7px}
+  .chuteBar i{display:block;height:100%;background:var(--coral);border-radius:2px}
   .empty{color:var(--fog);font-size:13px;text-align:center;padding:10px 0}
   /* R2 — fog map screen: a full-viewport overlay, deliberately OUTSIDE
      .wrap's 520px max-width (a map needs the whole screen, not a card). */
@@ -1205,6 +1212,7 @@ function renderHome(){
     +'<button class="ghost" id="btnMap">My map</button>'
     +'<p class="scrollhint" id="exploredPct" style="margin:6px 0 10px"></p>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
+    +'<button class="ghost" id="btnChutes">Your chutes</button>'
     +'<button class="ghost" id="btnFriends">Friends</button>'
     +'<button class="ghost" id="btnShare"></button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
@@ -1341,6 +1349,7 @@ function renderHome(){
   }
   document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
+  document.getElementById("btnChutes").onclick=()=>renderYourChutes();
   document.getElementById("btnFriends").onclick=()=>renderFriends();
   // "Share my location with friends today" — POST /api/share sets/clears
   // share_until server-side; RQ_SHARE_UNTIL mirrors it so the label + the
@@ -1449,6 +1458,56 @@ async function renderLeaderboard(mode, activityFilter){
       : '<div class="empty">No runs logged yet '+(mode==="daily"?"today":"this season")+'.</div>';
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load the leaderboard.</div>';
+  }
+}
+
+/* ============================ YOUR CHUTES ============================
+   Personal lap counts per chute (run_type==='chute'), Today vs this
+   season — GET /api/players/:id/chutes/daily|season. Mirrors
+   renderLeaderboard()'s daily/season toggle exactly. */
+function difficultyMarkHtml(diff){
+  if(diff==="green") return '<span class="chuteMark" style="color:#57e06f">●</span>';
+  if(diff==="blue")  return '<span class="chuteMark" style="color:#6bb6ff">●</span>';
+  if(diff==="double-black") return '<span class="chuteMark">◆◆</span>';
+  return '<span class="chuteMark">◆</span>'; // black, or no difficulty set
+}
+function chuteRowHtml(c, maxCount){
+  const pct = maxCount>0 ? Math.round((c.count/maxCount)*100) : 0;
+  return '<div class="chuteRow">'
+    +'<div class="chuteTop">'
+      +difficultyMarkHtml(c.difficulty)
+      +'<span class="name">'+esc(c.name)+'</span>'
+      +'<span class="count">×'+c.count+'</span>'
+    +'</div>'
+    +'<div class="chuteBar"><i style="width:'+pct+'%"></i></div>'
+  +'</div>';
+}
+async function renderYourChutes(mode){
+  mode = mode || "daily";
+  const s=getSession();
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Your chutes</h2>'
+    +'<div style="display:flex;gap:10px;margin-bottom:14px">'
+      +'<button class="ghost" id="chDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
+      +'<button class="ghost" id="chSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
+    +'</div>'
+    +'<div id="chList"><div class="empty">Loading…</div></div>'
+    +'<button class="ghost" id="chBack">← Back</button>'
+    +'</div>';
+  document.getElementById("chBack").onclick=renderHome;
+  document.getElementById("chDailyBtn").onclick=()=>renderYourChutes("daily");
+  document.getElementById("chSeasonBtn").onclick=()=>renderYourChutes("season");
+  const listEl=document.getElementById("chList");
+  try{
+    const j = await api("/api/players/"+s.player.id+"/chutes/"+mode);
+    const chutes = j.chutes||[];
+    const maxCount = chutes.length ? chutes[0].count : 0;
+    listEl.innerHTML = chutes.length
+      ? chutes.map(c=>chuteRowHtml(c, maxCount)).join("")
+      : '<div class="empty">No chutes skied yet '+(mode==="daily"?"today":"this season")+'.</div>';
+  }catch(e){
+    listEl.innerHTML = '<div class="empty">Couldn’t load your chutes.</div>';
   }
 }
 
