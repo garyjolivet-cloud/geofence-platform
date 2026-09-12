@@ -114,21 +114,19 @@
   .splashOverlay{position:fixed;inset:0;z-index:5000;background:var(--night);overflow:hidden}
   #splashMap{position:absolute;inset:0}
   .splashSkip{position:absolute;top:14px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-family:"Barlow Condensed";font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase;cursor:pointer}
-  .splashCaption{position:absolute;left:0;right:0;bottom:14%;z-index:1;text-align:center;
-    font-family:"Barlow Condensed";font-weight:700;font-size:clamp(22px,6vw,34px);letter-spacing:.5px;text-transform:uppercase;
-    color:var(--snow);text-shadow:0 0 4px #0a1018,0 0 10px #0a1018,0 2px 6px #0a1018;
-    opacity:0;transform:translateY(6px);transition:opacity .25s ease,transform .25s ease;pointer-events:none}
-  .splashCaption.show{opacity:1;transform:translateY(0)}
-  /* Second, smaller slot stacked above the primary one — up to two chute
-     names can be "passed" close together during the flight (see
-     SPLASH_MAX_CAPTIONS in playSplash()). */
-  .splashCaption--sub{bottom:23%;font-size:clamp(15px,4vw,20px);color:var(--ice)}
+  /* Chute names sit AT their real position on the map (a maplibregl.Marker
+     per corridor, using the same .runLabel look "My map" already uses),
+     not as a fixed on-screen caption — this class only adds the
+     fade-in/out the splash needs on top of .runLabel's existing
+     always-on styling. */
+  .splashChuteLabel{opacity:0;transform:translateY(4px);transition:opacity .3s ease,transform .3s ease}
+  .splashChuteLabel.show{opacity:1;transform:translateY(0)}
   .splashTitle{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
     background:rgba(10,16,24,0);opacity:0;transition:opacity .5s ease,background .5s ease;pointer-events:none}
   .splashTitle.show{opacity:1;background:rgba(10,16,24,.55)}
   .splashTitle h1{font-family:"Black Han Sans";font-weight:400;font-size:34px;color:var(--snow);margin:0}
   .splashTitle p{font-family:"Barlow Condensed";font-size:13px;letter-spacing:1.2px;text-transform:uppercase;color:var(--coral);margin:0}
-  @media (prefers-reduced-motion:reduce){ .splashCaption,.splashTitle{transition:none} }
+  @media (prefers-reduced-motion:reduce){ .splashChuteLabel,.splashTitle{transition:none} }
   /* "show all runs" overlay (fog + tile art both off) */
   .runLabel{font:700 clamp(22px,5.4vw,30px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
     letter-spacing:.02em;white-space:nowrap;pointer-events:none;
@@ -2198,52 +2196,52 @@ const SPLASH_CORRIDORS = [
   {name:"Marlys", path:[[51.277308,-117.075972],[51.277435,-117.076046],[51.277588,-117.076141],[51.277757,-117.076264],[51.277945,-117.076535],[51.278302,-117.076945],[51.278588,-117.077424],[51.278785,-117.077702]]},
   {name:"Bowling Ball", path:[[51.27626,-117.076106],[51.276139,-117.075366],[51.275998,-117.074599],[51.275741,-117.073818],[51.275631,-117.073185]]}
 ];
-// Golden Eagle Express base -> top, straight-line camera flight. Real
-// coordinates, matching the "Eagle Express Gondi Base"/"...Top" elevation
-// checkpoints authored in the Fence Editor (1263m / 2333m, ~3,246m apart).
-// Every named chute above sits in the top ~32% of this line (checked
-// live against the real bundle) — the bottom two-thirds is bare
-// lower-mountain forest with nothing to name, so the keyframes below
-// deliberately spend most of their time in the top portion rather than
-// flying the line at constant speed: base -> start of the chute zone in
-// ~3.4s (t=0..1), then a slow ~9.6s crawl through CPR Ridge (t=1..4)
-// before arriving at the top.
+// Golden Eagle Express base -> top, a literal straight-line camera
+// flight — center is always exactly lerp(SPLASH_BASE, SPLASH_TOP, u),
+// never detouring off the line to any chute's own position. Real
+// coordinates, matching the "Eagle Express Gondi Base"/"...Top"
+// elevation checkpoints authored in the Fence Editor (1263m / 2333m,
+// ~3,246m apart). Every named chute above sits within ~30-200m of this
+// line in its top ~32% (checked live against the real bundle) — the
+// bottom two-thirds is bare lower-mountain forest with nothing to name —
+// so the keyframes below deliberately spend most of their time in the
+// top portion rather than flying the line at constant speed: base ->
+// u=0.68 (start of the chute zone) in ~3.4s, then a slow ~9.6s crawl to
+// the top.
 //
 // Slowed from an original 8s total (2.6s/5.7s split) to 15s (this same
 // ~26%/74% split, just stretched) — confirmed live the original pace was
 // fast enough that map tiles/DEM couldn't keep up with the camera and
 // visibly flickered ("hardly recognizable").
 //
-// pitch/zoom per ridge keyframe are deliberately much lower than they
-// look like they should need to be — confirmed live (Fence Editor,
-// jumpTo against this real project's DEM) that "flying into the
-// mountain" (a fully black/buried-camera frame) happens when the camera
-// eye ends up behind AND below a rising ridge crest at steep pitch +
-// close zoom, and the safe ceiling varies a LOT by exact location: End
-// Zone's terrain tolerates zoom 14.8/pitch 60 (clips at 15.2/65), but
-// PW/Marlys/the gondola top itself — all right at a 2300-2475m ridge
-// crest — clip well before that and only stayed clean at zoom
-// 13.7-14.5/pitch 45-57. These values carry a small margin below each
-// tested-clean setting; don't push zoom/pitch back up on these specific
-// keyframes without re-testing live against the real terrain first.
+// zoom/pitch confirmed live (Fence Editor, jumpTo at each of these exact
+// on-line points against this project's real DEM) — a much safer,
+// simpler picture than the earlier off-line waypoints this replaced:
+// "flying into the mountain" (a fully black/buried-camera frame) turned
+// out to depend heavily on exact position, and every off-line detour
+// tried needed a different, hard-to-predict safe ceiling. The straight
+// line itself — presumably graded for continuous gondola operation, not
+// as steep as an individual chute entrance — stayed clean at a single
+// uniform zoom/pitch all the way from u=0.68 to u=1.0 (top).
 const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat]
 const SPLASH_TOP   = [-117.077867, 51.27508];
+function _splashLerpLL(u){ return [ SPLASH_BASE[0]+(SPLASH_TOP[0]-SPLASH_BASE[0])*u, SPLASH_BASE[1]+(SPLASH_TOP[1]-SPLASH_BASE[1])*u ]; }
 const SPLASH_KEYFRAMES = [
-  { t:0,    center:SPLASH_BASE,                zoom:13.5, pitch:55, bearing:219 }, // gondola base, facing up the line
-  { t:3400, center:[-117.07056, 51.283257],    zoom:14.5, pitch:57, bearing:58  }, // arriving at "End Zone" — chute zone starts here
-  { t:6400, center:[-117.073784,51.28056],     zoom:13.7, pitch:45, bearing:58  }, // near "PW"/"After Pride"
-  { t:9600, center:[-117.076535,51.277945],    zoom:13.7, pitch:45, bearing:45  }, // near "Marlys"/"Torpedo Alley"
-  { t:13000,center:SPLASH_TOP,                 zoom:13.7, pitch:45, bearing:58  }  // gondola top
+  { t:0,    u:0,    zoom:13.5, pitch:55, bearing:219 }, // gondola base, facing up the line
+  { t:3400, u:0.68, zoom:15.0, pitch:62, bearing:58  }, // start of the chute zone
+  { t:6400, u:0.80, zoom:15.0, pitch:62, bearing:58  },
+  { t:9600, u:0.90, zoom:15.0, pitch:62, bearing:58  },
+  { t:13000,u:1.0,  zoom:15.0, pitch:62, bearing:58  }  // gondola top
 ];
 // Chute-name reveal: real-world distance (not screen-space) from the
 // current interpolated camera center to each corridor's midpoint.
 // Hysteresis (exit radius > enter radius) stops a name flickering in/out
-// right at the boundary; capped at 2 simultaneous names (see
-// .splashCaption--sub) so a cluster of close-together chutes (several of
-// the above sit within ~200m of each other) doesn't pile up on screen.
+// right at the boundary. Shown as on-map labels at the chute's own
+// position (see the "load" handler below), not a fixed on-screen
+// caption, so no simultaneous-count cap is needed — they're spatially
+// separated by definition.
 const SPLASH_REVEAL_RADIUS_M = 220;
 const SPLASH_REVEAL_EXIT_RADIUS_M = 280;
-const SPLASH_MAX_CAPTIONS = 2;
 const SPLASH_TOTAL_MS = 15000;
 const SPLASH_END_CARD_MS = 2000;
 // Was temporarily false to isolate the real cause of the reported
@@ -2266,19 +2264,22 @@ let _splashEndCamera = null;
 // Shortest-path angle lerp (so a bearing swing like 219deg -> 58deg turns
 // the short way, through 180/90, rather than the long way through 0/360).
 function _splashLerpAngle(a, b, u){ const d = ((b - a + 540) % 360) - 180; return a + d * u; }
+function _splashCamFromKF(kf){
+  return { center:_splashLerpLL(kf.u), zoom:kf.zoom, pitch:kf.pitch, bearing:kf.bearing };
+}
 function _splashCameraAt(ms){
   const kf = SPLASH_KEYFRAMES;
-  if(ms <= kf[0].t) return kf[0];
-  if(ms >= kf[kf.length - 1].t) return kf[kf.length - 1];
+  if(ms <= kf[0].t) return _splashCamFromKF(kf[0]);
+  if(ms >= kf[kf.length - 1].t) return _splashCamFromKF(kf[kf.length - 1]);
   let i = 0;
   while(i < kf.length - 2 && ms > kf[i + 1].t) i++;
   const a = kf[i], b = kf[i + 1];
-  const u = (ms - a.t) / (b.t - a.t);
+  const frac = (ms - a.t) / (b.t - a.t);
   return {
-    center: [ a.center[0] + (b.center[0] - a.center[0]) * u, a.center[1] + (b.center[1] - a.center[1]) * u ],
-    zoom: a.zoom + (b.zoom - a.zoom) * u,
-    pitch: a.pitch + (b.pitch - a.pitch) * u,
-    bearing: _splashLerpAngle(a.bearing, b.bearing, u)
+    center: _splashLerpLL(a.u + (b.u - a.u) * frac),
+    zoom: a.zoom + (b.zoom - a.zoom) * frac,
+    pitch: a.pitch + (b.pitch - a.pitch) * frac,
+    bearing: _splashLerpAngle(a.bearing, b.bearing, frac)
   };
 }
 function playSplash(){
@@ -2288,8 +2289,6 @@ function playSplash(){
     overlay.className = "splashOverlay";
     overlay.innerHTML =
       '<div id="splashMap"></div>'
-      +'<div class="splashCaption" id="splashCaption0"></div>'
-      +'<div class="splashCaption splashCaption--sub" id="splashCaption1"></div>'
       +'<div class="splashTitle" id="splashTitle"><h1>Ridge Quest</h1><p>Kicking Horse &middot; CPR Ridge</p></div>'
       +'<button class="splashSkip" id="splashSkip">Skip &rsaquo;</button>';
     document.body.appendChild(overlay);
@@ -2311,8 +2310,7 @@ function playSplash(){
         // (not easeTo) it on the live map too, so the splash's last
         // visible frame matches — jumpTo sets the transform directly and
         // doesn't depend on the render loop the way easeTo does.
-        const last = SPLASH_KEYFRAMES[SPLASH_KEYFRAMES.length-1];
-        _splashEndCamera = { center:last.center.slice(), zoom:last.zoom, pitch:last.pitch, bearing:last.bearing };
+        _splashEndCamera = _splashCamFromKF(SPLASH_KEYFRAMES[SPLASH_KEYFRAMES.length-1]);
         try{ map.jumpTo(_splashEndCamera); }catch(e){}
         try{ map.remove(); }catch(e){}
       }
@@ -2332,9 +2330,24 @@ function playSplash(){
           tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
           tileSize:256, attribution:"Esri, Maxar" } },
         layers:[{ id:"base", type:"raster", source:"base" }] },
-      center:SPLASH_KEYFRAMES[0].center, zoom:SPLASH_KEYFRAMES[0].zoom,
+      center:_splashLerpLL(SPLASH_KEYFRAMES[0].u), zoom:SPLASH_KEYFRAMES[0].zoom,
       pitch:SPLASH_KEYFRAMES[0].pitch, bearing:SPLASH_KEYFRAMES[0].bearing,
       interactive:false, attributionControl:false
+    });
+    // Chute-name markers — one per SPLASH_CORRIDORS entry, sitting AT its
+    // real map position (same .runLabel look "My map" already uses for
+    // this exact purpose), faded in/out by updateChuteLabels() below
+    // rather than a fixed on-screen caption. Built once here so they're
+    // available even if "load" is slow/never fires (matches the corridor
+    // line layers' own try/catch below); position doesn't depend on load.
+    const chuteLabelEls = {};
+    SPLASH_CORRIDORS.forEach(c=>{
+      const mid = c.path[Math.floor(c.path.length/2)]; // [lat,lon]
+      const el = document.createElement("div");
+      el.className = "runLabel splashChuteLabel";
+      el.textContent = c.name;
+      chuteLabelEls[c.name] = el;
+      try{ new maplibregl.Marker({ element:el, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map); }catch(e){}
     });
     map.on("load", ()=>{
       try{
@@ -2360,40 +2373,30 @@ function playSplash(){
       }catch(e){} // offline/blocked tiles — splash still runs on its hard timer below
     });
 
-    // Chute-name captions — driven by real-world proximity to the
-    // (manually interpolated, see below) camera center, not an
-    // independent timer: a name only appears once the flight is actually
-    // passing near it. Up to SPLASH_MAX_CAPTIONS at once, nearest first;
-    // _splashRevealed tracks which corridors are currently "engaged" with
-    // hysteresis (SPLASH_REVEAL_EXIT_RADIUS_M > ...RADIUS_M) so a name
-    // doesn't flicker in/out right at the boundary.
-    const capSlots = [document.getElementById("splashCaption0"), document.getElementById("splashCaption1")];
+    // Chute-name labels — driven by real-world proximity to the (manually
+    // interpolated, see below) camera center, not an independent timer:
+    // a name only fades in on its own marker once the flight is actually
+    // passing near it. _splashRevealed tracks which corridors are
+    // currently "engaged" with hysteresis (SPLASH_REVEAL_EXIT_RADIUS_M >
+    // ...RADIUS_M) so a name doesn't flicker in/out right at the boundary.
     const _splashRevealed = new Set();
-    function updateCaptions(centerLonLat){
+    function updateChuteLabels(centerLonLat){
       const here = [centerLonLat[1], centerLonLat[0]]; // -> [lat,lon] for haversineM
-      const dists = SPLASH_CORRIDORS.map(c=>{
+      SPLASH_CORRIDORS.forEach(c=>{
         const mid = c.path[Math.floor(c.path.length / 2)]; // [lat,lon]
-        return { name:c.name, d:QGeo.haversineM(here, mid) };
-      });
-      dists.forEach(x=>{
-        if(_splashRevealed.has(x.name)){
-          if(x.d > SPLASH_REVEAL_EXIT_RADIUS_M) _splashRevealed.delete(x.name);
-        } else if(x.d <= SPLASH_REVEAL_RADIUS_M){
-          _splashRevealed.add(x.name);
+        const d = QGeo.haversineM(here, mid);
+        const wasOn = _splashRevealed.has(c.name);
+        if(wasOn){
+          if(d > SPLASH_REVEAL_EXIT_RADIUS_M) _splashRevealed.delete(c.name);
+        } else if(d <= SPLASH_REVEAL_RADIUS_M){
+          _splashRevealed.add(c.name);
+        }
+        const isOn = _splashRevealed.has(c.name);
+        if(isOn !== wasOn){
+          const el = chuteLabelEls[c.name];
+          if(el) el.classList.toggle("show", isOn);
         }
       });
-      const shown = dists.filter(x=>_splashRevealed.has(x.name))
-        .sort((a,b)=>a.d-b.d).slice(0, SPLASH_MAX_CAPTIONS).map(x=>x.name);
-      for(let i=0;i<capSlots.length;i++){
-        const want = shown[i] || "";
-        const slot = capSlots[i];
-        if(slot.dataset.name === want) continue; // unchanged — leave any in-progress fade alone
-        slot.dataset.name = want;
-        slot.classList.remove("show");
-        if(want){
-          setTimeout(()=>{ if(slot.dataset.name === want){ slot.textContent = want; slot.classList.add("show"); } }, 150);
-        }
-      }
     }
 
     // The flight itself: confirmed live that driving the visible camera
@@ -2412,7 +2415,7 @@ function playSplash(){
       const a = SPLASH_KEYFRAMES[i], b = SPLASH_KEYFRAMES[i+1];
       setTimeout(()=>{
         if(!map) return;
-        try{ map.easeTo({ center:b.center, zoom:b.zoom, pitch:b.pitch, bearing:b.bearing, duration:b.t-a.t, easing:t=>t }); }catch(e){}
+        try{ map.easeTo({ center:_splashLerpLL(b.u), zoom:b.zoom, pitch:b.pitch, bearing:b.bearing, duration:b.t-a.t, easing:t=>t }); }catch(e){}
       }, a.t);
     }
     // Chute-name reveal runs on its own cheap interval, entirely separate
@@ -2421,7 +2424,7 @@ function playSplash(){
     // contribute to the render load above regardless of tick rate.
     const flightStart = performance.now();
     function tick(){
-      updateCaptions(_splashCameraAt(performance.now() - flightStart).center);
+      updateChuteLabels(_splashCameraAt(performance.now() - flightStart).center);
     }
     tick();
     flightTimer = setInterval(tick, 150);
