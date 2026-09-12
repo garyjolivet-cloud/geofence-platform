@@ -2214,24 +2214,27 @@ const SPLASH_CORRIDORS = [
 // fast enough that map tiles/DEM couldn't keep up with the camera and
 // visibly flickered ("hardly recognizable").
 //
-// zoom/pitch confirmed live (Fence Editor, jumpTo at each of these exact
-// on-line points against this project's real DEM) — a much safer,
-// simpler picture than the earlier off-line waypoints this replaced:
-// "flying into the mountain" (a fully black/buried-camera frame) turned
-// out to depend heavily on exact position, and every off-line detour
-// tried needed a different, hard-to-predict safe ceiling. The straight
-// line itself — presumably graded for continuous gondola operation, not
-// as steep as an individual chute entrance — stayed clean at a single
-// uniform zoom/pitch all the way from u=0.68 to u=1.0 (top).
+// zoom/pitch were confirmed live at each of these exact on-line points —
+// but only by jumpTo (an instant, static placement), not the ACTUAL
+// eased transition the splash flies between them. Still reported flying
+// into the mountain at those values, most likely because map.easeTo()'s
+// own interpolation passes through intermediate pitch/zoom/center
+// combinations along the way that were never individually tested and
+// clip even though both endpoints, checked in isolation, didn't. Backed
+// off well past every previously-tested-clean value (13.2/40 here vs.
+// 13.7-15.0/45-62 before) specifically to put real margin under that
+// whole transient path, not just the keyframes themselves — go higher/
+// wider again only with the animated transition itself re-checked live,
+// not just its endpoints.
 const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat]
 const SPLASH_TOP   = [-117.077867, 51.27508];
 function _splashLerpLL(u){ return [ SPLASH_BASE[0]+(SPLASH_TOP[0]-SPLASH_BASE[0])*u, SPLASH_BASE[1]+(SPLASH_TOP[1]-SPLASH_BASE[1])*u ]; }
 const SPLASH_KEYFRAMES = [
-  { t:0,    u:0,    zoom:13.5, pitch:55, bearing:219 }, // gondola base, facing up the line
-  { t:3400, u:0.68, zoom:15.0, pitch:62, bearing:58  }, // start of the chute zone
-  { t:6400, u:0.80, zoom:15.0, pitch:62, bearing:58  },
-  { t:9600, u:0.90, zoom:15.0, pitch:62, bearing:58  },
-  { t:13000,u:1.0,  zoom:15.0, pitch:62, bearing:58  }  // gondola top
+  { t:0,    u:0,    zoom:13.0, pitch:42, bearing:219 }, // gondola base, facing up the line
+  { t:3400, u:0.68, zoom:13.2, pitch:40, bearing:58  }, // start of the chute zone
+  { t:6400, u:0.80, zoom:13.2, pitch:40, bearing:58  },
+  { t:9600, u:0.90, zoom:13.2, pitch:40, bearing:58  },
+  { t:13000,u:1.0,  zoom:13.2, pitch:40, bearing:58  }  // gondola top
 ];
 // Chute-name reveal: real-world distance (not screen-space) from the
 // current interpolated camera center to each corridor's midpoint.
