@@ -114,19 +114,12 @@
   .splashOverlay{position:fixed;inset:0;z-index:5000;background:var(--night);overflow:hidden}
   #splashMap{position:absolute;inset:0}
   .splashSkip{position:absolute;top:14px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-family:"Barlow Condensed";font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase;cursor:pointer}
-  /* Chute names sit AT their real position on the map (a maplibregl.Marker
-     per corridor, using the same .runLabel look "My map" already uses),
-     not as a fixed on-screen caption — this class only adds the
-     fade-in/out the splash needs on top of .runLabel's existing
-     always-on styling. */
-  .splashChuteLabel{opacity:0;transform:translateY(4px);transition:opacity .3s ease,transform .3s ease}
-  .splashChuteLabel.show{opacity:1;transform:translateY(0)}
   .splashTitle{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
     background:rgba(10,16,24,0);opacity:0;transition:opacity .5s ease,background .5s ease;pointer-events:none}
   .splashTitle.show{opacity:1;background:rgba(10,16,24,.55)}
   .splashTitle h1{font-family:"Black Han Sans";font-weight:400;font-size:34px;color:var(--snow);margin:0}
   .splashTitle p{font-family:"Barlow Condensed";font-size:13px;letter-spacing:1.2px;text-transform:uppercase;color:var(--coral);margin:0}
-  @media (prefers-reduced-motion:reduce){ .splashChuteLabel,.splashTitle{transition:none} }
+  @media (prefers-reduced-motion:reduce){ .splashTitle{transition:none} }
   /* "show all runs" overlay (fog + tile art both off) */
   .runLabel{font:700 clamp(22px,5.4vw,30px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
     letter-spacing:.02em;white-space:nowrap;pointer-events:none;
@@ -2176,115 +2169,40 @@ function renderFogMap(){
 /* ============================ SPLASH (CPR Ridge flyby) ============================
    Plays once per page load, before boot()'s first real screen — a real
    MapLibre render (same Esri satellite + Terrarium DEM stack renderFogMap()
-   uses, via Terrain3D) flying a fixed, hand-tuned camera sequence over CPR
-   Ridge with real corridor geometry, pulled once from the live bundle
-   (GET /api/projects/tour-mtgmj7nxhwmb/bundle) rather than fetched at
-   runtime — hardcoded here on purpose so the splash starts instantly with
-   no network dependency. _splashPlayed guards against boot()'s several
-   re-entries (after workspace/project pick, after login) replaying it
-   mid-session — it must fire exactly once per page load, not once per
-   boot() call. */
-const SPLASH_CORRIDORS = [
-  {name:"End Zone", path:[[51.282868,-117.070404],[51.282962,-117.070476],[51.283078,-117.070492],[51.283154,-117.070495],[51.283257,-117.07056],[51.28333,-117.070613],[51.283391,-117.070645],[51.28344,-117.070704]]},
-  {name:"Goal Posts", path:[[51.282345,-117.071229],[51.282478,-117.07139],[51.282556,-117.071529],[51.282673,-117.07161],[51.282833,-117.071723],[51.282953,-117.0718]]},
-  {name:"Boxy Entry", path:[[51.281288,-117.072342],[51.281352,-117.0724],[51.281476,-117.072546],[51.281628,-117.072575],[51.281795,-117.072767],[51.281887,-117.073115],[51.282018,-117.0732],[51.282064,-117.073266],[51.28218,-117.073387]]},
-  {name:"After Pride", path:[[51.280719,-117.072372],[51.280649,-117.071954],[51.280444,-117.071493],[51.280256,-117.070506]]},
-  {name:"PW", path:[[51.280159,-117.073172],[51.280089,-117.073405],[51.280256,-117.073505],[51.280371,-117.073474],[51.28056,-117.073784],[51.280649,-117.073935],[51.28077,-117.074112],[51.281131,-117.074442],[51.281261,-117.074565]]},
-  {name:"Miltys", path:[[51.279781,-117.07349],[51.279724,-117.073642],[51.279722,-117.073778],[51.279833,-117.073842],[51.279929,-117.073848],[51.280064,-117.073981],[51.280129,-117.074067],[51.280254,-117.07429],[51.280384,-117.074608],[51.280577,-117.075119],[51.280779,-117.07552]]},
-  {name:"Legs Right", path:[[51.278603,-117.074674],[51.278684,-117.074748],[51.278763,-117.074806],[51.278826,-117.074883],[51.27891,-117.075005],[51.278972,-117.075025],[51.279061,-117.075054],[51.279155,-117.075066],[51.279239,-117.075207],[51.27934,-117.075267],[51.279385,-117.075342],[51.279428,-117.075414],[51.279585,-117.075603],[51.279626,-117.075704],[51.279788,-117.075925]]},
-  {name:"Torpedo Alley", path:[[51.277723,-117.074803],[51.277634,-117.074355],[51.277513,-117.073657],[51.277533,-117.073115],[51.277506,-117.07278],[51.277423,-117.072431],[51.277404,-117.07226]]},
-  {name:"Marlys", path:[[51.277308,-117.075972],[51.277435,-117.076046],[51.277588,-117.076141],[51.277757,-117.076264],[51.277945,-117.076535],[51.278302,-117.076945],[51.278588,-117.077424],[51.278785,-117.077702]]},
-  {name:"Bowling Ball", path:[[51.27626,-117.076106],[51.276139,-117.075366],[51.275998,-117.074599],[51.275741,-117.073818],[51.275631,-117.073185]]}
-];
-// Golden Eagle Express base -> top, a literal straight-line camera
-// flight — center is always exactly lerp(SPLASH_BASE, SPLASH_TOP, u),
-// never detouring off the line to any chute's own position. Real
-// coordinates, matching the "Eagle Express Gondi Base"/"...Top"
-// elevation checkpoints authored in the Fence Editor (1263m / 2333m,
-// ~3,246m apart). Every named chute above sits within ~30-200m of this
-// line in its top ~32% (checked live against the real bundle) — the
-// bottom two-thirds is bare lower-mountain forest with nothing to name —
-// so the keyframes below deliberately spend most of their time in the
-// top portion rather than flying the line at constant speed: base ->
-// u=0.68 (start of the chute zone) in ~3.4s, then a slow ~9.6s crawl to
-// the top.
-//
-// Slowed from an original 8s total (2.6s/5.7s split) to 15s (this same
-// ~26%/74% split, just stretched) — confirmed live the original pace was
-// fast enough that map tiles/DEM couldn't keep up with the camera and
-// visibly flickered ("hardly recognizable").
-//
-// zoom/pitch were confirmed live at each of these exact on-line points —
-// but only by jumpTo (an instant, static placement), not the ACTUAL
-// eased transition the splash flies between them. Still reported flying
-// into the mountain at those values, most likely because map.easeTo()'s
-// own interpolation passes through intermediate pitch/zoom/center
-// combinations along the way that were never individually tested and
-// clip even though both endpoints, checked in isolation, didn't. Backed
-// off well past every previously-tested-clean value (13.2/40 here vs.
-// 13.7-15.0/45-62 before) specifically to put real margin under that
-// whole transient path, not just the keyframes themselves — go higher/
-// wider again only with the animated transition itself re-checked live,
-// not just its endpoints.
-const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat]
-const SPLASH_TOP   = [-117.077867, 51.27508];
+   uses, via Terrain3D) — a short final approach toward Golden Eagle
+   Express's top, on the real base->top line. _splashPlayed guards against
+   boot()'s several re-entries (after workspace/project pick, after login)
+   replaying it mid-session — it must fire exactly once per page load, not
+   once per boot() call.
+
+   Cut down to just this last stretch (was a full base-to-top flight with
+   corridor lines + proximity-triggered chute names, ~15s) — no chute
+   lines, no name labels/text of any kind now, just terrain + snow, 4s
+   total. SPLASH_ZOOM/PITCH/BEARING are the exact values already verified
+   live (Fence Editor, both the static endpoints AND the actual eased
+   transition) to stay clear of the DEM/imagery resolution ceiling across
+   this whole approach — don't push them without re-checking the same way. */
+const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat] gondola base
+const SPLASH_TOP   = [-117.077867, 51.27508];  // gondola top
 function _splashLerpLL(u){ return [ SPLASH_BASE[0]+(SPLASH_TOP[0]-SPLASH_BASE[0])*u, SPLASH_BASE[1]+(SPLASH_TOP[1]-SPLASH_BASE[1])*u ]; }
-const SPLASH_KEYFRAMES = [
-  { t:0,    u:0,    zoom:13.0, pitch:42, bearing:219 }, // gondola base, facing up the line
-  { t:3400, u:0.68, zoom:13.2, pitch:40, bearing:58  }, // start of the chute zone
-  { t:6400, u:0.80, zoom:13.2, pitch:40, bearing:58  },
-  { t:9600, u:0.90, zoom:13.2, pitch:40, bearing:58  },
-  { t:13000,u:1.0,  zoom:13.2, pitch:40, bearing:58  }  // gondola top
-];
-// Chute-name reveal: real-world distance (not screen-space) from the
-// current interpolated camera center to each corridor's midpoint.
-// Hysteresis (exit radius > enter radius) stops a name flickering in/out
-// right at the boundary. Shown as on-map labels at the chute's own
-// position (see the "load" handler below), not a fixed on-screen
-// caption, so no simultaneous-count cap is needed — they're spatially
-// separated by definition.
-const SPLASH_REVEAL_RADIUS_M = 220;
-const SPLASH_REVEAL_EXIT_RADIUS_M = 280;
-const SPLASH_TOTAL_MS = 15000;
-const SPLASH_END_CARD_MS = 2000;
-// Was temporarily false to isolate the real cause of the reported
-// flicker/black-screen: confirmed it was the camera itself (raw per-tick
-// jumpTo against live 3D terrain, plus specific keyframes pitched/zoomed
-// into the mountain — see the fixes above and on SPLASH_KEYFRAMES) —
-// the winter recolor was never actually the cause (flicker persisted
-// with this off). Back on now that both are fixed.
+const SPLASH_START_U = 0.85; // ~490m of real ground track short of the top
+const SPLASH_ZOOM = 13.2, SPLASH_PITCH = 40, SPLASH_BEARING = 58;
+const SPLASH_TOTAL_MS = 4000;
+const SPLASH_END_CARD_MS = 1500;
+// Was temporarily false to isolate the real cause of an earlier
+// flicker/black-screen report: confirmed it was the camera (raw per-tick
+// jumpTo against live 3D terrain, plus pitch/zoom that clipped into the
+// mountain), never the recolor itself. Left on.
 const SPLASH_WINTER_ENABLED = true;
 let _splashPlayed = false;
-// Set once the splash's own map is torn down, to whatever camera it
-// actually ended on (captured live, not just assumed to be the last
-// waypoint — correct whether the flyby finished naturally or was
-// skipped). renderFogMap() ("My map") opens here instead of its usual
-// whole-network fitBounds framing, so leaving the splash doesn't feel
-// like an abrupt jump. Stays null (renderFogMap() falls back to its
+// Set once the splash's own map is torn down — deterministic (always the
+// gondola-top framing by design), not read back from the live map: an
+// in-progress map.easeTo() can still report a stale position if read
+// mid-transition. renderFogMap() ("My map") opens here instead of its
+// usual whole-network fitBounds framing. Stays null (falls back to that
 // normal framing) for reduced-motion sessions, where no splash map is
 // ever created.
-let _splashEndCamera = null;
-// Shortest-path angle lerp (so a bearing swing like 219deg -> 58deg turns
-// the short way, through 180/90, rather than the long way through 0/360).
-function _splashLerpAngle(a, b, u){ const d = ((b - a + 540) % 360) - 180; return a + d * u; }
-function _splashCamFromKF(kf){
-  return { center:_splashLerpLL(kf.u), zoom:kf.zoom, pitch:kf.pitch, bearing:kf.bearing };
-}
-function _splashCameraAt(ms){
-  const kf = SPLASH_KEYFRAMES;
-  if(ms <= kf[0].t) return _splashCamFromKF(kf[0]);
-  if(ms >= kf[kf.length - 1].t) return _splashCamFromKF(kf[kf.length - 1]);
-  let i = 0;
-  while(i < kf.length - 2 && ms > kf[i + 1].t) i++;
-  const a = kf[i], b = kf[i + 1];
-  const frac = (ms - a.t) / (b.t - a.t);
-  return {
-    center: _splashLerpLL(a.u + (b.u - a.u) * frac),
-    zoom: a.zoom + (b.zoom - a.zoom) * frac,
-    pitch: a.pitch + (b.pitch - a.pitch) * frac,
-    bearing: _splashLerpAngle(a.bearing, b.bearing, frac)
-  };
-}
+let _splashEndCamera = { center:SPLASH_TOP.slice(), zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING };
 function playSplash(){
   return new Promise(resolve=>{
     const rm = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
@@ -2296,24 +2214,11 @@ function playSplash(){
       +'<button class="splashSkip" id="splashSkip">Skip &rsaquo;</button>';
     document.body.appendChild(overlay);
 
-    let map=null, endTimer=null, flightTimer=null, done=false;
+    let map=null, endTimer=null, done=false;
     function finish(){
       if(done) return; done=true;
       if(endTimer) clearTimeout(endTimer);
-      if(flightTimer) clearInterval(flightTimer);
       if(map){
-        // Deterministic — NOT read back from the live map. Confirmed live
-        // (this session): map.easeTo()'s eased interpolation only actually
-        // advances once the map's render loop is ticking (tied to
-        // style/tile load), so on a slow connection — or an early skip —
-        // getCenter()/getPitch() can still report a stale position. "My
-        // map" opening at the wrong spot is worse than that transition
-        // being invisible, so this is always the last keyframe by design,
-        // never whatever the map's transform actually settled on. jumpTo
-        // (not easeTo) it on the live map too, so the splash's last
-        // visible frame matches — jumpTo sets the transform directly and
-        // doesn't depend on the render loop the way easeTo does.
-        _splashEndCamera = _splashCamFromKF(SPLASH_KEYFRAMES[SPLASH_KEYFRAMES.length-1]);
         try{ map.jumpTo(_splashEndCamera); }catch(e){}
         try{ map.remove(); }catch(e){}
       }
@@ -2333,24 +2238,9 @@ function playSplash(){
           tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
           tileSize:256, attribution:"Esri, Maxar" } },
         layers:[{ id:"base", type:"raster", source:"base" }] },
-      center:_splashLerpLL(SPLASH_KEYFRAMES[0].u), zoom:SPLASH_KEYFRAMES[0].zoom,
-      pitch:SPLASH_KEYFRAMES[0].pitch, bearing:SPLASH_KEYFRAMES[0].bearing,
+      center:_splashLerpLL(SPLASH_START_U), zoom:SPLASH_ZOOM,
+      pitch:SPLASH_PITCH, bearing:SPLASH_BEARING,
       interactive:false, attributionControl:false
-    });
-    // Chute-name markers — one per SPLASH_CORRIDORS entry, sitting AT its
-    // real map position (same .runLabel look "My map" already uses for
-    // this exact purpose), faded in/out by updateChuteLabels() below
-    // rather than a fixed on-screen caption. Built once here so they're
-    // available even if "load" is slow/never fires (matches the corridor
-    // line layers' own try/catch below); position doesn't depend on load.
-    const chuteLabelEls = {};
-    SPLASH_CORRIDORS.forEach(c=>{
-      const mid = c.path[Math.floor(c.path.length/2)]; // [lat,lon]
-      const el = document.createElement("div");
-      el.className = "runLabel splashChuteLabel";
-      el.textContent = c.name;
-      chuteLabelEls[c.name] = el;
-      try{ new maplibregl.Marker({ element:el, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map); }catch(e){}
     });
     map.on("load", ()=>{
       try{
@@ -2366,77 +2256,18 @@ function playSplash(){
         // point of the whole splash. Gated behind SPLASH_WINTER_ENABLED —
         // see that const's comment.
         if(SPLASH_WINTER_ENABLED) Terrain3D.applyWinter(map, { dem:true });
-        map.addSource("splashCorridors", { type:"geojson", data:{ type:"FeatureCollection",
-          features: SPLASH_CORRIDORS.map(c=>({ type:"Feature", properties:{ name:c.name },
-            geometry:{ type:"LineString", coordinates:c.path.map(p=>[p[1],p[0]]) } })) } });
-        map.addLayer({ id:"splashCorridors-casing", type:"line", source:"splashCorridors",
-          paint:{ "line-color":"#1a0d07", "line-width":6, "line-opacity":0.5 } });
-        map.addLayer({ id:"splashCorridors-line", type:"line", source:"splashCorridors",
-          paint:{ "line-color":"#ff6a3d", "line-width":3 } });
       }catch(e){} // offline/blocked tiles — splash still runs on its hard timer below
     });
 
-    // Chute-name labels — driven by real-world proximity to the (manually
-    // interpolated, see below) camera center, not an independent timer:
-    // a name only fades in on its own marker once the flight is actually
-    // passing near it. _splashRevealed tracks which corridors are
-    // currently "engaged" with hysteresis (SPLASH_REVEAL_EXIT_RADIUS_M >
-    // ...RADIUS_M) so a name doesn't flicker in/out right at the boundary.
-    const _splashRevealed = new Set();
-    function updateChuteLabels(centerLonLat){
-      const here = [centerLonLat[1], centerLonLat[0]]; // -> [lat,lon] for haversineM
-      SPLASH_CORRIDORS.forEach(c=>{
-        const mid = c.path[Math.floor(c.path.length / 2)]; // [lat,lon]
-        const d = QGeo.haversineM(here, mid);
-        const wasOn = _splashRevealed.has(c.name);
-        if(wasOn){
-          if(d > SPLASH_REVEAL_EXIT_RADIUS_M) _splashRevealed.delete(c.name);
-        } else if(d <= SPLASH_REVEAL_RADIUS_M){
-          _splashRevealed.add(c.name);
-        }
-        const isOn = _splashRevealed.has(c.name);
-        if(isOn !== wasOn){
-          const el = chuteLabelEls[c.name];
-          if(el) el.classList.toggle("show", isOn);
-        }
-      });
-    }
-
-    // The flight itself: confirmed live that driving the visible camera
-    // with a manual jumpTo() every 50-100ms (150 calls over 15s) — while
-    // 3D DEM terrain is active — flickers badly and can go fully black
-    // (WebGL falling behind/losing its footing under that many forced
-    // transform resets against a live elevation mesh, still happened
-    // with the winter recolor OFF too, so it's this, not the recolor).
-    // Switched to the load-bearing part of the ORIGINAL 3-waypoint splash
-    // (already proven stable): a handful of map.easeTo() calls, one per
-    // keyframe segment, letting MapLibre's own internal animation loop
-    // do the interpolation instead of raw per-tick transform resets.
-    // Linear easing so the camera's actual motion matches the pure-math
-    // lerp below as closely as possible.
-    for(let i=0;i<SPLASH_KEYFRAMES.length-1;i++){
-      const a = SPLASH_KEYFRAMES[i], b = SPLASH_KEYFRAMES[i+1];
-      setTimeout(()=>{
-        if(!map) return;
-        try{ map.easeTo({ center:_splashLerpLL(b.u), zoom:b.zoom, pitch:b.pitch, bearing:b.bearing, duration:b.t-a.t, easing:t=>t }); }catch(e){}
-      }, a.t);
-    }
-    // Chute-name reveal runs on its own cheap interval, entirely separate
-    // from the map — it only ever reads performance.now() and the
-    // pure-math keyframe lerp, never touches the map/WebGL, so it can't
-    // contribute to the render load above regardless of tick rate.
-    const flightStart = performance.now();
-    function tick(){
-      updateChuteLabels(_splashCameraAt(performance.now() - flightStart).center);
-    }
-    tick();
-    flightTimer = setInterval(tick, 150);
+    // One easeTo, start -> top, zoom/pitch/bearing constant (only the
+    // geographic position slides) — matches the exact segment shape
+    // already verified live to stay clear of the terrain.
+    try{ map.easeTo({ center:SPLASH_TOP, zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING, duration:SPLASH_TOTAL_MS-SPLASH_END_CARD_MS, easing:t=>t }); }catch(e){}
 
     // Hard cap regardless of tile-load state — a partially-loaded basemap
     // is an acceptable look for a ~4s brand moment; boot() must never block
     // on tiles.
     endTimer = setTimeout(()=>{
-      if(flightTimer) clearInterval(flightTimer);
       const titleEl=document.getElementById("splashTitle");
       if(titleEl) titleEl.classList.add("show");
       endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
