@@ -119,6 +119,10 @@
     color:var(--snow);text-shadow:0 0 4px #0a1018,0 0 10px #0a1018,0 2px 6px #0a1018;
     opacity:0;transform:translateY(6px);transition:opacity .25s ease,transform .25s ease;pointer-events:none}
   .splashCaption.show{opacity:1;transform:translateY(0)}
+  /* Second, smaller slot stacked above the primary one — up to two chute
+     names can be "passed" close together during the flight (see
+     SPLASH_MAX_CAPTIONS in playSplash()). */
+  .splashCaption--sub{bottom:23%;font-size:clamp(15px,4vw,20px);color:var(--ice)}
   .splashTitle{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
     background:rgba(10,16,24,0);opacity:0;transition:opacity .5s ease,background .5s ease;pointer-events:none}
   .splashTitle.show{opacity:1;background:rgba(10,16,24,.55)}
@@ -2183,22 +2187,49 @@ function renderFogMap(){
    mid-session — it must fire exactly once per page load, not once per
    boot() call. */
 const SPLASH_CORRIDORS = [
-  {name:"Marlys", path:[[51.277308,-117.075972],[51.277435,-117.076046],[51.277588,-117.076141],[51.277757,-117.076264],[51.277945,-117.076535],[51.278302,-117.076945],[51.278588,-117.077424],[51.278785,-117.077702]]},
-  {name:"Legs Right", path:[[51.278603,-117.074674],[51.278684,-117.074748],[51.278763,-117.074806],[51.278826,-117.074883],[51.27891,-117.075005],[51.278972,-117.075025],[51.279061,-117.075054],[51.279155,-117.075066],[51.279239,-117.075207],[51.27934,-117.075267],[51.279385,-117.075342],[51.279428,-117.075414],[51.279585,-117.075603],[51.279626,-117.075704],[51.279788,-117.075925]]},
-  {name:"PW", path:[[51.280159,-117.073172],[51.280089,-117.073405],[51.280256,-117.073505],[51.280371,-117.073474],[51.28056,-117.073784],[51.280649,-117.073935],[51.28077,-117.074112],[51.281131,-117.074442],[51.281261,-117.074565]]},
+  {name:"End Zone", path:[[51.282868,-117.070404],[51.282962,-117.070476],[51.283078,-117.070492],[51.283154,-117.070495],[51.283257,-117.07056],[51.28333,-117.070613],[51.283391,-117.070645],[51.28344,-117.070704]]},
+  {name:"Goal Posts", path:[[51.282345,-117.071229],[51.282478,-117.07139],[51.282556,-117.071529],[51.282673,-117.07161],[51.282833,-117.071723],[51.282953,-117.0718]]},
   {name:"Boxy Entry", path:[[51.281288,-117.072342],[51.281352,-117.0724],[51.281476,-117.072546],[51.281628,-117.072575],[51.281795,-117.072767],[51.281887,-117.073115],[51.282018,-117.0732],[51.282064,-117.073266],[51.28218,-117.073387]]},
+  {name:"After Pride", path:[[51.280719,-117.072372],[51.280649,-117.071954],[51.280444,-117.071493],[51.280256,-117.070506]]},
+  {name:"PW", path:[[51.280159,-117.073172],[51.280089,-117.073405],[51.280256,-117.073505],[51.280371,-117.073474],[51.28056,-117.073784],[51.280649,-117.073935],[51.28077,-117.074112],[51.281131,-117.074442],[51.281261,-117.074565]]},
+  {name:"Miltys", path:[[51.279781,-117.07349],[51.279724,-117.073642],[51.279722,-117.073778],[51.279833,-117.073842],[51.279929,-117.073848],[51.280064,-117.073981],[51.280129,-117.074067],[51.280254,-117.07429],[51.280384,-117.074608],[51.280577,-117.075119],[51.280779,-117.07552]]},
+  {name:"Legs Right", path:[[51.278603,-117.074674],[51.278684,-117.074748],[51.278763,-117.074806],[51.278826,-117.074883],[51.27891,-117.075005],[51.278972,-117.075025],[51.279061,-117.075054],[51.279155,-117.075066],[51.279239,-117.075207],[51.27934,-117.075267],[51.279385,-117.075342],[51.279428,-117.075414],[51.279585,-117.075603],[51.279626,-117.075704],[51.279788,-117.075925]]},
   {name:"Torpedo Alley", path:[[51.277723,-117.074803],[51.277634,-117.074355],[51.277513,-117.073657],[51.277533,-117.073115],[51.277506,-117.07278],[51.277423,-117.072431],[51.277404,-117.07226]]},
+  {name:"Marlys", path:[[51.277308,-117.075972],[51.277435,-117.076046],[51.277588,-117.076141],[51.277757,-117.076264],[51.277945,-117.076535],[51.278302,-117.076945],[51.278588,-117.077424],[51.278785,-117.077702]]},
   {name:"Bowling Ball", path:[[51.27626,-117.076106],[51.276139,-117.075366],[51.275998,-117.074599],[51.275741,-117.073818],[51.275631,-117.073185]]}
 ];
-// Hand-tuned live against the real map (Fence Editor, this same project) —
-// pitch/zoom kept at or below the values confirmed clean; pushing much
-// past pitch 76 / zoom 16.5 here starts exposing "no data yet" gaps at the
-// DEM/imagery resolution ceiling.
-const SPLASH_WAYPOINTS = [
-  {center:[-117.0752,51.2782], zoom:14.7, pitch:48, bearing:25,  holdMs:2100},
-  {center:[-117.0775,51.2803], zoom:16.3, pitch:73, bearing:58,  holdMs:2200},
-  {center:[-117.0745,51.2768], zoom:15.9, pitch:68, bearing:-25, holdMs:2200}
+// Golden Eagle Express base -> top, straight-line camera flight. Real
+// coordinates, matching the "Eagle Express Gondi Base"/"...Top" elevation
+// checkpoints authored in the Fence Editor (1263m / 2333m, ~3,246m apart).
+// Every named chute above sits in the top ~32% of this line (checked
+// live against the real bundle) — the bottom two-thirds is bare
+// lower-mountain forest with nothing to name, so the keyframes below
+// deliberately spend most of their time in the top portion rather than
+// flying the line at constant speed: base -> start of the chute zone in
+// ~1.7s (t=0..1), then a slow ~4.8s crawl through CPR Ridge (t=1..4)
+// before arriving at the top. Hand-tuned live against the real map
+// (Fence Editor, this same project) — pitch/zoom kept at or below the
+// values confirmed clean; pushing much past pitch 76 / zoom 16.5 here
+// starts exposing "no data yet" gaps at the DEM/imagery resolution
+// ceiling.
+const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat]
+const SPLASH_TOP   = [-117.077867, 51.27508];
+const SPLASH_KEYFRAMES = [
+  { t:0,    center:SPLASH_BASE,                zoom:13.5, pitch:55, bearing:219 }, // gondola base, facing up the line
+  { t:1700, center:[-117.07056, 51.283257],    zoom:15.8, pitch:72, bearing:58  }, // arriving at "End Zone" — chute zone starts here
+  { t:3200, center:[-117.073784,51.28056],     zoom:15.8, pitch:72, bearing:58  }, // near "PW"/"After Pride"
+  { t:4800, center:[-117.076535,51.277945],    zoom:15.9, pitch:70, bearing:45  }, // near "Marlys"/"Torpedo Alley"
+  { t:6500, center:SPLASH_TOP,                 zoom:16.0, pitch:70, bearing:58  }  // gondola top
 ];
+// Chute-name reveal: real-world distance (not screen-space) from the
+// current interpolated camera center to each corridor's midpoint.
+// Hysteresis (exit radius > enter radius) stops a name flickering in/out
+// right at the boundary; capped at 2 simultaneous names (see
+// .splashCaption--sub) so a cluster of close-together chutes (several of
+// the above sit within ~200m of each other) doesn't pile up on screen.
+const SPLASH_REVEAL_RADIUS_M = 220;
+const SPLASH_REVEAL_EXIT_RADIUS_M = 280;
+const SPLASH_MAX_CAPTIONS = 2;
 const SPLASH_TOTAL_MS = 8000;
 const SPLASH_END_CARD_MS = 1500;
 let _splashPlayed = false;
@@ -2211,6 +2242,24 @@ let _splashPlayed = false;
 // normal framing) for reduced-motion sessions, where no splash map is
 // ever created.
 let _splashEndCamera = null;
+// Shortest-path angle lerp (so a bearing swing like 219deg -> 58deg turns
+// the short way, through 180/90, rather than the long way through 0/360).
+function _splashLerpAngle(a, b, u){ const d = ((b - a + 540) % 360) - 180; return a + d * u; }
+function _splashCameraAt(ms){
+  const kf = SPLASH_KEYFRAMES;
+  if(ms <= kf[0].t) return kf[0];
+  if(ms >= kf[kf.length - 1].t) return kf[kf.length - 1];
+  let i = 0;
+  while(i < kf.length - 2 && ms > kf[i + 1].t) i++;
+  const a = kf[i], b = kf[i + 1];
+  const u = (ms - a.t) / (b.t - a.t);
+  return {
+    center: [ a.center[0] + (b.center[0] - a.center[0]) * u, a.center[1] + (b.center[1] - a.center[1]) * u ],
+    zoom: a.zoom + (b.zoom - a.zoom) * u,
+    pitch: a.pitch + (b.pitch - a.pitch) * u,
+    bearing: _splashLerpAngle(a.bearing, b.bearing, u)
+  };
+}
 function playSplash(){
   return new Promise(resolve=>{
     const rm = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
@@ -2218,30 +2267,30 @@ function playSplash(){
     overlay.className = "splashOverlay";
     overlay.innerHTML =
       '<div id="splashMap"></div>'
-      +'<div class="splashCaption" id="splashCaption"></div>'
+      +'<div class="splashCaption" id="splashCaption0"></div>'
+      +'<div class="splashCaption splashCaption--sub" id="splashCaption1"></div>'
       +'<div class="splashTitle" id="splashTitle"><h1>Ridge Quest</h1><p>Kicking Horse &middot; CPR Ridge</p></div>'
       +'<button class="splashSkip" id="splashSkip">Skip &rsaquo;</button>';
     document.body.appendChild(overlay);
 
-    let map=null, endTimer=null, captionTimer=null, done=false;
+    let map=null, endTimer=null, flightTimer=null, done=false;
     function finish(){
       if(done) return; done=true;
       if(endTimer) clearTimeout(endTimer);
-      if(captionTimer) clearInterval(captionTimer);
+      if(flightTimer) clearInterval(flightTimer);
       if(map){
         // Deterministic — NOT read back from the live map. Confirmed live
         // (this session): map.easeTo()'s eased interpolation only actually
         // advances once the map's render loop is ticking (tied to
         // style/tile load), so on a slow connection — or an early skip —
-        // getCenter()/getPitch() can still report waypoint 0 even after
-        // every easeTo() call above has fired. "My map" opening at the
-        // wrong spot is worse than that transition being invisible, so
-        // this is always the last waypoint by design, never whatever the
-        // map's transform actually settled on. jumpTo (not easeTo) it on
-        // the live map too, so the splash's last visible frame matches —
-        // jumpTo sets the transform directly and doesn't depend on the
-        // render loop the way easeTo's interpolation does.
-        const last = SPLASH_WAYPOINTS[SPLASH_WAYPOINTS.length-1];
+        // getCenter()/getPitch() can still report a stale position. "My
+        // map" opening at the wrong spot is worse than that transition
+        // being invisible, so this is always the last keyframe by design,
+        // never whatever the map's transform actually settled on. jumpTo
+        // (not easeTo) it on the live map too, so the splash's last
+        // visible frame matches — jumpTo sets the transform directly and
+        // doesn't depend on the render loop the way easeTo does.
+        const last = SPLASH_KEYFRAMES[SPLASH_KEYFRAMES.length-1];
         _splashEndCamera = { center:last.center.slice(), zoom:last.zoom, pitch:last.pitch, bearing:last.bearing };
         try{ map.jumpTo(_splashEndCamera); }catch(e){}
         try{ map.remove(); }catch(e){}
@@ -2262,13 +2311,23 @@ function playSplash(){
           tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
           tileSize:256, attribution:"Esri, Maxar" } },
         layers:[{ id:"base", type:"raster", source:"base" }] },
-      center:SPLASH_WAYPOINTS[0].center, zoom:SPLASH_WAYPOINTS[0].zoom,
-      pitch:SPLASH_WAYPOINTS[0].pitch, bearing:SPLASH_WAYPOINTS[0].bearing,
+      center:SPLASH_KEYFRAMES[0].center, zoom:SPLASH_KEYFRAMES[0].zoom,
+      pitch:SPLASH_KEYFRAMES[0].pitch, bearing:SPLASH_KEYFRAMES[0].bearing,
       interactive:false, attributionControl:false
     });
     map.on("load", ()=>{
       try{
         Terrain3D.setEnabled(map, true, { sky:true });
+        // Real satellite imagery here is bare rock/dirt/forest, not snow —
+        // same winter recolor (blue-white basemap + DEM elevation
+        // snowline) every other project-facing map already uses when
+        // season==='winter' (this project's bundle already reports
+        // winter). Applied unconditionally rather than fetched/gated —
+        // the splash is bespoke hardcoded content for this one project,
+        // not bundle-driven, and fetching just to check a season flag
+        // would undercut the "starts instantly, no network dependency"
+        // point of the whole splash.
+        Terrain3D.applyWinter(map, { dem:true });
         map.addSource("splashCorridors", { type:"geojson", data:{ type:"FeatureCollection",
           features: SPLASH_CORRIDORS.map(c=>({ type:"Feature", properties:{ name:c.name },
             geometry:{ type:"LineString", coordinates:c.path.map(p=>[p[1],p[0]]) } })) } });
@@ -2279,40 +2338,64 @@ function playSplash(){
       }catch(e){} // offline/blocked tiles — splash still runs on its hard timer below
     });
 
-    // Corridor name captions — an independent track from the camera moves
-    // (doesn't try to guarantee a name is under the camera at that instant;
-    // just cycles real CPR Ridge corridor names while the real flyby plays
-    // underneath). Fade out, swap text, fade in.
-    const capEl=document.getElementById("splashCaption");
-    let capIdx=-1;
-    function showNextCaption(){
-      capEl.classList.remove("show");
-      setTimeout(()=>{
-        capIdx++;
-        if(capIdx>=SPLASH_CORRIDORS.length) return;
-        capEl.textContent = SPLASH_CORRIDORS[capIdx].name;
-        capEl.classList.add("show");
-      }, 200);
+    // Chute-name captions — driven by real-world proximity to the
+    // (manually interpolated, see below) camera center, not an
+    // independent timer: a name only appears once the flight is actually
+    // passing near it. Up to SPLASH_MAX_CAPTIONS at once, nearest first;
+    // _splashRevealed tracks which corridors are currently "engaged" with
+    // hysteresis (SPLASH_REVEAL_EXIT_RADIUS_M > ...RADIUS_M) so a name
+    // doesn't flicker in/out right at the boundary.
+    const capSlots = [document.getElementById("splashCaption0"), document.getElementById("splashCaption1")];
+    const _splashRevealed = new Set();
+    function updateCaptions(centerLonLat){
+      const here = [centerLonLat[1], centerLonLat[0]]; // -> [lat,lon] for haversineM
+      const dists = SPLASH_CORRIDORS.map(c=>{
+        const mid = c.path[Math.floor(c.path.length / 2)]; // [lat,lon]
+        return { name:c.name, d:QGeo.haversineM(here, mid) };
+      });
+      dists.forEach(x=>{
+        if(_splashRevealed.has(x.name)){
+          if(x.d > SPLASH_REVEAL_EXIT_RADIUS_M) _splashRevealed.delete(x.name);
+        } else if(x.d <= SPLASH_REVEAL_RADIUS_M){
+          _splashRevealed.add(x.name);
+        }
+      });
+      const shown = dists.filter(x=>_splashRevealed.has(x.name))
+        .sort((a,b)=>a.d-b.d).slice(0, SPLASH_MAX_CAPTIONS).map(x=>x.name);
+      for(let i=0;i<capSlots.length;i++){
+        const want = shown[i] || "";
+        const slot = capSlots[i];
+        if(slot.dataset.name === want) continue; // unchanged — leave any in-progress fade alone
+        slot.dataset.name = want;
+        slot.classList.remove("show");
+        if(want){
+          setTimeout(()=>{ if(slot.dataset.name === want){ slot.textContent = want; slot.classList.add("show"); } }, 150);
+        }
+      }
     }
-    const captionEvery = Math.round((SPLASH_TOTAL_MS-SPLASH_END_CARD_MS) / SPLASH_CORRIDORS.length);
-    showNextCaption();
-    captionTimer = setInterval(showNextCaption, captionEvery);
 
-    // Discrete camera cuts (not one continuous interpolated flight) — one
-    // easeTo per waypoint, matching every other easeTo in this codebase
-    // (terrain-3d.js's toggleTilt, etc.), which is always a single-step
-    // transition, never a chained multi-point path.
-    let t=0;
-    SPLASH_WAYPOINTS.forEach(wp=>{
-      setTimeout(()=>{ if(map) map.easeTo({ center:wp.center, zoom:wp.zoom, pitch:wp.pitch, bearing:wp.bearing, duration:900 }); }, t);
-      t += wp.holdMs;
-    });
+    // The flight itself: a manual per-tick interpolation (not
+    // map.easeTo()) so the logical camera position is always known
+    // exactly (needed for the proximity check above) regardless of
+    // whether MapLibre's own render loop is keeping up — confirmed live
+    // this session that reading an in-progress easeTo back can lag. A
+    // ~50ms tick is smooth enough for this kind of slow climb (the same
+    // technique a Ken-Burns effect typically uses).
+    const flightStart = performance.now();
+    function tick(){
+      const elapsed = performance.now() - flightStart;
+      const cam = _splashCameraAt(elapsed);
+      if(map){ try{ map.jumpTo({ center:cam.center, zoom:cam.zoom, pitch:cam.pitch, bearing:cam.bearing }); }catch(e){} }
+      updateCaptions(cam.center);
+    }
+    tick();
+    flightTimer = setInterval(tick, 50);
 
     // Hard cap regardless of tile-load state — a partially-loaded basemap
     // is an acceptable look for a ~4s brand moment; boot() must never block
     // on tiles.
     endTimer = setTimeout(()=>{
-      if(captionTimer) clearInterval(captionTimer);
+      if(flightTimer) clearInterval(flightTimer);
       const titleEl=document.getElementById("splashTitle");
       if(titleEl) titleEl.classList.add("show");
       endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
