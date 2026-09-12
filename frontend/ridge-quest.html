@@ -1791,6 +1791,22 @@ function questMapBounds(){
   });
   return [[minLon,minLat],[maxLon,maxLat]];
 }
+// Pan/zoom-out boundary for "My map" — the resort's own authored footprint
+// (questContentBounds(): corridors + viewpoints + ref, not the
+// fog-cell-inflated questMapBounds() above, which grows as a player
+// wanders) padded generously past the edges. Passed as MapLibre's
+// maxBounds, which does double duty: it stops panning past the box AND
+// (per MapLibre's own behavior) keeps the camera from zooming out far
+// enough to show area outside it — the "set a boundary you can pan or
+// zoom out" ask is really one setting, not two.
+function questPanBounds(){
+  const b = questContentBounds();
+  if(!b) return null;
+  const [[minLon,minLat],[maxLon,maxLat]] = b;
+  const padLon = Math.max((maxLon-minLon)*0.6, 0.01);
+  const padLat = Math.max((maxLat-minLat)*0.6, 0.01);
+  return [[minLon-padLon, minLat-padLat],[maxLon+padLon, maxLat+padLat]];
+}
 
 // "Show all runs" overlay for the fog-off + tile-art-off "My map": every
 // corridor drawn as a clean trail-map line — thin dark casing so it reads
@@ -1832,6 +1848,44 @@ function runStyleFor(c){
   const s = RUN_STYLE_DIFF[c.difficulty || ""] || RUN_STYLE_DIFF[""];
   return { col:s.col, halo:s.halo, dash:"", tier:s.tier };
 }
+// Name label + ◆/◆◆ badge markers — viewport-scoped, and only revealed at
+// all once a limited number of corridors are actually in view (rebuilt on
+// moveend). This resort's real corridor set (38) never gets anywhere near
+// fence-editor.html's Test Mode cap of 60 (_rebuildSimCorridorMarkers()/
+// SIM_RUN_MARKER_CAP — a top-N-nearest cap that only helps once a network
+// is much bigger than its visible viewport), so a raised cap wouldn't fix
+// this: the whole resort-wide "My map" framing shows every corridor at
+// once regardless of count. Below RUN_LABEL_MAX_VISIBLE in view, show all
+// of them; above it, show none — zoom in to reveal names rather than
+// packing an arbitrary top-N of large text labels into a small area.
+const RUN_LABEL_MAX_VISIBLE = 10;
+let _runLabelMarkers = [];
+let _runLabelMoveTimer = null;
+function _rebuildRunLabels(map, cors){
+  _runLabelMarkers.forEach(m=>m.remove()); _runLabelMarkers=[];
+  if(!cors.length) return;
+  const b=map.getBounds();
+  const inView=c=>{ const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
+    return mid[1]>=b.getWest() && mid[1]<=b.getEast() && mid[0]>=b.getSouth() && mid[0]<=b.getNorth(); };
+  const vis=cors.filter(c=>(c.path||[]).length>=2 && inView(c));
+  if(vis.length>RUN_LABEL_MAX_VISIBLE) return; // too many on screen — zoom in to reveal names
+  vis.forEach(c=>{
+    const path = c.path;
+    const mid = path[Math.floor(path.length/2)];
+    const lbl = document.createElement("div"); lbl.className = "runLabel"; lbl.textContent = c.name || "Run";
+    _runLabelMarkers.push(new maplibregl.Marker({ element:lbl, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map));
+    // ◆ / ◆◆ badge keyed on the run's DIFFICULTY only — an activityType
+    // (now NOT NULL DEFAULT 'hike' since migration 0059) used to make
+    // runStyleFor() return tier:"" and silently drop the diamond.
+    const tier = (RUN_STYLE_DIFF[c.difficulty || ""] || {}).tier || "";
+    if(tier){
+      const bd = document.createElement("div");
+      bd.className = "runDiamond" + (tier === "dblack" ? " dbl" : "");
+      bd.innerHTML = tier === "dblack" ? "<i></i><i></i>" : "<i></i>";
+      _runLabelMarkers.push(new maplibregl.Marker({ element:bd, anchor:"bottom", offset:[0,-4] }).setLngLat([path[0][1], path[0][0]]).addTo(map));
+    }
+  });
+}
 function drawAllRuns(map){
   const cors = Quest.corridors || [];
   if(!cors.length) return;
@@ -1857,26 +1911,11 @@ function drawAllRuns(map){
   map.addLayer({ id:"runLines-hit", type:"line", source:"runLines",
     paint:{ "line-color":"#000", "line-opacity":0, "line-width":14 } });
 
-  // Name label at each run's midpoint + a ◆/◆◆ badge at the top of black /
-  // double-black runs — HTML markers so this needs no glyphs source and
-  // renders identically in Fence-Editor Test Mode.
-  cors.forEach(c=>{
-    const path = c.path || [];
-    if(path.length < 2) return;
-    const mid = path[Math.floor(path.length/2)];
-    const lbl = document.createElement("div"); lbl.className = "runLabel"; lbl.textContent = c.name || "Run";
-    new maplibregl.Marker({ element:lbl, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map);
-    // ◆ / ◆◆ badge keyed on the run's DIFFICULTY only — an activityType
-    // (now NOT NULL DEFAULT 'hike' since migration 0059) used to make
-    // runStyleFor() return tier:"" and silently drop the diamond.
-    const tier = (RUN_STYLE_DIFF[c.difficulty || ""] || {}).tier || "";
-    if(tier){
-      const b = document.createElement("div");
-      b.className = "runDiamond" + (tier === "dblack" ? " dbl" : "");
-      b.innerHTML = tier === "dblack" ? "<i></i><i></i>" : "<i></i>";
-      new maplibregl.Marker({ element:b, anchor:"bottom", offset:[0,-4] }).setLngLat([path[0][1], path[0][0]]).addTo(map);
-    }
-  });
+  // Name label + ◆/◆◆ badges — see _rebuildRunLabels() above. Rebuilt on
+  // moveend (debounced) so panning/zooming keeps only nearby labels drawn.
+  clearTimeout(_runLabelMoveTimer);
+  _rebuildRunLabels(map, cors);
+  map.on("moveend", ()=>{ clearTimeout(_runLabelMoveTimer); _runLabelMoveTimer=setTimeout(()=>_rebuildRunLabels(map,cors),150); });
 
   map.on("click","runLines-hit",e=>{
     const p = e.features && e.features[0] && e.features[0].properties; if(!p) return;
@@ -1953,7 +1992,8 @@ function renderFogMap(){
           tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
           tileSize:256, attribution:"Esri, Maxar" } },
         layers:[{ id:"base", type:"raster", source:"base" }] },
-      center:[Quest.ref[1], Quest.ref[0]], zoom:13
+      center:[Quest.ref[1], Quest.ref[0]], zoom:13,
+      maxBounds: questPanBounds() || undefined
     }, _splashEndCamera ? { center:_splashEndCamera.center, zoom:_splashEndCamera.zoom, pitch:_splashEndCamera.pitch, bearing:_splashEndCamera.bearing } : {}));
     mapInstance = map;
     map.addControl(new maplibregl.NavigationControl({ visualizePitch:use3D }));
