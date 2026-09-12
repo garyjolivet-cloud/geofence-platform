@@ -1858,16 +1858,28 @@ function runStyleFor(c){
 // once regardless of count. Below RUN_LABEL_MAX_VISIBLE in view, show all
 // of them; above it, show none — zoom in to reveal names rather than
 // packing an arbitrary top-N of large text labels into a small area.
+//
+// "In view" is screen-space (map.project() -> pixel coords checked against
+// the container), NOT map.getBounds() -- confirmed live that getBounds()'s
+// lat/lon box is computed from the four corners of the viewport, and on a
+// PITCHED camera (this screen opens tilted) the corners near the horizon
+// project to ground points arbitrarily far away, so that box swings
+// wildly with tiny pitch/bearing changes — the actual bug behind labels
+// reappearing inconsistently on zoom-in. Screen-space projection is
+// perspective-correct regardless of pitch/bearing.
 const RUN_LABEL_MAX_VISIBLE = 10;
 let _runLabelMarkers = [];
 let _runLabelMoveTimer = null;
 function _rebuildRunLabels(map, cors){
   _runLabelMarkers.forEach(m=>m.remove()); _runLabelMarkers=[];
   if(!cors.length) return;
-  const b=map.getBounds();
-  const inView=c=>{ const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
-    return mid[1]>=b.getWest() && mid[1]<=b.getEast() && mid[0]>=b.getSouth() && mid[0]<=b.getNorth(); };
-  const vis=cors.filter(c=>(c.path||[]).length>=2 && inView(c));
+  const w = map.getContainer().clientWidth, h = map.getContainer().clientHeight;
+  const onScreen=c=>{
+    const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
+    const pt=map.project([mid[1], mid[0]]);
+    return pt.x>=0 && pt.x<=w && pt.y>=0 && pt.y<=h;
+  };
+  const vis=cors.filter(c=>(c.path||[]).length>=2 && onScreen(c));
   if(vis.length>RUN_LABEL_MAX_VISIBLE) return; // too many on screen — zoom in to reveal names
   vis.forEach(c=>{
     const path = c.path;
