@@ -587,6 +587,7 @@
     <p id="splashEditorHint">Fly the map to a shot, then <b>+ Add Keyframe</b>. <b>⟳</b> recaptures a row from the current view, <b>↦</b> jumps back to it. Reorder with ▲▼, remove with ✕.</p>
     <div id="splashKfList"></div>
     <div class="primaryRow">
+      <button id="splashKfRecenterBtn" title="Fly back to Kicking Horse village">🏠 Recenter</button>
       <button id="splashKfAddBtn">+ Add Keyframe</button>
     </div>
     <div class="primaryRow">
@@ -7348,6 +7349,22 @@ document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.targ
    verifying them live via a separate authenticated browser session. */
 let splashEditorMap = null;
 let splashKfDraft = [];
+// Fixed Kicking Horse village center (same REF the main editor map opens
+// on, above) — NOT wherever this page's own main map happens to be
+// scrolled/tilted to right now (that was the original approach; reported
+// live as disorienting — "im lost and can not find kicking horse on the
+// key frame map" — since the main map could be zoomed into an unrelated
+// zone or panned far away when Splash was opened). A flat, zoomed-out
+// top-down view over the whole resort is a far more recognizable starting
+// point than an arbitrary inherited camera.
+const SPLASH_EDITOR_CENTER = [-117.0547, 51.3027];
+const SPLASH_EDITOR_MAX_KM = 50; // maxBounds radius — keeps the flight from wandering off the mountain entirely
+function _kmBoundsAround(center, km){
+  const [lon, lat] = center;
+  const dLat = km / 111.32;
+  const dLon = km / (111.32 * Math.cos(lat * Math.PI / 180));
+  return [[lon - dLon, lat - dLat], [lon + dLon, lat + dLat]];
+}
 
 function _splashCamOf(m){
   const c = m.getCenter();
@@ -7425,9 +7442,6 @@ async function loadSplashKeyframes(){
 function openSplashEditor(){
   document.getElementById("splashEditorOverlay").classList.add("open");
   if(!splashEditorMap){
-    // Opens wherever this page's own main map currently is — a sane
-    // starting point to fly from, not a hardcoded location.
-    const cam = _splashCamOf(map);
     splashEditorMap = new maplibregl.Map({
       container: "splashEditorMap",
       style: { version:8,
@@ -7435,7 +7449,8 @@ function openSplashEditor(){
           tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
           tileSize:256, attribution:"Esri, Maxar" } },
         layers: [{ id:"base", type:"raster", source:"base" }] },
-      center: [cam.lon, cam.lat], zoom: cam.zoom, pitch: cam.pitch, bearing: cam.bearing,
+      center: SPLASH_EDITOR_CENTER, zoom: 10.5, pitch: 0, bearing: 0,
+      maxBounds: _kmBoundsAround(SPLASH_EDITOR_CENTER, SPLASH_EDITOR_MAX_KM),
       attributionControl: false
     });
     splashEditorMap.addControl(new maplibregl.NavigationControl({ visualizePitch:true }));
@@ -7449,9 +7464,16 @@ function openSplashEditor(){
   loadSplashKeyframes();
 }
 
+function recenterSplashEditor(){
+  if(!splashEditorMap) return;
+  try{ splashEditorMap.easeTo({ center:SPLASH_EDITOR_CENTER, zoom:10.5, pitch:0, bearing:0, duration:500 }); }catch(e){}
+}
+
 function closeSplashEditor(){
   document.getElementById("splashEditorOverlay").classList.remove("open");
 }
+
+document.getElementById("splashKfRecenterBtn").onclick = recenterSplashEditor;
 
 document.getElementById("splashKfAddBtn").onclick = () => {
   if(!splashEditorMap) return;
