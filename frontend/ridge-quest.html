@@ -1803,8 +1803,8 @@ function questPanBounds(){
   const b = questContentBounds();
   if(!b) return null;
   const [[minLon,minLat],[maxLon,maxLat]] = b;
-  const padLon = Math.max((maxLon-minLon)*0.6, 0.01);
-  const padLat = Math.max((maxLat-minLat)*0.6, 0.01);
+  const padLon = Math.max((maxLon-minLon)*0.9, 0.01);
+  const padLat = Math.max((maxLat-minLat)*0.9, 0.01);
   return [[minLon-padLon, minLat-padLat],[maxLon+padLon, maxLat+padLat]];
 }
 
