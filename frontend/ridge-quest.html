@@ -2390,25 +2390,35 @@ function playSplash(){
       }
     }
 
-    // The flight itself: a manual per-tick interpolation (not
-    // map.easeTo()) so the logical camera position is always known
-    // exactly (needed for the proximity check above) regardless of
-    // whether MapLibre's own render loop is keeping up — confirmed live
-    // this session that reading an in-progress easeTo back can lag. A
-    // 100ms tick (10fps) is smooth enough for this kind of slow climb
-    // (the same technique a Ken-Burns effect typically uses) — halved
-    // from an original 50ms after the same flicker report above: fewer,
-    // more spaced-out jumpTo calls means fewer forced repaints competing
-    // with tiles/DEM/the winter recolor trying to actually finish loading.
+    // The flight itself: confirmed live that driving the visible camera
+    // with a manual jumpTo() every 50-100ms (150 calls over 15s) — while
+    // 3D DEM terrain is active — flickers badly and can go fully black
+    // (WebGL falling behind/losing its footing under that many forced
+    // transform resets against a live elevation mesh, still happened
+    // with the winter recolor OFF too, so it's this, not the recolor).
+    // Switched to the load-bearing part of the ORIGINAL 3-waypoint splash
+    // (already proven stable): a handful of map.easeTo() calls, one per
+    // keyframe segment, letting MapLibre's own internal animation loop
+    // do the interpolation instead of raw per-tick transform resets.
+    // Linear easing so the camera's actual motion matches the pure-math
+    // lerp below as closely as possible.
+    for(let i=0;i<SPLASH_KEYFRAMES.length-1;i++){
+      const a = SPLASH_KEYFRAMES[i], b = SPLASH_KEYFRAMES[i+1];
+      setTimeout(()=>{
+        if(!map) return;
+        try{ map.easeTo({ center:b.center, zoom:b.zoom, pitch:b.pitch, bearing:b.bearing, duration:b.t-a.t, easing:t=>t }); }catch(e){}
+      }, a.t);
+    }
+    // Chute-name reveal runs on its own cheap interval, entirely separate
+    // from the map — it only ever reads performance.now() and the
+    // pure-math keyframe lerp, never touches the map/WebGL, so it can't
+    // contribute to the render load above regardless of tick rate.
     const flightStart = performance.now();
     function tick(){
-      const elapsed = performance.now() - flightStart;
-      const cam = _splashCameraAt(elapsed);
-      if(map){ try{ map.jumpTo({ center:cam.center, zoom:cam.zoom, pitch:cam.pitch, bearing:cam.bearing }); }catch(e){} }
-      updateCaptions(cam.center);
+      updateCaptions(_splashCameraAt(performance.now() - flightStart).center);
     }
     tick();
-    flightTimer = setInterval(tick, 100);
+    flightTimer = setInterval(tick, 150);
 
     // Hard cap regardless of tile-load state — a partially-loaded basemap
     // is an acceptable look for a ~4s brand moment; boot() must never block
