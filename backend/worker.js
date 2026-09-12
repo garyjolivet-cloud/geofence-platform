@@ -2450,8 +2450,8 @@ async function api(request, env, url) {
     if (!proj) return json({ error: "project not found" }, 404, AC);
     if (!scopeOk(A, "publish", proj.appId)) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json().catch(() => ({}));
-    if (!("record_retention_days" in b) && !("questPublic" in b) && !("questActivities" in b) && !("terrainBiome" in b) && !("season" in b))
-      return json({ error: "record_retention_days, questPublic, questActivities, terrainBiome, or season required" }, 400, AC);
+    if (!("record_retention_days" in b) && !("questPublic" in b) && !("questActivities" in b) && !("terrainBiome" in b) && !("season" in b) && !("splashKeyframes" in b))
+      return json({ error: "record_retention_days, questPublic, questActivities, terrainBiome, season, or splashKeyframes required" }, 400, AC);
     const now = new Date().toISOString();
     const resp = { ok: true, id: pid };
     if ("record_retention_days" in b) {
@@ -2516,6 +2516,32 @@ async function api(request, env, url) {
       await env.DB.prepare("UPDATE project SET season=?, updatedAt=? WHERE id=?").bind(season, now, pid).run();
       await logAudit(env, request, A, "project.season.update", pid + " -> " + (season || "null"));
       resp.season = season;
+    }
+    // Ridge Quest splash flyby — admin-authored camera keyframes captured
+    // via the Fence Editor's "Splash Flyby" tool (see frontend/splash-
+    // flight.js). null clears back to ridge-quest.html's own hardcoded
+    // fallback flight. Each point needs numeric lon/lat/zoom/pitch/bearing/
+    // ms in sane ranges so a malformed value can't later crash the splash's
+    // MapLibre calls; at least 2 points, since a 1-point "flight" has
+    // nowhere to fly.
+    if ("splashKeyframes" in b) {
+      let splashKeyframes = null;
+      if (b.splashKeyframes !== null) {
+        const kfs = b.splashKeyframes;
+        const kfOk = k => k && typeof k === "object"
+          && typeof k.lon === "number" && k.lon >= -180 && k.lon <= 180
+          && typeof k.lat === "number" && k.lat >= -90 && k.lat <= 90
+          && typeof k.zoom === "number" && k.zoom >= 0 && k.zoom <= 24
+          && typeof k.pitch === "number" && k.pitch >= 0 && k.pitch <= 85
+          && typeof k.bearing === "number" && k.bearing >= -360 && k.bearing <= 360
+          && typeof k.ms === "number" && k.ms >= 0 && k.ms <= 60000;
+        if (!Array.isArray(kfs) || kfs.length < 2 || !kfs.every(kfOk))
+          return json({ error: "splashKeyframes must be an array of 2+ {lon,lat,zoom,pitch,bearing,ms} points (lon -180..180, lat -90..90, zoom 0..24, pitch 0..85, bearing -360..360, ms 0..60000), or null to clear" }, 400, AC);
+        splashKeyframes = JSON.stringify(kfs);
+      }
+      await env.DB.prepare("UPDATE project SET splash_keyframes=?, updatedAt=? WHERE id=?").bind(splashKeyframes, now, pid).run();
+      await logAudit(env, request, A, "project.splashKeyframes.update", pid + " -> " + (splashKeyframes ? b.splashKeyframes.length + " keyframes" : "null(cleared)"));
+      resp.splashKeyframes = b.splashKeyframes;
     }
     return json(resp, 200, AC);
   }
@@ -2864,7 +2890,7 @@ async function api(request, env, url) {
       // Reflect the live owner — a project may have moved clients since this
       // bundle was published, and the stored JSON would otherwise be stale.
       const ownerRow = await env.DB.prepare(
-        "SELECT p.orgId AS orgId, p.quest_activities AS questActivities, p.terrain_biome AS terrainBiome, p.season AS season, a.tile_art_enabled AS tileArtEnabled, a.three_d_enabled AS threeDEnabled " +
+        "SELECT p.orgId AS orgId, p.quest_activities AS questActivities, p.terrain_biome AS terrainBiome, p.season AS season, p.splash_keyframes AS splashKeyframes, a.tile_art_enabled AS tileArtEnabled, a.three_d_enabled AS threeDEnabled " +
         "FROM project p LEFT JOIN app a ON a.id = p.appId WHERE p.id=?"
       ).bind(pid).first();
       if (ownerRow) bundle.orgId = ownerRow.orgId;
@@ -2886,6 +2912,12 @@ async function api(request, env, url) {
       // orgId just above. null = every activity allowed (backward compat).
       try { bundle.questActivities = ownerRow && ownerRow.questActivities ? JSON.parse(ownerRow.questActivities) : null; }
       catch (e) { bundle.questActivities = null; }
+      // Ridge Quest splash flyby — admin-authored camera keyframes (see
+      // migrations/0063 + the PATCH handler above); same live-owner-
+      // injection pattern, null when never authored so ridge-quest.html
+      // falls back to its own hardcoded default flight.
+      try { bundle.splashKeyframes = ownerRow && ownerRow.splashKeyframes ? JSON.parse(ownerRow.splashKeyframes) : null; }
+      catch (e) { bundle.splashKeyframes = null; }
       // Merge active live zones — filtered by guide when visitor arrived via a guide's walk link
       const liveGuide = url.searchParams.get("guide");
       const liveRows = liveGuide

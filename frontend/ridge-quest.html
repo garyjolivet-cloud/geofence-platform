@@ -28,6 +28,10 @@
 <!-- Shared corridor renderer (width band + piste-glow). Side-effect-free
      IIFE; only TileFog.addCorridorLayers / .pxPerMeterAtZ0 are used here. -->
 <script src="/tile-fog.js"></script>
+<!-- Shared splash-flyby camera player — same module fence-editor.html's
+     "Splash Flyby" keyframe editor uses for its live Preview, so what's
+     previewed there is exactly what plays here. -->
+<script src="/splash-flight.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
   *{box-sizing:border-box}
@@ -2169,42 +2173,55 @@ function renderFogMap(){
 /* ============================ SPLASH (CPR Ridge flyby) ============================
    Plays once per page load, before boot()'s first real screen — a real
    MapLibre render (same Esri satellite + Terrarium DEM stack renderFogMap()
-   uses, via Terrain3D) — a short final approach toward Golden Eagle
-   Express's top, on the real base->top line. _splashPlayed guards against
-   boot()'s several re-entries (after workspace/project pick, after login)
-   replaying it mid-session — it must fire exactly once per page load, not
-   once per boot() call.
+   uses, via Terrain3D). _splashPlayed guards against boot()'s several
+   re-entries (after workspace/project pick, after login) replaying it
+   mid-session — it must fire exactly once per page load, not once per
+   boot() call.
 
-   Cut down to just this last stretch (was a full base-to-top flight with
-   corridor lines + proximity-triggered chute names, ~15s) — no chute
-   lines, no name labels/text of any kind now, just terrain + snow, 4s
-   total. SPLASH_ZOOM/PITCH/BEARING are the exact values already verified
-   live (Fence Editor, both the static endpoints AND the actual eased
-   transition) to stay clear of the DEM/imagery resolution ceiling across
-   this whole approach — don't push them without re-checking the same way. */
+   The flight itself is a chain of admin-authored camera keyframes
+   (frontend/splash-flight.js, shared with the Fence Editor's "Splash
+   Flyby" tool that captures them) — bundle.splashKeyframes, fetched
+   before the splash starts (see boot()). SPLASH_* below are ONLY the
+   fallback flight used when a project has never had one authored: a
+   short final approach toward Golden Eagle Express's gondola top, at the
+   exact zoom/pitch/bearing already verified live (Fence Editor, both the
+   static endpoints AND the actual eased transition) to stay clear of the
+   DEM/imagery resolution ceiling — don't push them without re-checking
+   the same way. */
 const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat] gondola base
 const SPLASH_TOP   = [-117.077867, 51.27508];  // gondola top
 function _splashLerpLL(u){ return [ SPLASH_BASE[0]+(SPLASH_TOP[0]-SPLASH_BASE[0])*u, SPLASH_BASE[1]+(SPLASH_TOP[1]-SPLASH_BASE[1])*u ]; }
 const SPLASH_START_U = 0.85; // ~490m of real ground track short of the top
 const SPLASH_ZOOM = 13.2, SPLASH_PITCH = 40, SPLASH_BEARING = 58;
-const SPLASH_TOTAL_MS = 4000;
 const SPLASH_END_CARD_MS = 1500;
+function _splashFallbackKeyframes(){
+  const start = _splashLerpLL(SPLASH_START_U);
+  return [
+    { lon:start[0], lat:start[1], zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING, ms:0 },
+    { lon:SPLASH_TOP[0], lat:SPLASH_TOP[1], zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING, ms:2500 }
+  ];
+}
 // Was temporarily false to isolate the real cause of an earlier
 // flicker/black-screen report: confirmed it was the camera (raw per-tick
 // jumpTo against live 3D terrain, plus pitch/zoom that clipped into the
 // mountain), never the recolor itself. Left on.
 const SPLASH_WINTER_ENABLED = true;
 let _splashPlayed = false;
-// Set once the splash's own map is torn down — deterministic (always the
-// gondola-top framing by design), not read back from the live map: an
+// Set once the splash's own map is torn down — the last keyframe actually
+// flown (custom or fallback), not read back from the live map: an
 // in-progress map.easeTo() can still report a stale position if read
 // mid-transition. renderFogMap() ("My map") opens here instead of its
 // usual whole-network fitBounds framing. Stays null (falls back to that
 // normal framing) for reduced-motion sessions, where no splash map is
 // ever created.
-let _splashEndCamera = { center:SPLASH_TOP.slice(), zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING };
-function playSplash(){
+let _splashEndCamera = null;
+// customKeyframes: bundle.splashKeyframes fetched by boot() before calling
+// this, or null/too-short if none authored yet / the fetch didn't land in
+// time — either way this falls back to _splashFallbackKeyframes() so the
+// splash always has somewhere to fly.
+function playSplash(customKeyframes){
   return new Promise(resolve=>{
+    const keyframes = (Array.isArray(customKeyframes) && customKeyframes.length >= 2) ? customKeyframes : _splashFallbackKeyframes();
     const rm = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
     const overlay = document.createElement("div");
     overlay.className = "splashOverlay";
@@ -2219,7 +2236,7 @@ function playSplash(){
       if(done) return; done=true;
       if(endTimer) clearTimeout(endTimer);
       if(map){
-        try{ map.jumpTo(_splashEndCamera); }catch(e){}
+        try{ map.jumpTo(_splashEndCamera || SplashFlight.cameraFor(keyframes[keyframes.length-1])); }catch(e){}
         try{ map.remove(); }catch(e){}
       }
       overlay.remove();
@@ -2231,6 +2248,7 @@ function playSplash(){
     // pause, same spirit as terrain-3d.js's own reducedMotion() gating.
     if(rm){ endTimer=setTimeout(finish, 600); return; }
 
+    const startCam = SplashFlight.cameraFor(keyframes[0]);
     map = new maplibregl.Map({
       container:"splashMap",
       style:{ version:8,
@@ -2238,8 +2256,8 @@ function playSplash(){
           tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
           tileSize:256, attribution:"Esri, Maxar" } },
         layers:[{ id:"base", type:"raster", source:"base" }] },
-      center:_splashLerpLL(SPLASH_START_U), zoom:SPLASH_ZOOM,
-      pitch:SPLASH_PITCH, bearing:SPLASH_BEARING,
+      center:startCam.center, zoom:startCam.zoom,
+      pitch:startCam.pitch, bearing:startCam.bearing,
       interactive:false, attributionControl:false
     });
     map.on("load", ()=>{
@@ -2259,24 +2277,26 @@ function playSplash(){
       }catch(e){} // offline/blocked tiles — splash still runs on its hard timer below
     });
 
-    // One easeTo, start -> top, zoom/pitch/bearing constant (only the
-    // geographic position slides) — matches the exact segment shape
-    // already verified live to stay clear of the terrain.
-    try{ map.easeTo({ center:SPLASH_TOP, zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING, duration:SPLASH_TOTAL_MS-SPLASH_END_CARD_MS, easing:t=>t }); }catch(e){}
+    // Shared with the Fence Editor's "Splash Flyby" Preview button (see
+    // frontend/splash-flight.js) — the exact same chained-easeTo player,
+    // so what's previewed there is what plays here. Returns the flight's
+    // total duration so the end-card timing below always matches however
+    // many keyframes were actually authored.
+    const flightMs = SplashFlight.play(map, keyframes);
+    _splashEndCamera = SplashFlight.cameraFor(keyframes[keyframes.length-1]);
 
     // Hard cap regardless of tile-load state — a partially-loaded basemap
-    // is an acceptable look for a ~4s brand moment; boot() must never block
-    // on tiles.
+    // is an acceptable look for a brief brand moment; boot() must never
+    // block on tiles.
     endTimer = setTimeout(()=>{
       const titleEl=document.getElementById("splashTitle");
       if(titleEl) titleEl.classList.add("show");
       endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
-    }, SPLASH_TOTAL_MS - SPLASH_END_CARD_MS);
+    }, flightMs);
   });
 }
 
 async function boot(){
-  if(!_splashPlayed){ _splashPlayed = true; await playSplash(); }
   // R7 resolution, in order: explicit URL params always win (unchanged from
   // before this phase) > a remembered rq.workspace pick > an existing
   // session's own appId (so a player who's already active before this
@@ -2287,6 +2307,12 @@ async function boot(){
   // "golden-nordic" as a narrow backward-compat default, so those links
   // don't break; a truly bare /quest with NEITHER param falls through to
   // the full picker instead, which is the actual point of this phase.
+  //
+  // Hoisted to run BEFORE the splash (it used to run after) so the splash
+  // can look up this project's own bundle.splashKeyframes below — none of
+  // this requires login, so it resolves the same way for a first-time
+  // visitor as before; only reachable difference is a resolvable project
+  // now gets its authored flight instead of always the hardcoded fallback.
   if(!RQ_APP_ID || !RQ_PROJECT_ID){
     const w = getWorkspace();
     if(w){
@@ -2299,6 +2325,32 @@ async function boot(){
     if(existing && existing.token && existing.player && existing.player.appId) RQ_APP_ID = existing.player.appId;
   }
   if(!RQ_APP_ID && RQ_PROJECT_ID) RQ_APP_ID = "golden-nordic";
+
+  if(!_splashPlayed){
+    _splashPlayed = true;
+    // Best-effort fetch of this project's authored splash keyframes,
+    // raced against a short timeout so a slow/offline network never
+    // meaningfully delays the splash — on any failure/timeout/unresolved
+    // project, playSplash(null) just uses its own hardcoded fallback.
+    let splashKeyframes = null;
+    if(RQ_PROJECT_ID){
+      try{
+        const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+        const timeout = new Promise(res=>setTimeout(res, 1200, null));
+        const fetchP = (async ()=>{
+          const r = await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle", ctrl ? {signal:ctrl.signal} : undefined);
+          if(!r.ok) return null;
+          const b = await r.json();
+          return Array.isArray(b.splashKeyframes) ? b.splashKeyframes : null;
+        })();
+        fetchP.catch(()=>{}); // a late/aborted response must never surface as an unhandled rejection once the timeout has already won the race below
+        splashKeyframes = await Promise.race([fetchP, timeout]);
+        if(ctrl) try{ ctrl.abort(); }catch(e){}
+      }catch(e){ splashKeyframes = null; }
+    }
+    await playSplash(splashKeyframes);
+  }
+
   if(!RQ_APP_ID || !RQ_PROJECT_ID){ renderWorkspacePicker(); return; }
 
   const s=getSession();
