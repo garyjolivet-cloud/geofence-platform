@@ -7460,16 +7460,27 @@ function openSplashEditor(){
         Terrain3D.applyWinter(splashEditorMap, { dem:true });
       }catch(e){}
     });
+  } else {
+    // The map instance is kept alive across closes (its container just
+    // goes display:none) so reopening doesn't re-fetch terrain/imagery —
+    // but MapLibre caches the container's pixel size at creation time and
+    // has no way to notice a display:none->flex transition on its own.
+    // Without this, a map opened, closed, and reopened can end up
+    // "stuck" rendering into its old (or zero) size — resize() is the
+    // documented fix for exactly this.
+    requestAnimationFrame(() => { try{ splashEditorMap.resize(); }catch(e){} });
   }
   loadSplashKeyframes();
 }
 
 function recenterSplashEditor(){
   if(!splashEditorMap) return;
+  try{ SplashFlight.stop(); }catch(e){}
   try{ splashEditorMap.easeTo({ center:SPLASH_EDITOR_CENTER, zoom:10.5, pitch:0, bearing:0, duration:500 }); }catch(e){}
 }
 
 function closeSplashEditor(){
+  try{ SplashFlight.stop(); }catch(e){} // don't leave a preview's camera moves running against a hidden map
   document.getElementById("splashEditorOverlay").classList.remove("open");
 }
 
@@ -7487,7 +7498,13 @@ document.getElementById("splashKfPreviewBtn").onclick = () => {
   if(!splashEditorMap || splashKfDraft.length < 2){ statusEl.textContent = "Add at least 2 keyframes to preview."; return; }
   const btns = document.querySelectorAll("#splashEditorPanel button");
   btns.forEach(b => b.disabled = true);
-  const totalMs = SplashFlight.play(splashEditorMap, splashKfDraft);
+  // If SplashFlight.play() ever throws synchronously, the re-enable timer
+  // below still MUST get scheduled — otherwise every button in the panel
+  // stays permanently disabled after the failed attempt, which is exactly
+  // what "preview hangs up after first try" looked like live.
+  let totalMs = 0;
+  try{ totalMs = SplashFlight.play(splashEditorMap, splashKfDraft); }
+  catch(e){ totalMs = 0; }
   statusEl.textContent = "Previewing…";
   setTimeout(() => {
     btns.forEach(b => b.disabled = false);

@@ -8,6 +8,20 @@
    duration INTO this point from the previous one (ignored on point 0,
    which is just the starting camera the map opens on). */
 (function(){
+  // Segment easeTo's are scheduled via setTimeout, not chained off
+  // MapLibre's own 'moveend' events — a second play() call (the editor's
+  // Preview button can be clicked repeatedly on the same long-lived map
+  // instance, unlike the real splash which builds a fresh map every
+  // time) must cancel any still-pending segments from the previous call
+  // first, or the two runs' easeTo calls fight over the camera transform
+  // and the map can appear to freeze ("hangs up after first try" —
+  // reported live). Tracked at module scope since only one flight is
+  // ever meant to be in the air at once.
+  let _pendingTimers = [];
+  function _clearPending(){
+    _pendingTimers.forEach(id => clearTimeout(id));
+    _pendingTimers = [];
+  }
   function cameraFor(kf){
     return { center:[kf.lon, kf.lat], zoom:kf.zoom, pitch:kf.pitch, bearing:kf.bearing };
   }
@@ -25,6 +39,7 @@
   function play(map, keyframes, opts){
     opts = opts || {};
     const easing = opts.easing || (t => t);
+    _clearPending();
     if(!map || !Array.isArray(keyframes) || keyframes.length < 2) return 0;
     try{ map.jumpTo(cameraFor(keyframes[0])); }catch(e){}
     let elapsed = 0;
@@ -32,13 +47,17 @@
       const kf = keyframes[i];
       const dur = Math.max(0, Number(kf.ms) || 0);
       const cam = cameraFor(kf);
-      setTimeout(()=>{
+      const id = setTimeout(()=>{
         if(opts.onSegment) try{ opts.onSegment(i, keyframes.length-1); }catch(e){}
         try{ map.easeTo(Object.assign({}, cam, { duration:dur, easing })); }catch(e){}
       }, elapsed);
+      _pendingTimers.push(id);
       elapsed += dur;
     }
     return elapsed;
   }
-  window.SplashFlight = { cameraFor, totalDurationMs, play };
+  // Cancels any in-flight play() — the editor calls this when you close
+  // the panel or start a new preview mid-flight isn't otherwise covered.
+  function stop(){ _clearPending(); }
+  window.SplashFlight = { cameraFor, totalDurationMs, play, stop };
 })();

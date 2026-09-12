@@ -2260,6 +2260,37 @@ function playSplash(customKeyframes){
       pitch:startCam.pitch, bearing:startCam.bearing,
       interactive:false, attributionControl:false
     });
+    // Reported live: "the first few seconds are corrupt glittery no snow
+    // then last few seconds are great" — root cause was SplashFlight.play()
+    // getting kicked off immediately, in parallel with map creation,
+    // instead of waiting for "load": the camera was already flying through
+    // several keyframes before the style had even finished loading, let
+    // alone before Terrain3D.setEnabled/applyWinter below had run — so the
+    // whole opening stretch of the flight played over a bare, half-loaded
+    // basemap with no terrain/snow at all, only looking right once "load"
+    // (and then a few frames of tile streaming) finally caught up partway
+    // through. startFlight() below now only ever runs AFTER terrain+winter
+    // are already in place. flightStarted guards against double-starting —
+    // both the real "load" event and the offline/blocked-tiles fallback
+    // timer call it, and only the first one should count.
+    let flightStarted = false, fallbackTimer = null;
+    function startFlight(){
+      if(flightStarted) return;
+      flightStarted = true;
+      if(fallbackTimer) clearTimeout(fallbackTimer);
+      // Shared with the Fence Editor's "Splash Flyby" Preview button (see
+      // frontend/splash-flight.js) — the exact same chained-easeTo player,
+      // so what's previewed there is what plays here. Returns the flight's
+      // total duration so the end-card timing matches however many
+      // keyframes were actually authored.
+      const flightMs = SplashFlight.play(map, keyframes);
+      _splashEndCamera = SplashFlight.cameraFor(keyframes[keyframes.length-1]);
+      endTimer = setTimeout(()=>{
+        const titleEl=document.getElementById("splashTitle");
+        if(titleEl) titleEl.classList.add("show");
+        endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
+      }, flightMs);
+    }
     map.on("load", ()=>{
       try{
         Terrain3D.setEnabled(map, true, { sky:true });
@@ -2274,25 +2305,13 @@ function playSplash(customKeyframes){
         // point of the whole splash. Gated behind SPLASH_WINTER_ENABLED —
         // see that const's comment.
         if(SPLASH_WINTER_ENABLED) Terrain3D.applyWinter(map, { dem:true });
-      }catch(e){} // offline/blocked tiles — splash still runs on its hard timer below
+      }catch(e){} // offline/blocked tiles — startFlight()'s own fallback timer still fires below
+      startFlight();
     });
-
-    // Shared with the Fence Editor's "Splash Flyby" Preview button (see
-    // frontend/splash-flight.js) — the exact same chained-easeTo player,
-    // so what's previewed there is what plays here. Returns the flight's
-    // total duration so the end-card timing below always matches however
-    // many keyframes were actually authored.
-    const flightMs = SplashFlight.play(map, keyframes);
-    _splashEndCamera = SplashFlight.cameraFor(keyframes[keyframes.length-1]);
-
-    // Hard cap regardless of tile-load state — a partially-loaded basemap
-    // is an acceptable look for a brief brand moment; boot() must never
-    // block on tiles.
-    endTimer = setTimeout(()=>{
-      const titleEl=document.getElementById("splashTitle");
-      if(titleEl) titleEl.classList.add("show");
-      endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
-    }, flightMs);
+    // Fallback in case "load" never fires at all (fully offline/blocked
+    // tiles) — the splash must still finish within a bounded time
+    // regardless; boot() can never block on tiles.
+    endTimer = setTimeout(startFlight, 2500);
   });
 }
 
