@@ -2239,6 +2239,14 @@ const SPLASH_REVEAL_EXIT_RADIUS_M = 280;
 const SPLASH_MAX_CAPTIONS = 2;
 const SPLASH_TOTAL_MS = 15000;
 const SPLASH_END_CARD_MS = 2000;
+// DEBUG TOGGLE — slowing the flight to 15s didn't fix the reported
+// flicker ("hardly recognizable... may be too close to ground"). Flipped
+// off to isolate whether the winter recolor (raster recolor + DEM
+// hillshade/color-relief + wash + grain, all stacked on top of the
+// already-loading base imagery) is the actual cause, versus the low
+// pitch/altitude itself exposing DEM tile seams that'd flicker either
+// way. Flip back to true once that's confirmed either way.
+const SPLASH_WINTER_ENABLED = false;
 let _splashPlayed = false;
 // Set once the splash's own map is torn down, to whatever camera it
 // actually ended on (captured live, not just assumed to be the last
@@ -2333,8 +2341,9 @@ function playSplash(){
         // the splash is bespoke hardcoded content for this one project,
         // not bundle-driven, and fetching just to check a season flag
         // would undercut the "starts instantly, no network dependency"
-        // point of the whole splash.
-        Terrain3D.applyWinter(map, { dem:true });
+        // point of the whole splash. Gated behind SPLASH_WINTER_ENABLED —
+        // see that const's comment.
+        if(SPLASH_WINTER_ENABLED) Terrain3D.applyWinter(map, { dem:true });
         map.addSource("splashCorridors", { type:"geojson", data:{ type:"FeatureCollection",
           features: SPLASH_CORRIDORS.map(c=>({ type:"Feature", properties:{ name:c.name },
             geometry:{ type:"LineString", coordinates:c.path.map(p=>[p[1],p[0]]) } })) } });
