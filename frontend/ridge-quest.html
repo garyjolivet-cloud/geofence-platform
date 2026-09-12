@@ -2207,26 +2207,33 @@ const SPLASH_CORRIDORS = [
 // deliberately spend most of their time in the top portion rather than
 // flying the line at constant speed: base -> start of the chute zone in
 // ~3.4s (t=0..1), then a slow ~9.6s crawl through CPR Ridge (t=1..4)
-// before arriving at the top. Hand-tuned live against the real map
-// (Fence Editor, this same project) — pitch/zoom kept at or below the
-// values confirmed clean; pushing much past pitch 76 / zoom 16.5 here
-// starts exposing "no data yet" gaps at the DEM/imagery resolution
-// ceiling.
+// before arriving at the top.
 //
 // Slowed from an original 8s total (2.6s/5.7s split) to 15s (this same
 // ~26%/74% split, just stretched) — confirmed live the original pace was
-// fast enough that map tiles/DEM/the winter recolor below couldn't keep
-// up with the camera and visibly flickered ("hardly recognizable");
-// slower panning gives them time to actually load and settle in each
-// spot before the camera moves on.
+// fast enough that map tiles/DEM couldn't keep up with the camera and
+// visibly flickered ("hardly recognizable").
+//
+// pitch/zoom per ridge keyframe are deliberately much lower than they
+// look like they should need to be — confirmed live (Fence Editor,
+// jumpTo against this real project's DEM) that "flying into the
+// mountain" (a fully black/buried-camera frame) happens when the camera
+// eye ends up behind AND below a rising ridge crest at steep pitch +
+// close zoom, and the safe ceiling varies a LOT by exact location: End
+// Zone's terrain tolerates zoom 14.8/pitch 60 (clips at 15.2/65), but
+// PW/Marlys/the gondola top itself — all right at a 2300-2475m ridge
+// crest — clip well before that and only stayed clean at zoom
+// 13.7-14.5/pitch 45-57. These values carry a small margin below each
+// tested-clean setting; don't push zoom/pitch back up on these specific
+// keyframes without re-testing live against the real terrain first.
 const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat]
 const SPLASH_TOP   = [-117.077867, 51.27508];
 const SPLASH_KEYFRAMES = [
   { t:0,    center:SPLASH_BASE,                zoom:13.5, pitch:55, bearing:219 }, // gondola base, facing up the line
-  { t:3400, center:[-117.07056, 51.283257],    zoom:15.8, pitch:72, bearing:58  }, // arriving at "End Zone" — chute zone starts here
-  { t:6400, center:[-117.073784,51.28056],     zoom:15.8, pitch:72, bearing:58  }, // near "PW"/"After Pride"
-  { t:9600, center:[-117.076535,51.277945],    zoom:15.9, pitch:70, bearing:45  }, // near "Marlys"/"Torpedo Alley"
-  { t:13000,center:SPLASH_TOP,                 zoom:16.0, pitch:70, bearing:58  }  // gondola top
+  { t:3400, center:[-117.07056, 51.283257],    zoom:14.5, pitch:57, bearing:58  }, // arriving at "End Zone" — chute zone starts here
+  { t:6400, center:[-117.073784,51.28056],     zoom:13.7, pitch:45, bearing:58  }, // near "PW"/"After Pride"
+  { t:9600, center:[-117.076535,51.277945],    zoom:13.7, pitch:45, bearing:45  }, // near "Marlys"/"Torpedo Alley"
+  { t:13000,center:SPLASH_TOP,                 zoom:13.7, pitch:45, bearing:58  }  // gondola top
 ];
 // Chute-name reveal: real-world distance (not screen-space) from the
 // current interpolated camera center to each corridor's midpoint.
@@ -2239,14 +2246,13 @@ const SPLASH_REVEAL_EXIT_RADIUS_M = 280;
 const SPLASH_MAX_CAPTIONS = 2;
 const SPLASH_TOTAL_MS = 15000;
 const SPLASH_END_CARD_MS = 2000;
-// DEBUG TOGGLE — slowing the flight to 15s didn't fix the reported
-// flicker ("hardly recognizable... may be too close to ground"). Flipped
-// off to isolate whether the winter recolor (raster recolor + DEM
-// hillshade/color-relief + wash + grain, all stacked on top of the
-// already-loading base imagery) is the actual cause, versus the low
-// pitch/altitude itself exposing DEM tile seams that'd flicker either
-// way. Flip back to true once that's confirmed either way.
-const SPLASH_WINTER_ENABLED = false;
+// Was temporarily false to isolate the real cause of the reported
+// flicker/black-screen: confirmed it was the camera itself (raw per-tick
+// jumpTo against live 3D terrain, plus specific keyframes pitched/zoomed
+// into the mountain — see the fixes above and on SPLASH_KEYFRAMES) —
+// the winter recolor was never actually the cause (flicker persisted
+// with this off). Back on now that both are fixed.
+const SPLASH_WINTER_ENABLED = true;
 let _splashPlayed = false;
 // Set once the splash's own map is torn down, to whatever camera it
 // actually ended on (captured live, not just assumed to be the last
