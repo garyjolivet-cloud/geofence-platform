@@ -2190,27 +2190,32 @@ function renderFogMap(){
    The flight itself is a chain of admin-authored camera keyframes
    (frontend/splash-flight.js, shared with the Fence Editor's "Splash
    Flyby" tool that captures them) — bundle.splashKeyframes, fetched
-   before the splash starts (see boot()). SPLASH_* below are ONLY the
-   fallback flight used when a project has never had one authored: a
-   short final approach toward Golden Eagle Express's gondola top, at the
-   exact zoom/pitch/bearing already verified live (Fence Editor, both the
-   static endpoints AND the actual eased transition) to stay clear of the
-   DEM/imagery resolution ceiling — don't push them without re-checking
-   the same way. */
-const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat] gondola base
-const SPLASH_TOP   = [-117.077867, 51.27508];  // gondola top
+   before the splash starts (see boot()). Every project/resort gets its
+   own: there is no single hardcoded default location any more — a
+   project with no authored flight yet falls back to a plain push-in
+   centered on THAT project's own bundle.ref (the same generic per-
+   project "map center" reference point questContentBounds() etc.
+   already use), not on any one specific resort. Reported live: the
+   original fallback was hardcoded to Kicking Horse's own gondola
+   coordinates, which centered the splash on the wrong mountain entirely
+   for every other project. The fallback's pitch/zoom are deliberately
+   conservative (near-overhead, no lateral movement) since — unlike a
+   hand-tuned per-resort flight — there's no way to know this project's
+   terrain is safe at a more dramatic angle; SPLASH_BASE/SPLASH_TOP below
+   exist only as the very last resort, if a project has neither an
+   authored flight NOR a ref point (bundle fetch failed entirely). */
+const SPLASH_BASE = [-117.048466, 51.297713]; // [lon,lat] Kicking Horse gondola base — last-resort fallback only, see above
+const SPLASH_TOP   = [-117.077867, 51.27508];  // Kicking Horse gondola top — same
 function _splashLerpLL(u){ return [ SPLASH_BASE[0]+(SPLASH_TOP[0]-SPLASH_BASE[0])*u, SPLASH_BASE[1]+(SPLASH_TOP[1]-SPLASH_BASE[1])*u ]; }
-const SPLASH_START_U = 0.85; // ~490m of real ground track short of the top
-const SPLASH_ZOOM = 13.2, SPLASH_PITCH = 40, SPLASH_BEARING = 58;
 // Holds the end-card (last frame + title) for this long before auto-
 // advancing — Skip (bound for the whole overlay's lifetime, including
 // this hold) still exits immediately regardless.
 const SPLASH_END_CARD_MS = 15000;
-function _splashFallbackKeyframes(){
-  const start = _splashLerpLL(SPLASH_START_U);
+function _splashFallbackKeyframes(refLonLat){
+  const center = refLonLat || _splashLerpLL(0.85); // last resort — see header comment
   return [
-    { lon:start[0], lat:start[1], zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING, ms:0 },
-    { lon:SPLASH_TOP[0], lat:SPLASH_TOP[1], zoom:SPLASH_ZOOM, pitch:SPLASH_PITCH, bearing:SPLASH_BEARING, ms:2500 }
+    { lon:center[0], lat:center[1], zoom:11.8, pitch:28, bearing:0, ms:0 },
+    { lon:center[0], lat:center[1], zoom:13.0, pitch:38, bearing:0, ms:2500 }
   ];
 }
 // Was temporarily false to isolate the real cause of an earlier
@@ -2227,13 +2232,15 @@ let _splashPlayed = false;
 // normal framing) for reduced-motion sessions, where no splash map is
 // ever created.
 let _splashEndCamera = null;
-// customKeyframes: bundle.splashKeyframes fetched by boot() before calling
-// this, or null/too-short if none authored yet / the fetch didn't land in
-// time — either way this falls back to _splashFallbackKeyframes() so the
-// splash always has somewhere to fly.
-function playSplash(customKeyframes){
+// customKeyframes/refLonLat: bundle.splashKeyframes and bundle.ref, both
+// fetched by boot() before calling this (or null/too-short if none
+// authored yet / the project has no ref / the fetch didn't land in time)
+// — either way this falls back to _splashFallbackKeyframes(refLonLat), a
+// generic push-in centered on THIS project, so the splash always has
+// somewhere sensible to fly regardless of which resort it's running for.
+function playSplash(customKeyframes, refLonLat){
   return new Promise(resolve=>{
-    const keyframes = (Array.isArray(customKeyframes) && customKeyframes.length >= 2) ? customKeyframes : _splashFallbackKeyframes();
+    const keyframes = (Array.isArray(customKeyframes) && customKeyframes.length >= 2) ? customKeyframes : _splashFallbackKeyframes(refLonLat);
     const rm = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
     const overlay = document.createElement("div");
     overlay.className = "splashOverlay";
@@ -2372,11 +2379,17 @@ async function boot(){
 
   if(!_splashPlayed){
     _splashPlayed = true;
-    // Best-effort fetch of this project's authored splash keyframes,
-    // raced against a short timeout so a slow/offline network never
-    // meaningfully delays the splash — on any failure/timeout/unresolved
-    // project, playSplash(null) just uses its own hardcoded fallback.
-    let splashKeyframes = null;
+    // Best-effort fetch of this project's authored splash keyframes AND
+    // its own reference point (bundle.ref, [lat,lon] — the same generic
+    // per-project "map center" every other project already carries,
+    // used by "My map"'s own questContentBounds()), raced against a
+    // short timeout so a slow/offline network never meaningfully delays
+    // the splash. Without this, the no-custom-flight fallback used to be
+    // hardcoded to Kicking Horse's own gondola coordinates regardless of
+    // which project/resort was actually loading — centering on THIS
+    // project's own ref instead is what makes the fallback correct for
+    // every resort, not just the one it happened to be built against.
+    let splashKeyframes = null, projectRefLonLat = null;
     if(RQ_PROJECT_ID){
       try{
         const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
@@ -2385,14 +2398,22 @@ async function boot(){
           const r = await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle", ctrl ? {signal:ctrl.signal} : undefined);
           if(!r.ok) return null;
           const b = await r.json();
-          return Array.isArray(b.splashKeyframes) ? b.splashKeyframes : null;
+          // [0,0] is this codebase's existing convention for "never set"
+          // (bundle.ref defaults to [0,0], same null-island check
+          // questContentBounds() already applies) — treat it as absent.
+          const hasRef = Array.isArray(b.ref) && b.ref.length===2 && !(b.ref[0]===0 && b.ref[1]===0);
+          return {
+            splashKeyframes: Array.isArray(b.splashKeyframes) ? b.splashKeyframes : null,
+            ref: hasRef ? [b.ref[1], b.ref[0]] : null // [lat,lon] -> [lon,lat]
+          };
         })();
         fetchP.catch(()=>{}); // a late/aborted response must never surface as an unhandled rejection once the timeout has already won the race below
-        splashKeyframes = await Promise.race([fetchP, timeout]);
+        const result = await Promise.race([fetchP, timeout]);
+        if(result){ splashKeyframes = result.splashKeyframes; projectRefLonLat = result.ref; }
         if(ctrl) try{ ctrl.abort(); }catch(e){}
-      }catch(e){ splashKeyframes = null; }
+      }catch(e){}
     }
-    await playSplash(splashKeyframes);
+    await playSplash(splashKeyframes, projectRefLonLat);
   }
 
   if(!RQ_APP_ID || !RQ_PROJECT_ID){ renderWorkspacePicker(); return; }
