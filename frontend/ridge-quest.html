@@ -2377,6 +2377,24 @@ async function boot(){
   }
   if(!RQ_APP_ID && RQ_PROJECT_ID) RQ_APP_ID = "golden-nordic";
 
+  // Reported live: "still goes to kicking horse even though vancouver and
+  // dans test is selected." Root cause — this check used to run AFTER the
+  // splash block below: a brand-new visitor with no remembered workspace
+  // reaches this function with RQ_APP_ID/RQ_PROJECT_ID both still null, so
+  // the splash played immediately using the absolute-last-resort Kicking
+  // Horse coordinates (nothing else to center on yet) — then the picker
+  // appeared, and once a resort/project was actually picked,
+  // renderProjectPicker()'s click handler calls boot() again, but
+  // _splashPlayed already latched true on that very first call, so the
+  // splash never got a second chance to play now-correctly-centered.
+  // Moved here, before the splash, so it can never even attempt to play
+  // until a project is actually known — for a returning visitor (URL
+  // params or a remembered workspace) that's still immediately, same as
+  // before; for a brand-new one, the splash now plays right after they
+  // pick a resort/project (this same function, called again from
+  // renderProjectPicker()) instead of showing a guess beforehand.
+  if(!RQ_APP_ID || !RQ_PROJECT_ID){ renderWorkspacePicker(); return; }
+
   if(!_splashPlayed){
     _splashPlayed = true;
     // Best-effort fetch of this project's authored splash keyframes AND
@@ -2415,8 +2433,6 @@ async function boot(){
     }
     await playSplash(splashKeyframes, projectRefLonLat);
   }
-
-  if(!RQ_APP_ID || !RQ_PROJECT_ID){ renderWorkspacePicker(); return; }
 
   const s=getSession();
   if(!s || !s.token){ renderAuth("login"); return; }
