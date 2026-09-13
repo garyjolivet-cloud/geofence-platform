@@ -7498,17 +7498,30 @@ document.getElementById("splashKfPreviewBtn").onclick = () => {
   if(!splashEditorMap || splashKfDraft.length < 2){ statusEl.textContent = "Add at least 2 keyframes to preview."; return; }
   const btns = document.querySelectorAll("#splashEditorPanel button");
   btns.forEach(b => b.disabled = true);
+  console.log("SplashFlight preview: camera before =", splashEditorMap.getCenter(), splashEditorMap.getZoom(), splashEditorMap.getPitch(), splashEditorMap.getBearing(), "keyframes =", JSON.parse(JSON.stringify(splashKfDraft)));
   // If SplashFlight.play() ever throws synchronously, the re-enable timer
   // below still MUST get scheduled — otherwise every button in the panel
   // stays permanently disabled after the failed attempt, which is exactly
   // what "preview hangs up after first try" looked like live.
+  let sawError = false;
   let totalMs = 0;
-  try{ totalMs = SplashFlight.play(splashEditorMap, splashKfDraft); }
-  catch(e){ totalMs = 0; }
-  statusEl.textContent = "Previewing…";
+  try{
+    totalMs = SplashFlight.play(splashEditorMap, splashKfDraft, {
+      // A reported "second preview does nothing" couldn't be reproduced
+      // in an automated test browser (MapLibre's own animation loop
+      // doesn't tick there at all) — this surfaces whatever MapLibre
+      // actually throws directly in the status line, in the real
+      // browser, instead of it being silently swallowed as it was before.
+      onError: (e, where) => {
+        sawError = true;
+        statusEl.textContent = "Preview error (" + where + "): " + (e && e.message || e);
+      }
+    });
+  }catch(e){ sawError = true; totalMs = 0; statusEl.textContent = "Preview error: " + (e && e.message || e); }
+  if(!sawError) statusEl.textContent = "Previewing…";
   setTimeout(() => {
     btns.forEach(b => b.disabled = false);
-    statusEl.textContent = "Preview done.";
+    if(!sawError) statusEl.textContent = "Preview done."; // don't stomp an error message a segment reported mid-flight
   }, totalMs + 200);
 };
 

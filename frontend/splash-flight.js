@@ -41,7 +41,18 @@
     const easing = opts.easing || (t => t);
     _clearPending();
     if(!map || !Array.isArray(keyframes) || keyframes.length < 2) return 0;
-    try{ map.jumpTo(cameraFor(keyframes[0])); }catch(e){}
+    // A second play() on the same long-lived map (the editor's Preview
+    // button) had been reported as silently not moving the camera at all
+    // — with jumpTo/easeTo failures previously swallowed by a bare
+    // catch(e){}, there was no way to tell a genuine no-op from a thrown
+    // error. Now logged (console.error, always visible in DevTools) and,
+    // if the caller supplied one, handed to opts.onError so a UI can
+    // surface it directly instead of just looking frozen.
+    function _fail(where, e){
+      console.error("SplashFlight."+where+" failed:", e);
+      if(opts.onError) try{ opts.onError(e, where); }catch(e2){}
+    }
+    try{ map.jumpTo(cameraFor(keyframes[0])); }catch(e){ _fail("jumpTo(point 0)", e); }
     let elapsed = 0;
     for(let i=1; i<keyframes.length; i++){
       const kf = keyframes[i];
@@ -49,7 +60,8 @@
       const cam = cameraFor(kf);
       const id = setTimeout(()=>{
         if(opts.onSegment) try{ opts.onSegment(i, keyframes.length-1); }catch(e){}
-        try{ map.easeTo(Object.assign({}, cam, { duration:dur, easing })); }catch(e){}
+        try{ map.easeTo(Object.assign({}, cam, { duration:dur, easing })); }
+        catch(e){ _fail("easeTo(point "+i+")", e); }
       }, elapsed);
       _pendingTimers.push(id);
       elapsed += dur;
