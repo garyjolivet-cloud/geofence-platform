@@ -7349,6 +7349,7 @@ document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.targ
    verifying them live via a separate authenticated browser session. */
 let splashEditorMap = null;
 let splashKfDraft = [];
+let splashEditorTerrainSettled = false;
 // Fixed Kicking Horse village center (same REF the main editor map opens
 // on, above) — NOT wherever this page's own main map happens to be
 // scrolled/tilted to right now (that was the original approach; reported
@@ -7460,6 +7461,19 @@ function openSplashEditor(){
         Terrain3D.applyWinter(splashEditorMap, { dem:true });
       }catch(e){}
     });
+    // DEM (elevation) tiles for terrain stream in per-tile, same as any
+    // other raster source — not all-or-nothing at "load". Reported live
+    // as "first preview above mountains, second preview below" with no
+    // actual data change: the stored keyframe numbers are never touched
+    // by Preview (verified — play() only reads them), but the FIRST
+    // flight over a not-yet-visited area can render against low-res/
+    // still-loading terrain that looks more forgiving than the fully
+    // resolved terrain a later pass renders against once those tiles
+    // catch up — the later, settled pass is the accurate one. "idle"
+    // fires once every currently-queued resource (including terrain
+    // tiles for the current view) has finished loading; used below to
+    // flag when a preview's result should actually be trusted.
+    splashEditorMap.on("idle", () => { splashEditorTerrainSettled = true; });
   } else {
     // The map instance is kept alive across closes (its container just
     // goes display:none) so reopening doesn't re-fetch terrain/imagery —
@@ -7503,6 +7517,19 @@ document.getElementById("splashKfPreviewBtn").onclick = () => {
   // below still MUST get scheduled — otherwise every button in the panel
   // stays permanently disabled after the failed attempt, which is exactly
   // what "preview hangs up after first try" looked like live.
+  // Reported live: "keyframes are getting corrupted after save and
+  // preview... numbers are getting smaller... first time above
+  // mountains, second time below." Audited the whole save/load/preview
+  // path — nothing in it ever writes back into splashKfDraft except the
+  // explicit ⟳ button, so the stored numbers themselves aren't changing.
+  // Far more likely: DEM elevation tiles for a not-yet-visited area
+  // stream in progressively, same as any other raster source — an early
+  // preview over fresh terrain can render against a still-loading (more
+  // forgiving) mesh, while a later pass over the same spot renders
+  // against the fully-resolved one and reveals real clipping the first
+  // pass simply didn't have the data to show yet. Flagged here rather
+  // than silently trusting whichever preview happens to look fine.
+  const terrainNote = splashEditorTerrainSettled ? "" : " (terrain still settling — re-check once more before trusting this)";
   let sawError = false;
   let totalMs = 0;
   try{
@@ -7518,10 +7545,10 @@ document.getElementById("splashKfPreviewBtn").onclick = () => {
       }
     });
   }catch(e){ sawError = true; totalMs = 0; statusEl.textContent = "Preview error: " + (e && e.message || e); }
-  if(!sawError) statusEl.textContent = "Previewing…";
+  if(!sawError) statusEl.textContent = "Previewing…" + terrainNote;
   setTimeout(() => {
     btns.forEach(b => b.disabled = false);
-    if(!sawError) statusEl.textContent = "Preview done."; // don't stomp an error message a segment reported mid-flight
+    if(!sawError) statusEl.textContent = "Preview done." + terrainNote; // don't stomp an error message a segment reported mid-flight
   }, totalMs + 200);
 };
 
