@@ -116,7 +116,16 @@
      .fogMapOverlay (1000) and #rqToast (3000) since it's the very first
      thing on screen. */
   .splashOverlay{position:fixed;inset:0;z-index:5000;background:var(--night);overflow:hidden}
-  #splashMap{position:absolute;inset:0}
+  /* Starts invisible (revealing the overlay's own dark background
+     instead) and fades in once startFlight() below has actually given
+     terrain/winter a moment to paint — reported live as "a glitch frame
+     at first few frames on mobile": a pitched camera rendered against a
+     basemap whose DEM/hillshade/recolor layers hadn't painted yet showed
+     a visibly wrong frame or two, worse on slower mobile GPUs/networks.
+     Hides that behind the fade instead of trying to eliminate it. */
+  #splashMap{position:absolute;inset:0;opacity:0;transition:opacity .35s ease}
+  #splashMap.ready{opacity:1}
+  @media (prefers-reduced-motion:reduce){ #splashMap{transition:none} }
   .splashSkip{position:absolute;top:14px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-family:"Barlow Condensed";font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase;cursor:pointer}
   .splashTitle{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
     background:rgba(10,16,24,0);opacity:0;transition:opacity .5s ease,background .5s ease;pointer-events:none}
@@ -2231,10 +2240,11 @@ function playSplash(customKeyframes){
       +'<button class="splashSkip" id="splashSkip">Skip &rsaquo;</button>';
     document.body.appendChild(overlay);
 
-    let map=null, endTimer=null, done=false;
+    let map=null, endTimer=null, revealTimer=null, done=false;
     function finish(){
       if(done) return; done=true;
       if(endTimer) clearTimeout(endTimer);
+      if(revealTimer) clearTimeout(revealTimer);
       if(map){
         try{ map.jumpTo(_splashEndCamera || SplashFlight.cameraFor(keyframes[keyframes.length-1])); }catch(e){}
         try{ map.remove(); }catch(e){}
@@ -2278,18 +2288,30 @@ function playSplash(customKeyframes){
       if(flightStarted) return;
       flightStarted = true;
       if(fallbackTimer) clearTimeout(fallbackTimer);
-      // Shared with the Fence Editor's "Splash Flyby" Preview button (see
-      // frontend/splash-flight.js) — the exact same chained-easeTo player,
-      // so what's previewed there is what plays here. Returns the flight's
-      // total duration so the end-card timing matches however many
-      // keyframes were actually authored.
-      const flightMs = SplashFlight.play(map, keyframes);
-      _splashEndCamera = SplashFlight.cameraFor(keyframes[keyframes.length-1]);
-      endTimer = setTimeout(()=>{
-        const titleEl=document.getElementById("splashTitle");
-        if(titleEl) titleEl.classList.add("show");
-        endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
-      }, flightMs);
+      // A short, fixed hold before revealing the map at all — "load" firing
+      // (or the fallback timer below) only means the STYLE is ready; the
+      // terrain/winter layers just added above still need a real paint
+      // pass, and their DEM tiles are still an async network fetch on top
+      // of that, worse on a slow mobile connection. #splashMap starts
+      // css-opacity:0 (revealing the overlay's own dark background
+      // instead); fading it in here, after this buffer, hides whatever
+      // partial/glitchy frame rendered in between rather than showing it.
+      revealTimer = setTimeout(()=>{
+        const mapEl = document.getElementById("splashMap");
+        if(mapEl) mapEl.classList.add("ready");
+        // Shared with the Fence Editor's "Splash Flyby" Preview button (see
+        // frontend/splash-flight.js) — the exact same chained-easeTo
+        // player, so what's previewed there is what plays here. Returns
+        // the flight's total duration so the end-card timing matches
+        // however many keyframes were actually authored.
+        const flightMs = SplashFlight.play(map, keyframes);
+        _splashEndCamera = SplashFlight.cameraFor(keyframes[keyframes.length-1]);
+        endTimer = setTimeout(()=>{
+          const titleEl=document.getElementById("splashTitle");
+          if(titleEl) titleEl.classList.add("show");
+          endTimer = setTimeout(finish, SPLASH_END_CARD_MS);
+        }, flightMs);
+      }, 150);
     }
     map.on("load", ()=>{
       try{
