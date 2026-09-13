@@ -7350,21 +7350,36 @@ document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.targ
 let splashEditorMap = null;
 let splashKfDraft = [];
 let splashEditorTerrainSettled = false;
-// Fixed Kicking Horse village center (same REF the main editor map opens
-// on, above) — NOT wherever this page's own main map happens to be
-// scrolled/tilted to right now (that was the original approach; reported
-// live as disorienting — "im lost and can not find kicking horse on the
-// key frame map" — since the main map could be zoomed into an unrelated
-// zone or panned far away when Splash was opened). A flat, zoomed-out
-// top-down view over the whole resort is a far more recognizable starting
-// point than an arbitrary inherited camera.
+// Last-resort center — same REF the main editor map opens on before any
+// project loads — used ONLY when the CURRENT project has no zones at all
+// yet (see _splashEditorCenterNow() below). NOT a per-project value.
 const SPLASH_EDITOR_CENTER = [-117.0547, 51.3027];
-const SPLASH_EDITOR_MAX_KM = 50; // maxBounds radius — keeps the flight from wandering off the mountain entirely
+const SPLASH_EDITOR_MAX_KM = 50; // maxBounds radius — keeps the flight from wandering off the resort entirely
 function _kmBoundsAround(center, km){
   const [lon, lat] = center;
   const dLat = km / 111.32;
   const dLon = km / (111.32 * Math.cos(lat * Math.PI / 180));
   return [[lon - dLon, lat - dLat], [lon + dLon, lat + dLat]];
+}
+// The CURRENTLY LOADED project's own center — the exact same centroid-of-
+// zone-centers formula exportBundle() already uses for the published
+// bundle's own `ref` field, computed live here instead of fetched, so it
+// reflects even unpublished edits. Reported live: the editor's map used
+// to open on a hardcoded Kicking Horse point regardless of which project
+// was actually being edited ("the splash button from edit doesnt open
+// the current project it goes to kicking horse") — this is what makes it
+// per-project instead. Deliberately NOT the main map's live camera
+// (scroll/pitch/zoom) — that was the ORIGINAL approach here and was
+// reported disorienting for a different reason ("im lost... on the key
+// frame map") since the main map can be tilted/panned into an unrelated
+// zone; a flat top-down view centered on the project's own geography is
+// recognizable regardless of what the main map is currently doing.
+function _splashEditorCenterNow(){
+  if(zones.length){
+    const cs = zones.map(zoneCenterLonLat);
+    return [ cs.reduce((s,c)=>s+c[0],0)/cs.length, cs.reduce((s,c)=>s+c[1],0)/cs.length ];
+  }
+  return SPLASH_EDITOR_CENTER.slice(); // brand-new project, nothing drawn yet — nothing else to center on
 }
 
 function _splashCamOf(m){
@@ -7443,6 +7458,7 @@ async function loadSplashKeyframes(){
 function openSplashEditor(){
   document.getElementById("splashEditorOverlay").classList.add("open");
   if(!splashEditorMap){
+    const center0 = _splashEditorCenterNow();
     splashEditorMap = new maplibregl.Map({
       container: "splashEditorMap",
       style: { version:8,
@@ -7450,8 +7466,8 @@ function openSplashEditor(){
           tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
           tileSize:256, attribution:"Esri, Maxar" } },
         layers: [{ id:"base", type:"raster", source:"base" }] },
-      center: SPLASH_EDITOR_CENTER, zoom: 10.5, pitch: 0, bearing: 0,
-      maxBounds: _kmBoundsAround(SPLASH_EDITOR_CENTER, SPLASH_EDITOR_MAX_KM),
+      center: center0, zoom: 10.5, pitch: 0, bearing: 0,
+      maxBounds: _kmBoundsAround(center0, SPLASH_EDITOR_MAX_KM),
       attributionControl: false
     });
     splashEditorMap.addControl(new maplibregl.NavigationControl({ visualizePitch:true }));
@@ -7490,7 +7506,7 @@ function openSplashEditor(){
 function recenterSplashEditor(){
   if(!splashEditorMap) return;
   try{ SplashFlight.stop(); }catch(e){}
-  try{ splashEditorMap.easeTo({ center:SPLASH_EDITOR_CENTER, zoom:10.5, pitch:0, bearing:0, duration:500 }); }catch(e){}
+  try{ splashEditorMap.easeTo({ center:_splashEditorCenterNow(), zoom:10.5, pitch:0, bearing:0, duration:500 }); }catch(e){}
 }
 
 function closeSplashEditor(){
