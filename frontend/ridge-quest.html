@@ -2202,7 +2202,10 @@ const SPLASH_TOP   = [-117.077867, 51.27508];  // gondola top
 function _splashLerpLL(u){ return [ SPLASH_BASE[0]+(SPLASH_TOP[0]-SPLASH_BASE[0])*u, SPLASH_BASE[1]+(SPLASH_TOP[1]-SPLASH_BASE[1])*u ]; }
 const SPLASH_START_U = 0.85; // ~490m of real ground track short of the top
 const SPLASH_ZOOM = 13.2, SPLASH_PITCH = 40, SPLASH_BEARING = 58;
-const SPLASH_END_CARD_MS = 1500;
+// Holds the end-card (last frame + title) for this long before auto-
+// advancing — Skip (bound for the whole overlay's lifetime, including
+// this hold) still exits immediately regardless.
+const SPLASH_END_CARD_MS = 15000;
 function _splashFallbackKeyframes(){
   const start = _splashLerpLL(SPLASH_START_U);
   return [
