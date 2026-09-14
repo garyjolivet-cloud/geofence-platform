@@ -1807,13 +1807,29 @@ function questMapBounds(){
 // (per MapLibre's own behavior) keeps the camera from zooming out far
 // enough to show area outside it — the "set a boundary you can pan or
 // zoom out" ask is really one setting, not two.
+// Reported live: relative-only padding left "My map" unpannable past a
+// sparsely-corridored resort's own drawn footprint (Kicking Horse's real
+// terrain is much bigger than whatever's been drawn as corridors so far),
+// i.e. "can't pan wide enough... need to move over the mountain". Fix:
+// guarantee at least a QUEST_PAN_MIN_RADIUS_KM-radius circle around the
+// content's own center, unioned with the pre-existing relative padding
+// (so a resort with generous corridor coverage keeps its current, possibly
+// larger, bounds — this only ever widens them).
+const QUEST_PAN_MIN_RADIUS_KM = 50;
 function questPanBounds(){
   const b = questContentBounds();
   if(!b) return null;
   const [[minLon,minLat],[maxLon,maxLat]] = b;
   const padLon = Math.max((maxLon-minLon)*0.9, 0.01);
   const padLat = Math.max((maxLat-minLat)*0.9, 0.01);
-  return [[minLon-padLon, minLat-padLat],[maxLon+padLon, maxLat+padLat]];
+  let outMinLon = minLon-padLon, outMinLat = minLat-padLat;
+  let outMaxLon = maxLon+padLon, outMaxLat = maxLat+padLat;
+  const cLat = (minLat+maxLat)/2, cLon = (minLon+maxLon)/2;
+  const dLat = QUEST_PAN_MIN_RADIUS_KM/111.32;
+  const dLon = QUEST_PAN_MIN_RADIUS_KM/(111.32*Math.cos(cLat*Math.PI/180));
+  outMinLon = Math.min(outMinLon, cLon-dLon); outMinLat = Math.min(outMinLat, cLat-dLat);
+  outMaxLon = Math.max(outMaxLon, cLon+dLon); outMaxLat = Math.max(outMaxLat, cLat+dLat);
+  return [[outMinLon, outMinLat],[outMaxLon, outMaxLat]];
 }
 
 // "Show all runs" overlay for the fog-off + tile-art-off "My map": every
