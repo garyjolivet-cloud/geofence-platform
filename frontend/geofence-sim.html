@@ -977,13 +977,17 @@ function zonesGeoJSON(){
           const _cc=g.path.map(c=>[c[1],c[0]]);
           // difficulty/runType/activityType live on the ZONE, not the baked
           // geometry (confirmed in a real bundle) — g.* is just a fallback.
+          const _runType=(g.runType!=null?g.runType:z.runType)||"run";
           const _cs=TileFog.corridorStyle({difficulty:g.difficulty!=null?g.difficulty:z.difficulty,
             activityType:g.activityType!=null?g.activityType:z.activityType,
-            runType:g.runType!=null?g.runType:z.runType});
-          feats.push({type:"Feature",properties:Object.assign({},props,{corridor:true,
+            runType:_runType});
+          feats.push({type:"Feature",properties:Object.assign({},props,{corridor:true,runType:_runType,
               widthM:(g.widthM>0?g.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((_cc[0]||[0,0])[1]),
               col:_cs.col,halo:_cs.halo,tier:_cs.tier}),
             geometry:{type:"LineString",coordinates:_cc}});
+          // Lift towers — one small dot per drawn node (see tile-fog.js's
+          // towerFeatures()); _cc is already [lon,lat].
+          feats.push(...TileFog.towerFeatures({runType:_runType, points:_cc}));
         }
       }
     });

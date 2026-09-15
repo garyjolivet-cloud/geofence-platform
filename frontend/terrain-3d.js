@@ -223,6 +223,18 @@
 
     // 7. winter sky (pitched contexts only).
     if (opts.dem && map.setSky) { try { map.setSky(WINTER_SKY); } catch (e) {} }
+
+    // 8. The `anchor` computed above only finds an existing corridor/shroud
+    // layer to slot winter BELOW if one already exists at the moment
+    // applyWinter() runs. Confirmed live (2026-09): when winter is applied
+    // before a corridor's async data has loaded (or re-applied later, e.g.
+    // on a season toggle), anchor resolution misses and these layers land
+    // on top of everything -- permanently burying corridor lines added
+    // before or after, no matter how wide/dark they're drawn. Re-assert
+    // corridor-on-top here every time, regardless of order.
+    if (window.TileFog && window.TileFog.bringCorridorLayersToFront) {
+      try { window.TileFog.bringCorridorLayersToFront(map); } catch (e) {}
+    }
   }
 
   function clearWinter(map) {

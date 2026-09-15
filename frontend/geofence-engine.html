@@ -2070,13 +2070,17 @@ const MapView = {
       if(!g || !Array.isArray(g.path) || g.path.length<2) return;
       const cc=g.path.map(p=>[p[1],p[0]]); // [lat,lon] -> [lon,lat]
       const diff=(g.difficulty!=null?g.difficulty:z.difficulty)||'';
+      const runType=(g.runType!=null?g.runType:z.runType)||'run';
       const st=TileFog.corridorStyle({difficulty:diff,
         activityType:g.activityType!=null?g.activityType:z.activityType,
-        runType:g.runType!=null?g.runType:z.runType});
-      feats.push({type:'Feature',properties:{corridor:true,
+        runType});
+      feats.push({type:'Feature',properties:{corridor:true,runType,
         widthM:(g.widthM>0?g.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((cc[0]||[0,0])[1]),
         col:st.col,halo:st.halo,tier:st.tier},
         geometry:{type:'LineString',coordinates:cc}});
+      // Lift towers — one small dot per drawn node (see tile-fog.js's
+      // towerFeatures()); cc is already [lon,lat].
+      feats.push(...TileFog.towerFeatures({runType, points:cc}));
       // name at the run's midpoint
       const mid=cc[Math.floor(cc.length/2)];
       const lbl=document.createElement('div'); lbl.className='runLabel'; lbl.textContent=z.name||'Run';

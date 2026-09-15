@@ -65,6 +65,12 @@ let fogCells = new Map();       // h3Cell -> state (2 = revealed)
 let tileUrlByKey = new Map();   // "<terrainType>_<variantIndex>" -> R2-served URL
 let mapRef = null;
 const loadedImageKeys = new Set();
+// Every layer-id prefix addCorridorLayers() has ever registered on a given
+// map, so bringCorridorLayersToFront() (below) can re-assert corridor
+// layers above whatever else got added later, without every caller having
+// to know each other's layer ids.
+const corridorLayerPrefixes = new Map();  // map -> Set<prefix>
+const CORRIDOR_LAYER_SUFFIXES = ["-width", "-halo", "-casing", "-core", "-hot", "-tower"];
 
 function tileKey(terrainType, variantIndex){ return terrainType + "_" + (variantIndex || 0); }
 
@@ -130,11 +136,16 @@ function pxPerMeterAtZ0(lat){ return 1 / (156543.03392 * Math.cos(lat * Math.PI 
 // Grade -> core colour + glow colour + double-black "tier". A verbatim
 // port of the old ridge-quest.html runStyleFor(), minus the dash.
 // Callers pass { difficulty, activityType, runType }.
+// black/double-black halo darkened from periwinkle/pink (#89b4ff/#ff6f91)
+// to near-black -- confirmed live (2026-09) that once the halo layer was
+// wide/opaque enough to actually be visible on mobile, a bright colour
+// there reads as "the line is [that colour]" (a pink halo got reported as
+// "red"), not as a subtle glow accent on a white core.
 const RUN_STYLE_DIFF = {
   "green":        { col: "#57e06f", halo: "#22c246", tier: "" },
   "blue":         { col: "#6bb6ff", halo: "#2f86ff", tier: "" },
-  "black":        { col: "#ffffff", halo: "#89b4ff", tier: "black" },
-  "double-black": { col: "#ffffff", halo: "#ff6f91", tier: "dblack" },
+  "black":        { col: "#ffffff", halo: "#1a1a1a", tier: "black" },
+  "double-black": { col: "#ffffff", halo: "#0d0d0d", tier: "dblack" },
   "":             { col: "#ffd166", halo: "#ffab1f", tier: "" }   // no difficulty set
 };
 const RUN_STYLE_ACT = {
@@ -147,8 +158,18 @@ function corridorStyle(c){
   c = c || {};
   const act = c.activityType || (c.runType === "hike" ? "hike" : "");
   if(RUN_STYLE_ACT[act]){ const s = RUN_STYLE_ACT[act]; return { col: s.col, halo: s.halo, tier: "" }; }
-  if(c.runType === "lift") return { col: "#c2cec9", halo: "#8ea79c", tier: "" };
+  // Was a pale grey (#c2cec9/#8ea79c) -- confirmed live (2026-09) it all but
+  // vanished against snow/satellite imagery, especially on a phone screen.
+  // A dark charcoal-slate reads as "steel cable" while staying genuinely
+  // visible against bright terrain.
+  if(c.runType === "lift") return { col: "#3a4650", halo: "#1c2327", tier: "" };
   const d = RUN_STYLE_DIFF[c.difficulty || ""] || RUN_STYLE_DIFF[""];
+  // Chutes: always pure black, core AND halo, regardless of difficulty --
+  // not just black/double-black. Difficulty's own halo colour (periwinkle/
+  // pink/green/blue) read as "red" once the chute width multiplier made
+  // that halo band big enough to dominate. `tier` still comes from
+  // difficulty so the ◆/◆◆ badge and double-black tag keep working.
+  if(c.runType === "chute") return { col: "#000000", halo: "#0d0d0d", tier: d.tier };
   return { col: d.col, halo: d.halo, tier: d.tier };
 }
 
@@ -161,7 +182,13 @@ function corridorStyle(c){
 //   floor:"ribbon" -> the textured ribbon's original visible floors
 //   floor:"band"   -> gentler floors, for a translucent band that has a
 //                     solid grade centre line drawn over it
-const WIDTH_FLOORS = { ribbon: [1, 4, 10, 18, 30, 60, 120], band: [0, 2, 3, 4, 6, 10, 20] };
+// `band` floors briefly shrunk (2026-09) then restored to their original
+// size after mobile visibility complaints -- see addCorridorLayers()'s own
+// note on the halo/casing/core widths for the full story. `ribbon` (the
+// tile-art texture ribbon) was never touched: its floors are already tuned
+// to the minimum that still reads as a texture rather than "no path drawn"
+// (see the long note on tile-corridors-line below).
+const WIDTH_FLOORS = { ribbon: [1, 4, 10, 18, 30, 60, 120], band: [0, 4, 6, 8, 12, 20, 40] };
 const WIDTH_STOPS  = [ [0, 1], [12, 4096], [16, 65536], [18, 262144], [20, 1048576], [22, 4194304], [24, 16777216] ];
 function realWidthExpr(opts){
   opts = opts || {};
@@ -182,6 +209,46 @@ function realWidthExpr(opts){
 // ridge-quest _runW(a,b,c) / fence-editor _simRunW(a,b,c).
 function runW(a, b, c){ return ["interpolate", ["linear"], ["zoom"], 12, a, 15, b, 18, c]; }
 
+// runW(), scaled up per runType. Lift and chute lines started out THINNER
+// than a regular run (a lift's cable is a thin wire; a chute is a narrow
+// feature) but confirmed live (2026-09) that thinner read as too faint to
+// register against bright snow/satellite imagery, especially lift's pale
+// grey and a black-difficulty chute's white core -- both wrongly
+// disappeared instead of standing out, so both now render WIDER than a
+// normal run instead.
+//
+// A previous version of this used ["case", cond, ["interpolate",...zoom],
+// cond2, ["interpolate",...zoom], ["interpolate",...zoom]] -- three
+// separate zoom-based interpolate expressions nested inside a case.
+// Confirmed live (2026-09) this is EXACTLY the failure class this file's
+// own realWidthExpr() comment already documents from an earlier bug: a
+// zoom expression must be the sole top-level expression (or the value it's
+// nested in must not itself be another operator), and addLayer() rejects
+// an invalid expression by throwing -- caught by addCorridorLayers()'s own
+// try/catch, so halo/casing/core silently failed to ever get added, with
+// no visible error (only a console.warn easy to miss), while -width
+// (single interpolate, valid) and -tower (no case-wrapped zoom expr) kept
+// rendering fine. Same fix realWidthExpr() already uses successfully:
+// ONE top-level interpolate, with the runType scale factor (itself a
+// zoom-free case/data expression, fine to nest) multiplied into each
+// stop's value instead of picking between separate interpolates.
+// chute no longer gets its own multiplier -- per direct feedback, a chute
+// should render at the same width as a regular run now that the base line
+// is actually visible (the old 4x was compensating for chutes being
+// invisible, not a real design intent). Its pure-black colour override in
+// corridorStyle() stays -- this is a width-only change.
+const RUN_TYPE_WIDTH_SCALE = { lift: 1.5 };
+function runTypeScaleExpr(){
+  return ["case",
+    ["==", ["get", "runType"], "lift"], RUN_TYPE_WIDTH_SCALE.lift,
+    1];
+}
+function runWByRunType(a, b, c){
+  const s = runTypeScaleExpr();
+  return ["interpolate", ["linear"], ["zoom"],
+    12, ["*", a, s], 15, ["*", b, s], 18, ["*", c, s]];
+}
+
 // Add the shared corridor layer stack to `map`, reading from an existing
 // GeoJSON source whose corridor features carry:
 //   corridor:true, widthM:<metres>, pxPerMeterAtZ0:<pxPerMeterAtZ0(refLat)>,
@@ -195,7 +262,14 @@ function addCorridorLayers(map, o){
   const src = o.source;
   const pfx = o.id || (src + "-c");
   const before = o.before;
-  if(!src || map.getLayer(pfx + "-core")) return;
+  if(!src) return;
+  if(map.getLayer(pfx + "-core")){
+    // Already built (idempotent re-call, e.g. after a setStyle() wipe was
+    // already recovered from elsewhere) -- still worth re-asserting z-order
+    // below, in case something else got added on top since.
+    bringCorridorLayersToFront(map);
+    return;
+  }
   // A corridor feature must be flagged AND carry a real widthM -- lets a
   // surface flag a corridor purely as a hit target (no widthM) without it
   // getting a band drawn (the Fence Editor does this in Test Mode, where
@@ -207,23 +281,130 @@ function addCorridorLayers(map, o){
   // corridor's centre line green). Other surfaces just use the grade colour.
   const coreCol = o.coreColor || col;
   const add = (def) => { try { map.addLayer(def, before); } catch(e){ console.warn("TileFog.addCorridorLayers:", def.id, e && e.message); } };
+  // This band is the corridor's REAL declared width_m rendered true-to-scale
+  // (e.g. a run whose library entry says 100m or 150m wide draws genuinely
+  // that wide in real-world meters) -- confirmed live via a screenshot that
+  // for corridors with a large widthM this dwarfs the ~20-30px casing/core
+  // sitting on top of it, so what should read as "a thin black line" reads
+  // instead as "a big pale wash," especially against light snow/rock. 0.20
+  // opacity was already an attempt to keep it subtle; dropped further so it
+  // stays a faint true-width tint rather than competing with the line.
   add({ id: pfx + "-width", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": col, "line-opacity": 0.20, "line-blur": 0,
+    paint: { "line-color": col, "line-opacity": 0.07, "line-blur": 0,
       "line-width": realWidthExpr({ floor: "band" }) } });
+  // Widths went through several rounds live (2026-09): halved from this
+  // file's original values for a less-oversized line, then that read as
+  // too faint on a phone screen, so thickened well past the original --
+  // darker/thicker was the explicit ask. Casing (the dark outline, the
+  // main driver of "readable at a glance") carries that.
+  //
+  // The HALO's own width was a separate, uncaught bug through those same
+  // rounds: it was already wider than casing in this file's original
+  // pre-2026-09 numbers (8/14/22 vs casing's 3.5/6.5/10), and casing/core
+  // grew much faster than halo across the widening rounds since only they
+  // were runType-scaled for lift/chute -- so on a real device screenshot
+  // the halo (bright, only lightly blurred, 0.85 opacity) was reading as a
+  // solid, dominant colour FILL with the actual black casing/core reduced
+  // to a thin stripe buried inside it -- "wide red/pink, not thin black."
+  // A glow belongs just outside the casing's edge, not multiples of its
+  // width: halo now tracks casing's own width (same runWByRunType scale,
+  // so the ratio holds across lift/chute too) at a fixed ~1.35x, softer
+  // blur, and much lower opacity so it reads as a fringe, not a fill.
+  // Halved again (2026-09) once the runWByRunType() fix above actually made
+  // these render for the first time in several rounds of "bigger" -- turns
+  // out every one of those rounds was tuning a value that was silently
+  // never being applied. Also: `line-width` is CSS pixels, and a phone
+  // screenshot is taken at the device's native pixel ratio (3x on most
+  // current iPhones) -- a 28px CSS halo shows up as ~84 raw pixels in the
+  // screenshot, which reads as enormous compared to how it'd look on a 1x
+  // desktop display at the "same" zoom. Sized down with that in mind.
   add({ id: pfx + "-halo", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": halo, "line-opacity": 0.6, "line-blur": 6, "line-width": runW(8, 14, 22) } });
+    paint: { "line-color": halo, "line-opacity": 0.45, "line-blur": 5, "line-width": runWByRunType(5.5, 9.5, 14) } });
   add({ id: pfx + "-casing", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": "#05070b", "line-opacity": 0.9, "line-width": runW(3.5, 6.5, 10) } });
+    paint: { "line-color": "#05070b", "line-opacity": 1, "line-width": runWByRunType(4, 7, 10.5) } });
   add({ id: pfx + "-core", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": coreCol, "line-width": runW(1.8, 3, 4.5) } });
-  add({ id: pfx + "-hot", type: "line", source: src,
-    filter: ["all", ["==", ["get", "corridor"], true], ["has", "widthM"], ["==", ["get", "tier"], "dblack"]],
-    layout: { "line-cap": "round" },
-    paint: { "line-color": "#ff5a5f", "line-width": runW(1, 1.6, 2.4) } });
+    paint: { "line-color": coreCol, "line-width": runWByRunType(2, 3.3, 4.8) } });
+  // Double-black used to get a red (#ff5a5f) accent centre-line here on top
+  // of everything else. Removed entirely (2026-09) -- confirmed live this
+  // was the direct cause of a second "it's red, not black" report, this
+  // time on a double-black RUN rather than a chute (excluding just chutes,
+  // the previous fix, wasn't enough: any bright accent color on top of the
+  // line reads as "the line is that color" once the line itself is this
+  // wide). The ◆◆ badge elsewhere already marks double-black; that's
+  // enough without a red stripe on the line itself.
+  // Lift towers -- one small dot per drawn node of a runType:"lift"
+  // corridor (the user draws each tower as a point when authoring the
+  // line, so every vertex IS a tower location). A `circle` layer, not an
+  // icon/HTML marker: crisp at 2-3px and needs no image asset, and GPU
+  // point rendering handles any number of towers with no viewport-culling
+  // machinery (unlike the HTML run-name-label markers elsewhere). Features
+  // come from towerFeatures() below, pushed into the same source as the
+  // corridor LineString by each caller.
+  // 1/4 the previous radius and a fixed mid-grey (not tied to the line's
+  // own -- now near-black -- colour) per direct feedback: towers had grown
+  // too large and too dark alongside the line itself.
+  add({ id: pfx + "-tower", type: "circle", source: src,
+    filter: ["==", ["get", "kind"], "towerNode"],
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 0.8, 15, 1.2, 18, 1.6],
+      "circle-color": "#8a939a",
+      "circle-stroke-width": 0.6,
+      "circle-stroke-color": "#5a636a"
+    } });
+  if(!corridorLayerPrefixes.has(map)) corridorLayerPrefixes.set(map, new Set());
+  corridorLayerPrefixes.get(map).add(pfx);
+  // `before` (an explicit beforeId) means the caller deliberately wants
+  // these layers slotted at a specific spot, not forced to the absolute
+  // top -- respect that. With no `before`, addLayer() already put these at
+  // the top of whatever existed so far, but confirmed live (2026-09) that
+  // winter-treatment / hex-terrain-art layers added to the map AFTER a
+  // corridor source (fog, tile art, a later applyWinter() call) land above
+  // it and fully hide it regardless of how wide/dark it's drawn -- so
+  // re-assert top-of-stack now too, and expose bringCorridorLayersToFront()
+  // for other code (TileFog.attachToMap(), Terrain3D.applyWinter()) to call
+  // again whenever THEY add layers later.
+  if(!before) bringCorridorLayersToFront(map);
+}
+
+// Re-moves every corridor layer stack ever registered on `map` (via
+// addCorridorLayers()) to the very top of the style's layer list, in their
+// own bottom->top order (width/halo/casing/core/hot/tower). Safe to call
+// any time, including before any corridor layers exist (no-op) or after a
+// setStyle() wipe (skips missing ids). Call this after adding ANY layer
+// that must never visually bury a corridor line -- hex terrain art, the
+// tile-art ribbon, winter recolor/relief/sky layers, fog-of-war shrouds.
+function bringCorridorLayersToFront(map){
+  const prefixes = corridorLayerPrefixes.get(map);
+  if(!prefixes) return;
+  prefixes.forEach(pfx => {
+    CORRIDOR_LAYER_SUFFIXES.forEach(suf => {
+      const id = pfx + suf;
+      if(map.getLayer(id)){
+        try { map.moveLayer(id); } catch(e){}  // no 2nd arg = move to the very top
+      }
+    });
+  });
+}
+
+// One small circle-marker Point feature per vertex of a runType:"lift"
+// corridor -- each drawn node is a lift tower. No-op for any other
+// runType. `corridor` is whatever per-corridor object the caller already
+// has on hand (must carry `runType` and a lon/lat point array under
+// `points` or `coords`, each point [lon, lat, ...]).
+function towerFeatures(corridor){
+  corridor = corridor || {};
+  if(corridor.runType !== "lift") return [];
+  const pts = corridor.points || corridor.coords || [];
+  const col = corridorStyle(corridor).col;
+  return pts.map(p => ({
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [p[0], p[1]] },
+    properties: { kind: "towerNode", col }
+  }));
 }
 
 // Build the shared per-feature props for a corridor LineString. `latRef`
@@ -349,6 +530,20 @@ async function attachToMap(map, opts){
   }
   await preloadAllImages(map);
   renderCells();
+  // The ribbon must always render above the hex terrain fill it runs over
+  // (a "snow" hex tile included) -- addSource() call order above already
+  // achieves this on a fresh style, but re-assert explicitly since this
+  // function is safe to call again (e.g. after a setStyle() wipe) and
+  // re-creation order isn't guaranteed to match the first time.
+  if(map.getLayer("tile-corridors-line")){
+    try { map.moveLayer("tile-corridors-line"); } catch(e){}
+  }
+  // tile-cells-fill/tile-corridors-line just got added (or already existed)
+  // at whatever the top of the stack was at the time -- if a corridor
+  // piste-glow stack was already drawn before attachToMap() ran, re-assert
+  // it above the hex terrain art / ribbon texture just added, so the fog
+  // tiles never bury the corridor line.
+  bringCorridorLayersToFront(map);
 }
 
 // Chaikin corner-cutting on a closed ring of [lng,lat] points. Two passes
@@ -531,6 +726,7 @@ function reveal(lat, lon, acc, accuracyCapM){
 
 global.TileFog = { load, attachToMap, reveal, renderCorridors, isRevealed,
   setCells, redraw, ACTIVITY_WIDTH_M, ACTIVITY_TERRAIN_TYPE,
-  pxPerMeterAtZ0, realWidthExpr, runW, corridorStyle, addCorridorLayers, corridorFeatureProps };
+  pxPerMeterAtZ0, realWidthExpr, runW, corridorStyle, addCorridorLayers, corridorFeatureProps, towerFeatures,
+  bringCorridorLayersToFront };
 
 })(typeof window !== "undefined" ? window : globalThis);

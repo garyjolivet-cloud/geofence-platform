@@ -406,7 +406,7 @@
             letter-spacing:.02em;white-space:nowrap;pointer-events:none;
             text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 4px #0c140f}
   .runDiamond{display:flex;gap:3px;pointer-events:none}
-  .runDiamond i{width:12px;height:12px;background:#111;border:2px solid #eef3f0;
+  .runDiamond i{width:6px;height:6px;background:#111;border:1px solid #eef3f0;
                 transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
   /* map drag handles */
@@ -2235,7 +2235,7 @@ function renderSourcesInner(){
       } else {
         const _cst=TileFog.corridorStyle({difficulty:z.difficulty,activityType:z.activityType,runType:z.runType});
         feats.push({type:"Feature",properties:{kind:"line",zIdx:i,sel:selected,name:z.name+" ("+(s.widthM||10)+"m)",isPath:false,
-            corridor:true,widthM:(s.widthM>0?s.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((s.coords[0]||[0,0])[1]),
+            corridor:true,runType:z.runType||"run",widthM:(s.widthM>0?s.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0((s.coords[0]||[0,0])[1]),
             col:_cst.col,halo:_cst.halo,tier:_cst.tier},
           geometry:{type:"LineString",coordinates:s.coords}});
         // ◆ / ◆◆ badge at the run's top for black / double-black — same as
@@ -2244,6 +2244,9 @@ function renderSourcesInner(){
         if(_bt && s.coords && s.coords.length)
           feats.push({type:"Feature",properties:{kind:"corrbadge",tier:_bt},
             geometry:{type:"Point",coordinates:s.coords[0]}});
+        // Lift towers — one small dot per drawn node (see tile-fog.js's
+        // towerFeatures()). s.coords is already [lon,lat], no flip needed.
+        feats.push(...TileFog.towerFeatures({runType:z.runType, points:s.coords}));
       }
     }
     // label — in Test Mode a corridor already shows its name via the
@@ -2378,7 +2381,7 @@ map.on("load",()=>{
   // ◆ / ◆◆ badge at the top of black / double-black corridors (matches the
   // Ridge Quest run map + Test Mode).
   map.addLayer({id:"corr-badge",type:"symbol",source:"fences",filter:["==","kind","corrbadge"],
-     layout:{"text-field":["case",["==",["get","tier"],"dblack"],"◆◆","◆"],"text-size":16,
+     layout:{"text-field":["case",["==",["get","tier"],"dblack"],"◆◆","◆"],"text-size":8,
              "text-font":["Open Sans Bold"],"text-allow-overlap":true,"text-offset":[0,-0.4]},
      paint:{"text-color":"#0b0e13","text-halo-color":"#eef3f0","text-halo-width":2.4}});
   // small speaker badge — shown whenever the stop (or path) has a clip
@@ -6550,6 +6553,11 @@ function refreshSimCorridorLabels(){
                   // shared corridor renderer (width band + piste-glow, no dashes)
                   corridor:true,widthM:(c.widthM>0?c.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(c.path[0][0])},
       geometry:{type:"LineString",coordinates:c.path.map(p=>[p[1],p[0]])}}; // [lat,lon] -> [lon,lat]
+  });
+  // Lift towers — one small dot per drawn node (see tile-fog.js's
+  // towerFeatures()). c.path is [lat,lon]; flip to [lon,lat] first.
+  cors.forEach(c=>{
+    feats.push(...TileFog.towerFeatures({runType:c.runType, points:c.path.map(p=>[p[1],p[0]])}));
   });
   map.addSource("runLines",{type:"geojson",data:{type:"FeatureCollection",features:feats}});
   // Width band + halo + casing + solid grade core + hot line — one shared
