@@ -7,6 +7,7 @@
 <script src="role-gate.js"></script>
 <script>RoleGate.require(['admin']);</script>
 <script src="/kalman-filter.js"></script>
+<script src="/chute-guard.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
@@ -245,6 +246,13 @@ const Audio = {
               o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(0.0001,s);
               g.gain.exponentialRampToValueAtTime(0.25,s+0.01); g.gain.exponentialRampToValueAtTime(0.0001,s+0.25);
               o.connect(g); g.connect(this.ctx.destination); o.start(s); o.stop(s+0.3); }); }catch(e){} },
+  // Chute Guard's fallback tone (desktop has no navigator.vibrate at all) —
+  // a single quiet low blip, distinct from ding()'s bright two-note chime.
+  rumble(){ if(!this.on) return; try{ this.unlock(); const t=this.ctx.currentTime;
+            const o=this.ctx.createOscillator(),g=this.ctx.createGain();
+            o.type='sine'; o.frequency.value=220; g.gain.setValueAtTime(0.0001,t);
+            g.gain.exponentialRampToValueAtTime(0.16,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
+            o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t+0.24); }catch(e){} },
   say(text){ if(!this.on) return; try{ const u=new SpeechSynthesisUtterance(text);
             speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){} }
 };
@@ -1083,6 +1091,27 @@ function checkHazardAhead(p, headingDeg, speedMps, nowMs){
     }
   }
 }
+// Chute Guard callbacks — same "console log() instead of a visitor-facing
+// DOM banner, desktop authoring tool not the visitor engine" reasoning as
+// checkHazardAhead() above. navigator.vibrate is absent on desktop, so this
+// exercises the tone fallback path every time here, by design.
+function chuteGuardCallbacks(){
+  return {
+    onWarn(corridorId, name){
+      if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
+      else Audio.rumble();
+      log("ev-hazard", "drifted outside \""+(name||"chute")+"\"'s line");
+    },
+    // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
+    // exactly which gate is blocking a warning instead of a silent
+    // "nothing happened."
+    onDebug(corridorId, name, d){
+      log("ev-sys", "chuteGuard \""+(name||"chute")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
+        " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
+        " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s"));
+    }
+  };
+}
 // Same pure function as geofence-engine.html's zoneAudioFadeRadii() (ported
 // verbatim, not re-derived) — this sim has no spatial-audio playback of its
 // own to source the numbers from, but the simulated AR view's distance fade
@@ -1143,6 +1172,8 @@ function feed(lat,lon,acc,t,bleFix){
   // teleport/drag between stops at different elevations.
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:effAlt};
   checkHazardAhead(p, TravelHeading.heading, sm.speed, t);
+  if(BUNDLE.chuteGuardEnabled && typeof ChuteGuard!=='undefined')
+    ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t}, TravelHeading.heading);
   const active=Geofencer.update(p,prevP,t);
   // AR-object visibility — continuous distance-vs-audioM check, same range
   // spatial audio would use (zoneAudioFadeRadii), edge-triggered via
@@ -1370,6 +1401,7 @@ function loadBundle(b,srcLabel,pid){
   if(!b || !Array.isArray(b.zones)){ log("ev-warn","that doesn't look like a bundle (need a zones array)"); return; }
   BUNDLE = b;
   if(!BUNDLE.ref || BUNDLE.ref.length!==2) BUNDLE.ref = centroidOf(BUNDLE.zones);
+  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(b.zones, chuteGuardCallbacks());
   loadWalkingPaths(b);
   initTileArt(b,pid);
   GPSFilter.reset(); Geofencer.reset(); prevP=null; _arNearStateSim={}; fixCount=0;

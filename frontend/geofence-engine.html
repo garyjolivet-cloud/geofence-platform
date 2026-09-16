@@ -143,6 +143,7 @@
 <script src="/pipeline-runtime.js"></script>
 <script src="/tour-state.js"></script>
 <script src="/kalman-filter.js"></script>
+<script src="/chute-guard.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
@@ -927,6 +928,25 @@ const Audio = {
       });
     }catch(e){}
   },
+  // Chute Guard's iOS/no-vibration fallback tone — deliberately a single,
+  // quiet, low-pitched blip, distinct from ding()'s bright two-note arrival
+  // chime so the two are never confused. Kept genuinely subtle: this fires
+  // mid-run while the visitor is actively skiing, not a discrete event like
+  // an arrival.
+  rumble(){
+    try{
+      let ac=(typeof Clarity!=='undefined' && Clarity.ctx)?Clarity.ctx:this.ctx;
+      if(!ac){ ac=this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }
+      if(ac.state==='suspended') ac.resume();
+      const t=ac.currentTime;
+      const o=ac.createOscillator(), g=ac.createGain();
+      o.type='sine'; o.frequency.value=220;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(0.16,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
+      o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.24);
+    }catch(e){}
+  },
   // voiceOverride lets a caller pick a voice without also handing over a
   // zone/distance to compute panning from (pipelineCallbacks below needs
   // exactly that — a pipeline's Speak node has no distance of its own, but
@@ -1135,6 +1155,37 @@ function showHazardBanner(zoneName){
 function hideHazardBanner(){
   clearTimeout(_hazardBannerTimer);
   document.getElementById('_hazardBanner')?.remove();
+}
+// Chute Guard's visual companion — a brief, subtle screen-edge pulse, never
+// the primary channel (a skier's eyes are on the snow, not the phone).
+// Deliberately much quieter than the hazard banner: no text, short-lived,
+// amber rather than alarm-red, pointer-events:none throughout.
+function showChuteGuardPulse(){
+  let b=document.getElementById('_chuteGuardPulse');
+  if(!b){
+    b=document.createElement('div');
+    b.id='_chuteGuardPulse';
+    b.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:9998;'+
+      'box-shadow:inset 0 0 0 0 rgba(255,194,77,0);transition:box-shadow .15s ease-out';
+    document.body.appendChild(b);
+  }
+  b.style.boxShadow='inset 0 0 26px 6px rgba(255,194,77,.55)';
+  clearTimeout(b._t);
+  b._t=setTimeout(()=>{ b.style.boxShadow='inset 0 0 0 0 rgba(255,194,77,0)'; }, 650);
+}
+// Chute Guard callbacks — the host (this file) decides HOW to alert
+// (vibration where supported, a soft fallback tone otherwise, plus a
+// visual pulse either way); chute-guard.js itself only decides WHEN, per
+// its own header comment. Deliberately no spoken alert (unlike hazard
+// warnings, which always pair speech + visual) — narration would be the
+// opposite of "subtle" for something that fires mid-run.
+function chuteGuardCallbacks(){
+  return { onWarn(corridorId, name){
+    if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
+    else Audio.rumble();
+    showChuteGuardPulse();
+    HUD.log('ev-warn','⚠ drifted outside "'+(name||'chute')+'"\'s line');
+  } };
 }
 
 /* =================== PROXIMITY AUDIO — distance-clarity (§5a) ===================
@@ -1690,6 +1741,8 @@ const HUD = {
     }
     if(BUNDLE.tileArtEnabled&&typeof TileFog!=='undefined') TileFog.reveal(sm.lat,sm.lon,sm.acc,60);
     checkHazardAhead(p, TravelHeading.heading, sm.speed, fix.t);
+    if(BUNDLE.chuteGuardEnabled && typeof ChuteGuard!=='undefined')
+      ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t:fix.t}, TravelHeading.heading);
     const active=Geofencer.update(p,this.prev,fix.t);
     this.prev=p; this.pos=p;
     // Global functions (Code Objects dropped on the map, not a stop) run on
@@ -2677,6 +2730,7 @@ EngineKokoro.tryLoad();
       try{ localStorage.removeItem(LKEY); }catch(_){}
       HUD.log('ev-warn','no stops published for this project yet'); return; }
     BUNDLE=b; Geofencer.reset(); GPSFilter.reset(); HUD.prev=null;
+    if(typeof ChuteGuard!=='undefined') ChuteGuard.load(b.zones, chuteGuardCallbacks());
     loadWalkingPaths(b);
     MapView.setCorridorRuns(b);
     initTileArt(b,pid);
@@ -2701,6 +2755,7 @@ EngineKokoro.tryLoad();
     let cached=null; try{ cached=localStorage.getItem(LKEY); }catch(_){}
     if(cached){ try{ const b=JSON.parse(cached);
       BUNDLE=b; Geofencer.reset(); GPSFilter.reset(); HUD.prev=null;
+      if(typeof ChuteGuard!=='undefined') ChuteGuard.load(b.zones, chuteGuardCallbacks());
       loadWalkingPaths(b);
       MapView.setCorridorRuns(b);
       initTileArt(b,pid);

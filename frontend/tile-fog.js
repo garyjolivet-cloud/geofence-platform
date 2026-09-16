@@ -735,6 +735,17 @@ function reveal(lat, lon, acc, accuracyCapM){
 global.TileFog = { load, attachToMap, reveal, renderCorridors, isRevealed,
   setCells, redraw, ACTIVITY_WIDTH_M, ACTIVITY_TERRAIN_TYPE,
   pxPerMeterAtZ0, realWidthExpr, runW, corridorStyle, addCorridorLayers, corridorFeatureProps, towerFeatures,
-  bringCorridorLayersToFront };
+  bringCorridorLayersToFront,
+  // Exported so callers that build their OWN corridor source (fence-editor.html's
+  // Test Mode "runLines" stack) can tear down exactly the layer set
+  // addCorridorLayers() actually creates, instead of keeping a second
+  // hardcoded copy of these suffixes that silently drifts out of sync every
+  // time a new layer is added here (confirmed live -- a fence-editor.html
+  // copy of this list was missing "-tower" from day one, and then also
+  // "-liftline" when that was added: map.removeSource() throws if any
+  // layer still references the source, so a stale suffix list meant
+  // clearSimCorridorLabels() threw on re-entering Test Mode and aborted
+  // before rebuilding -- corridor lines silently vanished on 2nd+ entry).
+  CORRIDOR_LAYER_SUFFIXES };
 
 })(typeof window !== "undefined" ? window : globalThis);

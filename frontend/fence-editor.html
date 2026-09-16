@@ -491,6 +491,7 @@
 <script src="/pipeline-runtime.js"></script>
 <script src="/tour-state.js"></script>
 <script src="/kalman-filter.js"></script>
+<script src="/chute-guard.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="/code-objects.js"></script>
 <script src="/audio-tree.js"></script>
@@ -696,6 +697,13 @@
     <label class="k">zone states</label>
     <div id="simChips"></div>
     <div id="simLog"></div>
+    <!-- Temporary-use debugging aid (Chute Guard rollout) — downloads the
+         full sim log as a .txt file instead of relying on a screenshot of
+         the small scrollable box, which truncates/blurs the very numbers
+         needed to diagnose a gate. Not tied to Chute Guard specifically —
+         exports whatever's in the log (hazard/enter/exit lines too). -->
+    <button id="simExportLog" class="ghost" style="font-size:11px;padding:4px 8px;align-self:flex-start"
+            title="Download this log as a text file">⬇ Export log</button>
 
     <!-- guidance HUD — shown when a guidance bot is active in the simulator -->
     <div id="simGuidanceHud" style="display:none;background:var(--slate);border:2px solid var(--go);
@@ -1378,6 +1386,12 @@ let _visitorsFlyOn=false;
 // kept in sync purely so exportBundle() can denormalize it into the
 // published bundle, same as its three siblings.
 let _hazardAwareOn=false;
+// Chute Guard — same "kept in sync purely so exportBundle() can denormalize
+// it" reasoning as _hazardAwareOn above. Gates the subtle vibration/tone
+// warning a skier gets on drifting outside a chute's authored width
+// (ChuteGuard in geofence-engine.html/geofence-sim.html and this file's own
+// Test Mode).
+let _chuteGuardOn=false;
 function isThreeDEnabled(){ return _threeDOn; }
 function updateTerrain(){
   if(!map.getSource(TERRAIN_SOURCE_ID)) return; // not loaded yet — updateTerrain() runs again from the load handler above
@@ -3536,6 +3550,7 @@ function updateAssetPaletteVisibility(){
   _terrainAltOn=!!(app&&app.terrainAltitudeEnabled);
   _visitorsFlyOn=!!(app&&app.visitorsFly);
   _hazardAwareOn=!!(app&&app.hazardAwareEnabled);
+  _chuteGuardOn=!!(app&&app.chuteGuardEnabled);
   document.getElementById("assetPalette").classList.toggle("on", _threeDOn);
   // applyPanelVisibility()'s left-to-right row-packing runs once at boot,
   // before this (async, project-load-dependent) function has resolved
@@ -5227,6 +5242,10 @@ async function exportBundle(){
               // toward a hazard" warning at runtime. See _hazardAwareOn's
               // own comment.
               hazardAwareEnabled:_hazardAwareOn,
+              // Eighth denormalized flag (Chute Guard) — gates the subtle
+              // vibration/tone warning a skier gets on drifting outside a
+              // chute's authored width. See _chuteGuardOn's own comment.
+              chuteGuardEnabled:_chuteGuardOn,
               zones:zonesOut };
   document.getElementById("out").value=JSON.stringify(out,null,2);
   return out;
@@ -6451,7 +6470,12 @@ let simAmbientMarkers={}, simAmbientTimer=null;
 // player will see it. Kept a verbatim mirror of ridge-quest.html's
 // RUN_STYLE_* / RUN_DASH / runStyleFor(); update both together.
 let simCorridorLabels=[]; // name + diamond HTML markers
-const SIM_RUN_LAYERS=["runLines-width","runLines-halo","runLines-casing","runLines-core","runLines-hot","runLines-hit"];
+// Derived from TileFog's own exported suffix list (never a second hardcoded
+// copy — see that export's comment for why: a stale copy here previously
+// caused map.removeSource("runLines") to throw on re-entering Test Mode,
+// since a layer TileFog actually created was still attached) plus "-hit",
+// this file's own extra invisible click-target layer.
+const SIM_RUN_LAYERS=TileFog.CORRIDOR_LAYER_SUFFIXES.map(suf=>"runLines"+suf).concat(["runLines-hit"]);
 const SIM_RUN_STYLE_DIFF={
   "green":        {col:"#57e06f",halo:"#22c246",tier:""},
   "blue":         {col:"#6bb6ff",halo:"#2f86ff",tier:""},
@@ -6806,6 +6830,25 @@ function checkHazardAhead(p,headingDeg,speedMps,nowMs){
     }
   }
 }
+// Chute Guard callbacks — same "log() instead of a visitor-facing banner,
+// desktop authoring tool" reasoning as checkHazardAhead() above. No TTS
+// call, deliberately — Chute Guard is never spoken, see chute-guard.js's
+// own header comment.
+function chuteGuardCallbacks(){
+  return {
+    onWarn(corridorId,name){
+      simLogEv("sev-hazard","drifted outside \""+(name||"chute")+"\"'s line");
+    },
+    // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
+    // exactly which gate is blocking a warning while dragging the sim
+    // avatar, instead of a silent "nothing happened."
+    onDebug(corridorId,name,d){
+      simLogEv("sev-sys","chuteGuard \""+(name||"chute")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
+        " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
+        " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s"));
+    }
+  };
+}
 function feedSim(lat,lon,acc,t,bleFix){
   acc=acc||5; t=t||Date.now();
   // Altitude priority (3D-mode plan, Step 2, item D rescoped 2026-08-14):
@@ -6844,6 +6887,8 @@ function feedSim(lat,lon,acc,t,bleFix){
   // simulated walk between stops at different elevations).
   const raw={lat,lon,acc,alt:effAlt};
   checkHazardAhead(raw, SimTravelHeading.heading, sm.speed, t);
+  if(_chuteGuardOn && typeof ChuteGuard!=='undefined')
+    ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t}, SimTravelHeading.heading);
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;
@@ -7141,6 +7186,7 @@ function enterTestMode(){
   selectZone(-1);
   simBundle=editorToSimBundle();
   initTileArt(simBundle);
+  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(simBundle.globalCodeObjects||[], simPipelineCallbacks());
   // forceReset:true — Test Mode always starts every entry from a clean
@@ -7604,6 +7650,7 @@ document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterT
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
   initTileArt(simBundle);
+  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simDist=simDir>0?0:simPathTotal();
@@ -7617,6 +7664,16 @@ document.getElementById("simDirBtn").onclick=(e)=>{
 document.getElementById("simMute").onclick=(e)=>{simSoundOn=!simSoundOn;
   e.target.textContent=simSoundOn?"Sound ◼":"Muted ◻";e.target.classList.toggle("on",simSoundOn);
   if(!simSoundOn){SimVoice.fadeOut();try{speechSynthesis.cancel();}catch(err){}}};
+document.getElementById("simExportLog").onclick=()=>{
+  const el=document.getElementById("simLog");
+  const lines=[...el.children].map(d=>d.textContent).reverse(); // el.prepend()s newest-first; export oldest-first
+  const blob=new Blob([lines.join("\n")], {type:"text/plain"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url; a.download="sim-log-"+new Date().toISOString().replace(/[:.]/g,"-")+".txt";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+};
 document.getElementById("simGuidanceStopBtn").onclick=()=>{
   if(typeof GuidanceBot!=='undefined') GuidanceBot.stop();
   document.getElementById('simGuidanceHud').style.display='none';
@@ -7630,6 +7687,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();
   initTileArt(simBundle);
+  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   _arNearState={};
   // Visited-stops/flags/counters are per-session tracking state just like

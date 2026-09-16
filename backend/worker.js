@@ -2171,6 +2171,7 @@ async function api(request, env, url) {
       "a.terrain_altitude_enabled AS terrainAltitudeEnabled, a.visitors_fly AS visitorsFly, " +
       "a.hazard_aware_enabled AS hazardAwareEnabled, a.fog_enabled AS fogEnabled, " +
       "a.quest_enabled AS questEnabled, a.tile_art_enabled AS tileArtEnabled, " +
+      "a.chute_guard_enabled AS chuteGuardEnabled, " +
       "(SELECT COUNT(*) FROM project p WHERE p.appId=a.id) AS projectCount " +
       "FROM app a" + (scopedOrg ? " WHERE a.orgId=?" : "") + " ORDER BY a.updatedAt DESC";
     const stmt = scopedOrg ? env.DB.prepare(sql).bind(scopedOrg) : env.DB.prepare(sql);
@@ -2249,10 +2250,15 @@ async function api(request, env, url) {
     // Ridge Quest — DEFAULT 0 (see migrations/0052), an app must explicitly
     // opt in, same "own explicit opt-in" reasoning as threeDEnabled etc.
     const tileArtEnabled = b.tileArtEnabled === undefined ? null : (b.tileArtEnabled ? 1 : 0);
-    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), fog_enabled=COALESCE(?,fog_enabled), quest_enabled=COALESCE(?,quest_enabled), tile_art_enabled=COALESCE(?,tile_art_enabled), updatedAt=? WHERE id=?")
-      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, fogEnabled, questEnabled, tileArtEnabled, now, aid).run();
+    // chuteGuardEnabled — an eighth flag, gating the subtle vibration/tone
+    // warning a skier gets on drifting outside a chute's authored width.
+    // Same "own explicit opt-in" reasoning as its siblings above; baked into
+    // the bundle at Publish time (fence-editor.html), not read-time-injected.
+    const chuteGuardEnabled = b.chuteGuardEnabled === undefined ? null : (b.chuteGuardEnabled ? 1 : 0);
+    await env.DB.prepare("UPDATE app SET name=?, description=COALESCE(?,description), three_d_enabled=COALESCE(?,three_d_enabled), terrain_altitude_enabled=COALESCE(?,terrain_altitude_enabled), visitors_fly=COALESCE(?,visitors_fly), hazard_aware_enabled=COALESCE(?,hazard_aware_enabled), fog_enabled=COALESCE(?,fog_enabled), quest_enabled=COALESCE(?,quest_enabled), tile_art_enabled=COALESCE(?,tile_art_enabled), chute_guard_enabled=COALESCE(?,chute_guard_enabled), updatedAt=? WHERE id=?")
+      .bind(name, b.description ?? null, threeD, terrainAlt, visitorsFly, hazardAware, fogEnabled, questEnabled, tileArtEnabled, chuteGuardEnabled, now, aid).run();
     await logAudit(env, request, { keyId: "master" }, "app.rename", aid);
-    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware, fogEnabled, questEnabled, tileArtEnabled }, 200, AC);
+    return json({ ok: true, id: aid, name, threeDEnabled: threeD, terrainAltitudeEnabled: terrainAlt, visitorsFly, hazardAwareEnabled: hazardAware, fogEnabled, questEnabled, tileArtEnabled, chuteGuardEnabled }, 200, AC);
   }
 
   // --- delete an app (master only; ?cascade=true also deletes all its projects) ---
