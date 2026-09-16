@@ -875,6 +875,7 @@ document.getElementById("newCorridorBtn").onclick=()=>{
   if(!appId){ alert("Pick a company and project first."); return; }
   if(!confirmDiscardIfDirty()) return;
   loadedFrom=null;
+  gpxTree.setActive(null);
   resetRunDetails();
   document.getElementById("hdrCrumb").textContent="New corridor — click the map";
   setBase([], {resetHistory:true});   // clears addMode; re-armed on the next line
@@ -897,6 +898,7 @@ document.getElementById("importInput").onchange=async()=>{
     const text=await f.text();
     const {points:parsed}=parseGPX(text);
     loadedFrom=null;
+    gpxTree.setActive(null);
     setBase(parsed, {resetHistory:true});
     captureBaseline();
     renderAllCorridors();
@@ -918,6 +920,7 @@ async function openTreeItem(item){
     document.getElementById("gpxActivityType").value = j.activityType || "hike";
     document.getElementById("gpxWidth").value = (j.widthM != null ? j.widthM : 10);
     updateHdrCrumb();
+    gpxTree.setActive(item.id);
     setBase(pts, {resetHistory:true});
     captureBaseline();
     renderAllCorridors();   // drop the now-active corridor from the dim overlay
@@ -1133,6 +1136,7 @@ document.getElementById("saveAsBtn").onclick=async()=>{
       loadedFrom={kind:"corridor", id:j.id, name, ...rd};
     }
     updateHdrCrumb();
+    gpxTree.setActive(loadedFrom.id);
     document.getElementById("saveBtn").disabled=false;
     captureBaseline();
     gpxTree.refresh({appId});
@@ -1212,6 +1216,7 @@ async function enterProject(id, proj){
   updateWinter();
   document.getElementById("hdrCrumb").textContent = (proj&&proj.name)||id;
   loadedFrom=null;
+  gpxTree.setActive(null);
   resetRunDetails();
   setBase([], {resetHistory:true});
   captureBaseline();

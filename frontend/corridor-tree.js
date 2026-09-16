@@ -40,6 +40,7 @@
 //   tree.refresh({ appId: newAppId });
 //   tree.getUploadTarget();      // -> {kind, folderId} — where a new Save As should land
 //   tree.revealFolder(kind, folderId);
+//   tree.setActive(id);          // highlight the corridor currently open for editing (null to clear)
 //   tree.destroy();
 (function () {
   "use strict";
@@ -54,6 +55,11 @@
       .gt-row:hover{background:rgba(255,255,255,.04)}
       .gt-row.selected{background:rgba(255,106,61,.15)}
       .gt-row.dragover{background:rgba(255,106,61,.22);outline:1px dashed var(--coral,#ff6a3d)}
+      .gt-row.active{background:rgba(56,224,166,.10);box-shadow:inset 3px 0 0 var(--go,#38e0a6)}
+      .gt-row.active .gt-name{font-weight:700;color:var(--go,#38e0a6)}
+      .gt-active-badge{flex:0 0 auto;font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+        color:var(--go,#38e0a6);background:rgba(56,224,166,.14);border:1px solid rgba(56,224,166,.4);
+        border-radius:20px;padding:1px 7px}
       .gt-chevron{width:14px;flex:0 0 14px;text-align:center;color:var(--fog,#8aa5bf);font-size:10px}
       .gt-check{flex:0 0 auto;width:auto;height:auto;margin:0 4px 0 0;accent-color:var(--coral,#ff6a3d)}
       .gt-icon{flex:0 0 auto}
@@ -127,6 +133,11 @@
       expanded: new Set(),
       seenRoots: new Set(),
       selected: null,
+      // The single corridor currently open for editing (GPX Editor) — not to
+      // be confused with `selected`, which tracks a clicked FOLDER as the
+      // target for "New folder"/uploads. Set via tree.setActive(id), never
+      // touched by refresh()/load(), so it survives a tree reload.
+      activeId: opts.activeId != null ? opts.activeId : null,
       roots: { corridor: null },
       openMenu: null,
       parentById: new Map()
@@ -161,6 +172,21 @@
       seedRootExpanded("corridor:root");
       if (!state.selected) state.selected = { kind: "corridor", folderId: null };
       render();
+    }
+
+    // Finds which folder (id, or null for root) currently holds item `id` —
+    // used by setActive() to auto-expand the path down to the corridor
+    // being opened, so it's visible without the user hunting for it.
+    function findItemFolderId(kind, id) {
+      let found;
+      const root = state.roots[kind];
+      if (!root) return found; // tree hasn't loaded yet
+      (function walk(node) {
+        if (found !== undefined) return;
+        for (const it of node.items) { if (it.id === id) { found = node.id; return; } }
+        for (const child of node.children) { walk(child); if (found !== undefined) return; }
+      })(state.roots[kind]);
+      return found;
     }
 
     function revealFolder(kind, folderId) {
@@ -391,11 +417,17 @@
         chk.onchange = e => { e.stopPropagation(); if (opts.onToggle) opts.onToggle(item, chk.checked); };
         row.appendChild(chk);
       }
+      const isActive = state.activeId != null && item.id === state.activeId;
+      if (isActive) row.classList.add("active");
       const icon = document.createElement("span"); icon.className = "gt-icon"; icon.textContent = KIND[item.kind].leafIcon;
       const name = document.createElement("span"); name.className = "gt-name"; name.textContent = item.name + KIND[item.kind].suffix;
       const meta = document.createElement("span"); meta.className = "gt-meta";
       meta.textContent = (item.widthM != null ? "⌀" + item.widthM + "m " : "") + fmtKm(item.distanceM);
       row.appendChild(icon); row.appendChild(name); row.appendChild(meta);
+      // A text badge, not just the colour/left-bar above — so which corridor
+      // is currently open reads clearly even for a colour-blind user or on a
+      // washed-out display.
+      if (isActive) { const badge = document.createElement("span"); badge.className = "gt-active-badge"; badge.textContent = "editing"; row.appendChild(badge); }
       row.onclick = () => { if (opts.onPick) opts.onPick(item); };
       if (rowHasMenu()) {
         const moreBtn = document.createElement("button"); moreBtn.className = "gt-btn"; moreBtn.textContent = "⋯";
@@ -489,6 +521,16 @@
       getUploadTarget() { return state.selected || { kind: "corridor", folderId: null }; },
       listFolders(kind) { return allTargets(kind); },
       revealFolder(kind, folderId) { revealFolder(kind, folderId); },
+      // Marks corridor `id` as the one currently open for editing (a subtle
+      // green highlight + "editing" badge on its row) and auto-expands the
+      // folder path down to it. Pass null to clear (e.g. "New corridor").
+      // Independent of refresh()/load() so it survives a tree reload.
+      setActive(id) {
+        state.activeId = id;
+        const folderId = id != null ? findItemFolderId("corridor", id) : undefined;
+        if (folderId !== undefined) revealFolder("corridor", folderId); // revealFolder() also re-renders
+        else render();
+      },
       destroy() { document.removeEventListener("mousedown", onDocMousedown); el.innerHTML = ""; }
     };
     return tree;

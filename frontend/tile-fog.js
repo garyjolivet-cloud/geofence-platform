@@ -70,7 +70,7 @@ const loadedImageKeys = new Set();
 // layers above whatever else got added later, without every caller having
 // to know each other's layer ids.
 const corridorLayerPrefixes = new Map();  // map -> Set<prefix>
-const CORRIDOR_LAYER_SUFFIXES = ["-width", "-halo", "-casing", "-core", "-hot", "-tower"];
+const CORRIDOR_LAYER_SUFFIXES = ["-width", "-halo", "-casing", "-core", "-liftline", "-hot", "-tower"];
 
 function tileKey(terrainType, variantIndex){ return terrainType + "_" + (variantIndex || 0); }
 
@@ -164,12 +164,13 @@ function corridorStyle(c){
   // visible against bright terrain.
   if(c.runType === "lift") return { col: "#3a4650", halo: "#1c2327", tier: "" };
   const d = RUN_STYLE_DIFF[c.difficulty || ""] || RUN_STYLE_DIFF[""];
-  // Chutes: always pure black, core AND halo, regardless of difficulty --
-  // not just black/double-black. Difficulty's own halo colour (periwinkle/
-  // pink/green/blue) read as "red" once the chute width multiplier made
-  // that halo band big enough to dominate. `tier` still comes from
-  // difficulty so the ◆/◆◆ badge and double-black tag keep working.
-  if(c.runType === "chute") return { col: "#000000", halo: "#0d0d0d", tier: d.tier };
+  // Chutes used to force pure black (core AND halo) here regardless of
+  // difficulty -- confirmed live (2026-09) this made every unselected chute
+  // render as a flat black line instead of the normal difficulty-coloured
+  // glow every other corridor gets. Reverted per direct feedback: chutes
+  // should always look like a selected/highlighted run (coloured core +
+  // halo), never solid black. `tier` still comes from difficulty so the
+  // ◆/◆◆ badge and double-black tag keep working.
   return { col: d.col, halo: d.halo, tier: d.tier };
 }
 
@@ -237,16 +238,11 @@ function runW(a, b, c){ return ["interpolate", ["linear"], ["zoom"], 12, a, 15, 
 // is actually visible (the old 4x was compensating for chutes being
 // invisible, not a real design intent). Its pure-black colour override in
 // corridorStyle() stays -- this is a width-only change.
-const RUN_TYPE_WIDTH_SCALE = { lift: 1.5 };
-function runTypeScaleExpr(){
-  return ["case",
-    ["==", ["get", "runType"], "lift"], RUN_TYPE_WIDTH_SCALE.lift,
-    1];
-}
+// Lift no longer goes through this graded width stack at all (see the
+// dedicated "-liftline" layer in addCorridorLayers() below) and chute
+// dropped its multiplier earlier -- so no runType still needs a scale here.
 function runWByRunType(a, b, c){
-  const s = runTypeScaleExpr();
-  return ["interpolate", ["linear"], ["zoom"],
-    12, ["*", a, s], 15, ["*", b, s], 18, ["*", c, s]];
+  return ["interpolate", ["linear"], ["zoom"], 12, a, 15, b, 18, c];
 }
 
 // Add the shared corridor layer stack to `map`, reading from an existing
@@ -254,7 +250,8 @@ function runWByRunType(a, b, c){
 //   corridor:true, widthM:<metres>, pxPerMeterAtZ0:<pxPerMeterAtZ0(refLat)>,
 //   col:<core colour>, halo:<glow colour>, tier:"" | "dblack"
 // Layers bottom->top: width band, glow halo, dark casing, solid grade
-// core, double-black hot line. `id` prefixes the layer names (so one map
+// core, (lift only: a separate thin plain line instead of the above four),
+// tower dots. `id` prefixes the layer names (so one map
 // can host more than one corridor source); `before` is an optional
 // beforeId. Idempotent -- safe to call again after a setStyle() wipe.
 function addCorridorLayers(map, o){
@@ -273,8 +270,12 @@ function addCorridorLayers(map, o){
   // A corridor feature must be flagged AND carry a real widthM -- lets a
   // surface flag a corridor purely as a hit target (no widthM) without it
   // getting a band drawn (the Fence Editor does this in Test Mode, where
-  // the Test-Mode runLines stack already draws the glow).
-  const only = ["all", ["==", ["get", "corridor"], true], ["has", "widthM"]];
+  // the Test-Mode runLines stack already draws the glow). Lift is excluded
+  // here entirely -- it gets its own thin plain line below instead of the
+  // width-band/halo/casing/core glow stack, which read as too bold/wide for
+  // a lift cable per direct feedback.
+  const only = ["all", ["==", ["get", "corridor"], true], ["has", "widthM"], ["!=", ["get", "runType"], "lift"]];
+  const liftOnly = ["all", ["==", ["get", "corridor"], true], ["has", "widthM"], ["==", ["get", "runType"], "lift"]];
   const col  = ["coalesce", ["get", "col"], "#ff6a3d"];
   const halo = ["coalesce", ["get", "halo"], col];
   // Optional core-colour override (e.g. the Fence Editor turns the selected
@@ -328,6 +329,13 @@ function addCorridorLayers(map, o){
   add({ id: pfx + "-core", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": coreCol, "line-width": runWByRunType(2, 3.3, 4.8) } });
+  // Lift: a single thin plain black line, no halo/casing/width-band glow --
+  // the previous graded stack (scaled 1.5x wider than a normal run) read as
+  // too bold for a lift cable per direct feedback. Towers (added below)
+  // already mark the line's stations in grey.
+  add({ id: pfx + "-liftline", type: "line", source: src, filter: liftOnly,
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": "#111318", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 15, 1.6, 18, 2.2] } });
   // Double-black used to get a red (#ff5a5f) accent centre-line here on top
   // of everything else. Removed entirely (2026-09) -- confirmed live this
   // was the direct cause of a second "it's red, not black" report, this
@@ -344,16 +352,16 @@ function addCorridorLayers(map, o){
   // machinery (unlike the HTML run-name-label markers elsewhere). Features
   // come from towerFeatures() below, pushed into the same source as the
   // corridor LineString by each caller.
-  // 1/4 the previous radius and a fixed mid-grey (not tied to the line's
-  // own -- now near-black -- colour) per direct feedback: towers had grown
-  // too large and too dark alongside the line itself.
+  // Solid white, dark-stroked -- the previous mid-grey (#8a939a) didn't
+  // stand out against bright snow/satellite imagery per direct feedback.
+  // Stroke stays dark so a white dot doesn't disappear against snow itself.
   add({ id: pfx + "-tower", type: "circle", source: src,
     filter: ["==", ["get", "kind"], "towerNode"],
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 0.8, 15, 1.2, 18, 1.6],
-      "circle-color": "#8a939a",
+      "circle-color": "#ffffff",
       "circle-stroke-width": 0.6,
-      "circle-stroke-color": "#5a636a"
+      "circle-stroke-color": "#05070b"
     } });
   if(!corridorLayerPrefixes.has(map)) corridorLayerPrefixes.set(map, new Set());
   corridorLayerPrefixes.get(map).add(pfx);
