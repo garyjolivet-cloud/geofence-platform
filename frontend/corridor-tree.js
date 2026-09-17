@@ -36,6 +36,19 @@
 //                                //   Both flags are ignored when readOnly:false
 //                                //   (the ⋯ menu already has the full set).
 //     onError: (msg) => {},      // defaults to alert()
+//     itemsDraggable: true,      // true: native HTML5 drag source on item rows
+//                                //   (dragstart setting application/x-gpxitem-
+//                                //   corridor) — avoid dropping this onto a
+//                                //   MapLibre canvas, see renderItemRow()'s own
+//                                //   note. "manual": a plain mouse-event drag
+//                                //   (press+move+release) that never touches
+//                                //   the native drag API — requires dropTarget;
+//                                //   fires onPick(item) on a successful drop.
+//                                //   false: no drag at all, click-to-add only.
+//     dropTarget: () => el,      // itemsDraggable:"manual" only — element (or
+//                                //   a function returning one, re-evaluated
+//                                //   per drag) a manual drag must be released
+//                                //   over to count as a drop.
 //   });
 //   tree.refresh({ appId: newAppId });
 //   tree.getUploadTarget();      // -> {kind, folderId} — where a new Save As should land
@@ -397,12 +410,72 @@
 
     function renderItemRow(item) {
       const row = document.createElement("div"); row.className = "gt-row";
-      row.draggable = true;
-      row.addEventListener("dragstart", e => {
-        e.stopPropagation();
-        e.dataTransfer.setData("application/x-gpxitem-" + item.kind, item.id);
-        e.dataTransfer.effectAllowed = "move";
-      });
+      // Real bug, 2026-09-16: a native HTML5 drag (draggable=true +
+      // dragstart/dragover/drop) started on this row and dropped on
+      // fence-editor.html's map canvas locked up the tab, on every corridor
+      // tried across multiple projects — not a specific one's geometry, and
+      // not fixed by suspending terrain during the drag (tried) or by any
+      // handler-level change to the native drag events (also tried). The
+      // native drag gesture itself is the trigger, before any of this
+      // module's or the host page's own JS runs: an OS-level native drag
+      // operation compositing on top of a canvas MapLibre keeps repainting
+      // (this app's 3D terrain) is a known class of Chrome/GPU conflict.
+      // itemsDraggable:"manual" (fence-editor.html's mount) replaces native
+      // drag with a plain mouse-event drag (mousedown+mousemove+mouseup) —
+      // the same technique maplibregl.Marker's own draggable:true markers
+      // already use in this app, for exactly this reason: it never invokes
+      // the browser's native drag-and-drop machinery, so there's nothing
+      // for the WebGL canvas to conflict with. Default (unset) stays native
+      // drag — gpx-editor.html's own mount relies on it to drag an item row
+      // onto a folder row to reorganize, entirely within this tree's own
+      // DOM, never dropped on a map canvas, so it was never at risk here.
+      // itemsDraggable:false drops dragging entirely.
+      if (opts.itemsDraggable !== false && opts.itemsDraggable !== "manual") {
+        row.draggable = true;
+        row.addEventListener("dragstart", e => {
+          e.stopPropagation();
+          e.dataTransfer.setData("application/x-gpxitem-" + item.kind, item.id);
+          e.dataTransfer.effectAllowed = "move";
+        });
+      } else if (opts.itemsDraggable === "manual") {
+        row.addEventListener("mousedown", e => {
+          if (e.button !== 0 || e.target.closest(".gt-check, .gt-btn")) return;
+          const startX = e.clientX, startY = e.clientY;
+          let dragging = false, ghost = null;
+          const dropTarget = () => (typeof opts.dropTarget === "function" ? opts.dropTarget() : opts.dropTarget);
+          const overTarget = ev => {
+            const t = dropTarget();
+            if (!t || !t.getBoundingClientRect) return false;
+            const r = t.getBoundingClientRect();
+            return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+          };
+          function onMove(ev) {
+            if (!dragging) {
+              if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+              dragging = true;
+              ghost = document.createElement("div");
+              ghost.textContent = KIND[item.kind].leafIcon + " " + item.name;
+              ghost.style.cssText = "position:fixed;z-index:99999;pointer-events:none;"
+                + "font-family:'Barlow Condensed';font-size:13px;color:var(--snow,#eef4fb);"
+                + "background:var(--slate2,#1b2738);border:1px solid var(--coral,#ff6a3d);"
+                + "border-radius:8px;padding:6px 10px;box-shadow:0 6px 16px rgba(0,0,0,.4);opacity:.92";
+              document.body.appendChild(ghost);
+            }
+            ghost.style.left = (ev.clientX + 12) + "px";
+            ghost.style.top = (ev.clientY + 12) + "px";
+            ghost.style.borderColor = overTarget(ev) ? "var(--go,#38e0a6)" : "var(--coral,#ff6a3d)";
+          }
+          function onUp(ev) {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            if (!dragging) return; // no real movement — the row's own onclick (below) handles a plain click
+            if (ghost) ghost.remove();
+            if (overTarget(ev) && opts.onPick) opts.onPick(item);
+          }
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        });
+      }
       if (opts.selectable) {
         const chk = document.createElement("input");
         chk.type = "checkbox"; chk.className = "gt-check";

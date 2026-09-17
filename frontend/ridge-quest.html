@@ -21,6 +21,13 @@
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script src="/here-marker.js"></script>
 <script src="/device-heading.js"></script>
+<!-- Shared off-course vibration/tone warning for chute corridors — same
+     module geofence-engine.html's Tour Player uses, wired here (2026-09-17)
+     into Ridge Quest's own live tracking so it fires during Start Tracking
+     without needing a separate narrated tour open. See its own header
+     comment for the engage/coverage/heading gating; this page only supplies
+     callbacks (WHAT happens), never touches its WHEN logic. -->
+<script src="/chute-guard.js"></script>
 <!-- Shared 3D DEM-terrain wiring (Terrarium DEM + setTerrain + tilt). Used
      here when the workspace's 3D flag is on; the older map surfaces still
      carry their own copy of this. -->
@@ -108,6 +115,8 @@
   #fogMap{position:absolute;inset:0}
   .fogMapBack{position:absolute;top:14px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
   .fogMapTilt{position:absolute;top:58px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
+  .fogMapCompass{position:absolute;left:14px;z-index:2;width:44px;height:44px;margin:0;padding:0;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center;transition:transform .3s ease,background .15s,border-color .15s}
+  .fogMapCompass.on{background:var(--coral);border-color:var(--coral);color:#141d2b}
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
@@ -727,6 +736,7 @@ const Quest = {
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
   onCoverage: null,     // R9 — callback(corridorName, pct, passed) — fired once per band exit (whether it logged a run or was discarded), so a partial/clipped crossing isn't silent the way a below-threshold discard otherwise would be
   onCheckpointVertical: null, // callback(totalM) — fired when _tickCheckpoints credits a descent, so Home's "Vertical today" tile ticks up live
+  onNarrate: null,       // callback(sayText, zoneId) — fired once per band entry for a corridor with narration authored, wired up regardless of which screen (Home/My map) is showing
 
   async loadCorridors(){
     try{
@@ -740,6 +750,10 @@ const Quest = {
       // GET /bundle handler). null = every activity allowed (backward
       // compat default, matches every project that predates this filter).
       this.allowedActivities = bundle.questActivities || null;
+      // Workspace flag (same bundle.chuteGuardEnabled geofence-engine.html's
+      // Tour Player already reads) — gates the off-course vibration/tone
+      // warning wired into _onFix() below via chute-guard.js.
+      this.chuteGuardEnabled = !!bundle.chuteGuardEnabled;
       // Injected server-side into the bundle at read time (worker.js's
       // GET /bundle handler) — "My map" draws the all-runs overlay only when
       // fog AND tile art are both off for the project.
@@ -768,6 +782,12 @@ const Quest = {
                  // fraction, not a noisy GPS-altitude delta. null until
                  // Backfill Elevation has been run on the row.
                  descentM: target.geometry.descentM!=null ? target.geometry.descentM : null,
+                 // Spoken narration (2026-09-17) — authored the same way as
+                 // any other stop's say text (zoneToEngine bakes it onto the
+                 // zone's own trigger, not corridor-specific), null if none
+                 // was ever recorded/typed for this run. Spoken once per band
+                 // entry by _tick() below.
+                 say: (z.triggers && z.triggers[0] && z.triggers[0].say) || null,
                  widthM:target.geometry.widthM||10, path, lengthM, ref };
       }).filter(Boolean);
       // R4 — Viewpoint zones: a plain circle stop flagged isViewpoint, with
@@ -822,7 +842,30 @@ const Quest = {
       // A denied/unavailable permission used to vanish silently here — the
       // button flips to "Stop tracking" and nothing ever happens again,
       // indistinguishable from a real bug. Surface it instead.
-      err=>{ if(this.onStatus) this.onStatus({ok:false, message: err && err.message ? err.message : "location error (code "+(err&&err.code)+")"}); },
+      //
+      // Real bug, 2026-09-17: watchPosition() (above) already returns a real
+      // watch id SYNCHRONOUSLY the moment it's called, before the browser has
+      // even asked for permission — so this.watchId gets set, active()
+      // reports true, and the Home screen's activity picker permanently
+      // disables itself (see its own "disabled while tracking" comment),
+      // regardless of whether the fix ever actually arrives. PERMISSION_DENIED
+      // (code 1) is unrecoverable without the visitor changing a browser/OS
+      // setting — watchPosition keeps re-firing this same error forever, so
+      // without this, the activity picker (confirmed live: "stuck" on
+      // whichever activity was selected when the prompt was denied/dismissed)
+      // and the Start/Stop button both stay wedged in "tracking" state with
+      // no way out except reloading the page. stop() here clears watchId so
+      // active() correctly reports false again; stopped:true on the status
+      // payload lets the host page's onStatus reset the button/picker UI to
+      // match. POSITION_UNAVAILABLE/TIMEOUT (codes 2/3) are left alone — those
+      // are often transient mid-walk GPS dropouts the watch can still recover
+      // from on its own, and killing tracking on the first one would be worse
+      // than the bug this fixes.
+      err=>{
+        const denied = err && err.code===1;
+        if(denied) this.stop();
+        if(this.onStatus) this.onStatus({ok:false, message: err && err.message ? err.message : "location error (code "+(err&&err.code)+")", stopped:denied});
+      },
       { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
     );
     return true;
@@ -848,6 +891,12 @@ const Quest = {
       return;   // off the run network: no corridor ticks, no fog reveal, no sharing
     }
     this.corridors.forEach(corridor=>this._tick(corridor, p, this.selectedActivity));
+    // Off-course chute warning — travel heading, not device compass, same
+    // "phone in a pocket" reasoning Guidance Bot already uses elsewhere in
+    // this codebase (a stationary/paused compass reading would falsely gate
+    // "engaged" on or off regardless of whether the skier is actually moving
+    // along the line).
+    if(typeof ChuteGuard!=="undefined") ChuteGuard.tick({lat:p.lat,lon:p.lon,acc:p.acc,speed:p.speed,t:fix.t}, p.headingTravel);
     this._revealFog(p, fix.acc);
     this._tickViewpoints(p);
     this._tickCheckpoints(p);
@@ -1016,6 +1065,12 @@ const Quest = {
     const inBand = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref) < 0;
     if(st.phase==="idle" && inBand){
       st.phase="inRun"; st.buffer=[p];
+      // Spoken narration (2026-09-17) — fires once per band entry, same
+      // moment the Tour Player's own zone.fires_on:"enter" trigger would.
+      // Cooldown-gated the same as everything else in this state machine
+      // (st.cooldownUntil, set on exit below), so re-entering right after
+      // leaving doesn't re-speak.
+      if(corridor.say && this.onNarrate) this.onNarrate(corridor.say, corridor.zoneId);
     } else if(st.phase==="inRun" && inBand){
       st.buffer.push(p);
     } else if(st.phase==="inRun" && !inBand){
@@ -1069,18 +1124,29 @@ const Quest = {
 
     // R8 — selectedActivity is the player's own manual choice (Ski/Hike/
     // Bike/Drive on Home) and is now the PRIMARY driver of classification,
-    // with two exceptions that stay authoritative regardless of what was
+    // with three exceptions that stay authoritative regardless of what was
     // selected: a lift is mechanized transport, physically detected by
     // ascending a runType:"lift" corridor, not something you can "select"
-    // your way out of; and a corridor the author explicitly marked
+    // your way out of; a corridor the author explicitly marked
     // runType:"hike" (a real hiking-only trail) stays hike even if a fast
-    // trail-runner briefly clears the ski-speed threshold on it.
+    // trail-runner briefly clears the ski-speed threshold on it; and a
+    // corridor marked runType:"chute" (expert-only technical ski terrain by
+    // definition — Chute Guard exists specifically because these are narrow
+    // and consequential) always counts as ski, the same way — real bug,
+    // 2026-09-17: without this, the generic speed/direction heuristic below
+    // silently downgraded a completed chute to "hike" any time it was
+    // skied cautiously/slowly (sideslipping a tight line, a low-vis lap) or
+    // walked for testing, confirmed live on a real chute corridor that
+    // registered as a hike in the leaderboard despite being authored and
+    // rendered as a chute everywhere else.
     let activity;
     if(corridor.runType==="lift"){
       if(!ascending) return; // downhill lift-line foot traffic isn't a lift ride
       activity="lift";
     } else if(corridor.runType==="hike"){
       activity="hike";
+    } else if(corridor.runType==="chute"){
+      activity="ski";
     } else if(selectedActivity==="hike" || selectedActivity==="drive" || selectedActivity==="xcski"){
       // xcski (Nordic/cross-country) goes here, not in the ski branch below:
       // Nordic terrain is flat/rolling, so the ski branch's `descending &&`
@@ -1148,23 +1214,53 @@ function questSeasonIdClient(date){
   const y = d.getUTCFullYear(), m = d.getUTCMonth()+1;
   return m>=9 ? (y+"-"+(y+1)) : ((y-1)+"-"+y);
 }
-function runRowHtml(r){
-  const activity = r.activity;
-  const verticalM = r.vertical_m!=null ? r.vertical_m : r.verticalM;
-  const distanceM = r.distance_m!=null ? r.distance_m : r.distanceM;
+// Groups same-named runs into one row with a ×N counter (2026-09-17) —
+// previously every lap of the same run got its own full line, which read as
+// noisy repetition rather than "you skied this N times" the way the
+// existing "Your chutes" screen (chuteRowHtml, Today/Season toggle) already
+// shows chutes specifically. This brings the same treatment to Home's plain
+// "Today" list, which covers every activity, not just chutes. Order is
+// preserved from the input (most-recent-first, same as the server's own
+// ORDER BY started_at DESC) — the first occurrence of a name sets its
+// display fields (activity/difficulty), later occurrences just add to the
+// running totals.
+function groupRuns(runs){
+  const map = new Map();
+  (runs||[]).forEach(r=>{
+    const name = r.run_name || r.runName || "Run";
+    const verticalM = r.vertical_m!=null ? r.vertical_m : r.verticalM;
+    const distanceM = r.distance_m!=null ? r.distance_m : r.distanceM;
+    const durationS = r.duration_s!=null ? r.duration_s : r.durationS;
+    let g = map.get(name);
+    if(!g){
+      g = { name, activity:r.activity, count:0, pointsSum:0, durationSum:0,
+            // null stays null (not 0) when this activity never carries a
+            // vertical/distance figure at all, so groupedRunRowHtml's own
+            // R8 "which one did this activity actually earn from" choice
+            // still works the same way runRowHtml's did per-run.
+            verticalSum: verticalM!=null ? 0 : null, distanceSum: distanceM!=null ? 0 : null,
+            anyPowder:false };
+      map.set(name, g);
+    }
+    g.count++;
+    g.pointsSum += (r.points||0);
+    g.durationSum += (durationS||0);
+    if(g.verticalSum!=null && verticalM!=null) g.verticalSum += Math.abs(verticalM);
+    if(g.distanceSum!=null && distanceM!=null) g.distanceSum += distanceM;
+    if((r.snow_bonus!=null?r.snow_bonus:1) > 1) g.anyPowder = true;
+  });
+  return [...map.values()];
+}
+function groupedRunRowHtml(g){
   const meta = [
-    fmtDuration(r.duration_s!=null?r.duration_s:r.durationS),
-    // R8 — bike/drive score by distance, not vertical (verticalM is null
-    // for them) — show whichever the activity actually earned points from.
-    (verticalM!=null ? Math.abs(Math.round(verticalM))+"m vert"
-      : (distanceM!=null ? (Math.round(distanceM/100)/10)+"km" : null)),
+    fmtDuration(g.durationSum),
+    (g.verticalSum!=null ? Math.round(g.verticalSum)+"m vert"
+      : (g.distanceSum!=null ? (Math.round(g.distanceSum/100)/10)+"km" : null)),
   ].filter(Boolean).join(" · ");
-  const points = r.points!=null ? r.points : null;
-  const powder = (r.snow_bonus!=null?r.snow_bonus:1) > 1;
-  const activityLabel = (QUEST_ACTIVITIES.find(a=>a.key===activity)||{}).label || activity;
-  return '<div class="runrow"><span class="badge '+esc(activity)+'">'+esc(activityLabel)+'</span>'
-    +'<span class="name">'+esc(r.run_name||r.runName||"Run")+(powder?' ❄':'')+'</span>'
-    +'<span class="meta">'+esc(meta)+(points?' · +'+points+' pts':'')+'</span></div>';
+  const activityLabel = (QUEST_ACTIVITIES.find(a=>a.key===g.activity)||{}).label || g.activity;
+  return '<div class="runrow"><span class="badge '+esc(g.activity)+'">'+esc(activityLabel)+'</span>'
+    +'<span class="name">'+esc(g.name)+(g.anyPowder?' ❄':'')+(g.count>1?' ×'+g.count:'')+'</span>'
+    +'<span class="meta">'+esc(meta)+(g.pointsSum?' · +'+g.pointsSum+' pts':'')+'</span></div>';
 }
 async function refreshRuns(playerId){
   const listEl=document.getElementById("todayRuns");
@@ -1173,8 +1269,9 @@ async function refreshRuns(playerId){
     const j = await api("/api/players/"+playerId+"/runs");
     const today = new Date().toDateString();
     const todays = (j.runs||[]).filter(r=>new Date(r.started_at).toDateString()===today);
-    listEl.innerHTML = todays.length
-      ? todays.map(runRowHtml).join("")
+    const grouped = groupRuns(todays);
+    listEl.innerHTML = grouped.length
+      ? grouped.map(groupedRunRowHtml).join("")
       : '<div class="empty">No runs logged yet today.</div>';
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load runs.</div>';
@@ -1220,6 +1317,150 @@ async function refreshStats(playerId){
     tilesEl.innerHTML='';
   }
 }
+// Chute Guard, wired into Ridge Quest's own live tracking (2026-09-17) —
+// previously only ever ran inside the separate narrated Tour Player
+// (geofence-engine.html), so it never fired for anyone just using Ridge
+// Quest's own Start Tracking / My map flow, confirmed live as "no vibration
+// when I go out of bounds" even on a corridor correctly authored as a chute.
+//
+// Adapts Quest.corridors' own flat {runType,widthM,path,...} shape (see its
+// own comment at the top of the Quest object) into the {id,name,runType,
+// layers:[{geometry:{type:'corridor',path,widthM}}]} shape chute-guard.js's
+// load() expects — the exact shape a published bundle's zones already have,
+// which Quest.corridors was itself built FROM (loadCorridors() reads
+// target.geometry.path/widthM out of the same zones array), so this is a
+// re-wrap, not a re-fetch or a re-derivation.
+function chuteGuardZonesFor(corridors){
+  return (corridors||[]).map(c=>({ id:c.zoneId, name:c.name, runType:c.runType,
+    layers:[{ geometry:{ type:"corridor", path:c.path, widthM:c.widthM } }] }));
+}
+// iOS Safari/Chrome have no Vibration API at all (Apple has never
+// implemented it) — same fallback geofence-engine.html's Audio.rumble()
+// already uses there, reimplemented here standalone since this page has no
+// shared Audio object of its own (no spatial voice, no ambient beds — the
+// narration playback below is separate and simpler, just one <audio>
+// element playing one clip at a time, no WebAudio routing needed for it).
+// Lazily creates its own
+// AudioContext on first use, inside the real tap that started tracking (or
+// toggled compass mode) — same "already inside a user gesture by the time
+// a warning fires" reasoning Audio.unlock() documents elsewhere.
+let _cgAc = null;
+// Creates + resumes the AudioContext from inside a real tap (Start tracking)
+// without playing anything audible — same "unlock ahead of time" reasoning
+// as Audio.unlock() elsewhere: a context first created/resumed later, from
+// inside a GPS watchPosition callback (no user gesture), can silently stay
+// suspended on iOS and the warning tone would never actually sound.
+function chuteGuardPrimeAudio(){
+  try{
+    if(!_cgAc) _cgAc = new (window.AudioContext||window.webkitAudioContext)();
+    if(_cgAc.state==="suspended") _cgAc.resume();
+  }catch(e){}
+}
+function chuteGuardRumble(){
+  try{
+    if(!_cgAc) _cgAc = new (window.AudioContext||window.webkitAudioContext)();
+    if(_cgAc.state==="suspended") _cgAc.resume();
+    const t=_cgAc.currentTime, o=_cgAc.createOscillator(), g=_cgAc.createGain();
+    o.type="sine"; o.frequency.value=220;
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(0.16,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
+    o.connect(g); g.connect(_cgAc.destination); o.start(t); o.stop(t+0.24);
+  }catch(e){}
+}
+// Deliberately no spoken alert here specifically (mid-run drift warnings
+// stay non-verbal/subtle, same reasoning geofence-engine.html's own
+// chuteGuardCallbacks() documents) — vibration where supported, the tone
+// fallback otherwise, plus rqToast so it's visible too (this page has no
+// map-edge visual pulse the way the Tour Player does).
+function chuteGuardCallbacks(){
+  return { onWarn(corridorId, name){
+    if("vibrate" in navigator){ try{ navigator.vibrate(110); }catch(e){} }
+    else chuteGuardRumble();
+    rqToast("⚠ drifted outside \""+(name||"chute")+"\"'s line");
+  } };
+}
+// Spoken narration (2026-09-17) — wired into Quest.onNarrate (fired once per
+// corridor band entry, see _tick()'s own comment), so "no audio when I enter
+// a corridor" now has somewhere to actually play from in Ridge Quest itself,
+// not just the separate Tour Player.
+//
+// iOS Safari/Chrome-on-iOS has NO reliable unlock for speechSynthesis.speak()
+// called from a non-gesture context (a GPS watchPosition callback) — already
+// confirmed live and documented at length in field-recorder.html, which hit
+// this exact problem first. Same fix reused here verbatim: route the say
+// text through this app's own /api/tts (server-side Workers AI) for real
+// audio bytes, then play those through ONE shared, gesture-unlocked <audio>
+// element — browser speechSynthesis is kept only as a last-resort fallback
+// if /api/tts is unreachable (offline), same as field-recorder.html.
+const _sayTtsCache = new Map(); // say text -> blob: URL
+async function sayViaTts(text){
+  if(_sayTtsCache.has(text)) return _sayTtsCache.get(text);
+  const r = await fetch("/api/tts", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({text}) });
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  const url = URL.createObjectURL(await r.blob());
+  _sayTtsCache.set(text, url);
+  return url;
+}
+let _sayEl = null, _sayUnlocked = false;
+function _ensureSayEl(){
+  if(_sayEl) return _sayEl;
+  const el=document.createElement("audio");
+  el.setAttribute("playsinline","");
+  el.style.cssText="position:fixed;width:0;height:0;opacity:0;pointer-events:none";
+  document.body.appendChild(el);
+  _sayEl=el;
+  return el;
+}
+// A tiny silent WAV, same technique Audio.unlock() uses in
+// geofence-engine.html — playing a real (inaudible) clip inside the actual
+// "Start tracking" tap is what lets a LATER, non-gesture play() call
+// (from _tick()'s GPS callback) succeed on iOS.
+function _silentWavBlob(){
+  const sr=8000, n=sr, buf=new ArrayBuffer(44+n*2), dv=new DataView(buf);
+  const str=(o,s)=>{ for(let i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); };
+  str(0,"RIFF"); dv.setUint32(4,36+n*2,true); str(8,"WAVE");
+  str(12,"fmt "); dv.setUint32(16,16,true); dv.setUint16(20,1,true);
+  dv.setUint16(22,1,true); dv.setUint32(24,sr,true); dv.setUint32(28,sr*2,true);
+  dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+  str(36,"data"); dv.setUint32(40,n*2,true);
+  return new Blob([buf],{type:"audio/wav"});
+}
+function unlockSayAudio(){
+  try{
+    const el=_ensureSayEl();
+    if(!_sayUnlocked){
+      el.src=URL.createObjectURL(_silentWavBlob());
+      el.play().then(()=>{ _sayUnlocked=true; }).catch(()=>{});
+    } else {
+      // Re-touch on every tap, not just the first — the same "user
+      // activation" a prior unlock relied on can lapse over a long session
+      // (confirmed live in field-recorder.html, same fix reused here).
+      el.play().catch(()=>{});
+    }
+  }catch(e){}
+}
+function speakViaBrowserTts(text){
+  // Last-resort fallback only (offline, or /api/tts failed) — same
+  // restriction applies here, so this may still be silent on iOS when
+  // triggered from the GPS callback, but it's better than nothing with no
+  // network to reach /api/tts at all.
+  try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(text)); }catch(e){}
+}
+// Bumped on every call — an in-flight sayViaTts() fetch checks its own
+// snapshot against the live value before playing, so a slow fetch for a
+// corridor the skier has already left doesn't speak late over whatever
+// they've since entered.
+let _sayGen = 0;
+function narrateCorridor(text){
+  if(!text) return;
+  const gen = ++_sayGen;
+  sayViaTts(text).then(url=>{
+    if(gen!==_sayGen) return; // superseded by a newer entry while this was in flight
+    const el=_ensureSayEl();
+    el.src=url; el.play().catch(()=>{});
+  }).catch(()=>speakViaBrowserTts(text));
+}
 function renderHome(){
   const s=getSession();
   app.innerHTML =
@@ -1255,6 +1496,11 @@ function renderHome(){
   // by the time it paints, without fetching either one twice.
   (async ()=>{
     await Promise.all([Quest.loadCorridors(), Quest.loadFogCells(s.player.id)]);
+    // Re-load on every Home render, same as applyActivityFilter() below —
+    // corridors may have just changed (a different resort/project) and
+    // ChuteGuard.load() is cheap/idempotent (see its own header comment).
+    if(typeof ChuteGuard!=="undefined") ChuteGuard.load(Quest.chuteGuardEnabled ? chuteGuardZonesFor(Quest.corridors) : [], chuteGuardCallbacks());
+    Quest.onNarrate = narrateCorridor;
     const el = document.getElementById("exploredPct");
     if(!el) return; // navigated away before this resolved
     const pct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
@@ -1269,6 +1515,16 @@ function renderHome(){
   const statusEl=document.getElementById("gpsStatus");
   const coverageEl=document.getElementById("coverageStatus");
   const onStatus=(st)=>{
+    // Real bug, 2026-09-17: a permission-denied GPS error used to only ever
+    // update this status text — Quest.start()'s stop() call (see its own
+    // comment) now correctly clears watchId when this fires, but the
+    // Start/Stop button and the activity picker still need telling, or they
+    // stay visually stuck in "tracking" (Stop tracking / dimmed, unclickable
+    // activity buttons) even though tracking has actually already stopped.
+    if(st.stopped && trackBtn){
+      trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
+      activityBtns.forEach(b=>b.style.opacity="1");
+    }
     if(!statusEl) return;
     statusEl.textContent = st.ok
       ? "last fix "+new Date(st.t).toLocaleTimeString()+", ±"+Math.round(st.acc)+"m"
@@ -1346,6 +1602,8 @@ function renderHome(){
       statusEl.textContent="waiting for GPS…";
       coverageEl.textContent="";
       if(window.DeviceHeading) DeviceHeading.start();  // compass for the "you are here" arrow — this tap is the iOS permission gesture
+      chuteGuardPrimeAudio();  // this tap is also the iOS AudioContext-unlock gesture for the chute-guard fallback tone
+      unlockSayAudio();        // and the iOS <audio>-element-unlock gesture for spoken corridor narration
       const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity, onCoverage);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
@@ -2007,6 +2265,7 @@ function renderFogMap(){
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">Tilt</button>' : '')
+    +'<button class="ghost fogMapCompass" id="fogCompass" style="top:'+(use3D?102:58)+'px" title="Compass mode — rotate the map to match which way you\'re facing">🧭</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
@@ -2122,14 +2381,63 @@ function renderFogMap(){
     const here = HereMarker.attach(map, { follow:'edge',
       bounds: QBOUNDS, bufferM: 10000,
       onSite: (on, initial)=>{ Quest._offsite = !on; if(on && !initial) GPSFilter.reset(); } });
-    // Real-time compass -> needle, off the orientation event. This screen is
-    // rebuilt each time "My map" opens, so _unbindHeading (declared above) is
-    // called in the #fogBack teardown.
-    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange(h=>here.setHeading(h));
+    // Compass mode (2026-09-17) — off by default (map stays north-up, the
+    // familiar "browse the whole network" view). Toggled on via #fogCompass:
+    // the map itself rotates live to match the device compass heading, so
+    // whatever's drawn toward the top of the screen is genuinely in front of
+    // the player — the "point your phone at a chute and see it's ahead of
+    // you, not behind or to the side" use case a north-up map can't give you
+    // (a chute drawn "up" on a north-up map only means north of you, not
+    // in-front-of-you, unless you happen to be facing north). Distinct from
+    // the plain arrow rotation below, which only ever rotated the little
+    // avatar wedge, never the map itself.
+    let compassMode = false;
+    const compassBtn = document.getElementById("fogCompass");
+    // Once compassMode is on, the map's own bearing already equals "which
+    // way I'm facing" by construction — the avatar wedge pointing anywhere
+    // but straight up would be redundant at best, misleading at worst (see
+    // setWedge()'s own doc: it rotates true-north-relative, i.e. relative to
+    // a north-up map specifically). 0 here means "straight up" in wedge terms.
+    const wedgeHeadingFor = raw => compassMode ? 0 : raw;
+    function setCompassMode(on){
+      compassMode = on;
+      if(compassBtn) compassBtn.classList.toggle("on", on);
+      if(on) map.dragRotate.disable(); else map.dragRotate.enable();
+      map.easeTo({ bearing:on ? (DeviceHeading.heading||0) : 0, duration:300 });
+    }
+    if(compassBtn) compassBtn.onclick = async ()=>{
+      if(compassMode){ setCompassMode(false); return; }
+      if(!window.DeviceHeading || !DeviceHeading.supported){
+        // No compass on this device/browser at all — nothing to turn on.
+        rqToast("This device doesn't support a compass.");
+        return;
+      }
+      // This tap IS the user gesture DeviceOrientationEvent.requestPermission()
+      // needs on iOS — same pattern as Quest.start()'s own call, but this
+      // button can turn compass mode on before "Start tracking" is ever
+      // tapped, so it needs its own gesture-backed request rather than
+      // assuming DeviceHeading is already listening.
+      const ok = await DeviceHeading.start();
+      if(!ok){
+        rqToast("Compass access is off for this site — check your browser's motion & orientation permission.");
+        return;
+      }
+      setCompassMode(true);
+    };
+    // Real-time compass -> needle (north-up mode) or map bearing (compass
+    // mode), off the orientation event. This screen is rebuilt each time "My
+    // map" opens, so _unbindHeading (declared above) is called in the
+    // #fogBack teardown.
+    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange(h=>{
+      if(compassMode) map.setBearing(h);
+      here.setHeading(wedgeHeadingFor(h));
+    });
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,
       // Device compass (which way the phone points) when we have it, else
-      // the GPS travel heading (which way you're moving).
-      headingDeg:((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading : p.headingTravel),
+      // the GPS travel heading (which way you're moving) — wedgeHeadingFor
+      // collapses to "straight up" instead when compass mode has already
+      // pointed the whole map that way (see its own comment above).
+      headingDeg:wedgeHeadingFor((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading : p.headingTravel),
       accM:p.acc });
 
     // --- Live friends ---------------------------------------------------

@@ -2534,11 +2534,23 @@ function _zoneMousedown(e){
   if(z.shape.type==="circle")    snap={center:[...z.shape.center]};
   else if(z.shape.type==="polygon"||z.shape.type==="corridor") snap={coords:z.shape.coords.map(c=>[...c])};
   else                           snap={from:[...z.shape.from],to:[...z.shape.to]};
-  map.dragPan.disable();
+  const noMove=z.shape.type==="corridor";
+  // Real bug, 2026-09-16: this used to call map.dragPan.disable() for EVERY
+  // shape type unconditionally, including corridors. A corridor is noMove
+  // (its geometry never translates — mousemove bails below before applying
+  // any offset), so pressing down and dragging on ANY corridor's line
+  // disabled map panning AND never moved the shape: nothing on screen
+  // responded for as long as the mouse stayed down, which read exactly like
+  // the map had locked up (confirmed live — reproduces on every corridor,
+  // not just a newly authored one). Only disable dragPan when there's
+  // actual zone geometry this gesture might drag out from under a pan —
+  // for a noMove corridor, leaving dragPan on lets a press-and-drag on its
+  // line just pan the map underneath it, same as dragging empty map space.
+  if(!noMove) map.dragPan.disable();
   // Corridors are fixed to their library geometry — a mousedown just selects
   // them, never translates. (noMove: mousemove bails before applying an offset.)
-  _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false, noMove:z.shape.type==="corridor"};
-  map.getCanvas().style.cursor=_zoneDrag.noMove?"pointer":"grabbing";
+  _zoneDrag={zIdx, startLng:e.lngLat.lng, startLat:e.lngLat.lat, snap, moved:false, noMove};
+  map.getCanvas().style.cursor=noMove?"pointer":"grabbing";
 }
 map.on("mousedown","fence-fill",_zoneMousedown);
 map.on("mousedown","fence-line",_zoneMousedown);
@@ -2546,10 +2558,15 @@ map.on("mousedown","trip-hit",_zoneMousedown);
 
 // mousemove: apply offset to zone geometry while dragging
 map.on("mousemove",e=>{
-  if(!_zoneDrag || _zoneDrag.noMove) return; // corridors don't translate
+  if(!_zoneDrag) return;
   const dLng=e.lngLat.lng-_zoneDrag.startLng, dLat=e.lngLat.lat-_zoneDrag.startLat;
   if(!_zoneDrag.moved&&Math.abs(dLng)<0.000015&&Math.abs(dLat)<0.000015) return;
   _zoneDrag.moved=true;
+  // Corridors don't translate, but the gesture still counts as "moved" (set
+  // above) so mouseup's click-vs-drag check below doesn't mistake a real
+  // drag-to-pan for a plain click and flyTo back to the corridor, undoing
+  // the pan the user just did.
+  if(_zoneDrag.noMove) return;
   const z=zones[_zoneDrag.zIdx], s=_zoneDrag.snap;
   if(z.shape.type==="circle"){
     // A stop snapped onto a map-match corridor stays constrained to that
@@ -3045,14 +3062,45 @@ function renderGlobalCodeObjectsChips(){
     });
     return best;
   }
+  // Real bug, 2026-09-16: dragging a corridor from the Corridors palette
+  // onto the map (native HTML5 drag-and-drop) locked up the whole tab on a
+  // workspace with 3D/terrain on (confirmed live — "test" app has
+  // three_d_enabled=1; the CHUTE TEST corridor being dragged has completely
+  // normal, tiny geometry, 3 clean points, ruling out a degenerate-geometry
+  // rendering hang). MapLibre's terrain mode forces a continuous per-frame
+  // WebGL repaint even at rest (its own known characteristic, not a bug in
+  // this app) — a native OS-level drag gesture hovering over a canvas that's
+  // repainting every frame is a well-documented Chromium/GPU-compositor
+  // conflict that can hang the tab for as long as the drag continues.
+  // Suspending terrain for the duration of any recognized drag over the
+  // canvas (not just corridors — the same WebGL-repaint conflict applies to
+  // every drop type this handler accepts) and restoring it on drop/dragleave
+  // avoids the conflict without giving up terrain rendering the rest of the
+  // time.
+  let _terrainSuspendedForDrag=false;
+  function _suspendTerrainForDrag(){
+    if(_terrainSuspendedForDrag || !_threeDOn || !map.getTerrain()) return;
+    _terrainSuspendedForDrag=true;
+    map.setTerrain(null);
+  }
+  function _resumeTerrainAfterDrag(){
+    if(!_terrainSuspendedForDrag) return;
+    _terrainSuspendedForDrag=false;
+    if(_threeDOn) map.setTerrain({source:TERRAIN_SOURCE_ID,exaggeration:1});
+  }
   function setupMapDrop(){
     const canvas=map.getCanvas();
     canvas.addEventListener("dragover",e=>{
       if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")||e.dataTransfer.types.includes("application/x-asset-object-json")
-         ||e.dataTransfer.types.includes("application/x-gpxitem-corridor"))e.preventDefault();
+         ||e.dataTransfer.types.includes("application/x-gpxitem-corridor")){
+        e.preventDefault();
+        _suspendTerrainForDrag();
+      }
     });
+    canvas.addEventListener("dragleave",()=>_resumeTerrainAfterDrag());
     canvas.addEventListener("drop",e=>{
       e.preventDefault();
+      _resumeTerrainAfterDrag();
       // Drag a saved corridor from the Corridors palette onto the map —
       // same corridor-tree.js MIME type its item rows set on dragstart. Drops
       // a linked, geometry-read-only stop (importCorridorFromLibrary); no
@@ -4163,7 +4211,14 @@ const gpxTree=CorridorTree.mount(document.getElementById("gpxTreeHost"),{
   isSelected: it=>selectedWalkingPathIds.includes(it.id),
   onToggle: (it,on)=>toggleWalkingPath(it.id,on),
   onError: (m)=>{ const st=document.getElementById("status"); if(st) st.textContent=m; },
-  onPick: item=>importCorridorFromLibrary(item.id)
+  onPick: item=>importCorridorFromLibrary(item.id),
+  // A native HTML5 drag onto the map locked up the tab (see corridor-tree.js's
+  // own note on this) — "manual" is a plain mouse-event drag that never
+  // touches the native drag API, so the same press-drag-release gesture
+  // works without it. dropTarget is evaluated per-drag (not cached) since
+  // map.getCanvas() is only available once the map itself has loaded.
+  itemsDraggable:"manual",
+  dropTarget:()=>map.getCanvas()
 });
 document.getElementById("gpxRefresh").onclick=()=>gpxTree.refresh({appId:afAppId()});
 document.getElementById("gpxPullShapes").onclick=()=>reconcileLinkedCorridors();

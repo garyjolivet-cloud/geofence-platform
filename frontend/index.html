@@ -299,7 +299,7 @@ function projectRow(p, clientId){
   const meta=[("v"+(p.bundleVersion||1)), when(p.updatedAt)].filter(Boolean).join(" · ");
   return `<div class="p-row">
     ${badge}
-    <span class="p-name" onclick="location.href='/editor?project=${id}'" title="Edit">${esc(p.name||p.id)}</span>
+    <span class="p-name" onclick="location.href='/editor?project=${id}${clientId?'&asClient='+esc(clientId):''}'" title="Edit">${esc(p.name||p.id)}</span>
     <span class="p-meta">${meta}</span>
     <button class="p-btn go" onclick="event.stopPropagation();openWalkQr('${escJs(p.id)}','${escJs(p.name||p.id)}')" title="Walk (scan QR on your phone)">▶</button>
     <a class="p-btn" href="/field?project=${id}" title="Field Recorder">🎙</a>
