@@ -191,28 +191,60 @@ function rqToast(msg){
   clearTimeout(rqToast._t); rqToast._t = setTimeout(()=>{ t.classList.remove("show"); }, 3200);
 }
 
-// Screen-lock / backgrounding awareness (battery — 2026-09-17). This can't
-// make tracking actually CONTINUE while the screen is locked — iOS Safari
-// suspends a backgrounded/locked tab's JavaScript outright (not just
-// throttles it), a platform restriction no web page can code around, and
-// nothing here tries to. What it CAN fix: previously there was no feedback
-// at all, so a skier who locked their phone mid-run had no way to know
-// their run silently stopped being logged until they noticed a gap later.
-// Page-level (not tied to whichever screen is showing) since tracking runs
-// independent of Home vs. My map.
+// Screen Wake Lock (2026-09-18) — while actively tracking, stop the phone's
+// own idle timer from auto-locking the screen at all. This is the single
+// biggest lever a web page has against the problem the toast below
+// describes: a LOCKED screen is what triggers iOS Safari to suspend the
+// tab's JavaScript outright, so preventing the auto-lock in the first place
+// (not just reacting to it) is what actually keeps tracking/Chute Guard
+// alive through a run. Real tradeoff, on purpose: the screen stays lit the
+// whole time (faster battery drain, some warmth in a pocket) — acquired
+// only while Quest.active(), released the moment tracking stops.
+// Deliberately can't help with: the user manually pressing the side button
+// (Wake Lock only defeats the automatic idle timer, not a deliberate lock),
+// or switching to another app — the toast below still covers those.
+let _wakeLock = null;
+async function acquireWakeLock(){
+  try{
+    if(!("wakeLock" in navigator) || _wakeLock) return;
+    _wakeLock = await navigator.wakeLock.request("screen");
+    _wakeLock.addEventListener("release", ()=>{ _wakeLock = null; });
+  }catch(e){ _wakeLock = null; } // e.g. low battery mode, or the tab wasn't visible at request time
+}
+function releaseWakeLock(){
+  if(!_wakeLock) return;
+  try{ _wakeLock.release(); }catch(e){}
+  _wakeLock = null;
+}
+
+// Screen-lock / backgrounding awareness (battery — 2026-09-17). Wake Lock
+// above stops the common case (idle auto-lock) from happening at all, but
+// can't stop a deliberate side-button press or switching to another app —
+// both still hide the tab and suspend its JS outright, a platform
+// restriction no web page can code around. What this section fixes:
+// previously there was no feedback at all, so a skier who locked their
+// phone (any way) mid-run had no way to know their run silently stopped
+// being logged until they noticed a gap later. Also re-requests the Wake
+// Lock on the way back — the browser releases it automatically the instant
+// the tab is hidden, and won't restore it for us. Page-level (not tied to
+// whichever screen is showing) since tracking runs independent of Home vs.
+// My map.
 let _rqHiddenSince = null;
 document.addEventListener("visibilitychange", ()=>{
-  if(!Quest.active()) return; // nothing to warn about if tracking isn't even on
+  if(!Quest.active()) return; // nothing to warn about (or re-lock) if tracking isn't even on
   if(document.hidden){
     _rqHiddenSince = Date.now();
     rqToast("Tracking pauses while your screen is locked — reopen to keep logging this run.");
-  } else if(_rqHiddenSince!=null){
-    const awaySec = (Date.now()-_rqHiddenSince)/1000;
-    _rqHiddenSince = null;
-    // Skip the toast for a brief glance away (app-switcher, a notification)
-    // — only worth mentioning once it was gone long enough that a real gap
-    // in the run is plausible.
-    if(awaySec >= 5) rqToast("Welcome back — tracking resumed.");
+  } else {
+    acquireWakeLock();
+    if(_rqHiddenSince!=null){
+      const awaySec = (Date.now()-_rqHiddenSince)/1000;
+      _rqHiddenSince = null;
+      // Skip the toast for a brief glance away (app-switcher, a notification)
+      // — only worth mentioning once it was gone long enough that a real gap
+      // in the run is plausible.
+      if(awaySec >= 5) rqToast("Welcome back — tracking resumed.");
+    }
   }
 });
 
@@ -1366,21 +1398,58 @@ function chuteGuardZonesFor(corridors){
 // shared Audio object of its own (no spatial voice, no ambient beds — the
 // narration playback below is separate and simpler, just one <audio>
 // element playing one clip at a time, no WebAudio routing needed for it).
-// Lazily creates its own
-// AudioContext on first use, inside the real tap that started tracking (or
-// toggled compass mode) — same "already inside a user gesture by the time
-// a warning fires" reasoning Audio.unlock() documents elsewhere.
-let _cgAc = null;
-// Creates + resumes the AudioContext from inside a real tap (Start tracking)
-// without playing anything audible — same "unlock ahead of time" reasoning
-// as Audio.unlock() elsewhere: a context first created/resumed later, from
-// inside a GPS watchPosition callback (no user gesture), can silently stay
-// suspended on iOS and the warning tone would never actually sound.
+//
+// Bug fixed 2026-09-18 (field report: "not loud enough or not working" on
+// iPhone): this used to only create/resume an AudioContext, which is NOT
+// enough — a raw AudioContext oscillator is silenced outright by the
+// phone's hardware ring/silent switch (very commonly flipped while
+// skiing), independent of gain. That's the "not working" half of the
+// report. geofence-engine.html's Audio.unlock() already solved this exact
+// problem for its own tones (see its own comment): play a real, unmuted,
+// looping silent <audio> ELEMENT once — the silence is in the WAV data,
+// not the volume/muted flags — which shifts Safari's page-wide audio
+// session into a category that ignores the switch. Reproduced verbatim
+// here, plus the same inaudible keep-alive oscillator (helps the context
+// survive a brief idle/backgrounding instead of coming back suspended).
+// Also bumped the tone's peak gain/length (0.16→0.3, 0.22s→0.3s, matching
+// ding()'s loudness) for the "not loud enough" half, on a device that isn't
+// silenced.
+let _cgAc = null, _cgSilenceEl = null, _cgKeepAlive = null;
+function _cgSilentWavBlob(){
+  const sr=8000, n=sr; // 1s of silence @ 8kHz mono 16-bit — tiny, loops seamlessly
+  const buf=new ArrayBuffer(44+n*2), dv=new DataView(buf);
+  const str=(o,s)=>{ for(let i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); };
+  str(0,"RIFF"); dv.setUint32(4,36+n*2,true); str(8,"WAVE");
+  str(12,"fmt "); dv.setUint32(16,16,true); dv.setUint16(20,1,true);
+  dv.setUint16(22,1,true); dv.setUint32(24,sr,true); dv.setUint32(28,sr*2,true);
+  dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+  str(36,"data"); dv.setUint32(40,n*2,true);      // sample bytes stay zero = silence
+  return new Blob([buf],{type:"audio/wav"});
+}
+// Creates + resumes the AudioContext, starts the silent unlock loop, and
+// starts the keep-alive oscillator — all from inside a real tap (Start
+// tracking) so none of it needs a user gesture later. Anything set up
+// later, from inside a GPS watchPosition callback (no gesture), can
+// silently stay suspended/muted on iOS and the warning would never sound.
 function chuteGuardPrimeAudio(){
   try{
     if(!_cgAc) _cgAc = new (window.AudioContext||window.webkitAudioContext)();
     if(_cgAc.state==="suspended") _cgAc.resume();
+    if(!_cgKeepAlive){
+      const o=_cgAc.createOscillator(), g=_cgAc.createGain();
+      g.gain.value=0.0001; o.frequency.value=30; o.connect(g); g.connect(_cgAc.destination); o.start(); _cgKeepAlive=o;
+    }
   }catch(e){}
+  if(!_cgSilenceEl){
+    try{
+      const el=document.createElement("audio");
+      el.loop=true; el.volume=1; el.muted=false; el.setAttribute("playsinline","");
+      el.style.cssText="position:fixed;width:0;height:0;opacity:0;pointer-events:none";
+      el.src=URL.createObjectURL(_cgSilentWavBlob());
+      document.body.appendChild(el); el.play().catch(()=>{});
+      _cgSilenceEl=el;
+    }catch(e){}
+  }
 }
 function chuteGuardRumble(){
   try{
@@ -1389,9 +1458,9 @@ function chuteGuardRumble(){
     const t=_cgAc.currentTime, o=_cgAc.createOscillator(), g=_cgAc.createGain();
     o.type="sine"; o.frequency.value=220;
     g.gain.setValueAtTime(0.0001,t);
-    g.gain.exponentialRampToValueAtTime(0.16,t+0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
-    o.connect(g); g.connect(_cgAc.destination); o.start(t); o.stop(t+0.24);
+    g.gain.exponentialRampToValueAtTime(0.3,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.3);
+    o.connect(g); g.connect(_cgAc.destination); o.start(t); o.stop(t+0.32);
   }catch(e){}
 }
 // Deliberately no spoken alert here specifically (mid-run drift warnings
@@ -1550,6 +1619,7 @@ function renderHome(){
     if(st.stopped && trackBtn){
       trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
       activityBtns.forEach(b=>b.style.opacity="1");
+      releaseWakeLock();
     }
     if(!statusEl) return;
     statusEl.textContent = st.ok
@@ -1624,14 +1694,16 @@ function renderHome(){
       trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
       statusEl.textContent="";
       activityBtns.forEach(b=>b.style.opacity="1");
+      releaseWakeLock();
     } else {
       statusEl.textContent="waiting for GPS…";
       coverageEl.textContent="";
       if(window.DeviceHeading) DeviceHeading.start();  // compass for the "you are here" arrow — this tap is the iOS permission gesture
       chuteGuardPrimeAudio();  // this tap is also the iOS AudioContext-unlock gesture for the chute-guard fallback tone
       unlockSayAudio();        // and the iOS <audio>-element-unlock gesture for spoken corridor narration
+      acquireWakeLock();       // and the user-gesture context Wake Lock needs on some browsers — see its own comment
       const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity, onCoverage);
-      if(!ok){ alert("This device/browser doesn’t support GPS tracking."); return; }
+      if(!ok){ alert("This device/browser doesn’t support GPS tracking."); releaseWakeLock(); return; }
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
       activityBtns.forEach(b=>b.style.opacity="0.4");
     }
