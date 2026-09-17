@@ -190,6 +190,31 @@ function rqToast(msg){
   clearTimeout(rqToast._t); rqToast._t = setTimeout(()=>{ t.classList.remove("show"); }, 3200);
 }
 
+// Screen-lock / backgrounding awareness (battery — 2026-09-17). This can't
+// make tracking actually CONTINUE while the screen is locked — iOS Safari
+// suspends a backgrounded/locked tab's JavaScript outright (not just
+// throttles it), a platform restriction no web page can code around, and
+// nothing here tries to. What it CAN fix: previously there was no feedback
+// at all, so a skier who locked their phone mid-run had no way to know
+// their run silently stopped being logged until they noticed a gap later.
+// Page-level (not tied to whichever screen is showing) since tracking runs
+// independent of Home vs. My map.
+let _rqHiddenSince = null;
+document.addEventListener("visibilitychange", ()=>{
+  if(!Quest.active()) return; // nothing to warn about if tracking isn't even on
+  if(document.hidden){
+    _rqHiddenSince = Date.now();
+    rqToast("Tracking pauses while your screen is locked — reopen to keep logging this run.");
+  } else if(_rqHiddenSince!=null){
+    const awaySec = (Date.now()-_rqHiddenSince)/1000;
+    _rqHiddenSince = null;
+    // Skip the toast for a brief glance away (app-switcher, a notification)
+    // — only worth mentioning once it was gone long enough that a real gap
+    // in the run is plausible.
+    if(awaySec >= 5) rqToast("Welcome back — tracking resumed.");
+  }
+});
+
 /* ---- session storage — deliberately separate keys from the staff
    RoleGate session (localStorage["gp.session"]). Players are a wholly
    different, non-staff auth domain (see worker.js's playerAuth()), so this
@@ -2264,7 +2289,7 @@ function renderFogMap(){
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
-    +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">Tilt</button>' : '')
+    +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapCompass" id="fogCompass" style="top:'+(use3D?102:58)+'px" title="Compass mode — rotate the map to match which way you\'re facing">🧭</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
@@ -2276,6 +2301,12 @@ function renderFogMap(){
   document.getElementById("fogBack").onclick=()=>{
     Quest.onFogUpdated=null; Quest.onPosition=null;
     _unbindHeading();
+    // Battery (2026-09-17) — this screen is the only place device heading is
+    // ever actually shown (the arrow wedge / compass-mode bearing); nothing
+    // on Home reads it. Stop the sensor here so it doesn't keep being read
+    // and smoothed for the rest of the session just because tracking is
+    // still on. Re-started below on the way back in.
+    if(window.DeviceHeading) DeviceHeading.stop();
     if(friendPoll){ clearInterval(friendPoll); friendPoll=null; }
     friendMarkers.forEach(m=>m.remove()); friendMarkers.clear();
     if(mapInstance){ try{ mapInstance.remove(); }catch(e){} mapInstance=null; }
@@ -2302,20 +2333,51 @@ function renderFogMap(){
       const initialBounds = questMapBounds();
       if(initialBounds) map.fitBounds(initialBounds, { padding:70, maxZoom:17, duration:0 });
     }
-    // 3D terrain (workspace flag). Terrarium DEM + a subtle sky, and the map
-    // opens pitched so relief reads immediately. The #fogTilt button flattens
-    // it back to 2D (native two-finger / ctrl-drag pitch also works). All the
-    // fog/run fill+line layers below drape onto the DEM automatically.
-    if(use3D){
-      const reduced = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
-      map.on("load", ()=>{
-        Terrain3D.setEnabled(map, true, { sky:true });
-        // Skip the forced pitch when we already opened at the splash's
-        // exact angle — easing to 60 here would visibly undo it.
-        if(!_splashEndCamera) map.easeTo({ pitch:60, duration: reduced ? 0 : 700 });
-      });
-      const tiltBtn = document.getElementById("fogTilt");
-      if(tiltBtn) tiltBtn.onclick = ()=> Terrain3D.toggleTilt(map);
+    // 3D terrain (workspace flag) — OFF by default (battery, 2026-09-17).
+    // MapLibre's terrain mode forces a continuous per-frame WebGL repaint
+    // for as long as it's on, even sitting idle (needed to keep re-sampling
+    // elevation for hillshading) — real, ongoing GPU/battery cost regardless
+    // of whether anyone's actively looking at the relief. Previously auto-
+    // enabled (DEM + sky + forced pitch) the instant this screen opened, for
+    // every visitor, whether they wanted the 3D look or not. Now opt-in via
+    // #fogTilt, which the workspace flag still gates (no button, no terrain,
+    // for a workspace that never authored 3D support at all).
+    const reducedMotionQ = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
+    let terrainOn = false;
+    const tiltBtn = document.getElementById("fogTilt");
+    function setTerrainOn(on){
+      // setTerrain()/addSource() throw if the style isn't loaded yet — the
+      // splash-camera path below can call this before "load" has fired
+      // (right after the map's own construction), so defer rather than
+      // assume; a button click happens well after load in practice, but
+      // isStyleLoaded() makes that an actual guarantee instead of a hope.
+      const run = ()=>{
+        terrainOn = on;
+        Terrain3D.setEnabled(map, on, { sky:true });
+        if(on){
+          map.easeTo({ pitch:60, duration: reducedMotionQ ? 0 : 700 });
+          // The winter DEM hillshade/snowline layers (applyWinter's opts.dem
+          // branch) silently no-op until the DEM source actually exists —
+          // harmless when terrain was never turned on, but means a re-call
+          // is needed now that it just was, or winter mode never gets its
+          // relief shading for a visitor who opts into 3D after the map's
+          // already open.
+          if(winter) Terrain3D.applyWinter(map, { dem:true });
+        }
+        if(tiltBtn) tiltBtn.textContent = on ? "2D" : "3D";
+      };
+      if(map.isStyleLoaded && map.isStyleLoaded()) run(); else map.once("load", run);
+    }
+    if(use3D && tiltBtn){
+      tiltBtn.textContent = "3D";
+      tiltBtn.onclick = ()=> setTerrainOn(!terrainOn);
+      // _splashEndCamera already opened the map at a real pitched/terrain
+      // camera as part of the splash flyby — matching that with actual
+      // terrain (not just an empty pitched view over the flat basemap) is
+      // the one case still worth defaulting on, since the visual it's
+      // already showing needs it, not a fresh choice made on this visitor's
+      // behalf.
+      if(_splashEndCamera) setTerrainOn(true);
     }
     function syncSource(){
       const shroudSrc = map.getSource("shroud");
@@ -2381,6 +2443,12 @@ function renderFogMap(){
     const here = HereMarker.attach(map, { follow:'edge',
       bounds: QBOUNDS, bufferM: 10000,
       onSite: (on, initial)=>{ Quest._offsite = !on; if(on && !initial) GPSFilter.reset(); } });
+    // Resume the sensor #fogBack stopped on the way out of a previous "My
+    // map" visit (battery — see its own comment). Harmless no-op if it was
+    // never granted in the first place, or if it's already running because
+    // "Start tracking" primed it earlier this session and this is the very
+    // first time My map has opened.
+    if(window.DeviceHeading) DeviceHeading.start();
     // Compass mode (2026-09-17) — off by default (map stays north-up, the
     // familiar "browse the whole network" view). Toggled on via #fogCompass:
     // the map itself rotates live to match the device compass heading, so

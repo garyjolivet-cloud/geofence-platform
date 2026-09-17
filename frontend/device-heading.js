@@ -102,5 +102,21 @@
     return Promise.resolve(true);
   }
 
+  // Stops listening (battery — 2026-09-17): the magnetometer/orientation
+  // sensor otherwise keeps being read and smoothed for the rest of the
+  // session once started, even on a screen with nothing subscribed to
+  // onChange to actually show it (e.g. Ridge Quest's Home screen once "My
+  // map" — the only consumer of this data — has been closed again). start()
+  // is safe to call again later (re-attaches); permission, once granted,
+  // doesn't need to be re-requested.
+  function stop() {
+    if (!listening) return;
+    listening = false;
+    window.removeEventListener("deviceorientationabsolute", onEvent, true);
+    window.removeEventListener("deviceorientation", onEvent, true);
+    API.active = false;
+  }
+
+  API.stop = stop;
   window.DeviceHeading = API;
 })();
