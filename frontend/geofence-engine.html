@@ -160,6 +160,7 @@
       <span id="pill" class="pill idle" title="Tap to start your walk">▶ Start</span>
       <button id="tiltBtn" class="hamburger" aria-label="Tilt map to see terrain" title="Tilt map to see terrain" style="display:none">⛰</button>
       <button id="arBtn" class="hamburger" aria-label="View in AR" title="View in AR" style="display:none">🕶</button>
+      <button id="recenterBtn" class="hamburger" aria-label="Recenter on me" title="Recenter map on my location" style="display:none">⌖</button>
       <button id="btnTools" class="hamburger" aria-label="Tools" title="Tools">🛠</button>
       <button id="privacyBtn" style="font-family:'Barlow Condensed';font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ice);background:transparent;border:1px solid var(--rim);border-radius:8px;padding:5px 10px;cursor:pointer">Privacy</button>
       <button id="btnSettings" class="hamburger" aria-label="Settings" title="Settings">☰</button>
@@ -2030,7 +2031,15 @@ const MapView = {
       // stops the map chasing it, and pauses position-driven work (onSite).
       this.here = HereMarker.attach(this.map, { follow:true,
         bounds: zonesContentBounds(), bufferM: 10000,
-        onSite: (on)=>MapView.onSiteChange(on) });
+        onSite: (on)=>MapView.onSiteChange(on),
+        // Explicit lock + recenter button (2026-09-17) — any manual pan/
+        // zoom/rotate/pitch turns auto-follow off for good (not just for a
+        // few seconds) until #recenterBtn is tapped, so checking the map
+        // ahead of you doesn't get fought back to your own position.
+        onFollowChange: following=>{
+          const b=document.getElementById('recenterBtn');
+          if(b) b.style.display = following ? 'none' : 'inline-block';
+        } });
       // Real-time compass -> needle, straight off the orientation event (not
       // throttled to the GPS-fix cadence). Marker lives for the page, so no
       // unsubscribe needed.
@@ -2493,6 +2502,7 @@ document.getElementById('tiltBtn').onclick = ()=>{
   if(!MapView.map) return;
   MapView.map.easeTo({pitch:MapView.map.getPitch()>10?0:60, duration:400});
 };
+document.getElementById('recenterBtn').onclick = ()=> MapView.here && MapView.here.recenter();
 // AR view (3D-mode plan, Phase 2). Same gesture-required-for-sensor-access
 // convention as Audio.unlock()-on-tap and the BLE Connect button above —
 // Geofencer.onEvent's 'enter' never itself starts the camera, only reveals

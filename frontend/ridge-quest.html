@@ -117,6 +117,7 @@
   .fogMapTilt{position:absolute;top:58px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
   .fogMapCompass{position:absolute;left:14px;z-index:2;width:44px;height:44px;margin:0;padding:0;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center;transition:transform .3s ease,background .15s,border-color .15s}
   .fogMapCompass.on{background:var(--coral);border-color:var(--coral);color:#141d2b}
+  .fogMapRecenter{position:absolute;left:14px;z-index:2;width:44px;height:44px;margin:0;padding:0;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center}
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
@@ -2291,6 +2292,7 @@ function renderFogMap(){
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapCompass" id="fogCompass" style="top:'+(use3D?102:58)+'px" title="Compass mode — rotate the map to match which way you\'re facing">🧭</button>'
+    +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?146:102)+'px;display:none" title="Recenter map on your location">⌖</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
@@ -2440,9 +2442,19 @@ function renderFogMap(){
     // stops the map chasing it, and pauses fog reveal / corridor ticks /
     // position sharing (Quest._offsite, set in the onSite callback).
     const QBOUNDS = questContentBounds();
+    const fogRecenterBtn = document.getElementById("fogRecenter");
     const here = HereMarker.attach(map, { follow:'edge',
       bounds: QBOUNDS, bufferM: 10000,
-      onSite: (on, initial)=>{ Quest._offsite = !on; if(on && !initial) GPSFilter.reset(); } });
+      onSite: (on, initial)=>{ Quest._offsite = !on; if(on && !initial) GPSFilter.reset(); },
+      // Explicit lock + recenter button (battery/UX, 2026-09-17): the old
+      // 2s-cooldown auto-follow snapped the map back to the GPS dot the
+      // instant a fix landed after that window, even mid-scan for a distant
+      // chute — outdoor fixes can be 15-20s apart, so the cooldown never
+      // stood a chance of covering a real "looking around" pause. Now any
+      // manual pan/zoom/rotate/pitch turns follow off for good until this
+      // button is tapped.
+      onFollowChange: following=>{ if(fogRecenterBtn) fogRecenterBtn.style.display = following ? "none" : "flex"; } });
+    if(fogRecenterBtn) fogRecenterBtn.onclick = ()=> here.recenter();
     // Resume the sensor #fogBack stopped on the way out of a previous "My
     // map" visit (battery — see its own comment). Harmless no-op if it was
     // never granted in the first place, or if it's already running because

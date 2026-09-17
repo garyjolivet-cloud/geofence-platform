@@ -196,6 +196,7 @@ input,select{width:100%;font-family:"Barlow Condensed";font-size:14px;
     <span id="projName">Field</span>
     <button id="btnQr" onclick="showFieldQr()" title="QR code to open this on your phone" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">▦</button>
     <button id="btnTilt" onclick="onTiltClick()" title="Tilt to see terrain (3D Mode)" style="display:none;background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⛰</button>
+    <button id="btnRecenter" onclick="onRecenterClick()" title="Recenter map on my location" style="display:none;background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">⌖</button>
     <button id="btnBle" onclick="onBleClick()" title="Connect BLE barometer for accurate elevation" style="background:none;border:none;color:var(--fog);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0">🛰</button>
     <button id="btnPub" disabled>✓ Pub</button>
   </div>
@@ -416,6 +417,8 @@ function onTiltClick(){
   if(!map) return;
   map.easeTo({pitch:map.getPitch()>10?0:60,duration:400});
 }
+
+function onRecenterClick(){ if(here) here.recenter(); }
 
 // Winter map treatment — same project.season flag every other map surface
 // uses (ridge-quest / geofence-engine / -sim / fence-editor / gpx-editor).
@@ -831,7 +834,14 @@ function initMap(){
     // a fix well outside the project box hides the avatar and stops the map
     // chasing it. Recording itself is NOT paused (deliberate — it's an
     // authoring tool).
-    here = HereMarker.attach(map, { follow:true, bounds: frContentBounds(), bufferM: 15000 });
+    here = HereMarker.attach(map, { follow:true, bounds: frContentBounds(), bufferM: 15000,
+      // Explicit lock + recenter button (2026-09-17) — a manual pan/zoom/
+      // rotate/pitch turns auto-follow off for good until #btnRecenter is
+      // tapped, so scouting ahead on the map doesn't get yanked back.
+      onFollowChange: following=>{
+        const b=document.getElementById("btnRecenter");
+        if(b) b.style.display = following ? "none" : "inline-block";
+      } });
     // Real-time compass -> needle, off the orientation event (not the GPS-fix
     // cadence). Marker lives for the page, so no unsubscribe needed.
     if(window.DeviceHeading) DeviceHeading.onChange(h=>here && here.setHeading(h));

@@ -11,14 +11,18 @@
    - A faint GPS-accuracy circle drawn as a real ground-circle polygon (not a
      metre-scaled circle-radius expression).
    - Smart follow: centre on the first fix, then only re-centre when the dot
-     drifts near the screen edge, and never while the user is panning/zooming
-     (or within ~2s of finishing a gesture).
+     drifts near the screen edge. The moment the user manually pans, zooms,
+     rotates, or pitches the map, auto-follow turns off — permanently, not
+     just for a cooldown window — so scanning around (e.g. looking for a
+     chute far from your own position) never gets fought or snapped back
+     mid-exploration. A page-supplied recenter control calls the returned
+     recenter() to ease back and resume following.
 
    opts.color   dot/wedge colour   (default "#2f7dff" — distinct from the
                 pages' coral/green/amber/red map features)
    opts.follow  true | 'edge' | false   (default true; 'edge' = smart-follow
                 but skip the first-fix centre, so a page that fitBounds()es its
-                own framing keeps it)
+                own framing keeps it; false = fully disabled, no follow ever)
    opts.bounds  [[minLon,minLat],[maxLon,maxLat]]  — the project's content
                 bbox. When set, a fix outside that box grown by opts.bufferM
                 hides the marker + accuracy ring and suppresses ALL follow
@@ -31,6 +35,10 @@
                 first fix (isInitial=true) and again on every on-site<->off-site
                 transition. Use it to pause/resume the page's own
                 position-driven work (fog reveal, triggers, position sharing, …).
+   opts.onFollowChange  fn(following:boolean) — fired only on a genuine
+                follow-state transition (not opts.follow:false, which never
+                toggles). Show/hide a page-supplied "recenter on me" button
+                from this; call the returned recenter() on tap.
 
    Also exported: HereMarker.withinBounds(bounds, lat, lon, bufferM) — the
    same pure in/out predicate, for filtering OTHER people's positions
@@ -41,7 +49,6 @@
 
   var DOT_R_CAP_M = 75;   // don't draw an accuracy ring bigger than this
   var HIDE_ACC_OVER_M = 120; // above this the fix is too loose to bother drawing a ring
-  var INTERACT_COOLDOWN_MS = 2000;
   var FOLLOW_INSET = 0.6; // re-centre when the dot leaves the inner 60% box
   var SITE_BUFFER_M = 10000;   // default margin around the project content bbox
   var SITE_ENTER_FACTOR = 0.9; // hysteresis: must get 10% inside the buffer to flip back on-site
@@ -136,17 +143,23 @@
     return p.x >= mx && p.x <= w - mx && p.y >= my && p.y <= h - my;
   }
 
+  // Single choke point for follow-state transitions, so onFollowChange only
+  // ever fires when something actually changed (not on every drag tick, not
+  // when opts.follow:false — that mode never toggles at all).
+  function setFollowing(state, on) {
+    if (!state.followEnabled || state.following === on) return;
+    state.following = on;
+    if (state.onFollowChange) { try { state.onFollowChange(on); } catch (e) {} }
+  }
+
   function bindInteraction(state, map) {
-    var down = function () { state.userInteracting = true; };
-    var up = function () { state.userInteracting = false; state.lastInteractionAt = performance.now(); };
-    state.handlers = { down: down, up: up };
+    var down = function () { setFollowing(state, false); };
+    state.handlers = { down: down };
     ["dragstart", "zoomstart", "rotatestart", "pitchstart"].forEach(function (ev) { map.on(ev, down); });
-    ["dragend", "zoomend", "rotateend", "pitchend"].forEach(function (ev) { map.on(ev, up); });
   }
   function unbindInteraction(state, map) {
     if (!state.handlers) return;
     ["dragstart", "zoomstart", "rotatestart", "pitchstart"].forEach(function (ev) { map.off(ev, state.handlers.down); });
-    ["dragend", "zoomend", "rotateend", "pitchend"].forEach(function (ev) { map.off(ev, state.handlers.up); });
     state.handlers = null;
   }
 
@@ -175,15 +188,13 @@
   }
 
   function maybeFollow(state, map, lon, lat) {
-    if (state.follow === false) return;
+    if (!state.followEnabled || !state.following) return;
     if (!state.firstFixDone) {
       state.firstFixDone = true;
-      if (state.follow === "edge") return; // page keeps its own framing
+      if (state.followEdgeFirstFix) return; // page keeps its own framing
       map.easeTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 16), duration: 600 });
       return;
     }
-    if (state.userInteracting) return;
-    if (performance.now() - state.lastInteractionAt < INTERACT_COOLDOWN_MS) return;
     if (screenInsetHit(map, lon, lat, FOLLOW_INSET)) return;
     map.easeTo({ center: [lon, lat], duration: 500 });
   }
@@ -192,10 +203,16 @@
     opts = opts || {};
     injectStyles();
     var color = opts.color || "#2f7dff";
+    var followEnabled = opts.follow !== false;
     var state = {
-      map: map, color: color, follow: (opts.follow === undefined ? true : opts.follow),
+      map: map, color: color,
+      followEnabled: followEnabled,         // immutable — opts.follow:false disables this forever
+      followEdgeFirstFix: opts.follow === "edge", // immutable — skip only the very-first easeTo
+      following: followEnabled,             // mutable — the persistent lock maybeFollow checks
+      onFollowChange: (typeof opts.onFollowChange === "function" ? opts.onFollowChange : null),
+      lastFix: null,                        // {lon,lat} of the most recent on-site fix, for recenter()
       marker: null, wedgeEl: null, ready: false, firstFixDone: false,
-      userInteracting: false, lastInteractionAt: 0, removed: false, pending: null, handlers: null,
+      removed: false, pending: null, handlers: null,
       bounds: opts.bounds || null,
       bufferM: (opts.bufferM == null ? SITE_BUFFER_M : opts.bufferM),
       onSite: (typeof opts.onSite === "function" ? opts.onSite : null),
@@ -236,6 +253,7 @@
         return;
       }
       state.marker.getElement().classList.remove("hm--offsite");
+      state.lastFix = { lon: a.lon, lat: a.lat };
 
       state.marker.setLngLat([a.lon, a.lat]);
       state.marker.getElement().classList.remove("hm--pending");
@@ -299,7 +317,17 @@
     // Refresh the content bbox after a bundle (re)load without re-attaching.
     function setBounds(b) { state.bounds = b || null; }
 
-    return { update: update, setHeading: setHeading, remove: remove, setBounds: setBounds };
+    // Ease back to the last known on-site fix and re-arm auto-follow, so a
+    // page's "recenter on me" button both jumps back now AND resumes
+    // following on subsequent fixes. No-op (besides re-arming) if no on-site
+    // fix has landed yet — the next one will drive the camera in normally.
+    function recenter() {
+      if (state.removed || !state.followEnabled) return;
+      if (state.lastFix) map.easeTo({ center: [state.lastFix.lon, state.lastFix.lat], duration: 500 });
+      setFollowing(state, true);
+    }
+
+    return { update: update, setHeading: setHeading, remove: remove, setBounds: setBounds, recenter: recenter };
   }
 
   window.HereMarker = { attach: attach, withinBounds: withinBounds, SITE_BUFFER_M: SITE_BUFFER_M };
