@@ -73,7 +73,7 @@
     MAX_LEVEL: 3,
     ESCALATE_AFTER_MS: [0, 5000, 12000],  // time-since-first-alert ladder -> level (index+1)
     ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
-    COMMIT_STREAK_FIXES: 4,      // this many consecutive fixes of uninterrupted excess growth...
+    COMMIT_STREAK_MS: 4000,      // excess growing continuously (no intervening narrowing) for at least this long...
     COMMIT_GROWTH_M: 15,         // ...or the excess has grown at least this much past its value at the first alert, with no intervening fix narrowing it back...
     MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging"
     COMMIT_JITTER_M: 0.5,        // a change in excess smaller than this between fixes counts as neither growth nor a correction (GPS noise floor)
@@ -150,7 +150,7 @@
   function freshState(){
     return {
       level:0, firstAlertAt:null, excessAtFirstAlert:0,
-      maxExcessM:0, prevExcessM:null, growthStreak:0, committed:false,
+      maxExcessM:0, prevExcessM:null, growthStreakStartAt:null, committed:false,
       alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false
     };
   }
@@ -329,17 +329,30 @@
       }
 
       // Already alerting — track the excess-distance trend for the
-      // committed-exit detector before anything else.
+      // committed-exit detector before anything else. Time-based (how LONG
+      // it's been growing), not fix-count-based — a fix-count threshold is
+      // silently tick-rate-dependent: Test Mode's simulated walk can fire
+      // several fixes per real second, so a "4 consecutive fixes" rule
+      // would commit in under a second there but take ~4 real seconds on
+      // an actual phone at ~1Hz GPS, making the simulator behave nothing
+      // like a real device for this exact mechanism (found via a real
+      // Test Mode log: growth-streak commits fired within ~1s of real time
+      // during sim playback). Using elapsed wall-clock time since growth
+      // started makes this consistent regardless of fix cadence.
       if(st.prevExcessM!=null){
-        if(excessM > st.prevExcessM + TUNING.COMMIT_JITTER_M) st.growthStreak++;
-        else if(excessM < st.prevExcessM - TUNING.COMMIT_JITTER_M) st.growthStreak=0;
-        // a roughly-flat change neither confirms nor resets the streak
+        if(excessM > st.prevExcessM + TUNING.COMMIT_JITTER_M){
+          if(st.growthStreakStartAt==null) st.growthStreakStartAt = now;
+        }else if(excessM < st.prevExcessM - TUNING.COMMIT_JITTER_M){
+          st.growthStreakStartAt = null;
+        }
+        // a roughly-flat change neither starts nor resets the streak
       }
       st.prevExcessM = excessM;
 
       const grownEnough = (excessM - st.excessAtFirstAlert) >= TUNING.COMMIT_GROWTH_M;
+      const growingTooLong = st.growthStreakStartAt!=null && (now - st.growthStreakStartAt) >= TUNING.COMMIT_STREAK_MS;
       const tooLong = (now - st.firstAlertAt) >= TUNING.MAX_ALERT_DURATION_MS;
-      if(st.growthStreak >= TUNING.COMMIT_STREAK_FIXES || grownEnough || tooLong){
+      if(growingTooLong || grownEnough || tooLong){
         st.committed = true;
         if(cb.onDisengage) cb.onDisengage(c.id, c.name, {
           level:st.level, maxExcessM:st.maxExcessM, excessM, widthM:c.widthM, t:now

@@ -480,5 +480,46 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(events.warn.length > warnsAfterPass1, "after genuinely entering this pass, exiting alerts normally");
 })();
 
+// ============================================================
+// 15. Field bug: committed-exit timing must be wall-clock consistent
+// regardless of fix rate (Test Mode's simulated walk ticks several times
+// per real second; a real phone's GPS ticks roughly once per second) —
+// found via a real Test Mode log showing the guard silencing itself within
+// ~1s of real time during sim playback.
+// ============================================================
+(function testCommitTimingIsTickRateIndependent(){
+  function msToCommit(hz){
+    const cg = freshChuteGuard();
+    const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+    let firstAlertT = null, disengageT = null;
+    cg.load([corridor], {
+      onWarn: (id, name, info) => { if (firstAlertT == null) firstAlertT = info.t; },
+      onDisengage: (id, name, info) => { if (disengageT == null) disengageT = info.t; }
+    });
+    const dtMs = 1000 / hz, speedMps = 1.5, lateralPerRealSecond = 8; // fast departure, matching the real log's sharp-turn-away pattern
+    let forwardM = 0, t = 0;
+    const coverTicks = Math.round(50 * hz); // 50 real seconds of travel, regardless of hz
+    for (let i = 0; i <= coverTicks; i++) {
+      const pos = trackPoint(forwardM, 0);
+      cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: speedMps, t: 1700000000000 + t }, 0);
+      forwardM += speedMps * (dtMs / 1000); t += dtMs;
+    }
+    const driftTicks = Math.round(6 * hz); // up to 6 real seconds of drift
+    for (let i = 1; i <= driftTicks && disengageT == null; i++) {
+      const lateralM = i * (dtMs / 1000) * lateralPerRealSecond;
+      const pos = trackPoint(forwardM, lateralM);
+      cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: speedMps, t: 1700000000000 + t }, 0);
+      forwardM += speedMps * (dtMs / 1000); t += dtMs;
+    }
+    return (firstAlertT != null && disengageT != null) ? (disengageT - firstAlertT) : null;
+  }
+  const fast = msToCommit(10); // ~10 ticks/sec, like an accelerated Test Mode walk
+  const slow = msToCommit(1);  // ~1 tick/sec, like real GPS
+  assert(fast != null && slow != null, "both a fast-ticking and a slow-ticking track eventually commit");
+  assert(Math.abs(fast - slow) < 1500,
+    "time-to-commit (real elapsed ms outside) is consistent regardless of fix rate (fast=" + fast + "ms, slow=" + slow +
+    "ms) — a fix-count-based detector would have committed roughly 10x faster in wall-clock time at 10Hz than at 1Hz");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
