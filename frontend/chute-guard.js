@@ -151,7 +151,7 @@
     return {
       level:0, firstAlertAt:null, excessAtFirstAlert:0,
       maxExcessM:0, prevExcessM:null, growthStreak:0, committed:false,
-      alertCount:0, lastDebugAt:0, lastEmittedLevel:0
+      alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false
     };
   }
 
@@ -244,7 +244,21 @@
       const edgeM        = halfW + TUNING.OUTSIDE_BUFFER_M;
       const excessM       = near.distM - edgeM;                // >0 == outside
       const maxRelevantM = edgeM + TUNING.MAX_RELEVANT_PAD_M;
-      const outsideNow   = engaged && excessM > 0 && near.distM <= maxRelevantM;
+
+      // Field bug found 2026-09: the guard fired while a player was still
+      // APPROACHING a corridor, before ever having entered it this time —
+      // `covered` (which the `engaged` gate above needs) persists across
+      // the whole page session, not just the current approach, so a second
+      // lap of a corridor already partly walked earlier could satisfy
+      // engage/coverage/heading/speed while still outside on the way IN,
+      // firing a "you left" alert before ever having "been in." Fixed with
+      // an explicit "have you actually been inside (no buffer) at least
+      // once this approach" latch — true the instant near.distM<=halfW,
+      // and only cleared when the player leaves relevant range entirely
+      // (a genuine "gone away," not just "currently between the true edge
+      // and the buffer/relevant-range boundary").
+      if(near.distM <= halfW) st.everInside = true;
+      const outsideNow = engaged && excessM > 0 && near.distM <= maxRelevantM && st.everInside;
 
       // Debug hook — Test Mode wires this into its log panel so an author
       // can see exactly which gate is blocking a warning (coverage/heading/
@@ -254,18 +268,27 @@
       if(cb.onDebug && now-(st.lastDebugAt||0)>=500){
         st.lastDebugAt=now;
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
-          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM,
+          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside,
           headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed });
       }
 
       if(!outsideNow){
         // Only a genuine return inside the width band (not just "no longer
-        // engaged" while still geometrically outside, e.g. stopped moving)
-        // counts as "back on track" — a committed-exit that later wanders
-        // out of relevant range entirely resets silently, same as before.
+        // engaged" while still geometrically outside, e.g. stopped moving,
+        // or still approaching pre-entry) counts as "back on track" — a
+        // committed-exit that later wanders out of relevant range entirely
+        // resets silently, same as before.
         const wasActive = st.level>0;
         const backInside = excessM<=0;
+        const outOfRelevantRange = near.distM > maxRelevantM;
+        const everInside = st.everInside;
         Object.assign(st, freshState());
+        // A genuine "gone away" (out of relevant range) is the only case
+        // that should require re-earning entry on the next approach —
+        // everything else (still inside/buffered, or still approaching
+        // pre-entry within relevant range) keeps whatever entry status it
+        // already had.
+        if(!outOfRelevantRange) st.everInside = everInside;
         if(wasActive && backInside && cb.onClear) cb.onClear(c.id, c.name);
         continue;
       }

@@ -440,5 +440,45 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(warnCalls > 0, "onWarn was actually invoked during the back-compat run");
 })();
 
+// ============================================================
+// 14. Field bug: no alert while approaching a corridor before ever
+// entering it THIS pass, even when coverage/heading/speed already carry
+// over from an earlier lap in the same session
+// ============================================================
+(function testNoAlertBeforeFirstEntry(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=halfW+2=7
+  const events = { warn: [] };
+  cg.load([corridor], { onWarn: (id, name, info) => events.warn.push(info) });
+  const t0 = 1700000000000;
+  let forwardM = 0, t = 0;
+  function tick(lateralM){
+    const pos = trackPoint(forwardM, lateralM);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: t0 + t }, 0);
+    forwardM += 1.5; t += 1000;
+  }
+  // Pass 1: walk the corridor's centerline far enough to build coverage
+  // (60m clears the 150m-cap-of-15% gate for a 400m corridor) and to have
+  // genuinely been inside, then walk far enough away (well beyond
+  // maxRelevantM = edge7+60=67m) to fully leave its relevant range.
+  for (let i = 0; i <= 60; i++) tick(0);
+  for (let i = 0; i < 10; i++) tick(200);
+  const warnsAfterPass1 = events.warn.length;
+  assert(warnsAfterPass1 === 0, "walking the corridor once, then leaving, produces no false alert on its own");
+
+  // Pass 2: approach the SAME corridor again from outside — coverage,
+  // heading, and speed are all already satisfied from pass 1, so the field
+  // bug this test guards against would fire here purely from "currently
+  // outside," before ever having entered THIS pass.
+  for (let i = 0; i < 8; i++) tick(20); // excess = 20-7 = 13m, well outside but still within maxRelevantM
+  assert(events.warn.length === warnsAfterPass1,
+    "approaching a previously-walked corridor a second time, before re-entering it, produces no alert even though coverage/heading/speed already carry over");
+
+  // Now actually cross in, then exit — should alert normally.
+  for (let i = 0; i < 5; i++) tick(0);
+  for (let i = 0; i < 3; i++) tick(20);
+  assert(events.warn.length > warnsAfterPass1, "after genuinely entering this pass, exiting alerts normally");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

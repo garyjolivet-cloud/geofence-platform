@@ -235,12 +235,12 @@ function renderWalkPaths(){
     geometry:{type:"LineString", coordinates:p.latlon.map(ll=>[ll[1],ll[0]])}
   }))));
 }
-// One pulse's frequency/gain/duration per Corridor Guard escalation level —
-// matches ridge-quest.html's CG_PULSE / geofence-engine.html's CG_ENGINE_PULSE.
-const CG_SIM_PULSE = [
-  { freq:880,  gain:0.55, on:0.16, type:'triangle' },
-  { freq:1046, gain:0.75, on:0.15, type:'triangle' },
-  { freq:1318, gain:0.95, on:0.14, type:'square'   }
+// Frequency/gain/vibrato per Corridor Guard escalation level — matches
+// ridge-quest.html's CG_TONE / geofence-engine.html's CG_ENGINE_TONE.
+const CG_SIM_TONE = [
+  { freq:740,  gain:0.55, vibratoHz:0,   vibratoDepth:0  },
+  { freq:880,  gain:0.75, vibratoHz:5,   vibratoDepth:18 },
+  { freq:1046, gain:0.9,  vibratoHz:9,   vibratoDepth:35 }
 ];
 const Audio = {
   on:true, ctx:null, keepAlive:null,
@@ -253,25 +253,58 @@ const Audio = {
               o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(0.0001,s);
               g.gain.exponentialRampToValueAtTime(0.25,s+0.01); g.gain.exponentialRampToValueAtTime(0.0001,s+0.25);
               o.connect(g); g.connect(this.ctx.destination); o.start(s); o.stop(s+0.3); }); }catch(e){} },
-  // Corridor Guard's fallback tone. Bug fixed: the old comment claimed
-  // "desktop has no navigator.vibrate at all," which is false for Chrome/
-  // Edge (both expose navigator.vibrate as a real function, it just silently
-  // no-ops with no vibration hardware) — chuteGuardCallbacks()'s onWarn used
-  // to be `if('vibrate' in navigator) vibrate() else rumble()`, so on any
-  // Chromium desktop browser it always took the (silent, no-op) vibrate
-  // branch and this tone never played at all, which is why "no alarm heard"
-  // in the sim log even while the avatar was clearly outside a corridor.
-  // Fixed at the call site to fire both, always. Also moved off the old
-  // 220Hz/single-blip design into the same escalating 880-1318Hz alarm used
-  // in ridge-quest.html/geofence-engine.html, since a quiet low tone is easy
-  // to miss even on a laptop speaker.
-  rumble(level){ if(!this.on) return;
-    const p = CG_SIM_PULSE[Math.max(0, Math.min(CG_SIM_PULSE.length-1, ((level|0)||1)-1))];
-    try{ this.unlock(); const t=this.ctx.currentTime;
-      const o=this.ctx.createOscillator(),g=this.ctx.createGain();
-      o.type=p.type; o.frequency.value=p.freq; g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime(p.gain,t+0.015); g.gain.exponentialRampToValueAtTime(0.0001,t+p.on);
-      o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t+p.on+0.01); }catch(e){} },
+  // Corridor Guard's fallback tone — a single CONTINUOUS oscillator that
+  // keeps sounding for the whole excursion, not discrete pulses (an earlier
+  // version was, on explicit field feedback it read as "multiple beeps").
+  // Bug fixed earlier: the old comment claimed "desktop has no
+  // navigator.vibrate at all," which is false for Chrome/Edge (both expose
+  // it as a real, silently no-op function) — chuteGuardCallbacks()'s onWarn
+  // used to be `if('vibrate' in navigator) vibrate() else rumble()`, so on
+  // any Chromium desktop browser this tone never played at all. Fixed at
+  // the call site to fire both, always.
+  _alarm: null, // {osc, gain, vibOsc, vibGain}
+  startAlarm(level){
+    if(!this.on) return;
+    this.stopAlarm();
+    try{
+      this.unlock();
+      const o=this.ctx.createOscillator(), g=this.ctx.createGain();
+      o.type="sawtooth";
+      const vibOsc=this.ctx.createOscillator(), vibGain=this.ctx.createGain();
+      vibOsc.type="sine"; vibOsc.frequency.value=0.001; vibGain.gain.value=0;
+      vibOsc.connect(vibGain); vibGain.connect(o.frequency);
+      const t=this.ctx.currentTime;
+      o.frequency.value=CG_SIM_TONE[0].freq;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(CG_SIM_TONE[0].gain,t+0.06);
+      o.connect(g); g.connect(this.ctx.destination);
+      o.start(); vibOsc.start();
+      this._alarm = { osc:o, gain:g, vibOsc, vibGain };
+      this.updateAlarm(level, 0.06);
+    }catch(e){}
+  },
+  updateAlarm(level, rampS){
+    if(!this._alarm) return;
+    const spec = CG_SIM_TONE[Math.max(0, Math.min(CG_SIM_TONE.length-1, ((level|0)||1)-1))];
+    const t = this.ctx.currentTime, r = rampS!=null?rampS:0.15;
+    try{
+      this._alarm.osc.frequency.linearRampToValueAtTime(spec.freq, t+r);
+      this._alarm.gain.gain.linearRampToValueAtTime(spec.gain, t+r);
+      this._alarm.vibOsc.frequency.linearRampToValueAtTime(spec.vibratoHz || 0.001, t+r);
+      this._alarm.vibGain.gain.linearRampToValueAtTime(spec.vibratoDepth, t+r);
+    }catch(e){}
+  },
+  stopAlarm(){
+    if(this._alarm){
+      try{
+        const t=this.ctx.currentTime;
+        this._alarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.08);
+        this._alarm.osc.stop(t+0.1);
+        this._alarm.vibOsc.stop(t+0.1);
+      }catch(e){}
+    }
+    this._alarm = null;
+  },
   say(text){ if(!this.on) return; try{ const u=new SpeechSynthesisUtterance(text);
             speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){} }
 };
@@ -1122,27 +1155,35 @@ function checkHazardAhead(p, headingDeg, speedMps, nowMs){
 // on every tick while outside (roughly once per sim step) instead of once
 // per a 20s cooldown, so the log line is throttled here to first-alert/
 // level-change only — an unthrottled log would flood during a held excursion.
+let _cgSimAlarmCorridorId = null;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
       const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
-      if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
-      Audio.rumble(lvl);
+      if(_cgSimAlarmCorridorId!==corridorId){
+        _cgSimAlarmCorridorId = corridorId;
+        if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
+        Audio.startAlarm(lvl);
+      }else{
+        Audio.updateAlarm(lvl);
+      }
       if(!info || info.alertCount===1 || info.levelChanged)
         log("ev-hazard", "off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
     },
     onClear(corridorId, name){
+      if(_cgSimAlarmCorridorId===corridorId){ _cgSimAlarmCorridorId=null; Audio.stopAlarm(); }
       log("ev-sys", "back inside \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId, name, info){
+      if(_cgSimAlarmCorridorId===corridorId){ _cgSimAlarmCorridorId=null; Audio.stopAlarm(); }
       log("ev-sys", "left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
     },
     // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
     // exactly which gate is blocking a warning instead of a silent
     // "nothing happened."
     onDebug(corridorId, name, d){
-      log("ev-sys", "chuteGuard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
+      log("ev-sys", "chuteGuard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+" in="+(d.everInside?"Y":"n")+
         " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
         " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s")+
         " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":""));

@@ -929,32 +929,62 @@ const Audio = {
       });
     }catch(e){}
   },
-  // Chute/Corridor Guard's fallback tone — one pulse of a continuous alarm
-  // that plays back-to-back for as long as the visitor remains outside a
-  // corridor (see chuteGuardCallbacks() below), not a single blip fired
-  // once per excursion. Moved out of the old 220Hz/quiet-blip design into an
-  // 880-1318Hz alarm-like band (a phone micro-speaker is inefficient below
-  // ~500Hz — that was the real reason the old single quiet blip wasn't
-  // reliably audible, not the gain), using triangle/square oscillators for
-  // a more perceptible timbre than a plain sine. Still distinct from
-  // ding()'s bright two-note arrival chime by its pulsing/looping
-  // character, but no longer deliberately quieter — Corridor Guard needs to
-  // actually be heard and corrected on.
-  rumble(level){
-    const p = CG_ENGINE_PULSE[Math.max(0, Math.min(CG_ENGINE_PULSE.length-1, ((level|0)||1)-1))];
+  // Chute/Corridor Guard's fallback tone — a single, CONTINUOUS, unbroken
+  // oscillator that keeps sounding for as long as the visitor remains
+  // outside a corridor (see chuteGuardCallbacks() below), not a series of
+  // discrete pulses/beeps (an earlier version was, on explicit field
+  // feedback that it read as "multiple beeps" rather than one sustained
+  // tone). Moved out of the old 220Hz/quiet design into an 740-1046Hz
+  // alarm-like band (a phone micro-speaker is inefficient below ~500Hz —
+  // that was the real reason the old quiet blip wasn't reliably audible,
+  // not the gain), with a slow frequency vibrato (a second LFO oscillator
+  // modulating the main one) giving it an "alarm" character without ever
+  // introducing real silence. Level changes ramp frequency/gain/vibrato
+  // smoothly in place — the tone is never restarted/interrupted between
+  // levels, only started once and stopped once per excursion.
+  _alarm: null, // {osc, gain, vibOsc, vibGain}
+  startAlarm(level){
+    this.stopAlarm();
     try{
       let ac=(typeof Clarity!=='undefined' && Clarity.ctx)?Clarity.ctx:this.ctx;
       if(!ac){ ac=this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }
       if(ac.state==='suspended') ac.resume();
-      const t=ac.currentTime;
       const o=ac.createOscillator(), g=ac.createGain();
-      o.type=p.type; o.frequency.value=p.freq;
+      o.type="sawtooth";
+      const vibOsc=ac.createOscillator(), vibGain=ac.createGain();
+      vibOsc.type="sine"; vibOsc.frequency.value=0.001; vibGain.gain.value=0;
+      vibOsc.connect(vibGain); vibGain.connect(o.frequency);
+      const t=ac.currentTime;
+      o.frequency.value=CG_ENGINE_TONE[0].freq;
       g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime(p.gain,t+0.015);
-      g.gain.setValueAtTime(p.gain,t+p.on-0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+p.on);
-      o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+p.on+0.01);
+      g.gain.exponentialRampToValueAtTime(CG_ENGINE_TONE[0].gain,t+0.06);
+      o.connect(g); g.connect(ac.destination);
+      o.start(); vibOsc.start();
+      this._alarm = { osc:o, gain:g, vibOsc, vibGain, ac };
+      this.updateAlarm(level, 0.06);
     }catch(e){}
+  },
+  updateAlarm(level, rampS){
+    if(!this._alarm) return;
+    const spec = CG_ENGINE_TONE[Math.max(0, Math.min(CG_ENGINE_TONE.length-1, ((level|0)||1)-1))];
+    const t = this._alarm.ac.currentTime, r = rampS!=null?rampS:0.15;
+    try{
+      this._alarm.osc.frequency.linearRampToValueAtTime(spec.freq, t+r);
+      this._alarm.gain.gain.linearRampToValueAtTime(spec.gain, t+r);
+      this._alarm.vibOsc.frequency.linearRampToValueAtTime(spec.vibratoHz || 0.001, t+r);
+      this._alarm.vibGain.gain.linearRampToValueAtTime(spec.vibratoDepth, t+r);
+    }catch(e){}
+  },
+  stopAlarm(){
+    if(this._alarm){
+      try{
+        const t=this._alarm.ac.currentTime;
+        this._alarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.08);
+        this._alarm.osc.stop(t+0.1);
+        this._alarm.vibOsc.stop(t+0.1);
+      }catch(e){}
+    }
+    this._alarm = null;
   },
   // voiceOverride lets a caller pick a voice without also handing over a
   // zone/distance to compute panning from (pipelineCallbacks below needs
@@ -1181,47 +1211,39 @@ function showChuteGuardPulse(){
   clearTimeout(b._t);
   b._t=setTimeout(()=>{ b.style.boxShadow='inset 0 0 0 0 rgba(255,194,77,0)'; }, 650);
 }
-// One pulse's frequency/gain/duration per escalation level (see Audio.rumble above).
-const CG_ENGINE_PULSE = [
-  { freq:880,  gain:0.55, on:0.16, type:'triangle' },
-  { freq:1046, gain:0.75, on:0.15, type:'triangle' },
-  { freq:1318, gain:0.95, on:0.14, type:'square'   }
+// Frequency/gain/vibrato per escalation level (see Audio.startAlarm above).
+const CG_ENGINE_TONE = [
+  { freq:740,  gain:0.55, vibratoHz:0,   vibratoDepth:0  },
+  { freq:880,  gain:0.75, vibratoHz:5,   vibratoDepth:18 },
+  { freq:1046, gain:0.9,  vibratoHz:9,   vibratoDepth:35 }
 ];
-const CG_ENGINE_GAP_MS = [740, 500, 310];
-const CG_ENGINE_VIBE   = [ [160,740], [180,90,180,500], [220,80,220,80,220,310] ];
+const CG_ENGINE_VIBE = [ [500,150], [300,120], [200,90] ]; // long repeating vibrate() pattern per level, not a single pulse
 // Continuous alarm — owned by this page, not by GPS fix timing, same
 // reasoning as ridge-quest.html's identical construct: chute-guard.js calls
-// onWarn roughly once per fix, but the alarm must sound with no gaps for
-// the whole time the visitor is outside, bridging however long the next fix
-// takes to arrive. A ~20s watchdog stops it if no onWarn heartbeat arrives
-// (GPS dropout) rather than assuming they're back on track.
-let _cgEngineAlarm = null;
-function _cgEngineScheduleNext(){
-  if(!_cgEngineAlarm) return;
-  Audio.rumble(_cgEngineAlarm.level);
-  const p = CG_ENGINE_PULSE[Math.max(0, Math.min(CG_ENGINE_PULSE.length-1, _cgEngineAlarm.level-1))];
-  const gap = CG_ENGINE_GAP_MS[Math.max(0, Math.min(CG_ENGINE_GAP_MS.length-1, _cgEngineAlarm.level-1))];
-  _cgEngineAlarm.timer = setTimeout(()=>{
-    if(!_cgEngineAlarm) return;
-    if(Date.now()-_cgEngineAlarm.lastHeardAt > 20000){ stopCgEngineAlarm(); return; }
-    _cgEngineScheduleNext();
-  }, Math.round((p.on+gap)*1000));
-}
+// onWarn roughly once per fix, but the tone must keep sounding independent
+// of when the next fix lands. A ~20s watchdog stops it if no onWarn
+// heartbeat arrives (GPS dropout) rather than assuming they're back on
+// track — checked periodically now that there's no per-pulse reschedule
+// point to hang the check off of.
+let _cgEngineAlarm = null; // {corridorId, level, lastHeardAt, watchdog}
 function startCgEngineAlarm(corridorId, level){
   stopCgEngineAlarm();
-  _cgEngineAlarm = { corridorId, level, timer:null, lastHeardAt:Date.now() };
+  Audio.startAlarm(level);
+  _cgEngineAlarm = { corridorId, level, lastHeardAt:Date.now(),
+    watchdog: setInterval(()=>{ if(_cgEngineAlarm && Date.now()-_cgEngineAlarm.lastHeardAt>20000) stopCgEngineAlarm(); }, 4000) };
   if('vibrate' in navigator){ try{ navigator.vibrate(CG_ENGINE_VIBE[level-1]); }catch(e){} }
-  _cgEngineScheduleNext();
 }
 function updateCgEngineAlarmLevel(level){
   if(!_cgEngineAlarm) return;
   _cgEngineAlarm.level = level;
   _cgEngineAlarm.lastHeardAt = Date.now();
+  Audio.updateAlarm(level);
   if('vibrate' in navigator){ try{ navigator.vibrate(CG_ENGINE_VIBE[level-1]); }catch(e){} }
 }
 function stopCgEngineAlarm(){
-  if(_cgEngineAlarm && _cgEngineAlarm.timer) clearTimeout(_cgEngineAlarm.timer);
+  if(_cgEngineAlarm && _cgEngineAlarm.watchdog) clearInterval(_cgEngineAlarm.watchdog);
   _cgEngineAlarm = null;
+  Audio.stopAlarm();
   if('vibrate' in navigator){ try{ navigator.vibrate(0); }catch(e){} }
 }
 // Chute/Corridor Guard callbacks — the host (this file) decides HOW to

@@ -1464,54 +1464,6 @@ async function api(request, env, url) {
     return json({ ok: true, id, points, snowBonus }, 200, AC);
   }
 
-  // --- Corridor Guard field-debug log (temporary diagnostic tooling) ---
-  // A player field-testing outdoors (biking/skiing) can't watch an
-  // on-screen readout — ridge-quest.html batches chute-guard.js's
-  // onWarn/onClear/onDisengage/onDebug events here instead, so they can be
-  // reviewed after the fact via GET (master-token only) rather than
-  // requiring the player to relay numbers off their screen mid-ride.
-  if (path === "/api/quest-debug-log" && method === "POST") {
-    const P = await playerAuth(request, env);
-    if (!P) return json({ error: "not authenticated" }, 401, AC);
-    if (!env.DB) return json({ error: "D1 not bound" }, 500);
-    const buf = await request.arrayBuffer();
-    if (buf.byteLength > 200_000) return json({ error: "payload too large (max 200 KB)" }, 413, AC);
-    let b;
-    try { b = JSON.parse(new TextDecoder().decode(buf)); }
-    catch (e) { return json({ error: "invalid JSON" }, 400, AC); }
-    if (!b.projectId) return json({ error: "need projectId" }, 400, AC);
-    const entries = Array.isArray(b.entries) ? b.entries : [];
-    if (!entries.length) return json({ ok: true, accepted: 0 }, 200, AC);
-    const stmts = entries.slice(0, 300).map(e => env.DB.prepare(
-      `INSERT INTO quest_debug_log (player_id,app_id,project_id,ts,corridor_id,corridor_name,event,payload)
-       VALUES (?,?,?,?,?,?,?,?)`
-    ).bind(
-      P.playerId, P.appId, b.projectId, e.ts || Date.now(),
-      e.corridorId || null, e.corridorName || null, e.event || "unknown",
-      typeof e.payload === "string" ? e.payload : JSON.stringify(e.payload || {})
-    ));
-    await env.DB.batch(stmts);
-    return json({ ok: true, accepted: stmts.length }, 200, AC);
-  }
-  if (path === "/api/quest-debug-log" && method === "GET") {
-    if (!(await authed(request, env))) return json({ error: "master token required" }, 401, AC);
-    if (!env.DB) return json({ error: "D1 not bound" }, 500);
-    const conds = [], binds = [];
-    const player = url.searchParams.get("player");
-    const projectId = url.searchParams.get("project");
-    const since = url.searchParams.get("since");
-    if (player) { conds.push("player_id=?"); binds.push(player); }
-    if (projectId) { conds.push("project_id=?"); binds.push(projectId); }
-    if (since) { conds.push("ts>=?"); binds.push(Number(since)); }
-    const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
-    const lim = Math.min(parseInt(url.searchParams.get("limit") || "2000", 10) || 2000, 5000);
-    const { results } = await env.DB.prepare(
-      `SELECT id,player_id,app_id,project_id,ts,corridor_id,corridor_name,event,payload,created_at
-       FROM quest_debug_log ${where} ORDER BY ts ASC LIMIT ?`
-    ).bind(...binds, lim).all();
-    return json({ count: (results || []).length, entries: results || [] }, 200, AC);
-  }
-
   const mpr = path.match(/^\/api\/players\/([^/]+)\/runs$/);
   if (mpr && method === "GET") {
     const P = await playerAuth(request, env);

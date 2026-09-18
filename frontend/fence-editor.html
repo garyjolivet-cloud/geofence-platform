@@ -6885,12 +6885,12 @@ function checkHazardAhead(p,headingDeg,speedMps,nowMs){
     }
   }
 }
-// One pulse's frequency/gain/duration per Corridor Guard escalation level —
-// matches ridge-quest.html's CG_PULSE / geofence-engine.html's CG_ENGINE_PULSE.
-const CG_TEST_PULSE = [
-  { freq:880,  gain:0.55, on:0.16, type:'triangle' },
-  { freq:1046, gain:0.75, on:0.15, type:'triangle' },
-  { freq:1318, gain:0.95, on:0.14, type:'square'   }
+// Frequency/gain/vibrato per Corridor Guard escalation level — matches
+// ridge-quest.html's CG_TONE / geofence-engine.html's CG_ENGINE_TONE.
+const CG_TEST_TONE = [
+  { freq:740,  gain:0.55, vibratoHz:0,   vibratoDepth:0  },
+  { freq:880,  gain:0.75, vibratoHz:5,   vibratoDepth:18 },
+  { freq:1046, gain:0.9,  vibratoHz:9,   vibratoDepth:35 }
 ];
 // Corridor Guard never had ANY sound in Test Mode before — the "no TTS,
 // deliberately" note only ever meant "not spoken," but nothing else was
@@ -6899,51 +6899,89 @@ const CG_TEST_PULSE = [
 // happening while dragging the sim avatar outside a corridor. Reuses
 // SimVoice.ctx (already created + resumed from the real Test-Mode-entry
 // click, see enterTestMode()) for a plain oscillator->gain->destination
-// chain, independent of SimVoice's own routing graph.
-function chuteGuardTone(level){
+// chain, independent of SimVoice's own routing graph. A single CONTINUOUS
+// oscillator that keeps sounding for the whole excursion, not discrete
+// pulses (an earlier version was, on explicit field feedback it read as
+// "multiple beeps" rather than one sustained tone) — same design as the
+// other three surfaces.
+let _cgTestAlarm = null; // {osc, gain, vibOsc, vibGain}
+function chuteGuardStartTone(level){
   if(!simSoundOn || !SimVoice.ctx) return;
-  const p = CG_TEST_PULSE[Math.max(0, Math.min(CG_TEST_PULSE.length-1, ((level|0)||1)-1))];
+  chuteGuardStopTone();
   try{
     const ctx=SimVoice.ctx;
     if(ctx.state==="suspended") ctx.resume();
-    const t=ctx.currentTime, o=ctx.createOscillator(), g=ctx.createGain();
-    o.type=p.type; o.frequency.value=p.freq;
+    const o=ctx.createOscillator(), g=ctx.createGain();
+    o.type="sawtooth";
+    const vibOsc=ctx.createOscillator(), vibGain=ctx.createGain();
+    vibOsc.type="sine"; vibOsc.frequency.value=0.001; vibGain.gain.value=0;
+    vibOsc.connect(vibGain); vibGain.connect(o.frequency);
+    const t=ctx.currentTime;
+    o.frequency.value=CG_TEST_TONE[0].freq;
     g.gain.setValueAtTime(0.0001,t);
-    g.gain.exponentialRampToValueAtTime(p.gain,t+0.015);
-    g.gain.exponentialRampToValueAtTime(0.0001,t+p.on);
-    o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t+p.on+0.01);
+    g.gain.exponentialRampToValueAtTime(CG_TEST_TONE[0].gain,t+0.06);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); vibOsc.start();
+    _cgTestAlarm = { osc:o, gain:g, vibOsc, vibGain };
+    chuteGuardUpdateTone(level, 0.06);
   }catch(e){}
+}
+function chuteGuardUpdateTone(level, rampS){
+  if(!_cgTestAlarm || !SimVoice.ctx) return;
+  const spec = CG_TEST_TONE[Math.max(0, Math.min(CG_TEST_TONE.length-1, ((level|0)||1)-1))];
+  const t = SimVoice.ctx.currentTime, r = rampS!=null?rampS:0.15;
+  try{
+    _cgTestAlarm.osc.frequency.linearRampToValueAtTime(spec.freq, t+r);
+    _cgTestAlarm.gain.gain.linearRampToValueAtTime(spec.gain, t+r);
+    _cgTestAlarm.vibOsc.frequency.linearRampToValueAtTime(spec.vibratoHz || 0.001, t+r);
+    _cgTestAlarm.vibGain.gain.linearRampToValueAtTime(spec.vibratoDepth, t+r);
+  }catch(e){}
+}
+function chuteGuardStopTone(){
+  if(_cgTestAlarm && SimVoice.ctx){
+    try{
+      const t=SimVoice.ctx.currentTime;
+      _cgTestAlarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.08);
+      _cgTestAlarm.osc.stop(t+0.1);
+      _cgTestAlarm.vibOsc.stop(t+0.1);
+    }catch(e){}
+  }
+  _cgTestAlarm = null;
 }
 // Chute/Corridor Guard callbacks — same "log() instead of a visitor-facing
 // banner, desktop authoring tool" reasoning as checkHazardAhead() above.
 // Still no TTS/spoken alert — Corridor Guard is never spoken, see
-// chute-guard.js's own header comment — but now plays chuteGuardTone()
-// above so a real excursion is actually audible while testing, not just
-// visible in the #simLog panel. chute-guard.js calls onWarn on every tick
-// while outside (roughly every sim step) instead of once per a 20s
-// cooldown, so the log line is throttled to first-alert/level-change only —
-// an unthrottled log would flood while dragging the sim avatar around
-// outside a corridor (the tone plays on every tick, same as the other
-// surfaces, so it still sounds continuous).
+// chute-guard.js's own header comment — but now plays a continuous tone
+// (chuteGuardStartTone/Update/Stop above) so a real excursion is actually
+// audible while testing, not just visible in the #simLog panel.
+let _cgTestAlarmCorridorId = null;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId,name,info){
-      chuteGuardTone((info&&info.level)||1);
+      const lvl = (info&&info.level)||1;
+      if(_cgTestAlarmCorridorId!==corridorId){
+        _cgTestAlarmCorridorId = corridorId;
+        chuteGuardStartTone(lvl);
+      }else{
+        chuteGuardUpdateTone(lvl);
+      }
       if(!info || info.alertCount===1 || info.levelChanged)
         simLogEv("sev-hazard","off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
     },
     onClear(corridorId,name){
+      if(_cgTestAlarmCorridorId===corridorId){ _cgTestAlarmCorridorId=null; chuteGuardStopTone(); }
       simLogEv("sev-sys","back inside \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId,name,info){
+      if(_cgTestAlarmCorridorId===corridorId){ _cgTestAlarmCorridorId=null; chuteGuardStopTone(); }
       simLogEv("sev-sys","left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
     },
     // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
     // exactly which gate is blocking a warning while dragging the sim
     // avatar, instead of a silent "nothing happened."
     onDebug(corridorId,name,d){
-      simLogEv("sev-sys","chuteGuard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
+      simLogEv("sev-sys","chuteGuard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+" in="+(d.everInside?"Y":"n")+
         " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
         " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s")+
         " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":""));
