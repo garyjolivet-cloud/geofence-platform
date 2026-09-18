@@ -7389,6 +7389,20 @@ function exitTestMode(){
   if(BleGPS.active) BleGPS.disconnect();   // else a connected dongle keeps streaming fixes into a torn-down session
   SimVoice.stop();
   SimAmbient.stop();
+  // Bug fixed 2026-09: neither of these ever ran on exit, so (a) a tone
+  // already sounding kept playing indefinitely after leaving Test Mode
+  // (nothing else would ever call chuteGuardStopTone() again), and (b)
+  // chute-guard.js's load() preserves a corridor's live excursion state
+  // across a reload with the SAME id/path/width (by design, for
+  // ridge-quest.html's "don't wipe a live alarm on a Home re-render" case)
+  // — which also meant re-entering Test Mode silently inherited whatever
+  // level/committed/everInside state the PREVIOUS test run left behind,
+  // contradicting Test Mode's own "always start fresh on (re)entry"
+  // guarantee (see TourState.init's forceReset comment in enterTestMode()).
+  // unload() forces enterTestMode()'s next ChuteGuard.load() to build
+  // genuinely fresh state instead of reusing anything.
+  chuteGuardStopTone(); _cgTestAlarmCorridorId=null;
+  if(typeof ChuteGuard!=="undefined") ChuteGuard.unload();
   if(simAmbientTimer){clearInterval(simAmbientTimer);simAmbientTimer=null;}
   Object.values(simAmbientMarkers).forEach(mk=>mk.remove());
   simAmbientMarkers={};

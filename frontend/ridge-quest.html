@@ -1893,6 +1893,12 @@ function renderHome(){
       statusEl.textContent="";
       activityBtns.forEach(b=>b.style.opacity="1");
       releaseWakeLock();
+      // Bug fixed 2026-09: stopping tracking mid-alarm never silenced it —
+      // Quest.stop() tears down watchPosition, so no more onWarn/onClear
+      // fixes would ever arrive to naturally clear it, leaving the tone
+      // playing for up to the full 20s watchdog window (or forever, if the
+      // page stayed open with the tab backgrounded and its timers throttled).
+      stopCgAlarm();
     } else {
       statusEl.textContent="waiting for GPS…";
       coverageEl.textContent="";
