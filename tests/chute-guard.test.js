@@ -118,12 +118,12 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const events = drive(ChuteGuard, [noLayer, shortPath], excursionSteps({ lateralPerSec: 3, driftSeconds: 10 }));
   assert(events.warn.length === 0, "corridor with no layer / <2 path points never alerts, and load() doesn't throw");
 
-  // widthM coercion: "12" (string) -> 12 (halfW=6, edge=6+2=8m);
-  // 0/NaN -> fallback 10 (halfW=5, edge=5+2=7m). A constant 7.5m offset is
-  // inside the width="12" edge (excess -0.5m, never alerts) but outside the
-  // fallback-width edge (excess +0.5m) — with the immediate-trigger design
-  // (no distance/accuracy delay stacked on the edge), a single outside fix
-  // is enough to tell the two apart.
+  // widthM coercion: "12" (string) -> 12 (halfW=6, edge=6+BUF=6.5m);
+  // 0/NaN -> fallback 10 (halfW=5, edge=5+BUF=5.5m). A constant 6.0m offset
+  // is inside the width="12" edge (excess -0.5m, never alerts) but outside
+  // the fallback-width edge (excess +0.5m) — with the immediate-trigger
+  // design (no distance/accuracy delay stacked on the edge), a single
+  // outside fix is enough to tell the two apart.
   function edgeCheckAtOffset(widthMValue) {
     const cg = freshChuteGuard();
     const corridor = { id: "w1", name: "w", runType: "run", activityType: null,
@@ -131,13 +131,13 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     const steps = [];
     let forwardM = 0;
     for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t: i * 1000 }); forwardM += 1.5; }
-    steps.push({ forwardM, lateralM: 7.5, t: 51000 });
+    steps.push({ forwardM, lateralM: 6.0, t: 51000 });
     const events = drive(cg, corridor, steps);
     return events.warn.length > 0;
   }
-  assert(edgeCheckAtOffset("12") === false, "widthM='12' (string) coerced to 12 -> edge 8m -> 7.5m offset stays inside (no alert)");
-  assert(edgeCheckAtOffset(0) === true, "widthM=0 falls back to 10 -> edge 7m -> 7.5m offset is outside -> alerts on the very next fix");
-  assert(edgeCheckAtOffset(NaN) === true, "widthM=NaN falls back to 10 -> edge 7m -> 7.5m offset is outside -> alerts on the very next fix");
+  assert(edgeCheckAtOffset("12") === false, "widthM='12' (string) coerced to 12 -> edge 6.5m -> 6.0m offset stays inside (no alert)");
+  assert(edgeCheckAtOffset(0) === true, "widthM=0 falls back to 10 -> edge 5.5m -> 6.0m offset is outside -> alerts on the very next fix");
+  assert(edgeCheckAtOffset(NaN) === true, "widthM=NaN falls back to 10 -> edge 5.5m -> 6.0m offset is outside -> alerts on the very next fix");
 })();
 
 // ============================================================
@@ -162,7 +162,7 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   // behavior from the committed-exit detector (decision 5, covered
   // separately below) — a plateauing drift alerts repeatedly without ever
   // committing.
-  for (let i = 0; i < 10; i++) tick(14); // excess = 14-9 = 5m
+  for (let i = 0; i < 10; i++) tick(14); // excess = 14-5.5 = 8.5m
   const alertCountBeforeReload = events.warn.length;
   assert(alertCountBeforeReload > 0, "excursion produced alerts before reload (sanity check)");
   ChuteGuard.load([corridor], cbs); // same corridor reloaded mid-excursion
@@ -172,7 +172,7 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(new Set(alertCounts).size === alertCounts.length, "alertCount keeps incrementing across the reload, never resets back to 1");
 
   // Reload with a DIFFERENT widthM -> different sig -> state resets.
-  const changedCorridor = makeCorridor("c1", { lenM: 400, widthM: 20 }); // edge = 10+4 = 14
+  const changedCorridor = makeCorridor("c1", { lenM: 400, widthM: 20 }); // edge = 10+0.5 = 10.5
   ChuteGuard.load([changedCorridor], cbs);
   const before = events.warn.length;
   for (let i = 0; i <= 50; i++) tick(0); // cover phase again (fresh state, fresh coverage)
@@ -348,7 +348,7 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const steps = [];
   { let forwardM = 0, t = 0;
     for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
-    // Jump straight to 39m offset -> excess = 39-9 = 30m, past ESCALATE_EXCESS_M[2]=25.
+    // Jump straight to 39m offset -> excess = 39-5.5 = 33.5m, past ESCALATE_EXCESS_M[2]=25.
     steps.push({ forwardM, lateralM: 39, t: 51000 });
   }
   const events = drive(cg, corridor, steps);
@@ -447,7 +447,7 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 // ============================================================
 (function testNoAlertBeforeFirstEntry(){
   const cg = freshChuteGuard();
-  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=halfW+2=7
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=halfW+0.5=5.5
   const events = { warn: [] };
   cg.load([corridor], { onWarn: (id, name, info) => events.warn.push(info) });
   const t0 = 1700000000000;
@@ -460,7 +460,7 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   // Pass 1: walk the corridor's centerline far enough to build coverage
   // (60m clears the 150m-cap-of-15% gate for a 400m corridor) and to have
   // genuinely been inside, then walk far enough away (well beyond
-  // maxRelevantM = edge7+60=67m) to fully leave its relevant range.
+  // maxRelevantM = edge5.5+60=65.5m) to fully leave its relevant range.
   for (let i = 0; i <= 60; i++) tick(0);
   for (let i = 0; i < 10; i++) tick(200);
   const warnsAfterPass1 = events.warn.length;
@@ -470,7 +470,7 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   // heading, and speed are all already satisfied from pass 1, so the field
   // bug this test guards against would fire here purely from "currently
   // outside," before ever having entered THIS pass.
-  for (let i = 0; i < 8; i++) tick(20); // excess = 20-7 = 13m, well outside but still within maxRelevantM
+  for (let i = 0; i < 8; i++) tick(20); // excess = 20-5.5 = 14.5m, well outside but still within maxRelevantM
   assert(events.warn.length === warnsAfterPass1,
     "approaching a previously-walked corridor a second time, before re-entering it, produces no alert even though coverage/heading/speed already carry over");
 

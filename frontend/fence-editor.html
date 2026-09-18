@@ -6888,9 +6888,9 @@ function checkHazardAhead(p,headingDeg,speedMps,nowMs){
 // Frequency/gain/vibrato per Corridor Guard escalation level — matches
 // ridge-quest.html's CG_TONE / geofence-engine.html's CG_ENGINE_TONE.
 const CG_TEST_TONE = [
-  { freq:740,  gain:0.55, vibratoHz:0,   vibratoDepth:0  },
-  { freq:880,  gain:0.75, vibratoHz:5,   vibratoDepth:18 },
-  { freq:1046, gain:0.9,  vibratoHz:9,   vibratoDepth:35 }
+  { freq:740,  gain:0.5,  vibratoHz:0, vibratoDepth:0  },
+  { freq:880,  gain:0.65, vibratoHz:4, vibratoDepth:7  },
+  { freq:1046, gain:0.8,  vibratoHz:6, vibratoDepth:14 }
 ];
 // Corridor Guard never had ANY sound in Test Mode before — the "no TTS,
 // deliberately" note only ever meant "not spoken," but nothing else was
@@ -6912,7 +6912,7 @@ function chuteGuardStartTone(level){
     const ctx=SimVoice.ctx;
     if(ctx.state==="suspended") ctx.resume();
     const o=ctx.createOscillator(), g=ctx.createGain();
-    o.type="sawtooth";
+    o.type="triangle"; // smoother/less abrasive than a sawtooth drone (field feedback, 2026-09)
     const vibOsc=ctx.createOscillator(), vibGain=ctx.createGain();
     vibOsc.type="sine"; vibOsc.frequency.value=0.001; vibGain.gain.value=0;
     vibOsc.connect(vibGain); vibGain.connect(o.frequency);

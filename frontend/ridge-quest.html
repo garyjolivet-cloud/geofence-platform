@@ -1520,9 +1520,9 @@ document.addEventListener("visibilitychange", ()=>{
 // without ever introducing real silence the way discrete pulses did; it
 // widens/speeds up at higher levels for urgency.
 const CG_TONE = [
-  { freq:740,  gain:0.55, vibratoHz:0,   vibratoDepth:0  },
-  { freq:880,  gain:0.75, vibratoHz:5,   vibratoDepth:18 },
-  { freq:1046, gain:0.9,  vibratoHz:9,   vibratoDepth:35 }
+  { freq:740,  gain:0.5,  vibratoHz:0, vibratoDepth:0  },
+  { freq:880,  gain:0.65, vibratoHz:4, vibratoDepth:7  },
+  { freq:1046, gain:0.8,  vibratoHz:6, vibratoDepth:14 }
 ];
 // Long, repeating on/off pattern per level — navigator.vibrate() plays a
 // pattern like this in full, unattended (not just a single 110ms pulse),
@@ -1552,7 +1552,7 @@ function startCgAlarm(corridorId, level){
     if(!_cgAc) chuteGuardPrimeAudio();
     if(_cgAc.state==="suspended") _cgAc.resume();
     const o=_cgAc.createOscillator(), g=_cgAc.createGain();
-    o.type="sawtooth"; // more piercing/alarm-like than sine, cuts through better on a phone speaker
+    o.type="triangle"; // smoother/less abrasive than a sawtooth drone (field feedback, 2026-09) while still clearer than a plain sine on a phone speaker
     const vibOsc=_cgAc.createOscillator(), vibGain=_cgAc.createGain();
     vibOsc.type="sine"; vibOsc.frequency.value=0.001; vibGain.gain.value=0;
     vibOsc.connect(vibGain); vibGain.connect(o.frequency); // frequency-modulate the main tone, not its own audible output

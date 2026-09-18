@@ -950,7 +950,7 @@ const Audio = {
       if(!ac){ ac=this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }
       if(ac.state==='suspended') ac.resume();
       const o=ac.createOscillator(), g=ac.createGain();
-      o.type="sawtooth";
+      o.type="triangle"; // smoother/less abrasive than a sawtooth drone (field feedback, 2026-09)
       const vibOsc=ac.createOscillator(), vibGain=ac.createGain();
       vibOsc.type="sine"; vibOsc.frequency.value=0.001; vibGain.gain.value=0;
       vibOsc.connect(vibGain); vibGain.connect(o.frequency);
@@ -1213,9 +1213,9 @@ function showChuteGuardPulse(){
 }
 // Frequency/gain/vibrato per escalation level (see Audio.startAlarm above).
 const CG_ENGINE_TONE = [
-  { freq:740,  gain:0.55, vibratoHz:0,   vibratoDepth:0  },
-  { freq:880,  gain:0.75, vibratoHz:5,   vibratoDepth:18 },
-  { freq:1046, gain:0.9,  vibratoHz:9,   vibratoDepth:35 }
+  { freq:740,  gain:0.5,  vibratoHz:0, vibratoDepth:0  },
+  { freq:880,  gain:0.65, vibratoHz:4, vibratoDepth:7  },
+  { freq:1046, gain:0.8,  vibratoHz:6, vibratoDepth:14 }
 ];
 const CG_ENGINE_VIBE = [ [500,150], [300,120], [200,90] ]; // long repeating vibrate() pattern per level, not a single pulse
 // Continuous alarm — owned by this page, not by GPS fix timing, same

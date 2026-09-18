@@ -238,9 +238,9 @@ function renderWalkPaths(){
 // Frequency/gain/vibrato per Corridor Guard escalation level — matches
 // ridge-quest.html's CG_TONE / geofence-engine.html's CG_ENGINE_TONE.
 const CG_SIM_TONE = [
-  { freq:740,  gain:0.55, vibratoHz:0,   vibratoDepth:0  },
-  { freq:880,  gain:0.75, vibratoHz:5,   vibratoDepth:18 },
-  { freq:1046, gain:0.9,  vibratoHz:9,   vibratoDepth:35 }
+  { freq:740,  gain:0.5,  vibratoHz:0, vibratoDepth:0  },
+  { freq:880,  gain:0.65, vibratoHz:4, vibratoDepth:7  },
+  { freq:1046, gain:0.8,  vibratoHz:6, vibratoDepth:14 }
 ];
 const Audio = {
   on:true, ctx:null, keepAlive:null,
@@ -269,7 +269,7 @@ const Audio = {
     try{
       this.unlock();
       const o=this.ctx.createOscillator(), g=this.ctx.createGain();
-      o.type="sawtooth";
+      o.type="triangle"; // smoother/less abrasive than a sawtooth drone (field feedback, 2026-09)
       const vibOsc=this.ctx.createOscillator(), vibGain=this.ctx.createGain();
       vibOsc.type="sine"; vibOsc.frequency.value=0.001; vibGain.gain.value=0;
       vibOsc.connect(vibGain); vibGain.connect(o.frequency);

@@ -69,7 +69,7 @@
     ENGAGE_MIN_SPEED_BY_ACTIVITY: {   // per-activity floor — 1.5 m/s (5.4km/h) is faster than typical hiking pace, so a single fixed floor silently excluded hike/walk corridors
       hike: 0.7, walking_city: 0.7, xcountry: 1.2, bike: 1.5, ski_chute: 1.5, drive: 3.0
     },
-    OUTSIDE_BUFFER_M: 2,         // small margin past the nominal half-width, mainly float/geometry noise tolerance right at the line — NOT a "wait before alerting" delay (see the first-alert comment in tick() below: the alert fires on the very fix that crosses this edge, no separate distance/accuracy threshold on top of it)
+    OUTSIDE_BUFFER_M: 0.5,       // small margin past the nominal half-width — float/GPS-geometry noise tolerance right at the line ONLY, not a "wait before alerting/clearing" delay. Shared symmetrically by both the alert-trigger edge and the back-inside/clear edge (see the first-alert comment and backInside below), so this is also how close to the TRUE authored width the alarm has to get before it stops — field feedback (2026-09) was that the previous 2m value cleared the alarm well before the avatar visually re-entered a narrow corridor's drawn line, which read as "not turning off fast enough." Kept nonzero only because an exact 0 boundary can flicker on floating-point noise alone.
     MAX_LEVEL: 3,
     ESCALATE_AFTER_MS: [0, 5000, 12000],  // time-since-first-alert ladder -> level (index+1)
     ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
