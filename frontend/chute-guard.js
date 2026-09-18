@@ -18,12 +18,17 @@
 // no DOM/Audio/Vibration calls of its own" pattern as kalman-filter.js and
 // guidance-bot.js.
 //
-// Reaction is distance-based, not time-based: the first alert fires once
-// the player is a fixed distance past the corridor's edge (scaled up by the
-// GPS fix's own accuracy, for jitter rejection), not after a fixed
-// wall-clock delay — so a car and a walker both get warned at roughly the
-// same drift distance, instead of the car covering far more ground before a
-// fixed timer elapses.
+// Reaction is immediate, not distance- or time-accumulated: the first alert
+// fires on the very GPS fix that crosses the corridor's edge (its half-width
+// plus OUTSIDE_BUFFER_M's small "riding the line on purpose" tolerance) —
+// there is no separate "must be N meters past the edge" or "must stay
+// outside for N seconds/fixes" delay stacked on top of that. Anti-jitter
+// protection instead comes from the two checks that already have to be true
+// for a fix to reach that edge-crossing test at all: the `engaged` gate
+// (heading roughly parallel to the corridor, moving at a real travel speed —
+// the "direction" half) and the perpendicular-distance-to-nearest-segment
+// comparison against the edge itself (the "edge detection" half). A car and
+// a walker both get warned the instant either one crosses the line.
 //
 // Committed-exit detection: while alerting, this module also tracks whether
 // the player's distance from the corridor is trending back down (a real
@@ -61,10 +66,7 @@
     ENGAGE_MIN_SPEED_BY_ACTIVITY: {   // per-activity floor — 1.5 m/s (5.4km/h) is faster than typical hiking pace, so a single fixed floor silently excluded hike/walk corridors
       hike: 0.7, walking_city: 0.7, xcountry: 1.2, bike: 1.5, ski_chute: 1.5, drive: 3.0
     },
-    OUTSIDE_BUFFER_M: 4,         // extra margin past the nominal half-width before counting as "outside" (riding the edge on purpose shouldn't nag)
-    FIRST_ALERT_EXCESS_M: 3,     // must be at least this far past the buffered edge before the very first alert...
-    ACC_EXCESS_FACTOR: 0.75,     // ...or this fraction of the fix's own reported accuracy, whichever is LARGER — self-scaling jitter rejection, replaces a fixed wall-clock sustain timer so reaction distance doesn't depend on speed
-    SUSTAIN_OUTSIDE_FIXES: 3,    // secondary trigger: this many consecutive engaged-outside fixes at any excess also fires, so a small steady drift under noisy accuracy doesn't go unwarned forever
+    OUTSIDE_BUFFER_M: 2,         // small margin past the nominal half-width, mainly float/geometry noise tolerance right at the line — NOT a "wait before alerting" delay (see the first-alert comment in tick() below: the alert fires on the very fix that crosses this edge, no separate distance/accuracy threshold on top of it)
     MAX_LEVEL: 3,
     ESCALATE_AFTER_MS: [0, 5000, 12000],  // time-since-first-alert ladder -> level (index+1)
     ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
@@ -143,7 +145,7 @@
 
   function freshState(){
     return {
-      outsideFixes:0, level:0, firstAlertAt:null, excessAtFirstAlert:0,
+      level:0, firstAlertAt:null, excessAtFirstAlert:0,
       maxExcessM:0, prevExcessM:null, growthStreak:0, committed:false,
       alertCount:0, lastDebugAt:0, lastEmittedLevel:0
     };
@@ -209,7 +211,6 @@
     if(!corridors.length || fix==null || (fix.acc!=null && fix.acc>TUNING.ACCURACY_CAP_M)) return;
     const latLon=[fix.lat, fix.lon];
     const now = fix.t || Date.now();
-    const acc = (fix.acc!=null ? fix.acc : 10);
 
     for(const c of corridors){
       const ref=c.path[0];
@@ -273,14 +274,21 @@
         continue;
       }
 
-      st.outsideFixes++;
       if(excessM > st.maxExcessM) st.maxExcessM = excessM;
 
       if(st.level===0){
-        const requiredExcessM = Math.max(TUNING.FIRST_ALERT_EXCESS_M, TUNING.ACC_EXCESS_FACTOR*acc);
-        const far       = excessM >= requiredExcessM;
-        const sustained = st.outsideFixes >= TUNING.SUSTAIN_OUTSIDE_FIXES;
-        if(!far && !sustained){ st.prevExcessM = excessM; continue; }
+        // Fires on the very fix that crosses the edge — no extra distance or
+        // accuracy-scaled delay stacked on top of OUTSIDE_BUFFER_M's small
+        // tolerance. "Direction" and "edge" are both already accounted for
+        // by the time we get here: `engaged` (above) is the direction check
+        // — heading roughly parallel to the corridor, moving at a real
+        // travel speed, not a stray reading while stationary — and
+        // `excessM > 0` against `near.distM` IS the edge check, a genuine
+        // perpendicular-distance-past-the-boundary crossing, not a
+        // time/distance-accumulated guess at one. A single noisy fix that
+        // isn't part of real engaged travel along the corridor never
+        // reaches this branch at all, so no separate anti-jitter delay is
+        // needed before sounding the alarm.
         st.firstAlertAt = now;
         st.excessAtFirstAlert = excessM;
         st.prevExcessM = excessM;

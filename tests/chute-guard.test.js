@@ -118,12 +118,12 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const events = drive(ChuteGuard, [noLayer, shortPath], excursionSteps({ lateralPerSec: 3, driftSeconds: 10 }));
   assert(events.warn.length === 0, "corridor with no layer / <2 path points never alerts, and load() doesn't throw");
 
-  // widthM coercion: "12" (string) -> 12 (edge=10m); 0/NaN -> fallback 10 (edge=9m).
-  // At a constant 9.5m offset: excess is -0.5m (inside, never alerts) against
-  // edge=10m, but +0.5m (outside) against edge=9m — too small to cross the
-  // accuracy-scaled "far" threshold on its own, so the fallback case relies
-  // on the SUSTAIN_OUTSIDE_FIXES=3 path, which needs several consecutive
-  // outside fixes.
+  // widthM coercion: "12" (string) -> 12 (halfW=6, edge=6+2=8m);
+  // 0/NaN -> fallback 10 (halfW=5, edge=5+2=7m). A constant 7.5m offset is
+  // inside the width="12" edge (excess -0.5m, never alerts) but outside the
+  // fallback-width edge (excess +0.5m) — with the immediate-trigger design
+  // (no distance/accuracy delay stacked on the edge), a single outside fix
+  // is enough to tell the two apart.
   function edgeCheckAtOffset(widthMValue) {
     const cg = freshChuteGuard();
     const corridor = { id: "w1", name: "w", runType: "run", activityType: null,
@@ -131,13 +131,13 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     const steps = [];
     let forwardM = 0;
     for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t: i * 1000 }); forwardM += 1.5; }
-    for (let i = 1; i <= 5; i++) { steps.push({ forwardM, lateralM: 9.5, t: (51 + i) * 1000 }); forwardM += 1.5; }
+    steps.push({ forwardM, lateralM: 7.5, t: 51000 });
     const events = drive(cg, corridor, steps);
     return events.warn.length > 0;
   }
-  assert(edgeCheckAtOffset("12") === false, "widthM='12' (string) coerced to 12 -> edge 10m -> 9.5m offset stays inside forever (no alert)");
-  assert(edgeCheckAtOffset(0) === true, "widthM=0 falls back to 10 -> edge 9m -> 9.5m offset is outside and eventually alerts via the sustain fallback");
-  assert(edgeCheckAtOffset(NaN) === true, "widthM=NaN falls back to 10 -> edge 9m -> 9.5m offset is outside and eventually alerts via the sustain fallback");
+  assert(edgeCheckAtOffset("12") === false, "widthM='12' (string) coerced to 12 -> edge 8m -> 7.5m offset stays inside (no alert)");
+  assert(edgeCheckAtOffset(0) === true, "widthM=0 falls back to 10 -> edge 7m -> 7.5m offset is outside -> alerts on the very next fix");
+  assert(edgeCheckAtOffset(NaN) === true, "widthM=NaN falls back to 10 -> edge 7m -> 7.5m offset is outside -> alerts on the very next fix");
 })();
 
 // ============================================================
@@ -259,37 +259,33 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 })();
 
 // ============================================================
-// 8. Accuracy scaling
+// 8. Reaction is immediate regardless of GPS accuracy (below the cap)
 // ============================================================
-(function testAccuracyScaling(){
-  // Tight accuracy (5m): required excess = max(3, 0.75*5) = 3.75m. A
-  // constant 5m excess exceeds that immediately -> fires on the very first
-  // outside fix.
-  const tight = freshChuteGuard();
+(function testAccuracyDoesNotDelayReaction(){
+  // There is no accuracy-scaled "how far past the edge" requirement any
+  // more (removed per the "start as soon as GPS is outside corridor"
+  // fix) — a fix's own accuracy no longer changes how many meters of
+  // excess are needed before the first alert. Confirm tight vs. loose
+  // (but still-under-the-cap) accuracy both fire on the very first
+  // outside fix, for the same small excess.
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
-  const tightSteps = excursionSteps({ coverM: 70, driftSeconds: 5, lateralPerSec: 100, acc: 5 }); // huge jump to a constant offset on step 1
-  // Build a constant-offset track directly instead of a ramp, to test "far" firing immediately:
-  const constSteps = [];
-  { let forwardM = 0, t = 0;
-    for (let i = 0; i <= 50; i++) { constSteps.push({ forwardM, lateralM: 0, acc: 5, t }); forwardM += 1.5; t += 1000; }
-    for (let i = 1; i <= 5; i++) { constSteps.push({ forwardM, lateralM: 14, acc: 5, t }); forwardM += 1.5; t += 1000; } // excess = 14-9 = 5m
+  function buildConstSteps(acc){
+    const steps = [];
+    let forwardM = 0, t = 0;
+    for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, acc, t }); forwardM += 1.5; t += 1000; }
+    for (let i = 1; i <= 5; i++) { steps.push({ forwardM, lateralM: 9, acc, t }); forwardM += 1.5; t += 1000; } // excess = 9-7 = 2m
+    return steps;
   }
-  const tightEvents = drive(tight, corridor, constSteps);
-  assert(tightEvents.warn.length === 5, "tight accuracy (5m): a constant 5m excess (above the 3.75m requirement) fires on every outside fix, starting with the first");
+  const tight = drive(freshChuteGuard(), corridor, buildConstSteps(5));
+  assert(tight.warn.length === 5, "tight accuracy (5m): fires on every one of the 5 outside fixes, starting with the first");
 
-  // Loose accuracy (25m): required excess = max(3, 0.75*25) = 18.75m. The
-  // same constant 5m excess never reaches that -> only fires via the
-  // SUSTAIN_OUTSIDE_FIXES=3 fallback, on the 3rd outside fix, not the 1st.
-  const loose = freshChuteGuard();
-  const looseSteps = constSteps.map(s => Object.assign({}, s, { acc: 25 }));
-  const looseEvents = drive(loose, corridor, looseSteps);
-  assert(looseEvents.warn.length === 3, "loose accuracy (25m): the same 5m excess only fires via the 3-consecutive-fix fallback (3 alerts across 5 outside fixes), not immediately");
+  const loose = drive(freshChuteGuard(), corridor, buildConstSteps(25));
+  assert(loose.warn.length === 5, "loose accuracy (25m, still under the cap): fires on every outside fix too — no longer delayed by accuracy");
+  assert(loose.warn[0].alertCount === 1 && tight.warn[0].alertCount === 1, "both fire on the very first outside fix (alertCount 1), regardless of accuracy");
 
-  // Fixes worse than the accuracy cap (30m) are ignored entirely.
-  const capped = freshChuteGuard();
-  const cappedSteps = constSteps.map(s => Object.assign({}, s, { acc: 31 }));
-  const cappedEvents = drive(capped, corridor, cappedSteps);
-  assert(cappedEvents.warn.length === 0 && cappedEvents.debug.length === 0, "fixes with accuracy worse than the 30m cap are ignored entirely (no warn, no debug)");
+  // Fixes worse than the accuracy cap (30m) are still ignored entirely.
+  const capped = drive(freshChuteGuard(), corridor, buildConstSteps(31));
+  assert(capped.warn.length === 0 && capped.debug.length === 0, "fixes with accuracy worse than the 30m cap are ignored entirely (no warn, no debug)");
 })();
 
 // ============================================================
