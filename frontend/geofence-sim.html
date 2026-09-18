@@ -1091,24 +1091,37 @@ function checkHazardAhead(p, headingDeg, speedMps, nowMs){
     }
   }
 }
-// Chute Guard callbacks — same "console log() instead of a visitor-facing
-// DOM banner, desktop authoring tool not the visitor engine" reasoning as
-// checkHazardAhead() above. navigator.vibrate is absent on desktop, so this
-// exercises the tone fallback path every time here, by design.
+// Chute/Corridor Guard callbacks — same "console log() instead of a
+// visitor-facing DOM banner, desktop authoring tool not the visitor engine"
+// reasoning as checkHazardAhead() above. navigator.vibrate is absent on
+// desktop, so this exercises the tone fallback path every time here, by
+// design. chute-guard.js now calls onWarn on every tick while outside
+// (roughly once per sim step) instead of once per a 20s cooldown, so the log
+// line is throttled here to first-alert/level-change only — an unthrottled
+// log would flood during a held excursion.
 function chuteGuardCallbacks(){
   return {
-    onWarn(corridorId, name){
+    onWarn(corridorId, name, info){
       if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
       else Audio.rumble();
-      log("ev-hazard", "drifted outside \""+(name||"chute")+"\"'s line");
+      if(!info || info.alertCount===1 || info.levelChanged)
+        log("ev-hazard", "off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
+          " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
+    },
+    onClear(corridorId, name){
+      log("ev-sys", "back inside \""+(name||"corridor")+"\"");
+    },
+    onDisengage(corridorId, name, info){
+      log("ev-sys", "left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
     },
     // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
     // exactly which gate is blocking a warning instead of a silent
     // "nothing happened."
     onDebug(corridorId, name, d){
-      log("ev-sys", "chuteGuard \""+(name||"chute")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
+      log("ev-sys", "chuteGuard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
         " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
-        " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s"));
+        " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s")+
+        " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":""));
     }
   };
 }

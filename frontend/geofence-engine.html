@@ -929,23 +929,31 @@ const Audio = {
       });
     }catch(e){}
   },
-  // Chute Guard's iOS/no-vibration fallback tone — deliberately a single,
-  // quiet, low-pitched blip, distinct from ding()'s bright two-note arrival
-  // chime so the two are never confused. Kept genuinely subtle: this fires
-  // mid-run while the visitor is actively skiing, not a discrete event like
-  // an arrival.
-  rumble(){
+  // Chute/Corridor Guard's fallback tone — one pulse of a continuous alarm
+  // that plays back-to-back for as long as the visitor remains outside a
+  // corridor (see chuteGuardCallbacks() below), not a single blip fired
+  // once per excursion. Moved out of the old 220Hz/quiet-blip design into an
+  // 880-1318Hz alarm-like band (a phone micro-speaker is inefficient below
+  // ~500Hz — that was the real reason the old single quiet blip wasn't
+  // reliably audible, not the gain), using triangle/square oscillators for
+  // a more perceptible timbre than a plain sine. Still distinct from
+  // ding()'s bright two-note arrival chime by its pulsing/looping
+  // character, but no longer deliberately quieter — Corridor Guard needs to
+  // actually be heard and corrected on.
+  rumble(level){
+    const p = CG_ENGINE_PULSE[Math.max(0, Math.min(CG_ENGINE_PULSE.length-1, ((level|0)||1)-1))];
     try{
       let ac=(typeof Clarity!=='undefined' && Clarity.ctx)?Clarity.ctx:this.ctx;
       if(!ac){ ac=this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }
       if(ac.state==='suspended') ac.resume();
       const t=ac.currentTime;
       const o=ac.createOscillator(), g=ac.createGain();
-      o.type='sine'; o.frequency.value=220;
+      o.type=p.type; o.frequency.value=p.freq;
       g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime(0.16,t+0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
-      o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+0.24);
+      g.gain.exponentialRampToValueAtTime(p.gain,t+0.015);
+      g.gain.setValueAtTime(p.gain,t+p.on-0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+p.on);
+      o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+p.on+0.01);
     }catch(e){}
   },
   // voiceOverride lets a caller pick a voice without also handing over a
@@ -1157,10 +1165,9 @@ function hideHazardBanner(){
   clearTimeout(_hazardBannerTimer);
   document.getElementById('_hazardBanner')?.remove();
 }
-// Chute Guard's visual companion — a brief, subtle screen-edge pulse, never
-// the primary channel (a skier's eyes are on the snow, not the phone).
-// Deliberately much quieter than the hazard banner: no text, short-lived,
-// amber rather than alarm-red, pointer-events:none throughout.
+// Chute/Corridor Guard's visual companion — a brief screen-edge pulse.
+// Self-debouncing on its own 650ms timer, so it's safe to re-trigger on
+// every onWarn call at chute-guard.js's new roughly-per-GPS-fix cadence.
 function showChuteGuardPulse(){
   let b=document.getElementById('_chuteGuardPulse');
   if(!b){
@@ -1174,19 +1181,82 @@ function showChuteGuardPulse(){
   clearTimeout(b._t);
   b._t=setTimeout(()=>{ b.style.boxShadow='inset 0 0 0 0 rgba(255,194,77,0)'; }, 650);
 }
-// Chute Guard callbacks — the host (this file) decides HOW to alert
-// (vibration where supported, a soft fallback tone otherwise, plus a
-// visual pulse either way); chute-guard.js itself only decides WHEN, per
-// its own header comment. Deliberately no spoken alert (unlike hazard
-// warnings, which always pair speech + visual) — narration would be the
-// opposite of "subtle" for something that fires mid-run.
+// One pulse's frequency/gain/duration per escalation level (see Audio.rumble above).
+const CG_ENGINE_PULSE = [
+  { freq:880,  gain:0.55, on:0.16, type:'triangle' },
+  { freq:1046, gain:0.75, on:0.15, type:'triangle' },
+  { freq:1318, gain:0.95, on:0.14, type:'square'   }
+];
+const CG_ENGINE_GAP_MS = [740, 500, 310];
+const CG_ENGINE_VIBE   = [ [160,740], [180,90,180,500], [220,80,220,80,220,310] ];
+// Continuous alarm — owned by this page, not by GPS fix timing, same
+// reasoning as ridge-quest.html's identical construct: chute-guard.js calls
+// onWarn roughly once per fix, but the alarm must sound with no gaps for
+// the whole time the visitor is outside, bridging however long the next fix
+// takes to arrive. A ~20s watchdog stops it if no onWarn heartbeat arrives
+// (GPS dropout) rather than assuming they're back on track.
+let _cgEngineAlarm = null;
+function _cgEngineScheduleNext(){
+  if(!_cgEngineAlarm) return;
+  Audio.rumble(_cgEngineAlarm.level);
+  const p = CG_ENGINE_PULSE[Math.max(0, Math.min(CG_ENGINE_PULSE.length-1, _cgEngineAlarm.level-1))];
+  const gap = CG_ENGINE_GAP_MS[Math.max(0, Math.min(CG_ENGINE_GAP_MS.length-1, _cgEngineAlarm.level-1))];
+  _cgEngineAlarm.timer = setTimeout(()=>{
+    if(!_cgEngineAlarm) return;
+    if(Date.now()-_cgEngineAlarm.lastHeardAt > 20000){ stopCgEngineAlarm(); return; }
+    _cgEngineScheduleNext();
+  }, Math.round((p.on+gap)*1000));
+}
+function startCgEngineAlarm(corridorId, level){
+  stopCgEngineAlarm();
+  _cgEngineAlarm = { corridorId, level, timer:null, lastHeardAt:Date.now() };
+  if('vibrate' in navigator){ try{ navigator.vibrate(CG_ENGINE_VIBE[level-1]); }catch(e){} }
+  _cgEngineScheduleNext();
+}
+function updateCgEngineAlarmLevel(level){
+  if(!_cgEngineAlarm) return;
+  _cgEngineAlarm.level = level;
+  _cgEngineAlarm.lastHeardAt = Date.now();
+  if('vibrate' in navigator){ try{ navigator.vibrate(CG_ENGINE_VIBE[level-1]); }catch(e){} }
+}
+function stopCgEngineAlarm(){
+  if(_cgEngineAlarm && _cgEngineAlarm.timer) clearTimeout(_cgEngineAlarm.timer);
+  _cgEngineAlarm = null;
+  if('vibrate' in navigator){ try{ navigator.vibrate(0); }catch(e){} }
+}
+// Chute/Corridor Guard callbacks — the host (this file) decides HOW to
+// alert (vibration AND a fallback tone together — no longer an either/or,
+// which used to silence the tone outright on any device with the Vibration
+// API — plus a visual pulse); chute-guard.js itself only decides WHEN and
+// for how long, per its own header comment. Deliberately no spoken alert
+// (unlike hazard warnings, which always pair speech + visual) — narration
+// would fight the rest of the tour's narration for something that fires
+// mid-run.
 function chuteGuardCallbacks(){
-  return { onWarn(corridorId, name){
-    if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
-    else Audio.rumble();
-    showChuteGuardPulse();
-    HUD.log('ev-warn','⚠ drifted outside "'+(name||'chute')+'"\'s line');
-  } };
+  return {
+    onWarn(corridorId, name, info){
+      const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
+      if(!_cgEngineAlarm || _cgEngineAlarm.corridorId!==corridorId){
+        startCgEngineAlarm(corridorId, lvl);
+      }else if(lvl > _cgEngineAlarm.level){
+        updateCgEngineAlarmLevel(lvl);
+      }else{
+        _cgEngineAlarm.lastHeardAt = Date.now();
+      }
+      showChuteGuardPulse();
+      if(!info || info.alertCount===1 || info.levelChanged)
+        HUD.log('ev-warn','⚠ off the line — outside "'+(name||'corridor')+'" (L'+lvl+')');
+    },
+    onClear(corridorId, name){
+      if(_cgEngineAlarm && _cgEngineAlarm.corridorId===corridorId){
+        stopCgEngineAlarm();
+        HUD.log('ev-sys','back inside "'+(name||'corridor')+'"');
+      }
+    },
+    onDisengage(corridorId, name){
+      if(_cgEngineAlarm && _cgEngineAlarm.corridorId===corridorId) stopCgEngineAlarm();
+    }
+  };
 }
 
 /* =================== PROXIMITY AUDIO — distance-clarity (§5a) ===================

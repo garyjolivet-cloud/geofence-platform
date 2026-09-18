@@ -1389,15 +1389,26 @@ async function refreshStats(playerId){
 // target.geometry.path/widthM out of the same zones array), so this is a
 // re-wrap, not a re-fetch or a re-derivation.
 function chuteGuardZonesFor(corridors){
-  return (corridors||[]).map(c=>({ id:c.zoneId, name:c.name, runType:c.runType,
+  return (corridors||[]).map(c=>({ id:c.zoneId, name:c.name, runType:c.runType, activityType:c.activityType,
     layers:[{ geometry:{ type:"corridor", path:c.path, widthM:c.widthM } }] }));
 }
+// Corridor Guard audio — a continuous alarm while the player is outside a
+// corridor, not a one-shot blip. See chute-guard.js for the detection state
+// machine (per-fix "still outside" signal + escalation level + committed-
+// exit detection); everything below is the host's job of turning that
+// per-fix signal into something actually audible/felt, and keeping it
+// sounding continuously between GPS fixes (which can be several seconds
+// apart) until chute-guard.js says to stop.
+//
 // iOS Safari/Chrome have no Vibration API at all (Apple has never
 // implemented it) — same fallback geofence-engine.html's Audio.rumble()
 // already uses there, reimplemented here standalone since this page has no
 // shared Audio object of its own (no spatial voice, no ambient beds — the
 // narration playback below is separate and simpler, just one <audio>
 // element playing one clip at a time, no WebAudio routing needed for it).
+// On platforms that DO support vibrate(), it now always fires ALONGSIDE the
+// tone rather than instead of it (the old code was an if/vibrate-else-tone,
+// which silenced the tone entirely on any such device).
 //
 // Bug fixed 2026-09-18 (field report: "not loud enough or not working" on
 // iPhone): this used to only create/resume an AudioContext, which is NOT
@@ -1411,10 +1422,17 @@ function chuteGuardZonesFor(corridors){
 // session into a category that ignores the switch. Reproduced verbatim
 // here, plus the same inaudible keep-alive oscillator (helps the context
 // survive a brief idle/backgrounding instead of coming back suspended).
-// Also bumped the tone's peak gain/length (0.16→0.3, 0.22s→0.3s, matching
-// ding()'s loudness) for the "not loud enough" half, on a device that isn't
-// silenced.
-let _cgAc = null, _cgSilenceEl = null, _cgKeepAlive = null;
+//
+// Bug fixed 2026-09-(next) (field report: still not audible on a real test
+// walk): two more issues found. (1) the walk was on a non-chute corridor,
+// which chute-guard.js used to filter out entirely — see its own header,
+// it now evaluates every corridor. (2) even when the tone did play, 220Hz
+// is below where a phone's micro-speaker is efficient — moved to an
+// 880-1300Hz range, which is a bigger audibility win than any further gain
+// increase — and a single ~0.3s blip is easy to miss during activity, so
+// it's now a continuously-sounding alarm for as long as the player remains
+// outside (chuteGuardAlert() below), escalating with chute-guard.js's level.
+let _cgAc = null, _cgSilenceEl = null, _cgKeepAlive = null, _cgMaster = null;
 function _cgSilentWavBlob(){
   const sr=8000, n=sr; // 1s of silence @ 8kHz mono 16-bit — tiny, loops seamlessly
   const buf=new ArrayBuffer(44+n*2), dv=new DataView(buf);
@@ -1426,11 +1444,14 @@ function _cgSilentWavBlob(){
   str(36,"data"); dv.setUint32(40,n*2,true);      // sample bytes stay zero = silence
   return new Blob([buf],{type:"audio/wav"});
 }
-// Creates + resumes the AudioContext, starts the silent unlock loop, and
-// starts the keep-alive oscillator — all from inside a real tap (Start
-// tracking) so none of it needs a user gesture later. Anything set up
-// later, from inside a GPS watchPosition callback (no gesture), can
-// silently stay suspended/muted on iOS and the warning would never sound.
+// Creates + resumes the AudioContext, starts the silent unlock loop, the
+// keep-alive oscillator, and a persistent DynamicsCompressor master chain —
+// all from inside a real tap (Start tracking) so none of it needs a user
+// gesture later. Anything set up later, from inside a GPS watchPosition
+// callback (no gesture), can silently stay suspended/muted on iOS and the
+// warning would never sound. The compressor keeps the louder/denser alarm
+// at higher escalation levels from clipping into a harsh buzz on a phone
+// speaker.
 function chuteGuardPrimeAudio(){
   try{
     if(!_cgAc) _cgAc = new (window.AudioContext||window.webkitAudioContext)();
@@ -1438,6 +1459,12 @@ function chuteGuardPrimeAudio(){
     if(!_cgKeepAlive){
       const o=_cgAc.createOscillator(), g=_cgAc.createGain();
       g.gain.value=0.0001; o.frequency.value=30; o.connect(g); g.connect(_cgAc.destination); o.start(); _cgKeepAlive=o;
+    }
+    if(!_cgMaster){
+      const comp=_cgAc.createDynamicsCompressor();
+      comp.threshold.value=-12; comp.ratio.value=8; comp.attack.value=0.003; comp.release.value=0.15;
+      const g=_cgAc.createGain(); g.gain.value=1;
+      g.connect(comp); comp.connect(_cgAc.destination); _cgMaster=g;
     }
   }catch(e){}
   if(!_cgSilenceEl){
@@ -1451,29 +1478,114 @@ function chuteGuardPrimeAudio(){
     }catch(e){}
   }
 }
-function chuteGuardRumble(){
+// A tracking session can run 30-60+ minutes with the screen locking/
+// unlocking repeatedly — re-arm anything that got suspended along the way
+// instead of only priming once at Start-tracking.
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState!=="visible") return;
+  try{ if(_cgAc && _cgAc.state==="suspended") _cgAc.resume(); }catch(e){}
+  try{ if(_cgSilenceEl && _cgSilenceEl.paused) _cgSilenceEl.play().catch(()=>{}); }catch(e){}
+});
+
+// One short pulse of the alarm tone at the given level — 880/1046/1318Hz
+// (well above 220Hz's old range, where a phone micro-speaker is inefficient)
+// using triangle/square oscillators for a more perceptible, alarm-like
+// timbre than a plain sine. Called back-to-back by the continuous-alarm
+// loop below, not once per GPS fix.
+const CG_PULSE = [
+  { freq:880,  gain:0.55, on:0.16, type:"triangle" },
+  { freq:1046, gain:0.75, on:0.15, type:"triangle" },
+  { freq:1318, gain:0.95, on:0.14, type:"square"   }
+];
+const CG_GAP_MS   = [740, 500, 310];             // silence between pulses — shrinks as level rises, but never actually reaches 0 (still "continuous" in the sense of never leaving the player wondering if it stopped)
+const CG_VIBE     = [ [160,740], [180,90,180,500], [220,80,220,80,220,310] ]; // repeating on/off pattern per level; re-issued whenever the level changes
+function _cgPulse(level){
+  const p = CG_PULSE[Math.max(0, Math.min(CG_PULSE.length-1, (level|0)-1))];
   try{
-    if(!_cgAc) _cgAc = new (window.AudioContext||window.webkitAudioContext)();
+    if(!_cgAc) chuteGuardPrimeAudio();
     if(_cgAc.state==="suspended") _cgAc.resume();
-    const t=_cgAc.currentTime, o=_cgAc.createOscillator(), g=_cgAc.createGain();
-    o.type="sine"; o.frequency.value=220;
+    const t=_cgAc.currentTime+0.008, o=_cgAc.createOscillator(), g=_cgAc.createGain();
+    o.type=p.type; o.frequency.value=p.freq;
     g.gain.setValueAtTime(0.0001,t);
-    g.gain.exponentialRampToValueAtTime(0.3,t+0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001,t+0.3);
-    o.connect(g); g.connect(_cgAc.destination); o.start(t); o.stop(t+0.32);
+    g.gain.exponentialRampToValueAtTime(p.gain,t+0.015);
+    g.gain.setValueAtTime(p.gain,t+p.on-0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+p.on);
+    o.connect(g); g.connect(_cgMaster||_cgAc.destination);
+    o.start(t); o.stop(t+p.on+0.01);
   }catch(e){}
+}
+// Continuous alarm — owned by this page, not by GPS fix timing. chute-guard.js
+// calls onWarn roughly once per GPS fix (which can be several seconds apart),
+// but the alarm itself must sound with no silent gaps for the whole time the
+// player is outside. So: start a self-rescheduling pulse loop the moment the
+// first onWarn for an excursion arrives, keep it running on its own clock
+// (independent of when the next fix lands) until stopCgAlarm() is called by
+// onClear/onDisengage, or until a ~20s watchdog fires (comfortably longer
+// than watchPosition's own 15s timeout) in case a GPS dropout means neither
+// callback ever arrives — treated as "lost signal, stop nagging."
+let _cgAlarm = null; // {corridorId, level, timer, lastHeardAt}
+function _cgScheduleNext(){
+  if(!_cgAlarm) return;
+  _cgPulse(_cgAlarm.level);
+  const p = CG_PULSE[Math.max(0, Math.min(CG_PULSE.length-1, _cgAlarm.level-1))];
+  const gap = CG_GAP_MS[Math.max(0, Math.min(CG_GAP_MS.length-1, _cgAlarm.level-1))];
+  _cgAlarm.timer = setTimeout(()=>{
+    if(!_cgAlarm) return;
+    if(Date.now()-_cgAlarm.lastHeardAt > 20000){ stopCgAlarm(); return; }
+    _cgScheduleNext();
+  }, Math.round((p.on+gap)*1000));
+}
+function startCgAlarm(corridorId, level){
+  stopCgAlarm();
+  _cgAlarm = { corridorId, level, timer:null, lastHeardAt:Date.now() };
+  if("vibrate" in navigator){ try{ navigator.vibrate(CG_VIBE[level-1]); }catch(e){} }
+  _cgScheduleNext();
+}
+function updateCgAlarmLevel(level){
+  if(!_cgAlarm) return;
+  _cgAlarm.level = level;
+  _cgAlarm.lastHeardAt = Date.now();
+  if("vibrate" in navigator){ try{ navigator.vibrate(CG_VIBE[level-1]); }catch(e){} }
+}
+function stopCgAlarm(){
+  if(_cgAlarm && _cgAlarm.timer) clearTimeout(_cgAlarm.timer);
+  _cgAlarm = null;
+  if("vibrate" in navigator){ try{ navigator.vibrate(0); }catch(e){} }
 }
 // Deliberately no spoken alert here specifically (mid-run drift warnings
 // stay non-verbal/subtle, same reasoning geofence-engine.html's own
-// chuteGuardCallbacks() documents) — vibration where supported, the tone
-// fallback otherwise, plus rqToast so it's visible too (this page has no
-// map-edge visual pulse the way the Tour Player does).
+// chuteGuardCallbacks() documents) — a continuous vibrate+tone alarm, plus
+// rqToast so it's visible too (this page has no map-edge visual pulse the
+// way the Tour Player does).
 function chuteGuardCallbacks(){
-  return { onWarn(corridorId, name){
-    if("vibrate" in navigator){ try{ navigator.vibrate(110); }catch(e){} }
-    else chuteGuardRumble();
-    rqToast("⚠ drifted outside \""+(name||"chute")+"\"'s line");
-  } };
+  return {
+    onWarn(corridorId, name, info){
+      const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
+      if(!_cgAlarm || _cgAlarm.corridorId!==corridorId){
+        startCgAlarm(corridorId, lvl);
+        rqToast("⚠ off the line — outside \""+(name||"corridor")+"\"");
+      }else if(lvl > _cgAlarm.level){
+        updateCgAlarmLevel(lvl);
+        rqToast("⚠⚠ still off the line — \""+(name||"corridor")+"\"");
+      }else{
+        _cgAlarm.lastHeardAt = Date.now();
+      }
+    },
+    onClear(corridorId, name){
+      if(_cgAlarm && _cgAlarm.corridorId===corridorId){
+        stopCgAlarm();
+        rqToast("✓ back on \""+(name||"corridor")+"\"");
+      }
+    },
+    onDisengage(corridorId, name, info){
+      // chute-guard.js concluded this is a deliberate departure (steady
+      // one-directional move away, not a correction attempt) — stop the
+      // alarm the same way onClear does, but without the "back on track"
+      // framing, since they aren't back on track, they've just shown
+      // they're headed somewhere else on purpose.
+      if(_cgAlarm && _cgAlarm.corridorId===corridorId) stopCgAlarm();
+    }
+  };
 }
 // Spoken narration (2026-09-17) — wired into Quest.onNarrate (fired once per
 // corridor band entry, see _tick()'s own comment), so "no audio when I enter
@@ -1592,8 +1704,11 @@ function renderHome(){
   (async ()=>{
     await Promise.all([Quest.loadCorridors(), Quest.loadFogCells(s.player.id)]);
     // Re-load on every Home render, same as applyActivityFilter() below —
-    // corridors may have just changed (a different resort/project) and
-    // ChuteGuard.load() is cheap/idempotent (see its own header comment).
+    // corridors may have just changed (a different resort/project).
+    // ChuteGuard.load() is cheap/idempotent AND preserves any live
+    // excursion's state across a same-corridor reload (see its own header
+    // comment) — this used to just rebuild coverage tracking, but a reload
+    // mid-alarm would now otherwise wipe an in-progress escalation.
     if(typeof ChuteGuard!=="undefined") ChuteGuard.load(Quest.chuteGuardEnabled ? chuteGuardZonesFor(Quest.corridors) : [], chuteGuardCallbacks());
     Quest.onNarrate = narrateCorridor;
     const el = document.getElementById("exploredPct");

@@ -1,48 +1,80 @@
-// Chute Guard — subtle "you've drifted outside the chute" warning.
+// Corridor Guard — continuous "you've drifted outside the corridor" alarm.
 //
-// Fires only while a skier is actively skiing a chute (tracked most of its
-// length, moving roughly along its own direction) and has drifted past its
-// authored width band for a sustained moment — never while merely
-// traversing across the mountain and clipping through a chute at an angle.
-// Gated end-to-end by the app-level `chuteGuardEnabled` flag (bundle-level
-// once published); this module itself has no opinion on that flag, the
-// host decides whether to load()/tick() it at all.
+// Watches every corridor in a project and tells the host, once per GPS fix,
+// whether the tracked player is currently outside its width band. Evaluates
+// EVERY corridor regardless of run_type/activityType (ski/hike/bike/drive
+// all treated the same) EXCEPT run_type:"lift" — a chairlift line isn't
+// something you meaningfully "drift outside of," and unloading + skiing
+// away roughly parallel to the line would otherwise false-alert.
+//
+// The host is responsible for turning the per-fix onWarn signal into a
+// continuous, uninterrupted alarm — this module has no timer/audio of its
+// own and GPS fixes can be several seconds apart, so it cannot make the
+// alert *feel* continuous by itself; it only tells the host "still outside,
+// here's the current level" on every tick while that's true.
 //
 // Self-contained (its own local-planar geometry, no dependency on a host
 // page's Geo/QGeo/nearestOnPath) — same "shared module, callback injection,
 // no DOM/Audio/Vibration calls of its own" pattern as kalman-filter.js and
-// guidance-bot.js. The host owns actually alerting the user (vibration /
-// tone / visual) via the onWarn callback; this module only decides WHEN.
+// guidance-bot.js.
 //
-// Scoped to runType:"chute" corridors specifically (not every run) — a
-// chute is narrow and typically flanked by rock/cliff, where drifting off
-// line matters in a way it doesn't on a wide groomed run. Broaden the
-// filter in load() below if that's ever wanted for other run types.
+// Reaction is distance-based, not time-based: the first alert fires once
+// the player is a fixed distance past the corridor's edge (scaled up by the
+// GPS fix's own accuracy, for jitter rejection), not after a fixed
+// wall-clock delay — so a car and a walker both get warned at roughly the
+// same drift distance, instead of the car covering far more ground before a
+// fixed timer elapses.
+//
+// Committed-exit detection: while alerting, this module also tracks whether
+// the player's distance from the corridor is trending back down (a real
+// correction attempt) or growing steadily with no narrowing in between
+// (they've decided to go a different way — a skier traversing out of a
+// chute to exit onto another run, a biker peeling off onto a branch trail).
+// Once the excess distance has grown enough this way, chute-guard.js
+// concludes they're not coming back and fires onDisengage once instead of
+// continuing to warn, so the alarm doesn't nag someone who has clearly left
+// on purpose. It stays quiet for the rest of that excursion.
 //
 // Usage (mirrors GuidanceBot's lifecycle):
-//   ChuteGuard.load(zones, { onWarn(corridorId, name) {...} });
+//   ChuteGuard.load(zones, {
+//     onWarn(corridorId, name, info) {...},       // still outside — info: {level, levelChanged, alertCount, excessM, maxExcessM, msOutside, widthM, t}
+//     onClear(corridorId, name) {...},             // back inside the width band
+//     onDisengage(corridorId, name, info) {...},   // concluded they left on purpose — info: {level, maxExcessM, excessM, widthM, t}
+//     onDebug(corridorId, name, info) {...}        // optional, diagnostic only
+//   });
 //   // once per GPS fix, after GPSFilter.push()/TravelHeading.update():
 //   ChuteGuard.tick({ lat, lon, acc, speed, t }, TravelHeading.heading);
 //   ChuteGuard.unload();
 //
 // `zones` is the bundle's zone array (BUNDLE.zones / simBundle.zones) — each
-// chute zone's geometry is read from its corridor target layer
+// zone's corridor geometry is read from its corridor target layer
 // (zone.layers[].geometry.type==="corridor"), the same {path,widthM} shape
 // Geofencer.sd()'s own corridor branch already reads, in [lat,lon] pairs.
 (function(){
   "use strict";
 
   const TUNING = {
-    ENGAGE_COVERAGE_PCT: 0.15,   // fraction of the chute's own length that must already be tracked to count as "skiing it," not just clipping it
-    ENGAGE_HEADING_TOL_DEG: 55,  // max angle off parallel/anti-parallel to the chute's local bearing to still count as "along it"
-    ENGAGE_MIN_SPEED_MPS: 1.5,   // below this, treat as standing/scoping the line, not skiing
+    ENGAGE_COVERAGE_PCT: 0.15,   // fraction of the corridor's own length that must already be tracked to count as "traveling it," not just clipping it
+    ENGAGE_COVERAGE_MAX_M: 150,  // ...or this many meters of it, whichever is SMALLER — keeps a long trail/road from requiring kilometers of travel to arm
+    ENGAGE_HEADING_TOL_DEG: 55,  // max angle off parallel/anti-parallel to the corridor's local bearing to still count as "along it"
+    ENGAGE_MIN_SPEED_MPS: 1.5,   // fallback floor when a corridor has no/unrecognized activityType
+    ENGAGE_MIN_SPEED_BY_ACTIVITY: {   // per-activity floor — 1.5 m/s (5.4km/h) is faster than typical hiking pace, so a single fixed floor silently excluded hike/walk corridors
+      hike: 0.7, walking_city: 0.7, xcountry: 1.2, bike: 1.5, ski_chute: 1.5, drive: 3.0
+    },
     OUTSIDE_BUFFER_M: 4,         // extra margin past the nominal half-width before counting as "outside" (riding the edge on purpose shouldn't nag)
-    OUTSIDE_SUSTAIN_MS: 1300,    // must be continuously outside this long before warning — debounces a single noisy GPS fix
-    WARN_COOLDOWN_MS: 20000,     // per-corridor cooldown after a warning fires; also single-edge-triggered (re-arms only after returning inside)
+    FIRST_ALERT_EXCESS_M: 3,     // must be at least this far past the buffered edge before the very first alert...
+    ACC_EXCESS_FACTOR: 0.75,     // ...or this fraction of the fix's own reported accuracy, whichever is LARGER — self-scaling jitter rejection, replaces a fixed wall-clock sustain timer so reaction distance doesn't depend on speed
+    SUSTAIN_OUTSIDE_FIXES: 3,    // secondary trigger: this many consecutive engaged-outside fixes at any excess also fires, so a small steady drift under noisy accuracy doesn't go unwarned forever
+    MAX_LEVEL: 3,
+    ESCALATE_AFTER_MS: [0, 5000, 12000],  // time-since-first-alert ladder -> level (index+1)
+    ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
+    COMMIT_STREAK_FIXES: 4,      // this many consecutive fixes of uninterrupted excess growth...
+    COMMIT_GROWTH_M: 15,         // ...or the excess has grown at least this much past its value at the first alert, with no intervening fix narrowing it back -> conclude "not coming back, stop nagging"
+    COMMIT_JITTER_M: 0.5,        // a change in excess smaller than this between fixes counts as neither growth nor a correction (GPS noise floor)
     SAMPLE_STEP_M: 20,           // corridor resampling step for the coverage gate
-    NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered" (mirrors ridge-quest.html's CORRIDOR_GPS_TOLERANCE_M)
-    MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while skiing somewhere else entirely
-    ACCURACY_CAP_M: 30           // ignore fixes worse than this (mirrors TUNING.ACCURACY_CAP_M elsewhere)
+    NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
+    MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while the player is somewhere else entirely
+    ACCURACY_CAP_M: 30           // ignore fixes worse than this
   };
 
   const EARTH_R = 6371000;
@@ -105,28 +137,69 @@
     return out;
   }
 
-  let corridors=[];      // [{id,name,path,widthM,samples,covered:Set<int>}]
-  let stateByCorridor=new Map(); // id -> {outsideSince, lastWarnAt}
+  let corridors=[];             // [{id,name,sig,path,widthM,activityType,runType,minSpeed,samples,covered:Set<int>}]
+  let stateByCorridor=new Map();
   let cb={};
+
+  function freshState(){
+    return {
+      outsideFixes:0, level:0, firstAlertAt:null, excessAtFirstAlert:0,
+      maxExcessM:0, prevExcessM:null, growthStreak:0, committed:false,
+      alertCount:0, lastDebugAt:0, lastEmittedLevel:0
+    };
+  }
 
   function load(zones, callbacks){
     cb = callbacks || {};
+    const prevById = new Map(corridors.map(c=>[c.id, c]));
+    const prevStateBy = stateByCorridor;
+
     corridors = (zones||[]).map(z=>{
-      if(z.runType!=="chute") return null; // scoped to chutes only, see header comment
+      if(z.runType==="lift") return null; // not a travel corridor you can drift outside of
       const target = (z.layers||[]).find(l=>l.geometry && l.geometry.type==="corridor");
       const path = target && target.geometry.path;
       if(!path || path.length<2) return null;
+      const w = Number(target.geometry.widthM);
+      const widthM = (isFinite(w) && w>0) ? w : 10;
+      const sig = z.id+":"+path.length+":"+widthM;
+      const prev = prevById.get(z.id);
+      const reuse = prev && prev.sig===sig;
       return {
-        id: z.id, name: z.name || "chute",
-        path, widthM: target.geometry.widthM || 10,
-        samples: resample(path, TUNING.SAMPLE_STEP_M),
-        covered: new Set()
+        id: z.id, name: z.name || "corridor", sig, path, widthM,
+        activityType: z.activityType || null,
+        runType: z.runType || null,
+        samples: reuse ? prev.samples : resample(path, TUNING.SAMPLE_STEP_M),
+        covered: reuse ? prev.covered : new Set(),
+        minSpeed: TUNING.ENGAGE_MIN_SPEED_BY_ACTIVITY[z.activityType] ?? TUNING.ENGAGE_MIN_SPEED_MPS
       };
     }).filter(Boolean);
-    stateByCorridor = new Map(corridors.map(c=>[c.id, { outsideSince:null, lastWarnAt:0 }]));
+
+    // Reuse a corridor's live excursion state across a reload of the SAME
+    // corridor (ridge-quest.html calls load() on every Home render) — the
+    // old code wiped `covered`/state unconditionally, which was harmless
+    // when state was just coverage tracking but would silently kill a live
+    // alarm/escalation now that state carries alert level and timing.
+    stateByCorridor = new Map(corridors.map(c=>{
+      const prev = prevStateBy.get(c.id);
+      const prevZone = prevById.get(c.id);
+      const keep = prev && prevZone && prevZone.sig===c.sig;
+      return [c.id, keep ? prev : freshState()];
+    }));
   }
 
   function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; }
+
+  function emitWarn(c, st, now, excessM){
+    st.alertCount++;
+    const levelChanged = st.alertCount===1 || st.lastEmittedLevel!==st.level;
+    st.lastEmittedLevel = st.level;
+    if(cb.onWarn) cb.onWarn(c.id, c.name, {
+      level: st.level, levelChanged, alertCount: st.alertCount,
+      excessM, maxExcessM: st.maxExcessM,
+      msOutside: st.firstAlertAt!=null ? now-st.firstAlertAt : 0,
+      widthM: c.widthM, t: now
+    });
+  }
 
   // fix: {lat,lon,acc,speed,t}. headingDeg: smoothed travel heading in
   // degrees, or null (sticky-null before the visitor has moved at all —
@@ -136,10 +209,12 @@
     if(!corridors.length || fix==null || (fix.acc!=null && fix.acc>TUNING.ACCURACY_CAP_M)) return;
     const latLon=[fix.lat, fix.lon];
     const now = fix.t || Date.now();
+    const acc = (fix.acc!=null ? fix.acc : 10);
+
     for(const c of corridors){
       const ref=c.path[0];
       const near=nearestOnPath(latLon, c.path, ref);
-      const halfW=(c.widthM||10)/2;
+      const halfW=c.widthM/2;
       const st=stateByCorridor.get(c.id);
 
       // Coverage — mark any resampled point currently within the band as
@@ -149,13 +224,22 @@
         if(haversineM(latLon, c.samples[i]) <= halfW+TUNING.NEAR_PAD_M) c.covered.add(i);
       }
       const coverage = c.samples.length ? c.covered.size/c.samples.length : 0;
+      const coveredM  = c.covered.size * TUNING.SAMPLE_STEP_M;
+      const lengthM   = c.samples.length * TUNING.SAMPLE_STEP_M;
+      const needM     = Math.min(TUNING.ENGAGE_COVERAGE_PCT*lengthM, TUNING.ENGAGE_COVERAGE_MAX_M);
+      const covered   = coveredM >= needM;
 
-      // Engaged? all three gates — this is what rejects a traverse.
+      // Engaged? all three gates — this is what rejects a mere traverse.
       let engaged=false;
-      if(coverage>=TUNING.ENGAGE_COVERAGE_PCT && headingDeg!=null && fix.speed!=null && fix.speed>=TUNING.ENGAGE_MIN_SPEED_MPS){
+      if(covered && headingDeg!=null && fix.speed!=null && fix.speed>=c.minSpeed){
         const A=c.path[near.segIdx], B=c.path[Math.min(near.segIdx+1, c.path.length-1)];
         engaged = parallelness(headingDeg, bearing(A,B)) <= TUNING.ENGAGE_HEADING_TOL_DEG;
       }
+
+      const edgeM        = halfW + TUNING.OUTSIDE_BUFFER_M;
+      const excessM       = near.distM - edgeM;                // >0 == outside
+      const maxRelevantM = edgeM + TUNING.MAX_RELEVANT_PAD_M;
+      const outsideNow   = engaged && excessM > 0 && near.distM <= maxRelevantM;
 
       // Debug hook — Test Mode wires this into its log panel so an author
       // can see exactly which gate is blocking a warning (coverage/heading/
@@ -165,21 +249,88 @@
       if(cb.onDebug && now-(st.lastDebugAt||0)>=500){
         st.lastDebugAt=now;
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
-          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM:halfW+TUNING.OUTSIDE_BUFFER_M+TUNING.MAX_RELEVANT_PAD_M,
-          headingDeg, speed:fix.speed });
+          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM,
+          headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed });
       }
 
-      const maxRelevantM = halfW+TUNING.OUTSIDE_BUFFER_M+TUNING.MAX_RELEVANT_PAD_M;
-      const outsideNow = engaged && near.distM>halfW+TUNING.OUTSIDE_BUFFER_M && near.distM<=maxRelevantM;
-      if(!outsideNow){ st.outsideSince=null; continue; }
-
-      if(st.outsideSince==null) st.outsideSince=now;
-      if(now-st.outsideSince>=TUNING.OUTSIDE_SUSTAIN_MS && now-st.lastWarnAt>=TUNING.WARN_COOLDOWN_MS){
-        st.lastWarnAt=now;
-        st.outsideSince=null; // single edge-trigger per excursion
-        if(cb.onWarn) cb.onWarn(c.id, c.name);
+      if(!outsideNow){
+        // Only a genuine return inside the width band (not just "no longer
+        // engaged" while still geometrically outside, e.g. stopped moving)
+        // counts as "back on track" — a committed-exit that later wanders
+        // out of relevant range entirely resets silently, same as before.
+        const wasActive = st.level>0;
+        const backInside = excessM<=0;
+        Object.assign(st, freshState());
+        if(wasActive && backInside && cb.onClear) cb.onClear(c.id, c.name);
+        continue;
       }
+
+      if(st.committed){
+        // Already concluded this excursion is a deliberate departure — stay
+        // silent until they either come back inside (handled above) or
+        // drift out of relevant range (also handled above).
+        st.prevExcessM = excessM;
+        continue;
+      }
+
+      st.outsideFixes++;
+      if(excessM > st.maxExcessM) st.maxExcessM = excessM;
+
+      if(st.level===0){
+        const requiredExcessM = Math.max(TUNING.FIRST_ALERT_EXCESS_M, TUNING.ACC_EXCESS_FACTOR*acc);
+        const far       = excessM >= requiredExcessM;
+        const sustained = st.outsideFixes >= TUNING.SUSTAIN_OUTSIDE_FIXES;
+        if(!far && !sustained){ st.prevExcessM = excessM; continue; }
+        st.firstAlertAt = now;
+        st.excessAtFirstAlert = excessM;
+        st.prevExcessM = excessM;
+        // The escalation ladder applies from the very first alert too — a
+        // single large excursion (e.g. 30m past the edge) starts at level 3
+        // immediately, rather than easing in through 1->2->3 over the next
+        // 12s the way a gradual drift would.
+        st.level = ladderLevel(0, st.maxExcessM);
+        emitWarn(c, st, now, excessM);
+        continue;
+      }
+
+      // Already alerting — track the excess-distance trend for the
+      // committed-exit detector before anything else.
+      if(st.prevExcessM!=null){
+        if(excessM > st.prevExcessM + TUNING.COMMIT_JITTER_M) st.growthStreak++;
+        else if(excessM < st.prevExcessM - TUNING.COMMIT_JITTER_M) st.growthStreak=0;
+        // a roughly-flat change neither confirms nor resets the streak
+      }
+      st.prevExcessM = excessM;
+
+      const grownEnough = (excessM - st.excessAtFirstAlert) >= TUNING.COMMIT_GROWTH_M;
+      if(st.growthStreak >= TUNING.COMMIT_STREAK_FIXES || grownEnough){
+        st.committed = true;
+        if(cb.onDisengage) cb.onDisengage(c.id, c.name, {
+          level:st.level, maxExcessM:st.maxExcessM, excessM, widthM:c.widthM, t:now
+        });
+        continue;
+      }
+
+      // Still trying (or at least not yet proven otherwise) — escalate and
+      // re-emit on every tick. The host is responsible for turning this
+      // per-fix signal into a continuous alarm; this module just reports
+      // "still outside, here's the level" as often as it has a fix to check.
+      const msOut = now - st.firstAlertAt;
+      st.level = Math.max(st.level, ladderLevel(msOut, st.maxExcessM));
+      emitWarn(c, st, now, excessM);
     }
+  }
+
+  // Escalation level from the more urgent of the two ladders — how long
+  // they've been outside, or how far outside they've gotten. Used both for
+  // the very first alert (msOut=0, so only the distance ladder can bite —
+  // see its call site above) and for every subsequent tick.
+  function ladderLevel(msOut, maxExcessM){
+    let lvl = 1;
+    for(let i=TUNING.MAX_LEVEL-1;i>=1;i--){
+      if(msOut>=TUNING.ESCALATE_AFTER_MS[i] || maxExcessM>=TUNING.ESCALATE_EXCESS_M[i]){ lvl=i+1; break; }
+    }
+    return Math.min(lvl, TUNING.MAX_LEVEL);
   }
 
   window.ChuteGuard = { load, tick, unload, TUNING };
