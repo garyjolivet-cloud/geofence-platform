@@ -6926,24 +6926,36 @@ function chuteGuardStartTone(level){
     chuteGuardUpdateTone(level, 0.06);
   }catch(e){}
 }
+// Real bug found 2026-09 via a road-test log (ridge-quest.html): every ramp
+// scheduled a new automation point without cancelling whatever a PRIOR call
+// (an escalation) had already scheduled — a classic WebAudio gotcha.
+// _cgRamp cancels + re-anchors before each ramp so a "go quiet" command
+// can't lose to an earlier "get louder" one still queued for later.
+function _cgTestRamp(param, target, t, rampS){
+  param.cancelScheduledValues(t);
+  param.setValueAtTime(param.value, t);
+  param.linearRampToValueAtTime(target, t+rampS);
+}
 function chuteGuardUpdateTone(level, rampS){
   if(!_cgTestAlarm || !SimVoice.ctx) return;
   const spec = CG_TEST_TONE[Math.max(0, Math.min(CG_TEST_TONE.length-1, ((level|0)||1)-1))];
   const t = SimVoice.ctx.currentTime, r = rampS!=null?rampS:0.15;
   try{
-    _cgTestAlarm.osc.frequency.linearRampToValueAtTime(spec.freq, t+r);
-    _cgTestAlarm.gain.gain.linearRampToValueAtTime(spec.gain, t+r);
-    _cgTestAlarm.vibOsc.frequency.linearRampToValueAtTime(spec.vibratoHz || 0.001, t+r);
-    _cgTestAlarm.vibGain.gain.linearRampToValueAtTime(spec.vibratoDepth, t+r);
+    _cgTestRamp(_cgTestAlarm.osc.frequency, spec.freq, t, r);
+    _cgTestRamp(_cgTestAlarm.gain.gain, spec.gain, t, r);
+    _cgTestRamp(_cgTestAlarm.vibOsc.frequency, spec.vibratoHz || 0.001, t, r);
+    _cgTestRamp(_cgTestAlarm.vibGain.gain, spec.vibratoDepth, t, r);
   }catch(e){}
 }
 function chuteGuardStopTone(){
   if(_cgTestAlarm && SimVoice.ctx){
     try{
       const t=SimVoice.ctx.currentTime;
-      _cgTestAlarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.08);
-      _cgTestAlarm.osc.stop(t+0.1);
-      _cgTestAlarm.vibOsc.stop(t+0.1);
+      _cgTestAlarm.gain.gain.cancelScheduledValues(t);
+      _cgTestAlarm.gain.gain.setValueAtTime(_cgTestAlarm.gain.gain.value, t);
+      _cgTestAlarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.05);
+      _cgTestAlarm.osc.stop(t+0.06);
+      _cgTestAlarm.vibOsc.stop(t+0.06);
     }catch(e){}
   }
   _cgTestAlarm = null;

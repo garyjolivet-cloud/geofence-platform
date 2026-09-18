@@ -1139,10 +1139,22 @@ const Quest = {
     // with no tolerance let ordinary GPS jitter right at the line flip
     // idle<->inRun back and forth, re-speaking the corridor's narration on
     // what was really just noise near the far edge, not a genuine re-entry.
+    //
+    // Bug fixed 2026-09 (field report: "the voice does not announce the
+    // corridor" — a real road test on a narrow corridor): corridorDist()'s
+    // minimum possible value is -halfWidth (standing exactly on the
+    // centerline), so a FIXED 3m entry margin made entry mathematically
+    // impossible for any corridor narrower than 6m wide — this project's
+    // "test Chute" is only 4m wide (halfWidth 2m), so dist could never go
+    // below -2, and the entry condition (dist< -3) never once fired. Margin
+    // is now capped to half the corridor's own half-width, so entry always
+    // has room to be satisfied regardless of how narrow the corridor is.
+    const halfW = (corridor.widthM||10)/2;
+    const margin = Math.min(QUEST_TUNING.NARRATE_HYSTERESIS_M, halfW*0.5);
     const dist = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref);
     const inBand = st.phase==="inRun"
-      ? dist < QUEST_TUNING.NARRATE_HYSTERESIS_M
-      : dist < -QUEST_TUNING.NARRATE_HYSTERESIS_M;
+      ? dist < margin
+      : dist < -margin;
     if(st.phase==="idle" && inBand){
       st.phase="inRun"; st.buffer=[p];
       // Spoken narration (2026-09-17) — fires once per band entry, same
@@ -1538,13 +1550,33 @@ const CG_VIBE = [ [500,150], [300,120], [200,90] ];
 // nagging," checked every few seconds rather than tied to a per-pulse
 // reschedule (there are no pulses to reschedule any more).
 let _cgAlarm = null; // {corridorId, level, osc, gain, vibOsc, vibGain, lastHeardAt, watchdog}
+// Real bug found 2026-09 via a road-test log: chute-guard.js's onClear was
+// firing perfectly on time (confirmed — the log's CLEAR line lands on the
+// exact same tick the excess goes negative, every time), but the tone
+// itself sometimes kept sounding anyway. Root cause: every ramp() call here
+// scheduled a NEW automation point (frequency/gain) WITHOUT ever cancelling
+// whatever ramp a PRIOR call (an escalation to a louder/higher level) had
+// already scheduled — a classic WebAudio gotcha, same one already solved
+// elsewhere in this codebase (see SimVoice/Audio's fade-gain nodes in
+// fence-editor.html/geofence-engine.html). With two overlapping scheduled
+// ramps in the same AudioParam's timeline, a "stop, go quiet" ramp can lose
+// to an earlier "get louder" ramp still queued for a later time, so the
+// tone doesn't actually go silent until whichever scheduled event wins —
+// which is NOT necessarily the one stopCgAlarm() just asked for. Every ramp
+// below now cancels any pending automation and re-anchors at the node's
+// actual current value first, so each call starts from a clean slate.
+function _cgRamp(param, target, t, rampS){
+  param.cancelScheduledValues(t);
+  param.setValueAtTime(param.value, t);
+  param.linearRampToValueAtTime(target, t+rampS);
+}
 function _cgApplyLevel(level, rampS){
   const spec = CG_TONE[Math.max(0, Math.min(CG_TONE.length-1, level-1))];
   const t = _cgAc.currentTime;
-  _cgAlarm.osc.frequency.linearRampToValueAtTime(spec.freq, t+rampS);
-  _cgAlarm.gain.gain.linearRampToValueAtTime(spec.gain, t+rampS);
-  _cgAlarm.vibOsc.frequency.linearRampToValueAtTime(spec.vibratoHz || 0.001, t+rampS);
-  _cgAlarm.vibGain.gain.linearRampToValueAtTime(spec.vibratoDepth, t+rampS);
+  _cgRamp(_cgAlarm.osc.frequency, spec.freq, t, rampS);
+  _cgRamp(_cgAlarm.gain.gain, spec.gain, t, rampS);
+  _cgRamp(_cgAlarm.vibOsc.frequency, spec.vibratoHz || 0.001, t, rampS);
+  _cgRamp(_cgAlarm.vibGain.gain, spec.vibratoDepth, t, rampS);
 }
 function startCgAlarm(corridorId, level){
   stopCgAlarm();
@@ -1580,9 +1612,13 @@ function stopCgAlarm(){
   if(_cgAlarm){
     try{
       const t=_cgAc.currentTime;
-      _cgAlarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.08);
-      _cgAlarm.osc.stop(t+0.1);
-      _cgAlarm.vibOsc.stop(t+0.1);
+      // Cancel + re-anchor first (see _cgRamp's comment above) so a
+      // still-pending escalation ramp can't outlive this stop.
+      _cgAlarm.gain.gain.cancelScheduledValues(t);
+      _cgAlarm.gain.gain.setValueAtTime(_cgAlarm.gain.gain.value, t);
+      _cgAlarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.05);
+      _cgAlarm.osc.stop(t+0.06);
+      _cgAlarm.vibOsc.stop(t+0.06);
     }catch(e){}
     if(_cgAlarm.watchdog) clearInterval(_cgAlarm.watchdog);
   }

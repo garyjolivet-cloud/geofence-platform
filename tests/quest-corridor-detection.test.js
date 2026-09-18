@@ -48,6 +48,28 @@ const classifyBody = html.slice(startIdx + startTag.length, endIdx) + "\nreturn 
 // eslint-disable-next-line no-new-func
 const classify = new Function("corridor", "buffer", "selectedActivity", "QGeo", "QUEST_TUNING", classifyBody);
 
+// ---- extract the body of Quest._tick (the corridor-band entry/exit state
+// machine that drives spoken narration) — same real-shipped-code technique
+// as _classifyAndLog above. Bound via .call() with a minimal `this` stub
+// (states/onNarrate/_classifyAndLog), since the method reads `this.*`. ----
+const tickStartTag = "_tick(corridor, p, selectedActivity){";
+const tickStartIdx = html.indexOf(tickStartTag);
+if (tickStartIdx < 0) { console.log("FAIL: could not find _tick in ridge-quest.html"); process.exit(1); }
+// ridge-quest.html is CRLF; the source has a blank line between _tick's
+// closing brace and _classifyAndLog's own definition, so search for the
+// next method's start directly (not a literal multi-\n boundary, which a
+// CRLF file's extra \r characters would break) and strip _tick's own
+// trailing "  },\r\n\r\n" method-separator off the slice afterward.
+const tickEndTag = "_classifyAndLog(corridor, buffer, selectedActivity){";
+const tickEndIdx = html.indexOf(tickEndTag, tickStartIdx);
+if (tickEndIdx < 0) { console.log("FAIL: could not find end of _tick body in ridge-quest.html"); process.exit(1); }
+const tickBody = html.slice(tickStartIdx + tickStartTag.length, tickEndIdx).replace(/\r?\n\s*\},\s*$/, "");
+// eslint-disable-next-line no-new-func
+const tickFn = new Function("corridor", "p", "selectedActivity", "QGeo", "QUEST_TUNING", tickBody);
+function makeTickThis(){
+  return { states: {}, onNarrate: null, _classifyAndLog(){} };
+}
+
 // ---- test fixtures ----
 // A straight north-south corridor near Golden BC, "top" at path[0] (higher
 // latitude), "bottom" at path[1] — matches the authoring convention
@@ -456,6 +478,77 @@ const liftLineWithDescent = Object.assign({}, liftLine, { descentM: 250 });
   classify.call(self, straightRun, buffer, "ski", QGeo, QUEST_TUNING);
   assert(calls.length === 1, "onCoverage fires even when the crossing is discarded for low coverage, got " + calls.length);
   assert(calls[0].passed === false, "a low-coverage crossing reports passed=false, got " + calls[0].passed);
+})();
+
+// ---- Quest._tick narration hysteresis (field bug, 2026-09) ----
+// A fixed 3m entry margin made narration entry mathematically impossible
+// for any corridor narrower than 6m wide, since corridorDist()'s minimum
+// possible value is -halfWidth. Confirmed live on a real 4m-wide "test
+// Chute" corridor: standing exactly on its centerline could never satisfy
+// dist< -3. Margin must be capped relative to the corridor's own
+// half-width so entry always has room to fire, while still guarding
+// against jitter-driven re-narration on a corridor wide enough to afford
+// the full margin.
+(function testTickNarratesOnNarrowCorridor() {
+  const narrow = { zoneId: "nc1", name: "Test Chute", say: "test chute", runType: "chute", widthM: 4,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
+  const self = makeTickThis();
+  let narrated = null;
+  self.onNarrate = (text, zoneId) => { narrated = { text, zoneId }; };
+  // Exactly on the centerline — corridorDist = -halfWidth = -2, the
+  // farthest-inside a fix can ever be for this corridor.
+  tickFn.call(self, narrow, mkFix(51.305, -117.05, 0), "ski", QGeo, QUEST_TUNING);
+  assert(narrated !== null, "standing on a 4m-wide corridor's centerline fires narration (old fixed 3m margin made this impossible)");
+  assert(narrated && narrated.text === "test chute", "narration receives the corridor's own say text");
+})();
+
+(function testTickHysteresisStillGuardsWideCorridor() {
+  // A corridor wide enough to afford the full 3m margin: entry still
+  // requires being clearly inside, not just barely past dist=0 — this is
+  // the original behavior the hysteresis fix was meant to add.
+  const wide = { zoneId: "wc1", name: "Wide Run", say: "wide run", runType: "run", widthM: 20,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
+  const halfW = 10, margin = Math.min(QUEST_TUNING.NARRATE_HYSTERESIS_M, halfW * 0.5); // = 3
+
+  const barely = makeTickThis();
+  let barelyNarrated = false;
+  barely.onNarrate = () => { barelyNarrated = true; };
+  // 1m inside the true edge — less than the margin, should NOT enter yet.
+  // The corridor runs north-south, so an offset PERPENDICULAR to it is a
+  // longitude change, not a latitude change (which would move ALONG the
+  // path instead, staying on the centerline) — kept at the path's own
+  // reference latitude so the point still projects onto its interior.
+  const nearEdgeLon = -117.05 + (halfW - 1) / (111320 * Math.cos(51.305 * Math.PI / 180));
+  tickFn.call(barely, wide, mkFix(51.305, nearEdgeLon, 0), "hike", QGeo, QUEST_TUNING);
+  assert(!barelyNarrated, "barely inside the true edge (less than the margin) does not yet count as entering");
+
+  const clearly = makeTickThis();
+  let clearlyNarrated = false;
+  clearly.onNarrate = () => { clearlyNarrated = true; };
+  tickFn.call(clearly, wide, mkFix(51.305, -117.05, 0), "hike", QGeo, QUEST_TUNING); // centerline, well past the margin
+  assert(clearlyNarrated, "clearly inside (past the margin) counts as entering and narrates");
+})();
+
+(function testTickExitHysteresisIgnoresJitter() {
+  // Enter, then a fix that's only slightly outside (less than the margin)
+  // must NOT exit yet — this is the original double-narration fix: GPS
+  // jitter right at the edge shouldn't flip the phase back and forth.
+  const narrow = { zoneId: "nc2", name: "Test Chute", say: "test chute", runType: "chute", widthM: 4,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
+  const self = makeTickThis();
+  let narrateCount = 0;
+  self.onNarrate = () => { narrateCount++; };
+  tickFn.call(self, narrow, mkFix(51.305, -117.05, 0), "ski", QGeo, QUEST_TUNING); // enter
+  assert(narrateCount === 1, "entered once");
+  // halfW=2, margin=min(3,1)=1 -> edge=2, exit needs dist>=1 i.e. distToLine>=3.
+  // 2.5m from centerline (0.5m past the true edge) is still under the
+  // margin. Perpendicular to this north-south corridor is a LONGITUDE
+  // offset (a latitude offset would move along the path instead, staying
+  // on the centerline) — kept at the path's own reference latitude.
+  const justOutsideLon = -117.05 + 2.5 / (111320 * Math.cos(51.305 * Math.PI / 180));
+  tickFn.call(self, narrow, mkFix(51.305, justOutsideLon, 1), "ski", QGeo, QUEST_TUNING);
+  tickFn.call(self, narrow, mkFix(51.305, -117.05, 2), "ski", QGeo, QUEST_TUNING); // back to centerline
+  assert(narrateCount === 1, "a small excursion under the exit margin doesn't flip phase, so no spurious re-narration on return");
 })();
 
 console.log(pass + " passed, " + fail + " failed");

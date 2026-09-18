@@ -283,24 +283,36 @@ const Audio = {
       this.updateAlarm(level, 0.06);
     }catch(e){}
   },
+  // Real bug found 2026-09 via a road-test log (ridge-quest.html): every
+  // ramp scheduled a new automation point without cancelling whatever a
+  // PRIOR call (an escalation) had already scheduled — a classic WebAudio
+  // gotcha. _cgRamp cancels + re-anchors before each ramp so a "go quiet"
+  // command can't lose to an earlier "get louder" one still queued.
+  _cgRamp(param, target, t, rampS){
+    param.cancelScheduledValues(t);
+    param.setValueAtTime(param.value, t);
+    param.linearRampToValueAtTime(target, t+rampS);
+  },
   updateAlarm(level, rampS){
     if(!this._alarm) return;
     const spec = CG_SIM_TONE[Math.max(0, Math.min(CG_SIM_TONE.length-1, ((level|0)||1)-1))];
     const t = this.ctx.currentTime, r = rampS!=null?rampS:0.15;
     try{
-      this._alarm.osc.frequency.linearRampToValueAtTime(spec.freq, t+r);
-      this._alarm.gain.gain.linearRampToValueAtTime(spec.gain, t+r);
-      this._alarm.vibOsc.frequency.linearRampToValueAtTime(spec.vibratoHz || 0.001, t+r);
-      this._alarm.vibGain.gain.linearRampToValueAtTime(spec.vibratoDepth, t+r);
+      this._cgRamp(this._alarm.osc.frequency, spec.freq, t, r);
+      this._cgRamp(this._alarm.gain.gain, spec.gain, t, r);
+      this._cgRamp(this._alarm.vibOsc.frequency, spec.vibratoHz || 0.001, t, r);
+      this._cgRamp(this._alarm.vibGain.gain, spec.vibratoDepth, t, r);
     }catch(e){}
   },
   stopAlarm(){
     if(this._alarm){
       try{
         const t=this.ctx.currentTime;
-        this._alarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.08);
-        this._alarm.osc.stop(t+0.1);
-        this._alarm.vibOsc.stop(t+0.1);
+        this._alarm.gain.gain.cancelScheduledValues(t);
+        this._alarm.gain.gain.setValueAtTime(this._alarm.gain.gain.value, t);
+        this._alarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.05);
+        this._alarm.osc.stop(t+0.06);
+        this._alarm.vibOsc.stop(t+0.06);
       }catch(e){}
     }
     this._alarm = null;
