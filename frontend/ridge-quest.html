@@ -4,6 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ridge Quest</title>
+<!-- Lets "Add to Home Screen" on iOS open Ridge Quest full-screen, without
+     Safari's URL bar/tab switcher — pairs with iOS Guided Access (Settings ->
+     Accessibility -> Guided Access, triple-click the side button) for
+     locking a phone to just this app while skiing, so a stray swipe/button
+     press can't land in Camera or another app mid-run. apple-mobile-web-app-
+     capable is the one Safari actually honors for this; mobile-web-app-
+     capable is the standard-track name other browsers use, harmless here. -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ridge Quest">
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <!-- Google Identity Services — client-side Sign in with Google. The button
      returns a signed ID token directly to this page; the actual identity
