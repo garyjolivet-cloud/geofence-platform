@@ -35,10 +35,13 @@
 // correction attempt) or growing steadily with no narrowing in between
 // (they've decided to go a different way — a skier traversing out of a
 // chute to exit onto another run, a biker peeling off onto a branch trail).
-// Once the excess distance has grown enough this way, chute-guard.js
+// Once the excess distance has grown enough this way — OR the alarm has
+// simply been sounding continuously for MAX_ALERT_DURATION_MS (15s) with no
+// return inside at all, even at a roughly constant distance — chute-guard.js
 // concludes they're not coming back and fires onDisengage once instead of
 // continuing to warn, so the alarm doesn't nag someone who has clearly left
-// on purpose. It stays quiet for the rest of that excursion.
+// on purpose (or just isn't near a phone/isn't going to correct). It stays
+// quiet for the rest of that excursion.
 //
 // Usage (mirrors GuidanceBot's lifecycle):
 //   ChuteGuard.load(zones, {
@@ -71,7 +74,8 @@
     ESCALATE_AFTER_MS: [0, 5000, 12000],  // time-since-first-alert ladder -> level (index+1)
     ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
     COMMIT_STREAK_FIXES: 4,      // this many consecutive fixes of uninterrupted excess growth...
-    COMMIT_GROWTH_M: 15,         // ...or the excess has grown at least this much past its value at the first alert, with no intervening fix narrowing it back -> conclude "not coming back, stop nagging"
+    COMMIT_GROWTH_M: 15,         // ...or the excess has grown at least this much past its value at the first alert, with no intervening fix narrowing it back...
+    MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging"
     COMMIT_JITTER_M: 0.5,        // a change in excess smaller than this between fixes counts as neither growth nor a correction (GPS noise floor)
     SAMPLE_STEP_M: 20,           // corridor resampling step for the coverage gate
     NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
@@ -311,7 +315,8 @@
       st.prevExcessM = excessM;
 
       const grownEnough = (excessM - st.excessAtFirstAlert) >= TUNING.COMMIT_GROWTH_M;
-      if(st.growthStreak >= TUNING.COMMIT_STREAK_FIXES || grownEnough){
+      const tooLong = (now - st.firstAlertAt) >= TUNING.MAX_ALERT_DURATION_MS;
+      if(st.growthStreak >= TUNING.COMMIT_STREAK_FIXES || grownEnough || tooLong){
         st.committed = true;
         if(cb.onDisengage) cb.onDisengage(c.id, c.name, {
           level:st.level, maxExcessM:st.maxExcessM, excessM, widthM:c.widthM, t:now

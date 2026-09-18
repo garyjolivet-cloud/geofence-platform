@@ -295,14 +295,16 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const cg = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
   // Constant 5m excess (below both distance-ladder thresholds of 10m/25m),
-  // held for 20 fixes at 1Hz -> escalation must come purely from the time ladder.
+  // held for 13 fixes at 1Hz (max msOutside=12000, under the 15s give-up
+  // cap tested separately below) -> escalation must come purely from the
+  // time ladder.
   const steps = [];
   { let forwardM = 0, t = 0;
     for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
-    for (let i = 1; i <= 20; i++) { steps.push({ forwardM, lateralM: 14, t }); forwardM += 1.5; t += 1000; }
+    for (let i = 1; i <= 13; i++) { steps.push({ forwardM, lateralM: 14, t }); forwardM += 1.5; t += 1000; }
   }
   const events = drive(cg, corridor, steps);
-  assert(events.warn.length === 20, "onWarn fires on every one of the 20 outside fixes, not throttled to a cooldown");
+  assert(events.warn.length === 13, "onWarn fires on every one of the 13 outside fixes, not throttled to a cooldown");
   let levelsNonDecreasing = true;
   for (let i = 1; i < events.warn.length; i++) if (events.warn[i].level < events.warn[i-1].level) levelsNonDecreasing = false;
   assert(levelsNonDecreasing, "level never decreases within a single excursion");
@@ -312,6 +314,29 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(at12s && at12s.level >= 3, "reaches level 3 by ~12s outside");
   const alertCounts = events.warn.map(w => w.alertCount);
   assert(alertCounts.every((v, i) => i === 0 || v === alertCounts[i-1] + 1), "alertCount increments by exactly 1 on every alert");
+})();
+
+// ============================================================
+// 9b. Unconditional 15s give-up cap — fires regardless of pattern
+// ============================================================
+(function testMaxAlertDuration(){
+  // Held at a perfectly constant excess (no growth, no correction) for 20s
+  // straight — the growth-based commit detector alone would never fire
+  // here, but the alarm still must not nag forever: past
+  // MAX_ALERT_DURATION_MS (15s) with no return inside, chute-guard.js gives
+  // up and fires onDisengage, same as a genuine committed departure.
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  const steps = [];
+  { let forwardM = 0, t = 0;
+    for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
+    for (let i = 1; i <= 20; i++) { steps.push({ forwardM, lateralM: 14, t }); forwardM += 1.5; t += 1000; } // constant excess = 5m
+  }
+  const events = drive(cg, corridor, steps);
+  assert(events.disengage.length === 1, "a held-constant excursion past 15s fires onDisengage exactly once, purely from the time cap");
+  const disengageT = events.disengage[0].t;
+  assert(events.warn.every(w => w.t < disengageT), "no onWarn calls after the 15s cap fires");
+  assert(events.warn.length >= 14 && events.warn.length <= 16, "roughly 15 warns fired before the cap cut it off (t=0..~14000ms at 1Hz)");
 })();
 
 // ============================================================
@@ -367,27 +392,31 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(warnsAfterDisengage.length === 0, "no further onWarn calls after onDisengage, even while still within range");
 
   // Grows for a couple fixes then narrows back down (a real correction
-  // attempt) -> never disengages, keeps alerting normally.
+  // attempt) -> never disengages via the growth detector, keeps alerting
+  // normally. Kept under the 15s give-up cap (tested separately) so this
+  // isolates the growth/correction logic specifically.
   const correcting = freshChuteGuard();
   const correctSteps = [];
   { let forwardM = 0, t = 0;
     for (let i = 0; i <= 50; i++) { correctSteps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
-    const offsets = [14, 15, 16, 15, 13, 11, 9.5, 14, 15, 16, 15, 13, 11, 9.5, 14, 15]; // repeated grow-then-correct, never fully resolves or fully commits
+    const offsets = [14, 15, 16, 15, 13, 11, 9.5, 14, 15, 16]; // grow-then-correct, never fully resolves or fully commits (10s total, under the cap)
     offsets.forEach((off, i) => { correctSteps.push({ forwardM, lateralM: off, t: 51000 + i * 1000 }); forwardM += 1.5; });
   }
   const correctEvents = drive(correcting, corridor, correctSteps);
-  assert(correctEvents.disengage.length === 0, "an oscillating correction attempt (grow then narrow, repeated) never fires onDisengage");
+  assert(correctEvents.disengage.length === 0, "an oscillating correction attempt (grow then narrow, repeated), kept under 15s, never fires onDisengage");
   assert(correctEvents.warn.length > 0, "the oscillating/correcting track keeps alerting normally");
 
-  // Pure GPS jitter near the edge (no clear trend) — also never disengages.
+  // Pure GPS jitter near the edge (no clear trend) — also never disengages
+  // via the growth detector. Kept under the 15s cap for the same reason as
+  // the correcting case above (the unconditional cap is tested separately).
   const jittering = freshChuteGuard();
   const jitterSteps = [];
   { let forwardM = 0, t = 0;
     for (let i = 0; i <= 50; i++) { jitterSteps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
-    for (let i = 0; i < 20; i++) { jitterSteps.push({ forwardM, lateralM: 14 + (i % 2 === 0 ? 0.2 : -0.2), t: 51000 + i * 1000 }); forwardM += 1.5; }
+    for (let i = 0; i < 10; i++) { jitterSteps.push({ forwardM, lateralM: 14 + (i % 2 === 0 ? 0.2 : -0.2), t: 51000 + i * 1000 }); forwardM += 1.5; }
   }
   const jitterEvents = drive(jittering, corridor, jitterSteps);
-  assert(jitterEvents.disengage.length === 0, "GPS jitter with no real trend never fires onDisengage");
+  assert(jitterEvents.disengage.length === 0, "GPS jitter with no real trend, kept under 15s, never fires onDisengage via the growth detector");
 })();
 
 // ============================================================

@@ -682,6 +682,7 @@ const QUEST_TUNING = {
   SKI_SPEED_MIN_MPS: 2.5,  // ~9 km/h; below this while descending a run = skinning/walking it, not skiing it
   BIKE_SPEED_MIN_MPS: 3.0, // R8 — ~11 km/h; below this while descending a trail = walking/pushing the bike, not riding it
   COOLDOWN_MS: 4000,       // avoid double-counting a lingering crossing at the band edge
+  NARRATE_HYSTERESIS_M: 3, // in-band test used a hard dist<0 boundary with zero tolerance, so GPS jitter right at a corridor's edge (e.g. lingering near the far end before actually leaving) could flip idle<->inRun rapidly and re-speak the corridor's narration on what was really just noise, not a genuine re-entry. Schmitt-trigger margin: entering needs dist< -this (clearly inside), staying entered only exits once dist>=this (clearly outside) — see _tick() below.
   ACCURACY_CAP_M: 40,      // R2: fixes worse than this don't drive fog reveal — same value/reasoning as geofence-engine.html's TUNING.ACCURACY_CAP_M
   FOG_RESOLUTION: 10,      // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
   VIEWPOINT_RADIUS_M: 15,  // R4: a viewpoint is a spot to stand at, not a zone to cross — small trigger radius
@@ -1131,7 +1132,17 @@ const Quest = {
   _tick(corridor, p, selectedActivity){
     const st = this.states[corridor.zoneId] || (this.states[corridor.zoneId] = { phase:"idle", buffer:[], cooldownUntil:0 });
     if(Date.now() < st.cooldownUntil) return;
-    const inBand = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref) < 0;
+    // Hysteresis (see QUEST_TUNING.NARRATE_HYSTERESIS_M): while already
+    // in-run, a fix has to be clearly PAST the edge (dist >= +margin) to
+    // count as exiting; while idle, a fix has to be clearly INSIDE
+    // (dist < -margin) to count as (re-)entering. A single dist<0 boundary
+    // with no tolerance let ordinary GPS jitter right at the line flip
+    // idle<->inRun back and forth, re-speaking the corridor's narration on
+    // what was really just noise near the far edge, not a genuine re-entry.
+    const dist = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref);
+    const inBand = st.phase==="inRun"
+      ? dist < QUEST_TUNING.NARRATE_HYSTERESIS_M
+      : dist < -QUEST_TUNING.NARRATE_HYSTERESIS_M;
     if(st.phase==="idle" && inBand){
       st.phase="inRun"; st.buffer=[p];
       // Spoken narration (2026-09-17) — fires once per band entry, same
@@ -1563,6 +1574,31 @@ function stopCgAlarm(){
   _cgAlarm = null;
   if("vibrate" in navigator){ try{ navigator.vibrate(0); }catch(e){} }
 }
+// Field-debug log — a player biking/skiing can't watch an on-screen
+// readout, so Corridor Guard events are batched to the server here instead
+// (GET /api/quest-debug-log, master-token only, for review after the
+// ride) rather than requiring anyone to read numbers off their screen
+// mid-activity. Best-effort: retries a failed batch (patchy signal on a
+// mountain is normal) but caps the buffer so an extended offline stretch
+// can't grow memory unbounded — this is diagnostic tooling, not a
+// data-integrity path, some loss during a long dead zone is acceptable.
+let _qdlBuf = [];
+let _qdlFlushing = false;
+function qdlPush(event, corridorId, corridorName, payload){
+  _qdlBuf.push({ ts: Date.now(), corridorId, corridorName, event, payload });
+  if(_qdlBuf.length > 500) _qdlBuf.splice(0, _qdlBuf.length-500);
+}
+async function qdlFlush(){
+  if(_qdlFlushing || !_qdlBuf.length || !RQ_PROJECT_ID) return;
+  _qdlFlushing = true;
+  const batch = _qdlBuf.slice(0, 300);
+  try{
+    await api("/api/quest-debug-log", { method:"POST", body: JSON.stringify({ projectId: RQ_PROJECT_ID, entries: batch }) });
+    _qdlBuf = _qdlBuf.slice(batch.length); // only drop what actually made it to the server
+  }catch(e){ /* offline/error — stays buffered, retried on the next tick */ }
+  _qdlFlushing = false;
+}
+setInterval(qdlFlush, 8000);
 // Deliberately no spoken alert here specifically (mid-run drift warnings
 // stay non-verbal/subtle, same reasoning geofence-engine.html's own
 // chuteGuardCallbacks() documents) — a continuous vibrate+tone alarm, plus
@@ -1571,6 +1607,7 @@ function stopCgAlarm(){
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
+      qdlPush("warn", corridorId, name, info);
       const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
       if(!_cgAlarm || _cgAlarm.corridorId!==corridorId){
         startCgAlarm(corridorId, lvl);
@@ -1583,12 +1620,14 @@ function chuteGuardCallbacks(){
       }
     },
     onClear(corridorId, name){
+      qdlPush("clear", corridorId, name, null);
       if(_cgAlarm && _cgAlarm.corridorId===corridorId){
         stopCgAlarm();
         rqToast("✓ back on \""+(name||"corridor")+"\"");
       }
     },
     onDisengage(corridorId, name, info){
+      qdlPush("disengage", corridorId, name, info);
       // chute-guard.js concluded this is a deliberate departure (steady
       // one-directional move away, not a correction attempt) — stop the
       // alarm the same way onClear does, but without the "back on track"
@@ -1596,24 +1635,23 @@ function chuteGuardCallbacks(){
       // they're headed somewhere else on purpose.
       if(_cgAlarm && _cgAlarm.corridorId===corridorId) stopCgAlarm();
     },
-    // On-screen diagnostic — same idea as field-recorder.html's
-    // #proxDebugText, added specifically because a real outdoor field test
-    // has no attached console: a player heard the corridor-entry narration
-    // (a separate, simpler band-entry check) but never got a Corridor Guard
-    // alarm on exit, and there was no way to see WHY (coverage too low?
-    // heading rejected? speed too low for this corridor's activity floor?
-    // just not close enough to register at all?) without this readout.
-    // Same format geofence-sim.html's onDebug log line already uses.
-    // Overwrites with whichever corridor last ticked, roughly once every
-    // 500ms per corridor (chute-guard.js's own debug throttle) — fine for a
-    // single nearby corridor, which is the real-world case this exists for.
+    // On-screen diagnostic (same idea as field-recorder.html's
+    // #proxDebugText) AND the field-debug log (qdlPush, see its own comment
+    // above) both feed off this same hook — the on-screen version helps
+    // when someone CAN glance at the phone (e.g. testing on foot), the
+    // logged version is for when they can't (biking/skiing). Only logged
+    // when the corridor is within chute-guard.js's own "relevant" range
+    // (d.distM<=d.maxRelevantM) — every OTHER loaded corridor in the
+    // project also calls onDebug every ~500ms regardless of how far away it
+    // is, which would otherwise flood the log with noise about corridors
+    // nowhere near the player.
     onDebug(corridorId, name, d){
       const el = document.getElementById("cgDebug");
-      if(!el) return;
-      el.textContent = "guard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
+      if(el) el.textContent = "guard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+
         " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
         " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s")+
         " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":"");
+      if(d.distM <= d.maxRelevantM) qdlPush("debug", corridorId, name, d);
     }
   };
 }
@@ -1841,6 +1879,7 @@ function renderHome(){
       statusEl.textContent="";
       activityBtns.forEach(b=>b.style.opacity="1");
       releaseWakeLock();
+      qdlFlush(); // don't leave the tail end of the ride's diagnostics sitting in memory until the next 8s tick
     } else {
       statusEl.textContent="waiting for GPS…";
       coverageEl.textContent="";
