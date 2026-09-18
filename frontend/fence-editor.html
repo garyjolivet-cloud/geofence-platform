@@ -6885,17 +6885,50 @@ function checkHazardAhead(p,headingDeg,speedMps,nowMs){
     }
   }
 }
+// One pulse's frequency/gain/duration per Corridor Guard escalation level —
+// matches ridge-quest.html's CG_PULSE / geofence-engine.html's CG_ENGINE_PULSE.
+const CG_TEST_PULSE = [
+  { freq:880,  gain:0.55, on:0.16, type:'triangle' },
+  { freq:1046, gain:0.75, on:0.15, type:'triangle' },
+  { freq:1318, gain:0.95, on:0.14, type:'square'   }
+];
+// Corridor Guard never had ANY sound in Test Mode before — the "no TTS,
+// deliberately" note only ever meant "not spoken," but nothing else was
+// ever wired up either, so a real corridor excursion was silent here
+// regardless of mute state, which is why it looked/sounded like nothing was
+// happening while dragging the sim avatar outside a corridor. Reuses
+// SimVoice.ctx (already created + resumed from the real Test-Mode-entry
+// click, see enterTestMode()) for a plain oscillator->gain->destination
+// chain, independent of SimVoice's own routing graph.
+function chuteGuardTone(level){
+  if(!simSoundOn || !SimVoice.ctx) return;
+  const p = CG_TEST_PULSE[Math.max(0, Math.min(CG_TEST_PULSE.length-1, ((level|0)||1)-1))];
+  try{
+    const ctx=SimVoice.ctx;
+    if(ctx.state==="suspended") ctx.resume();
+    const t=ctx.currentTime, o=ctx.createOscillator(), g=ctx.createGain();
+    o.type=p.type; o.frequency.value=p.freq;
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(p.gain,t+0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+p.on);
+    o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t+p.on+0.01);
+  }catch(e){}
+}
 // Chute/Corridor Guard callbacks — same "log() instead of a visitor-facing
-// banner, desktop authoring tool" reasoning as checkHazardAhead() above. No
-// TTS call, deliberately — Corridor Guard is never spoken, see
-// chute-guard.js's own header comment. chute-guard.js now calls onWarn on
-// every tick while outside (roughly every sim step) instead of once per a
-// 20s cooldown, so the log line is throttled here to first-alert/
-// level-change only — an unthrottled log would flood while dragging the sim
-// avatar around outside a corridor.
+// banner, desktop authoring tool" reasoning as checkHazardAhead() above.
+// Still no TTS/spoken alert — Corridor Guard is never spoken, see
+// chute-guard.js's own header comment — but now plays chuteGuardTone()
+// above so a real excursion is actually audible while testing, not just
+// visible in the #simLog panel. chute-guard.js calls onWarn on every tick
+// while outside (roughly every sim step) instead of once per a 20s
+// cooldown, so the log line is throttled to first-alert/level-change only —
+// an unthrottled log would flood while dragging the sim avatar around
+// outside a corridor (the tone plays on every tick, same as the other
+// surfaces, so it still sounds continuous).
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId,name,info){
+      chuteGuardTone((info&&info.level)||1);
       if(!info || info.alertCount===1 || info.levelChanged)
         simLogEv("sev-hazard","off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");

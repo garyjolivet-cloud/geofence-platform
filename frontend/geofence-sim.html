@@ -235,6 +235,13 @@ function renderWalkPaths(){
     geometry:{type:"LineString", coordinates:p.latlon.map(ll=>[ll[1],ll[0]])}
   }))));
 }
+// One pulse's frequency/gain/duration per Corridor Guard escalation level —
+// matches ridge-quest.html's CG_PULSE / geofence-engine.html's CG_ENGINE_PULSE.
+const CG_SIM_PULSE = [
+  { freq:880,  gain:0.55, on:0.16, type:'triangle' },
+  { freq:1046, gain:0.75, on:0.15, type:'triangle' },
+  { freq:1318, gain:0.95, on:0.14, type:'square'   }
+];
 const Audio = {
   on:true, ctx:null, keepAlive:null,
   unlock(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
@@ -246,13 +253,25 @@ const Audio = {
               o.type='sine'; o.frequency.value=f; g.gain.setValueAtTime(0.0001,s);
               g.gain.exponentialRampToValueAtTime(0.25,s+0.01); g.gain.exponentialRampToValueAtTime(0.0001,s+0.25);
               o.connect(g); g.connect(this.ctx.destination); o.start(s); o.stop(s+0.3); }); }catch(e){} },
-  // Chute Guard's fallback tone (desktop has no navigator.vibrate at all) —
-  // a single quiet low blip, distinct from ding()'s bright two-note chime.
-  rumble(){ if(!this.on) return; try{ this.unlock(); const t=this.ctx.currentTime;
-            const o=this.ctx.createOscillator(),g=this.ctx.createGain();
-            o.type='sine'; o.frequency.value=220; g.gain.setValueAtTime(0.0001,t);
-            g.gain.exponentialRampToValueAtTime(0.16,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
-            o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t+0.24); }catch(e){} },
+  // Corridor Guard's fallback tone. Bug fixed: the old comment claimed
+  // "desktop has no navigator.vibrate at all," which is false for Chrome/
+  // Edge (both expose navigator.vibrate as a real function, it just silently
+  // no-ops with no vibration hardware) — chuteGuardCallbacks()'s onWarn used
+  // to be `if('vibrate' in navigator) vibrate() else rumble()`, so on any
+  // Chromium desktop browser it always took the (silent, no-op) vibrate
+  // branch and this tone never played at all, which is why "no alarm heard"
+  // in the sim log even while the avatar was clearly outside a corridor.
+  // Fixed at the call site to fire both, always. Also moved off the old
+  // 220Hz/single-blip design into the same escalating 880-1318Hz alarm used
+  // in ridge-quest.html/geofence-engine.html, since a quiet low tone is easy
+  // to miss even on a laptop speaker.
+  rumble(level){ if(!this.on) return;
+    const p = CG_SIM_PULSE[Math.max(0, Math.min(CG_SIM_PULSE.length-1, ((level|0)||1)-1))];
+    try{ this.unlock(); const t=this.ctx.currentTime;
+      const o=this.ctx.createOscillator(),g=this.ctx.createGain();
+      o.type=p.type; o.frequency.value=p.freq; g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(p.gain,t+0.015); g.gain.exponentialRampToValueAtTime(0.0001,t+p.on);
+      o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t+p.on+0.01); }catch(e){} },
   say(text){ if(!this.on) return; try{ const u=new SpeechSynthesisUtterance(text);
             speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){} }
 };
@@ -1093,17 +1112,22 @@ function checkHazardAhead(p, headingDeg, speedMps, nowMs){
 }
 // Chute/Corridor Guard callbacks — same "console log() instead of a
 // visitor-facing DOM banner, desktop authoring tool not the visitor engine"
-// reasoning as checkHazardAhead() above. navigator.vibrate is absent on
-// desktop, so this exercises the tone fallback path every time here, by
-// design. chute-guard.js now calls onWarn on every tick while outside
-// (roughly once per sim step) instead of once per a 20s cooldown, so the log
-// line is throttled here to first-alert/level-change only — an unthrottled
-// log would flood during a held excursion.
+// reasoning as checkHazardAhead() above. Bug fixed: this used to be
+// `if('vibrate' in navigator) vibrate() else rumble()`, on the assumption
+// desktop has no Vibration API at all — false for Chrome/Edge, which expose
+// navigator.vibrate as a real (silently no-op) function, so on those
+// browsers the tone NEVER played and testing in the sim looked/sounded like
+// the guard wasn't firing at all. Now fires both, always, matching the same
+// fix in ridge-quest.html/geofence-engine.html. chute-guard.js calls onWarn
+// on every tick while outside (roughly once per sim step) instead of once
+// per a 20s cooldown, so the log line is throttled here to first-alert/
+// level-change only — an unthrottled log would flood during a held excursion.
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
+      const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
       if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
-      else Audio.rumble();
+      Audio.rumble(lvl);
       if(!info || info.alertCount===1 || info.levelChanged)
         log("ev-hazard", "off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
