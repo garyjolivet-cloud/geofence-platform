@@ -1214,7 +1214,8 @@ function chuteGuardCallbacks(){
       log("ev-sys", "chuteGuard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+" in="+(d.everInside?"Y":"n")+
         " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
         " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s")+
-        " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":""));
+        " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":"")+
+        " pos="+d.lat.toFixed(6)+","+d.lon.toFixed(6)); // raw position, so an exported log shows exactly where each crossing happened
     }
   };
 }

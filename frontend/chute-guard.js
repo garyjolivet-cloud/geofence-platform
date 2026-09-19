@@ -127,6 +127,50 @@
     }
     return { distM:bestD, segIdx:bestI };
   }
+  // Signed perpendicular distance from P to the INFINITE line through A,B —
+  // sign indicates which side of the line P is on, magnitude is the true
+  // perpendicular distance. Used only by sweptOppositeSideCrossing() below;
+  // nearestOnPath()'s own segment-clamped, unsigned distance is unaffected
+  // and still what drives the actual excess/level/escalation math.
+  function signedDistToLineXY(P, A, B){
+    const vx=B.x-A.x, vy=B.y-A.y;
+    const len=Math.hypot(vx,vy);
+    if(len===0) return 0;
+    return (vx*(P.y-A.y) - vy*(P.x-A.x)) / len;
+  }
+  // "Hard line in space" (2026-09-19, second real gap found under the same
+  // requirement): checking only the CURRENT fix's distance to the corridor
+  // means two consecutive fixes far enough apart (a fast rider, sparse GPS,
+  // or Test Mode's own random jitter) can straddle a narrow corridor
+  // entirely — one fix reads "6m right of center," the next reads "6m left
+  // of center," and NEITHER ever lands inside the width band, even though
+  // the true continuous path between them plainly crossed it. Confirmed via
+  // a real field report: "if I exit right and reenter, the tone stays on
+  // until I exit left" — exactly this skip, since near.distM is unsigned
+  // and the excursion never saw a tick with excessM<=0 while crossing.
+  //
+  // A first attempt used the UNSIGNED minimum distance between the swept
+  // (previous-fix -> current-fix) segment and the corridor, but that breaks
+  // the single most common tick of all: "was inside, just stepped outside."
+  // That segment necessarily starts ON/near the corridor (its previous
+  // endpoint), so its unsigned swept distance is always ~0 too — genuinely
+  // indistinguishable from a real opposite-side crossing using distance
+  // alone. The correct signal is SIGN, not distance: did the straight path
+  // go from clearly outside on one side to clearly outside on the other
+  // side (both perpendicular offsets bigger than the edge, with opposite
+  // signs)? A normal single-sided crossing never satisfies this, because
+  // its "previous" endpoint sits inside the edge, not clearly outside it.
+  // Evaluated against the CURRENT point's own nearest segment (near.segIdx)
+  // — correct for the narrow/local jump this guards against; a corridor
+  // curved enough for the previous fix to truly belong to a different
+  // segment is beyond what this check needs to handle.
+  function sweptOppositeSideCrossing(prevLatLon, latLon, segA, segB, ref, edgeM){
+    if(!prevLatLon) return false;
+    const A=toXY(segA, ref), B=toXY(segB, ref);
+    const sCur = signedDistToLineXY(toXY(latLon, ref), A, B);
+    const sPrev = signedDistToLineXY(toXY(prevLatLon, ref), A, B);
+    return Math.abs(sCur) > edgeM && Math.abs(sPrev) > edgeM && (sCur>0) !== (sPrev>0);
+  }
   // Resample a polyline every stepM (same technique as ridge-quest.html's
   // QGeo.resamplePath) — used once at load() to build each corridor's
   // coverage-sample points.
@@ -150,6 +194,7 @@
   let stateByCorridor=new Map();
   let cb={};
   let lastTickAtWall=0;         // real Date.now() at the last tick() call — see getActiveAlarm()
+  let prevFixLatLon=null;       // [lat,lon] of the last ACCEPTED fix — see nearestOnPathSwept()
 
   function freshState(){
     return {
@@ -197,7 +242,7 @@
     }));
   }
 
-  function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; }
+  function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; }
 
   function emitWarn(c, st, now, excessM){
     st.alertCount++;
@@ -220,10 +265,12 @@
     lastTickAtWall = Date.now(); // real wall clock, independent of fix.t — see getActiveAlarm()
     const latLon=[fix.lat, fix.lon];
     const now = fix.t || Date.now();
+    const prevLatLon = prevFixLatLon; // captured before this tick updates it, below
+    prevFixLatLon = latLon;
 
     for(const c of corridors){
       const ref=c.path[0];
-      const near=nearestOnPath(latLon, c.path, ref);
+      const near=nearestOnPath(latLon, c.path, ref); // current true distance — unaffected by the crossing check below
       const halfW=c.widthM/2;
       const st=stateByCorridor.get(c.id);
 
@@ -249,6 +296,14 @@
       const edgeM        = halfW + TUNING.OUTSIDE_BUFFER_M;
       const excessM       = near.distM - edgeM;                // >0 == outside
       const maxRelevantM = edgeM + TUNING.MAX_RELEVANT_PAD_M;
+      // See sweptOppositeSideCrossing()'s own comment — catches a fast
+      // lateral movement that skips clean over a narrow corridor's inside
+      // zone between two consecutive fixes (both fixes still read
+      // "outside," just on opposite sides), which the point-only distance
+      // above can't see on its own.
+      const crossedOppositeSide = sweptOppositeSideCrossing(
+        prevLatLon, latLon, c.path[near.segIdx], c.path[Math.min(near.segIdx+1, c.path.length-1)], ref, edgeM
+      );
 
       // Field bug found 2026-09: the guard fired while a player was still
       // APPROACHING a corridor, before ever having entered it this time —
@@ -279,7 +334,7 @@
       // still-outside excursion once it concludes the departure is
       // deliberate — otherwise skiing/riding away on purpose would alarm
       // forever with no way to stop it short of returning.
-      const outsideNow = excessM > 0 && near.distM <= maxRelevantM;
+      const outsideNow = excessM > 0 && near.distM <= maxRelevantM && !crossedOppositeSide;
 
       // Debug hook — Test Mode wires this into its log panel so an author
       // can see exactly which gate is blocking a warning (coverage/heading/
@@ -290,7 +345,8 @@
         st.lastDebugAt=now;
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
           bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside,
-          headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed });
+          headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed,
+          lat:fix.lat, lon:fix.lon }); // raw position — lets an exported log be checked against exactly where a crossing happened
       }
 
       if(!outsideNow){
@@ -300,7 +356,7 @@
         // committed-exit that later wanders out of relevant range entirely
         // resets silently, same as before.
         const wasActive = st.level>0;
-        const backInside = excessM<=0;
+        const backInside = excessM<=0 || crossedOppositeSide;
         const outOfRelevantRange = near.distM > maxRelevantM;
         const everInside = st.everInside;
         // Field bug found 2026-09-19 (real Test Mode report: "tone never

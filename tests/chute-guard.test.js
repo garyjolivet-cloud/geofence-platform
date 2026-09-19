@@ -639,5 +639,57 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   cg.TUNING.STALE_MS = origStale;
 })();
 
+// ============================================================
+// 19. Field bug found 2026-09-19: "if I exit right and reenter, the tone
+// stays on until I exit left." Root cause: near.distM is unsigned, so a
+// fast movement (or Test Mode's own random jitter) between two consecutive
+// fixes could straddle a narrow corridor entirely — one fix reads "6m right
+// of center," the very next reads "6m left of center," and NEITHER fix
+// ever lands inside the width band, even though the true continuous path
+// between them plainly crossed it. Fixed by checking the SWEPT segment
+// between consecutive fixes against the corridor, not just each point in
+// isolation.
+// ============================================================
+(function testSweptCrossingCatchesFastLateralJump(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 4 }); // halfW=2, edge=2.5
+  const events = { warn: [], clear: [] };
+  cg.load([corridor], {
+    onWarn: (id, name, info) => events.warn.push(info),
+    onClear: (id, name) => events.clear.push({ id, name })
+  });
+  const t0 = 1700000000000;
+  let forwardM = 0, t = 0;
+  function tick(lateralM){
+    const pos = trackPoint(forwardM, lateralM);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: t0 + t }, 0);
+    forwardM += 1.5; t += 1000;
+  }
+  for (let i = 0; i <= 5; i++) tick(0); // brief cover phase, centerline
+  tick(6); // exit to the RIGHT: excess = 6-2.5 = 3.5m -> first alert
+  assert(events.warn.length > 0, "sanity check: exiting right triggers a first alert");
+
+  tick(-6); // one fast tick straight to the LEFT side — the old point-only check would ALSO read this as ~3.5m outside (distance is unsigned), never registering a return
+  assert(events.clear.length === 1, "a single-tick jump from one side to the other correctly registers as a genuine return inside via the swept-segment check, not a continuous never-cleared excursion");
+
+  tick(6); // jumping straight back from -6 to +6 is ITSELF another genuine crossing — state is already inactive after the first reset, so there's nothing to clear again, but this tick still shouldn't count as a fresh alert either
+  assert(events.warn.filter(w => w.alertCount === 1).length === 1, "the jump-back tick is also a crossing, not yet a fresh excursion (still only one alertCount=1 so far)");
+  tick(6); // hold at +6 for a second consecutive tick — now the PREVIOUS fix is also on the right side, so this one is a genuinely fresh excursion, not another crossing
+  const freshAlerts = events.warn.filter(w => w.alertCount === 1);
+  assert(freshAlerts.length > 1, "once the crossing settles, the next confirming tick on one side starts a brand new excursion (alertCount resets to 1 again)");
+})();
+
+// ============================================================
+// 20. The swept-segment check must not regress the normal, small-step case
+// (typical GPS/sim ticks a meter or so apart) — same-side movement across
+// several ordinary steps should behave exactly as before.
+// ============================================================
+(function testSweptCrossingMatchesPointCheckForOrdinaryMovement(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  const events = drive(cg, corridor, excursionSteps({ coverM: 70, driftSeconds: 15, lateralPerSec: 1 }));
+  assert(events.warn.length > 0, "ordinary small-step drift still alerts normally with the swept-segment check in place");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
