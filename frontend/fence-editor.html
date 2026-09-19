@@ -7489,7 +7489,21 @@ function enterTestMode(){
   if(!simAvatar){const el=document.createElement("div");el.className="av-dot";
     simAvatar=new maplibregl.Marker({element:el,draggable:true}).setLngLat([c.lng,c.lat]).addTo(map);
     let dragT=0;
-    simAvatar.on("drag",()=>{const now=performance.now();if(now-dragT<150)return;dragT=now;
+    // Real bug found 2026-09-19 (user report: "at faster speeds the shut
+    // off only happens at [the] opposite side"): the marker's own on-screen
+    // position updates on every native drag event (unthrottled, unrelated
+    // to this handler), but this handler only fed ChuteGuard/SimFencer a
+    // position once every 150ms. During a fast, continuous drag sweep
+    // across a narrow corridor, the dot could visually cross the ENTIRE
+    // width well within one 150ms window — the audio was always correctly
+    // synced to whatever position had actually been PROCESSED (confirmed
+    // repeatedly by the real signal meter), but the dot you were WATCHING
+    // had already moved past that point, so the stop looked like it only
+    // happened once you'd visually reached the far side. Dropped to 30ms —
+    // still bounded (a genuinely pathological event storm won't overwhelm
+    // feedSim's own work), but far below anything perceptible during a
+    // manual drag test.
+    simAvatar.on("drag",()=>{const now=performance.now();if(now-dragT<30)return;dragT=now;
       const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());});
     // Real bug found 2026-09-19 (user report: "hearing a tone for seconds
     // while the avatar sits on the centre of the corridor"): the marker
