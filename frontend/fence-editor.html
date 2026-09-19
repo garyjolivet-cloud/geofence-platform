@@ -6666,13 +6666,16 @@ function refreshSimCorridorLabels(){
   // Width band + halo + casing + solid grade core + hot line — one shared
   // implementation, identical to ridge-quest's "My map" (see tile-fog.js).
   // NO dashes (activity shown by colour, not line-dasharray).
-  // trueWidthOpacity: Test Mode needs the ACTUAL geofence boundary visible
-  // for precise corridor-guard testing, unlike Ridge Quest's real map where
-  // that band is intentionally a faint 7% tint under the decorative
-  // piste-glow — see TileFog.addCorridorLayers()'s own comment for the
-  // full story (a real field-report root cause: users judging "inside vs
-  // outside" against the glow, which has no relation to the actual width).
-  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",trueWidthOpacity:0.35});
+  // trueWidthOpacity intentionally left at its faint default (7%) here: a
+  // visible tint band has its own edge at exactly halfW, which sits only
+  // OUTSIDE_BUFFER_M (0.5m) inside the real trigger line drawn below —
+  // close enough to read as a second boundary and make the tone appear to
+  // need "2 lines" crossed before it stops (confirmed via a real Test Mode
+  // log 2026-09-19: every crossing fires exactly at the dashed line below,
+  // the tint band's edge was the other "line" being seen). The dashed edge
+  // line IS the precise boundary now; a second faint band next to it only
+  // confuses which one actually matters.
+  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines"});
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
     paint:{"line-color":"#000","line-opacity":0,"line-width":14}});
   // Trigger-boundary lines (Test Mode only, per user request) — exact
