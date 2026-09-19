@@ -7070,6 +7070,11 @@ function chuteGuardStopTone(){
     // above threw, instead of that failing silently inside a try/catch.
     simLogEv("sev-sys","STOP_TONE fired"+(disconnectErr?" disconnect()FAILED:"+disconnectErr.message:" disconnect()ok")+
       (oscErr?" osc.stop()FAILED:"+oscErr.message:" osc.stop()ok")+(vibErr?" vibOsc.stop()FAILED:"+vibErr.message:" vibOsc.stop()ok"));
+    // Visual "X" at the exact spot the tone actually went silent, per
+    // explicit request — the avatar's own last position fed to
+    // ChuteGuard.tick() (_cgLastFixLatLon, set in feedSim), not wherever
+    // the marker happens to be rendered right now.
+    if(_cgLastFixLatLon) _cgTrailAddStopMark(_cgLastFixLatLon.lat, _cgLastFixLatLon.lon);
   }
   _cgTestAlarm = null;
 }
@@ -7091,6 +7096,51 @@ function chuteGuardStopTone(){
 // is that same query — see its own comment for the full reasoning. This
 // timer calls it 5x/second (independent of how often feedSim()/tick() itself
 // runs) and unconditionally syncs the tone to match, every time.
+// Visual breadcrumb trail + "tone went silent here" X marks, Test Mode
+// only — added per explicit request after a series of reports where the
+// exported text log showed correct behavior but what the user saw/heard on
+// screen didn't match. Rendering ground truth directly on the map (not a
+// log line) removes any gap between "what the data says happened" and
+// "what it looked/sounded like."
+let _cgLastFixLatLon = null; // last position actually fed to ChuteGuard.tick() — set in feedSim()
+let _cgTrailPts = [], _cgStopMarkPts = [];
+const CG_TRAIL_MAX = 3000, CG_STOPMARK_MAX = 500;
+function _cgTrailPtsToFC(pts){ return {type:"FeatureCollection", features:pts.map(p=>({type:"Feature",properties:{},geometry:{type:"Point",coordinates:p}}))}; }
+function cgTrailInit(){
+  if(!map.getSource("cgTrail")){
+    map.addSource("cgTrail",{type:"geojson",data:_cgTrailPtsToFC(_cgTrailPts)});
+    map.addLayer({id:"cgTrail-dots",type:"circle",source:"cgTrail",
+      paint:{"circle-radius":2.5,"circle-color":"#8ea7ff","circle-opacity":0.7}});
+  }
+  if(!map.getSource("cgStopMarks")){
+    map.addSource("cgStopMarks",{type:"geojson",data:_cgTrailPtsToFC(_cgStopMarkPts)});
+    map.addLayer({id:"cgStopMarks-x",type:"symbol",source:"cgStopMarks",
+      layout:{"text-field":"✕","text-size":18,"text-allow-overlap":true,"text-ignore-placement":true},
+      paint:{"text-color":"#ff2f4e","text-halo-color":"#fff","text-halo-width":1.5}});
+  }
+}
+function cgTrailClear(){
+  _cgTrailPts=[]; _cgStopMarkPts=[];
+  if(map.getSource("cgTrail")) map.getSource("cgTrail").setData(_cgTrailPtsToFC(_cgTrailPts));
+  if(map.getSource("cgStopMarks")) map.getSource("cgStopMarks").setData(_cgTrailPtsToFC(_cgStopMarkPts));
+}
+function cgTrailTeardown(){
+  _cgTrailPts=[]; _cgStopMarkPts=[]; _cgLastFixLatLon=null;
+  if(map.getLayer("cgTrail-dots")) map.removeLayer("cgTrail-dots");
+  if(map.getSource("cgTrail")) map.removeSource("cgTrail");
+  if(map.getLayer("cgStopMarks-x")) map.removeLayer("cgStopMarks-x");
+  if(map.getSource("cgStopMarks")) map.removeSource("cgStopMarks");
+}
+function _cgTrailAddPoint(lat,lon){
+  _cgTrailPts.push([lon,lat]);
+  if(_cgTrailPts.length>CG_TRAIL_MAX) _cgTrailPts.shift();
+  const src=map.getSource("cgTrail"); if(src) src.setData(_cgTrailPtsToFC(_cgTrailPts));
+}
+function _cgTrailAddStopMark(lat,lon){
+  _cgStopMarkPts.push([lon,lat]);
+  if(_cgStopMarkPts.length>CG_STOPMARK_MAX) _cgStopMarkPts.shift();
+  const src=map.getSource("cgStopMarks"); if(src) src.setData(_cgTrailPtsToFC(_cgStopMarkPts));
+}
 let _cgSyncTimer = null;
 function chuteGuardStartSync(){
   chuteGuardStopSync();
@@ -7193,6 +7243,8 @@ function feedSim(lat,lon,acc,t,bleFix){
   const raw={lat,lon,acc,alt:effAlt};
   checkHazardAhead(raw, SimTravelHeading.heading, sm.speed, t);
   if(_chuteGuardOn && typeof ChuteGuard!=='undefined'){
+    _cgLastFixLatLon = {lat:sm.lat, lon:sm.lon};
+    _cgTrailAddPoint(sm.lat, sm.lon);
     ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t}, SimTravelHeading.heading);
     // Sync eagerly on every real tick, not just the 200ms poll timer — a
     // real bug found 2026-09-19 (first test run of the new polled design):
@@ -7596,6 +7648,8 @@ function enterTestMode(){
   _arNearState={}; // everything just got forced hidden above — forget any stale near/far state so the first tick re-evaluates cleanly
   refreshSimCorridorLabels();
   refreshSimChips();
+  cgTrailInit();
+  cgTrailClear();
   simLogEv("sev-sys","test loaded — "+simBundle.zones.length+" stop"+(simBundle.zones.length===1?"":"s")
     +" — click map or drag dot.");
 }
@@ -7624,6 +7678,7 @@ function exitTestMode(){
   Object.values(simAmbientMarkers).forEach(mk=>mk.remove());
   simAmbientMarkers={};
   clearSimCorridorLabels();
+  cgTrailTeardown();
   if(simAvatar){simAvatar.remove();simAvatar=null;}
   render();
   // Phase 3: back to normal editing — force every AR object back to full
@@ -8065,6 +8120,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   // earlier in this test session stays unlocked on the next simulated walk,
   // which would look exactly like Reset silently not working.
   if(typeof TourState!=='undefined') TourState.init(afProjectId(), simBundle.zones.length, {ns:"sim", forceReset:true});
+  cgTrailClear();
   refreshSimChips();simLogEv("sev-sys","reset");};
 // speed presets — slider value is real km/h (see input's comment above)
 (function(){
