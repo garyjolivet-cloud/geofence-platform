@@ -290,9 +290,22 @@ function addCorridorLayers(map, o){
   // instead as "a big pale wash," especially against light snow/rock. 0.20
   // opacity was already an attempt to keep it subtle; dropped further so it
   // stays a faint true-width tint rather than competing with the line.
+  //
+  // Real bug found 2026-09-19 (Fence Editor Test Mode, field report: exit/
+  // re-entry crossings looked wildly asymmetric): the halo/casing/core
+  // "piste-glow" drawn below is a FIXED, decorative pixel width per
+  // runWByRunType() -- it has nothing to do with the corridor's actual
+  // widthM. On a narrow corridor (a few meters), the glow's apparent width
+  // on screen bears no relation to Corridor Guard's real edgeM threshold,
+  // so a user judging "inside vs outside" by eye against the glow sees a
+  // "safe zone" that doesn't match the math at all -- this band is the
+  // ONLY thing that does, and at 7% opacity it's effectively invisible.
+  // o.trueWidthOpacity lets a caller that needs precise visual testing
+  // (Test Mode) override it; every other caller keeps the original faint
+  // tint unchanged.
   add({ id: pfx + "-width", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": col, "line-opacity": 0.07, "line-blur": 0,
+    paint: { "line-color": col, "line-opacity": o.trueWidthOpacity!=null ? o.trueWidthOpacity : 0.07, "line-blur": 0,
       "line-width": realWidthExpr({ floor: "band" }) } });
   // Widths went through several rounds live (2026-09): halved from this
   // file's original values for a less-oversized line, then that read as

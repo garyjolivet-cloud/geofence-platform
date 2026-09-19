@@ -6642,7 +6642,13 @@ function refreshSimCorridorLabels(){
   // Width band + halo + casing + solid grade core + hot line — one shared
   // implementation, identical to ridge-quest's "My map" (see tile-fog.js).
   // NO dashes (activity shown by colour, not line-dasharray).
-  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines"});
+  // trueWidthOpacity: Test Mode needs the ACTUAL geofence boundary visible
+  // for precise corridor-guard testing, unlike Ridge Quest's real map where
+  // that band is intentionally a faint 7% tint under the decorative
+  // piste-glow — see TileFog.addCorridorLayers()'s own comment for the
+  // full story (a real field-report root cause: users judging "inside vs
+  // outside" against the glow, which has no relation to the actual width).
+  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",trueWidthOpacity:0.35});
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
     paint:{"line-color":"#000","line-opacity":0,"line-width":14}});
   _simRunCors=cors;
