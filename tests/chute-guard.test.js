@@ -691,5 +691,62 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(events.warn.length > 0, "ordinary small-step drift still alerts normally with the swept-segment check in place");
 })();
 
+// ============================================================
+// 21. Field bug found 2026-09-19: "I hear two tones, a low and higher
+// pitch, at times" — a DIFFERENT, distant, unrelated corridor's tone
+// briefly stealing the alarm slot. Root cause: sweptOppositeSideCrossing()
+// measured against a segment's INFINITE line with no bound tight enough to
+// exclude a corridor sitting continuously 30-65m away (well within the old
+// maxRelevantM pad) — a coincidental line-crossing far from that corridor's
+// actual location could falsely un-commit it and let it re-fire a fresh,
+// often high-level alert. Fixed with a tighter MAX_CROSSING_JUMP_M bound.
+// ============================================================
+(function testDistantCorridorNotFalselyCrossedByJump(){
+  const cg = freshChuteGuard();
+  const near = makeCorridor("near", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  // A second, unrelated corridor running parallel to "near" but shifted 50m
+  // east — the player never comes anywhere near its actual location, but
+  // it's well within the OLD maxRelevantM bound (~65.5m) the whole time.
+  const distantOffset = 50;
+  const distantStart = destPoint(START, 90, distantOffset);
+  const distantPath = [distantStart];
+  for (let i = 1; i <= 20; i++) distantPath.push(destPoint(distantStart, 0, i * 20));
+  const distant = { id: "distant", name: "Distant", runType: "run", activityType: null,
+    layers: [{ geometry: { type: "corridor", path: distantPath, widthM: 10 } }] }; // halfW=5, edge=5.5
+
+  const events = { warn: [], disengage: [] };
+  cg.load([near, distant], {
+    onWarn: (id, name, info) => events.warn.push(Object.assign({ id }, info)),
+    onDisengage: (id) => events.disengage.push(id)
+  });
+
+  const t0 = 1700000000000;
+  let t = 0;
+  // Get "distant" committed first: hold at a fixed point ~8m outside its
+  // edge (well within ITS OWN engage/relevance) for 15+ seconds so the
+  // unconditional MAX_ALERT_DURATION_MS cap commits it.
+  for (let i = 0; i <= 16; i++) {
+    const pos = trackPoint(0, distantOffset - 8); // ~8m from distant's axis, well outside its 5.5m edge
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: t0 + t }, 0);
+    t += 1000;
+  }
+  assert(events.disengage.includes("distant"), "sanity check: 'distant' corridor commits (silences itself) after holding outside it for 15s+");
+  const distantWarnsBeforeJump = events.warn.filter(w => w.id === "distant").length;
+
+  // A huge, fast lateral jump on the far side of "near" — both endpoints
+  // land beyond MAX_CROSSING_JUMP_M past distant's own edge (40m out on
+  // each side, well past its ~35.5m bound), on opposite sides of distant's
+  // axis. This must NOT be treated as a crossing of "distant" — the player
+  // never came anywhere near its actual location.
+  const before = trackPoint(0, distantOffset - 40);
+  cg.tick({ lat: before[0], lon: before[1], acc: 5, speed: 1.5, t: t0 + t }, 0); t += 1000;
+  const after = trackPoint(1.5, distantOffset + 40);
+  cg.tick({ lat: after[0], lon: after[1], acc: 5, speed: 30, t: t0 + t }, 0);
+
+  const distantWarnsAfterJump = events.warn.filter(w => w.id === "distant").length;
+  assert(distantWarnsAfterJump === distantWarnsBeforeJump,
+    "a huge, fast lateral jump on the far side of a DIFFERENT, distant, already-committed corridor does not falsely re-trigger a fresh alert for it");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

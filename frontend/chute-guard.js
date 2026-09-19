@@ -83,7 +83,8 @@
     NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
     MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while the player is somewhere else entirely
     ACCURACY_CAP_M: 30,          // ignore fixes worse than this
-    STALE_MS: 5000               // getActiveAlarm() treats state older than this as untrustworthy (no fix has landed recently) and reports "no alarm," regardless of whatever level/committed state a corridor was last left in — see getActiveAlarm()'s own comment
+    STALE_MS: 5000,              // getActiveAlarm() treats state older than this as untrustworthy (no fix has landed recently) and reports "no alarm," regardless of whatever level/committed state a corridor was last left in — see getActiveAlarm()'s own comment
+    MAX_CROSSING_JUMP_M: 30      // sweptOppositeSideCrossing()'s own, tighter bound — a genuine single-tick lateral "skip" over a corridor's width realistically spans tens of meters near its OWN edge, not the full MAX_RELEVANT_PAD_M "still worth alerting" range; keeps a distant, unrelated corridor's infinite line from being coincidentally "crossed" by an unrelated movement 50+ meters away
   };
 
   const EARTH_R = 6371000;
@@ -164,12 +165,32 @@
   // — correct for the narrow/local jump this guards against; a corridor
   // curved enough for the previous fix to truly belong to a different
   // segment is beyond what this check needs to handle.
+  //
+  // Real bug found 2026-09-19 (field report: "I hear two tones, a low and
+  // higher pitch, at times" — a DIFFERENT, distant, unrelated corridor's
+  // tone briefly competing with the intended one): signedDistToLineXY
+  // measures against the segment's INFINITE line, with no bound on how far
+  // from the segment itself that's still meaningful. A corridor 30-60m away
+  // that the player never came anywhere near could still have its nearest
+  // segment's infinite line happen to cross the player's actual, unrelated
+  // walking path — falsely satisfying "opposite sides" purely by
+  // coincidental line geometry, un-committing that distant corridor and
+  // letting it re-fire a fresh (often high-level, since maxExcessM is huge)
+  // alert that briefly stole the alarm slot at a different pitch. Bounded by
+  // TUNING.MAX_CROSSING_JUMP_M rather than the full maxRelevantM pad — a
+  // real single-tick "skip" over a corridor's own width realistically spans
+  // tens of meters, not the much larger "still worth alerting" range, and a
+  // corridor sitting continuously 30-65m away (well within maxRelevantM)
+  // needs the tighter bound to actually be excluded here.
   function sweptOppositeSideCrossing(prevLatLon, latLon, segA, segB, ref, edgeM){
     if(!prevLatLon) return false;
     const A=toXY(segA, ref), B=toXY(segB, ref);
     const sCur = signedDistToLineXY(toXY(latLon, ref), A, B);
     const sPrev = signedDistToLineXY(toXY(prevLatLon, ref), A, B);
-    return Math.abs(sCur) > edgeM && Math.abs(sPrev) > edgeM && (sCur>0) !== (sPrev>0);
+    const bound = edgeM + TUNING.MAX_CROSSING_JUMP_M;
+    return Math.abs(sCur) > edgeM && Math.abs(sPrev) > edgeM &&
+      Math.abs(sCur) <= bound && Math.abs(sPrev) <= bound &&
+      (sCur>0) !== (sPrev>0);
   }
   // Resample a polyline every stepM (same technique as ridge-quest.html's
   // QGeo.resamplePath) — used once at load() to build each corridor's

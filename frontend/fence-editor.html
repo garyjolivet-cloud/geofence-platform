@@ -7363,7 +7363,13 @@ function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)ret
   const hms=now.toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
   const ms=String(now.getMilliseconds()).padStart(3,"0");
   d.textContent=hms+"."+ms+"  "+msg;
-  el.prepend(d);while(el.children.length>120)el.removeChild(el.lastChild);}
+  // Cap raised 120->3000 (2026-09-19): at ~4-8 lines/sec during an active
+  // multi-corridor excursion, 120 lines is under 30 real seconds of
+  // history — a test run any longer than that silently discarded its
+  // OLDEST lines before the "Export guard log" button ever got clicked,
+  // meaning an exported log could be missing the exact moment worth
+  // seeing. 3000 lines covers several minutes of active testing.
+  el.prepend(d);while(el.children.length>3000)el.removeChild(el.lastChild);}
 
 // Shared sayFn/guideStartFn/webhookFn closures for PipelineRuntime.load()
 // (per-zone) and .loadGlobal() (project-wide global functions) in Test
