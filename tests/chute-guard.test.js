@@ -748,5 +748,31 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     "a huge, fast lateral jump on the far side of a DIFFERENT, distant, already-committed corridor does not falsely re-trigger a fresh alert for it");
 })();
 
+// ============================================================
+// 22. onDebug's "crossing" marker (added 2026-09-19 per a user request to
+// verify exit/entry use the same distance-from-center threshold): must
+// fire exactly on the tick outsideNow flips, bypassing the normal 500ms
+// throttle, for BOTH the exit and the entry transition — not just one of
+// them (a first version only caught entry, since the reset branch wiped
+// the tracking on every tick spent inside).
+// ============================================================
+(function testCrossingMarkerFiresForBothExitAndEntry(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  const events = drive(cg, corridor, [
+    ...Array.from({ length: 8 }, (_, i) => ({ forwardM: i * 1.5, lateralM: 0, t: i * 1000 })), // cover phase, inside
+    { forwardM: 12, lateralM: 6, t: 8000 },   // exit: excess = 0.5m
+    { forwardM: 13.5, lateralM: 6, t: 9000 }, // hold outside (not a crossing tick)
+    { forwardM: 15, lateralM: 0, t: 10000 },  // entry: back on centerline
+    { forwardM: 16.5, lateralM: 0, t: 11000 } // hold inside (not a crossing tick)
+  ]);
+  const crossings = events.debug.filter(d => d.crossing);
+  assert(crossings.length === 2, "exactly two crossing-marked debug lines fire — one exit, one entry (got " + crossings.length + ")");
+  if (crossings.length === 2) {
+    assert(crossings[0].excessM > 0, "the exit crossing is marked on a tick with positive excess (just went outside)");
+    assert(crossings[1].excessM <= 0, "the entry crossing is marked on a tick with non-positive excess (just came back inside)");
+  }
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

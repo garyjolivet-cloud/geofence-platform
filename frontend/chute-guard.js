@@ -221,7 +221,7 @@
     return {
       level:0, firstAlertAt:null, excessAtFirstAlert:0,
       maxExcessM:0, prevExcessM:null, growthStreakStartAt:null, committed:false,
-      alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false
+      alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false, lastOutsideNow:null
     };
   }
 
@@ -360,15 +360,25 @@
       // Debug hook — Test Mode wires this into its log panel so an author
       // can see exactly which gate is blocking a warning (coverage/heading/
       // speed/distance) instead of a silent "nothing happened." Throttled
-      // per-corridor so a held drag doesn't flood the log. Not wired by the
-      // production engine/sim — diagnostic only.
-      if(cb.onDebug && now-(st.lastDebugAt||0)>=500){
+      // per-corridor so a held drag doesn't flood the log — EXCEPT on the
+      // exact tick outsideNow flips (a genuine exit or entry), which always
+      // gets logged regardless of the throttle. Added 2026-09-19: the
+      // throttle could otherwise skip the precise crossing tick, so a user
+      // comparing "how far past the edge did it turn on" vs. "how far past
+      // the edge did it turn off" from an exported log could see two
+      // different-looking numbers even though both directions use the
+      // exact same edgeM threshold internally — this makes that threshold
+      // directly verifiable from the log itself, not just from reading the
+      // source. Not wired by the production engine/sim — diagnostic only.
+      const outsideNowChanged = st.lastOutsideNow!=null && st.lastOutsideNow!==outsideNow;
+      if(cb.onDebug && (outsideNowChanged || now-(st.lastDebugAt||0)>=500)){
         st.lastDebugAt=now;
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
           bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside,
           headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed,
-          lat:fix.lat, lon:fix.lon }); // raw position — lets an exported log be checked against exactly where a crossing happened
+          lat:fix.lat, lon:fix.lon, crossing:outsideNowChanged }); // raw position + a "crossing" flag marking the exact tick outsideNow flipped
       }
+      st.lastOutsideNow = outsideNow;
 
       if(!outsideNow){
         // Only a genuine return inside the width band (not just "no longer
@@ -403,7 +413,16 @@
         // everything else (still inside/buffered, or still approaching
         // pre-entry within relevant range) keeps whatever entry status it
         // already had.
-        if(!outOfRelevantRange) st.everInside = everInside;
+        if(!outOfRelevantRange){
+          st.everInside = everInside;
+          // Also preserve lastOutsideNow (same reasoning) — without this,
+          // it gets wiped to null on EVERY tick while genuinely inside
+          // (this branch runs every such tick), so by the time the player
+          // exits again, outsideNowChanged above would always read false
+          // for that tick — the crossing marker would only ever catch the
+          // entry transition, never the exit one.
+          st.lastOutsideNow = outsideNow;
+        }
         if(wasActive && backInside && cb.onClear){
           cb.onClear(c.id, c.name);
         }else if(wasActive && outOfRelevantRange && !wasCommitted && cb.onDisengage){
