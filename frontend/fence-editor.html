@@ -7266,7 +7266,14 @@ function updateGuidanceArrow(lat,lon){
 
 function simLogEv(cls,msg){const el=document.getElementById("simLog");if(!el)return;
   const d=document.createElement("div");d.className=cls;
-  d.textContent=new Date().toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit",second:"2-digit"})+"  "+msg;
+  // Millisecond precision (was second-only) — a second-granularity
+  // timestamp can't distinguish "stopped instantly" from "stopped nearly
+  // a second later," which is exactly the field report this log needs to
+  // settle (STOP_TONE vs. the tick that crossed back inside).
+  const now=new Date();
+  const hms=now.toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  const ms=String(now.getMilliseconds()).padStart(3,"0");
+  d.textContent=hms+"."+ms+"  "+msg;
   el.prepend(d);while(el.children.length>120)el.removeChild(el.lastChild);}
 
 // Shared sayFn/guideStartFn/webhookFn closures for PipelineRuntime.load()
