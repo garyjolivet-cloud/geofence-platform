@@ -555,5 +555,27 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     "alertCount keeps incrementing straight through the flicker — proves the excursion state was never silently reset (alertCount would restart at 1 if it had been)");
 })();
 
+// ============================================================
+// 17. Field bug: walking straight past a corridor's END far enough to leave
+// maxRelevantM entirely, while still actively alerting but before ever
+// satisfying the normal commit-detection thresholds, must still fire
+// onDisengage — not a silent reset with no stop signal at all. Found via a
+// real Test Mode report: "tone never turned off, had to exit Test Mode to
+// kill it" after walking well past a corridor's end.
+// ============================================================
+(function testFarOutOfRangeStillFiresDisengage(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5, maxRelevantM=65.5
+  const steps = [];
+  let forwardM = 0, t = 0;
+  for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; } // cover phase
+  steps.push({ forwardM, lateralM: 6, t: t }); forwardM += 1.5; t += 1000;      // excess=0.5m -> first alert, level 1
+  steps.push({ forwardM, lateralM: 200, t: t });                                // one big jump straight past maxRelevantM (65.5m) in a single tick
+  const events = drive(cg, corridor, steps);
+  assert(events.warn.length >= 1, "sanity check: the excursion actually alerted before jumping out of range");
+  assert(events.disengage.length === 1, "jumping straight past maxRelevantM while still actively alerting fires onDisengage exactly once");
+  assert(events.clear.length === 0, "this is not a genuine return inside, so onClear never fires");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

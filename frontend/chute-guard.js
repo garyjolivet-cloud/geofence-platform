@@ -300,6 +300,23 @@
         const backInside = excessM<=0;
         const outOfRelevantRange = near.distM > maxRelevantM;
         const everInside = st.everInside;
+        // Field bug found 2026-09-19 (real Test Mode report: "tone never
+        // turned off, had to exit Test Mode to kill it" — the excursion had
+        // walked straight past a corridor's END, well beyond maxRelevantM):
+        // wandering out of relevant range while STILL actively alerting but
+        // not yet committed hit this exact reset with neither onClear (they
+        // never came back inside) nor onDisengage (only fired by the
+        // separate commit-detection branch below, which this code path
+        // bypasses entirely) — the host's already-started alarm was
+        // orphaned with no stop signal at all, and since the corridor id
+        // stays "the one playing" on the host side, a later re-approach
+        // just updates the stale alarm in place instead of restarting it,
+        // so it plays uninterrupted indefinitely. Capture pre-reset level/
+        // maxExcessM so a genuinely-still-active excursion always gets a
+        // stop signal one way or another before its state is wiped.
+        const wasCommitted = st.committed;
+        const levelAtReset = st.level;
+        const maxExcessAtReset = st.maxExcessM;
         Object.assign(st, freshState());
         // A genuine "gone away" (out of relevant range) is the only case
         // that should require re-earning entry on the next approach —
@@ -307,7 +324,11 @@
         // pre-entry within relevant range) keeps whatever entry status it
         // already had.
         if(!outOfRelevantRange) st.everInside = everInside;
-        if(wasActive && backInside && cb.onClear) cb.onClear(c.id, c.name);
+        if(wasActive && backInside && cb.onClear){
+          cb.onClear(c.id, c.name);
+        }else if(wasActive && outOfRelevantRange && !wasCommitted && cb.onDisengage){
+          cb.onDisengage(c.id, c.name, {level:levelAtReset, maxExcessM:maxExcessAtReset, excessM, widthM:c.widthM, t:now});
+        }
         continue;
       }
 
