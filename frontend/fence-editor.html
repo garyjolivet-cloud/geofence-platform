@@ -7027,8 +7027,28 @@ function chuteGuardStartTone(level){
     // Temporary diagnostic (see chuteGuardStopTone's matching log line) —
     // lets a "still playing" report be checked against exactly how many
     // START_TONE/STOP_TONE pairs actually happened and in what order.
-    simLogEv("sev-sys","START_TONE fired ctxState="+ctx.state);
+    simLogEv("sev-sys","START_TONE fired ctxState="+ctx.state+" "+_cgLatencyStr(ctx));
   }catch(e){}
+}
+// outputLatency/baseLatency, in ms: the browser's own estimate of how far
+// behind the physical speaker a scheduled sample actually plays — entirely
+// downstream of disconnect()/stop(), which only stop FUTURE samples from
+// being generated. Samples already handed to the OS/audio-driver queue
+// before that call still play out for this long, invisible to the WebAudio
+// meter (it taps the graph, not the physical output) but audible to a
+// listener. Added per a real report: "delay on the laptop before tone is
+// turned off" despite STOP_TONE/METER-silent both landing within ms of the
+// crossing in the log — this quantifies whether that gap is genuine
+// hardware/OS buffering (which no code change here can eliminate) or
+// something else. outputLatency isn't supported in every browser; falls
+// back to baseLatency, then "n/a".
+function _cgLatencyStr(ctx){
+  try{
+    const out = ctx.outputLatency, base = ctx.baseLatency;
+    if(out!=null) return "outputLatency="+Math.round(out*1000)+"ms"+(base!=null?" baseLatency="+Math.round(base*1000)+"ms":"");
+    if(base!=null) return "baseLatency="+Math.round(base*1000)+"ms (outputLatency n/a in this browser)";
+  }catch(e){}
+  return "latency n/a";
 }
 // Real bug found 2026-09 via a road-test log (ridge-quest.html): every ramp
 // scheduled a new automation point without cancelling whatever a PRIOR call
@@ -7069,7 +7089,8 @@ function chuteGuardStopTone(){
     // this function actually executed and whether any of the three calls
     // above threw, instead of that failing silently inside a try/catch.
     simLogEv("sev-sys","STOP_TONE fired"+(disconnectErr?" disconnect()FAILED:"+disconnectErr.message:" disconnect()ok")+
-      (oscErr?" osc.stop()FAILED:"+oscErr.message:" osc.stop()ok")+(vibErr?" vibOsc.stop()FAILED:"+vibErr.message:" vibOsc.stop()ok"));
+      (oscErr?" osc.stop()FAILED:"+oscErr.message:" osc.stop()ok")+(vibErr?" vibOsc.stop()FAILED:"+vibErr.message:" vibOsc.stop()ok")+
+      " "+(SimVoice.ctx?_cgLatencyStr(SimVoice.ctx):"latency n/a"));
     // Visual "X" at the exact spot the tone actually went silent, per
     // explicit request — the avatar's own last position fed to
     // ChuteGuard.tick() (_cgLastFixLatLon, set in feedSim), not wherever
