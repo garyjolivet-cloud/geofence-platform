@@ -6905,6 +6905,49 @@ const CG_TEST_TONE = [
 // "multiple beeps" rather than one sustained tone) — same design as the
 // other three surfaces.
 let _cgTestAlarm = null; // {osc, gain, vibOsc, vibGain}
+// Real audio-level meter — added 2026-09-19 at the user's request, after
+// text-log diagnostics repeatedly showed 0ms latency between the "back
+// inside" detection and the disconnect()/stop() calls, but the user kept
+// perceiving an audible delay anyway. Every diagnostic so far only proved
+// WHEN THE JS CALL HAPPENED — none of them could see whether the actual
+// SIGNAL coming out of the audio graph matched that timing. This taps an
+// AnalyserNode directly off the tone's own gain node (a parallel tap, so it
+// never affects what's actually audible) and samples real amplitude every
+// animation frame, logging the exact moment the signal crosses to/from
+// silence — closing the one gap between "JS says it stopped" and "the
+// speaker actually went quiet" that no other diagnostic here could see.
+let _cgMeterAnalyser = null;
+let _cgMeterAudible = false;
+let _cgMeterBuf = null;
+let _cgMeterRAF = null;
+function _cgMeterEnsure(ctx){
+  if(_cgMeterAnalyser) return;
+  _cgMeterAnalyser = ctx.createAnalyser();
+  _cgMeterAnalyser.fftSize = 512;
+  _cgMeterBuf = new Float32Array(_cgMeterAnalyser.fftSize);
+}
+function _cgMeterLoop(){
+  _cgMeterRAF = requestAnimationFrame(_cgMeterLoop);
+  if(!_cgMeterAnalyser) return;
+  _cgMeterAnalyser.getFloatTimeDomainData(_cgMeterBuf);
+  let peak=0;
+  for(let i=0;i<_cgMeterBuf.length;i++){ const v=Math.abs(_cgMeterBuf[i]); if(v>peak) peak=v; }
+  const audibleNow = peak > 0.01; // well below the tone's 0.5-0.8 gain range, well above true silence/float noise
+  if(audibleNow && !_cgMeterAudible){
+    _cgMeterAudible = true;
+    simLogEv("sev-sys","METER: tone became AUDIBLE (peak="+peak.toFixed(3)+")");
+  }else if(!audibleNow && _cgMeterAudible){
+    _cgMeterAudible = false;
+    simLogEv("sev-sys","METER: tone went SILENT (peak="+peak.toFixed(3)+")");
+  }
+}
+function chuteGuardStartMeter(){
+  if(_cgMeterRAF==null) _cgMeterLoop();
+}
+function chuteGuardStopMeter(){
+  if(_cgMeterRAF!=null){ cancelAnimationFrame(_cgMeterRAF); _cgMeterRAF=null; }
+  _cgMeterAnalyser = null; _cgMeterAudible = false;
+}
 function chuteGuardStartTone(level){
   if(!simSoundOn || !SimVoice.ctx){
     simLogEv("sev-sys","START_TONE skipped (simSoundOn="+simSoundOn+" SimVoice.ctx="+(!!SimVoice.ctx)+")");
@@ -6914,6 +6957,7 @@ function chuteGuardStartTone(level){
   try{
     const ctx=SimVoice.ctx;
     if(ctx.state==="suspended") ctx.resume();
+    _cgMeterEnsure(ctx);
     const o=ctx.createOscillator(), g=ctx.createGain();
     o.type="triangle"; // smoother/less abrasive than a sawtooth drone (field feedback, 2026-09)
     const vibOsc=ctx.createOscillator(), vibGain=ctx.createGain();
@@ -6924,6 +6968,7 @@ function chuteGuardStartTone(level){
     g.gain.setValueAtTime(0.0001,t);
     g.gain.exponentialRampToValueAtTime(CG_TEST_TONE[0].gain,t+0.06);
     o.connect(g); g.connect(ctx.destination);
+    g.connect(_cgMeterAnalyser); // parallel tap — measures the real signal without touching the audible path
     o.start(); vibOsc.start();
     _cgTestAlarm = { osc:o, gain:g, vibOsc, vibGain };
     chuteGuardUpdateTone(level, 0.06);
@@ -6998,10 +7043,12 @@ let _cgSyncTimer = null;
 function chuteGuardStartSync(){
   chuteGuardStopSync();
   _cgSyncTimer = setInterval(syncCgTestAlarm, 200);
+  chuteGuardStartMeter();
 }
 function chuteGuardStopSync(){
   if(_cgSyncTimer){ clearInterval(_cgSyncTimer); _cgSyncTimer=null; }
   chuteGuardStopTone();
+  chuteGuardStopMeter();
   _cgTestAlarmCorridorId = null;
 }
 function syncCgTestAlarm(){
