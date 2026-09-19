@@ -7141,21 +7141,46 @@ function cgTrailInit(){
   }
 }
 function cgTrailClear(){
+  if(_cgTrailRAF!=null){ cancelAnimationFrame(_cgTrailRAF); _cgTrailRAF=null; }
+  _cgTrailDirty=false;
   _cgTrailPts=[]; _cgStopMarkPts=[];
   if(map.getSource("cgTrail")) map.getSource("cgTrail").setData(_cgTrailPtsToFC(_cgTrailPts));
   if(map.getSource("cgStopMarks")) map.getSource("cgStopMarks").setData(_cgTrailPtsToFC(_cgStopMarkPts));
 }
 function cgTrailTeardown(){
+  if(_cgTrailRAF!=null){ cancelAnimationFrame(_cgTrailRAF); _cgTrailRAF=null; }
+  _cgTrailDirty=false;
   _cgTrailPts=[]; _cgStopMarkPts=[]; _cgLastFixLatLon=null;
   if(map.getLayer("cgTrail-dots")) map.removeLayer("cgTrail-dots");
   if(map.getSource("cgTrail")) map.removeSource("cgTrail");
   if(map.getLayer("cgStopMarks-x")) map.removeLayer("cgStopMarks-x");
   if(map.getSource("cgStopMarks")) map.removeSource("cgStopMarks");
 }
+// Real bug found 2026-09-19 (field report: an intermittent ~70ms delay
+// between the crossing tick and STOP_TONE, on top of everything else in
+// this saga that measured as instant): _cgTrailAddPoint runs on the exact
+// same synchronous call path as chuteGuardStopTone() (both fire from
+// feedSim(), back-to-back, on every real tick) — a source.setData() call
+// on every single tick, rebuilding/re-uploading the whole point trail to
+// the GPU, could occasionally stall that shared call path long enough to
+// delay the tone's own stop by however long that stall took. The in-memory
+// point array still updates every tick (cheap, needed for correctness), but
+// the actual map update is deferred to the next animation frame and
+// coalesced — so a burst of ticks between two frames costs one setData(),
+// not one per tick, and none of it can block whichever tick happens to be
+// the one that silences the tone.
+let _cgTrailDirty=false, _cgTrailRAF=null;
+function _cgTrailFlush(){
+  _cgTrailRAF=null;
+  if(!_cgTrailDirty) return;
+  _cgTrailDirty=false;
+  const src=map.getSource("cgTrail"); if(src) src.setData(_cgTrailPtsToFC(_cgTrailPts));
+}
 function _cgTrailAddPoint(lat,lon){
   _cgTrailPts.push([lon,lat]);
   if(_cgTrailPts.length>CG_TRAIL_MAX) _cgTrailPts.shift();
-  const src=map.getSource("cgTrail"); if(src) src.setData(_cgTrailPtsToFC(_cgTrailPts));
+  _cgTrailDirty=true;
+  if(_cgTrailRAF==null) _cgTrailRAF=requestAnimationFrame(_cgTrailFlush);
 }
 function _cgTrailAddStopMark(lat,lon){
   _cgStopMarkPts.push([lon,lat]);
