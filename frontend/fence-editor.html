@@ -6904,7 +6904,7 @@ const CG_TEST_TONE = [
 // pulses (an earlier version was, on explicit field feedback it read as
 // "multiple beeps" rather than one sustained tone) — same design as the
 // other three surfaces.
-let _cgTestAlarm = null; // {osc, gain, vibOsc, vibGain}
+let _cgTestAlarm = null; // {osc, gain, vibOsc, vibGain, lastHeardAt, watchdog}
 function chuteGuardStartTone(level){
   if(!simSoundOn || !SimVoice.ctx){
     simLogEv("sev-sys","START_TONE skipped (simSoundOn="+simSoundOn+" SimVoice.ctx="+(!!SimVoice.ctx)+")");
@@ -6925,7 +6925,26 @@ function chuteGuardStartTone(level){
     g.gain.exponentialRampToValueAtTime(CG_TEST_TONE[0].gain,t+0.06);
     o.connect(g); g.connect(ctx.destination);
     o.start(); vibOsc.start();
-    _cgTestAlarm = { osc:o, gain:g, vibOsc, vibGain };
+    // Field bug found 2026-09-19 (real Test Mode report: had to Exit Test to
+    // kill the tone, confirmed via a log gap — the simulated walk had
+    // paused, so feedSim()/ChuteGuard.tick() simply stopped being called at
+    // all): chute-guard.js's "unconditional" 15s give-up cap is only
+    // evaluated INSIDE tick(), so it can never fire if fixes stop arriving
+    // entirely (a paused walk here; a real GPS dropout or the phone going
+    // stationary long enough for watchPosition to throttle, in the field).
+    // ridge-quest.html already carries exactly this watchdog for the same
+    // reason (see its _cgAlarm comment) — ported verbatim: if no
+    // onWarn/onClear/onDisengage heartbeat lands for 20s (comfortably
+    // longer than a stalled sim or watchPosition's own 15s timeout), stop
+    // regardless of whether chute-guard.js itself ever got another tick to
+    // evaluate its own cap on.
+    _cgTestAlarm = { osc:o, gain:g, vibOsc, vibGain, lastHeardAt:Date.now(),
+      watchdog: setInterval(()=>{
+        if(_cgTestAlarm && Date.now()-_cgTestAlarm.lastHeardAt>20000){
+          simLogEv("sev-sys","WATCHDOG: no chuteGuard heartbeat for 20s — forcing tone off");
+          chuteGuardStopTone();
+        }
+      }, 4000) };
     chuteGuardUpdateTone(level, 0.06);
     // Temporary diagnostic (see chuteGuardStopTone's matching log line) —
     // lets a "still playing" report be checked against exactly how many
@@ -6945,6 +6964,7 @@ function _cgTestRamp(param, target, t, rampS){
 }
 function chuteGuardUpdateTone(level, rampS){
   if(!_cgTestAlarm || !SimVoice.ctx) return;
+  _cgTestAlarm.lastHeardAt = Date.now(); // any real onWarn heartbeat resets the watchdog above
   const spec = CG_TEST_TONE[Math.max(0, Math.min(CG_TEST_TONE.length-1, ((level|0)||1)-1))];
   const t = SimVoice.ctx.currentTime, r = rampS!=null?rampS:0.15;
   try{
@@ -6967,6 +6987,7 @@ function chuteGuardStopTone(){
     try{ alarm.gain.disconnect(); }catch(e){ disconnectErr=e; }
     try{ alarm.osc.stop(); }catch(e){ oscErr=e; }       // stop() with no argument = immediately, not scheduled
     try{ alarm.vibOsc.stop(); }catch(e){ vibErr=e; }
+    if(alarm.watchdog) clearInterval(alarm.watchdog);
     // Temporary diagnostic (field report: tone reportedly kept sounding
     // even after this ran) — confirms in the exportable #simLog whether
     // this function actually executed and whether any of the three calls

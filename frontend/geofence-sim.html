@@ -262,7 +262,7 @@ const Audio = {
   // used to be `if('vibrate' in navigator) vibrate() else rumble()`, so on
   // any Chromium desktop browser this tone never played at all. Fixed at
   // the call site to fire both, always.
-  _alarm: null, // {osc, gain, vibOsc, vibGain}
+  _alarm: null, // {osc, gain, vibOsc, vibGain, lastHeardAt, watchdog}
   startAlarm(level){
     if(!this.on) return;
     this.stopAlarm();
@@ -279,7 +279,14 @@ const Audio = {
       g.gain.exponentialRampToValueAtTime(CG_SIM_TONE[0].gain,t+0.06);
       o.connect(g); g.connect(this.ctx.destination);
       o.start(); vibOsc.start();
-      this._alarm = { osc:o, gain:g, vibOsc, vibGain };
+      // Field bug found 2026-09-19 (fence-editor.html Test Mode report, same
+      // shared chute-guard.js): the "unconditional" 15s give-up cap only
+      // gets evaluated inside tick(), so it never fires if fixes stop
+      // arriving entirely (a paused walk, or a real GPS dropout). Ported
+      // ridge-quest.html's watchdog verbatim: force-stop after 20s with no
+      // onWarn/onClear/onDisengage heartbeat, independent of ticks.
+      this._alarm = { osc:o, gain:g, vibOsc, vibGain, lastHeardAt:Date.now(),
+        watchdog: setInterval(()=>{ if(this._alarm && Date.now()-this._alarm.lastHeardAt>20000) this.stopAlarm(); }, 4000) };
       this.updateAlarm(level, 0.06);
     }catch(e){}
   },
@@ -295,6 +302,7 @@ const Audio = {
   },
   updateAlarm(level, rampS){
     if(!this._alarm) return;
+    this._alarm.lastHeardAt = Date.now(); // any real onWarn heartbeat resets the watchdog above
     const spec = CG_SIM_TONE[Math.max(0, Math.min(CG_SIM_TONE.length-1, ((level|0)||1)-1))];
     const t = this.ctx.currentTime, r = rampS!=null?rampS:0.15;
     try{
@@ -316,6 +324,7 @@ const Audio = {
       try{ alarm.gain.disconnect(); }catch(e){}
       try{ alarm.osc.stop(); }catch(e){}       // stop() with no argument = immediately, not scheduled
       try{ alarm.vibOsc.stop(); }catch(e){}
+      if(alarm.watchdog) clearInterval(alarm.watchdog);
     }
     this._alarm = null;
   },
