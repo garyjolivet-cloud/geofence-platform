@@ -7484,6 +7484,20 @@ function enterTestMode(){
     let dragT=0;
     simAvatar.on("drag",()=>{const now=performance.now();if(now-dragT<150)return;dragT=now;
       const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());});
+    // Real bug found 2026-09-19 (user report: "hearing a tone for seconds
+    // while the avatar sits on the centre of the corridor"): the marker
+    // itself re-renders on every drag event, unthrottled — but the drag
+    // handler above only feeds ChuteGuard/SimFencer a position every 150ms.
+    // With no dragend handler at all, the exact drop point was only ever
+    // evaluated if it happened to land on a non-throttled tick — a fast
+    // drag ending well inside a corridor could visually rest dead-center
+    // while chute-guard.js's last-evaluated position (from a throttled-out
+    // tick moments earlier) was still outside, and since dragging has
+    // stopped, nothing ever generates a correcting tick. The only thing
+    // that eventually silenced it was the unrelated 5s staleness fail-safe
+    // — which is exactly "for seconds." Always evaluate the true final
+    // position the instant dragging ends, bypassing the throttle.
+    simAvatar.on("dragend",()=>{const ll=simAvatar.getLngLat();feedSim(ll.lat,ll.lng,5,Date.now());});
   } else simAvatar.setLngLat([c.lng,c.lat]);
   document.getElementById("editSection").style.display="none";
   document.getElementById("editorControls").style.display="none";
