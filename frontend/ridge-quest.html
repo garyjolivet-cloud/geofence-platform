@@ -966,7 +966,15 @@ const Quest = {
     // this codebase (a stationary/paused compass reading would falsely gate
     // "engaged" on or off regardless of whether the skier is actually moving
     // along the line).
-    if(typeof ChuteGuard!=="undefined") ChuteGuard.tick({lat:p.lat,lon:p.lon,acc:p.acc,speed:p.speed,t:fix.t}, p.headingTravel);
+    if(typeof ChuteGuard!=="undefined"){
+      ChuteGuard.tick({lat:p.lat,lon:p.lon,acc:p.acc,speed:p.speed,t:fix.t}, p.headingTravel);
+      // Sync eagerly on every real fix, not just the 200ms poll timer — see
+      // fence-editor.html's identical call site for the bug this fixes (a
+      // real back-inside tick landed but the tone didn't stop for ~1.7s,
+      // since nothing forced an immediate re-check). The timer stays as the
+      // staleness backstop for when fixes STOP arriving.
+      syncCgAlarm();
+    }
     this._revealFog(p, fix.acc);
     this._tickViewpoints(p);
     this._tickCheckpoints(p);

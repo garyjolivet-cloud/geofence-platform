@@ -1278,8 +1278,12 @@ function feed(lat,lon,acc,t,bleFix){
   // teleport/drag between stops at different elevations.
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:effAlt};
   checkHazardAhead(p, TravelHeading.heading, sm.speed, t);
-  if(BUNDLE.chuteGuardEnabled && typeof ChuteGuard!=='undefined')
+  if(BUNDLE.chuteGuardEnabled && typeof ChuteGuard!=='undefined'){
     ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t}, TravelHeading.heading);
+    // Sync eagerly on every real fix, not just the 200ms poll timer — see
+    // ridge-quest.html's identical call site for the bug this fixes.
+    syncCgSimAlarm();
+  }
   const active=Geofencer.update(p,prevP,t);
   // AR-object visibility — continuous distance-vs-audioM check, same range
   // spatial audio would use (zoneAudioFadeRadii), edge-triggered via

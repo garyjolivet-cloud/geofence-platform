@@ -7086,8 +7086,17 @@ function feedSim(lat,lon,acc,t,bleFix){
   // simulated walk between stops at different elevations).
   const raw={lat,lon,acc,alt:effAlt};
   checkHazardAhead(raw, SimTravelHeading.heading, sm.speed, t);
-  if(_chuteGuardOn && typeof ChuteGuard!=='undefined')
+  if(_chuteGuardOn && typeof ChuteGuard!=='undefined'){
     ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t}, SimTravelHeading.heading);
+    // Sync eagerly on every real tick, not just the 200ms poll timer — a
+    // real bug found 2026-09-19 (first test run of the new polled design):
+    // a genuine back-inside tick landed, but STOP_TONE didn't fire for
+    // another ~1.7s because nothing forced an immediate re-check, only the
+    // next independent timer firing. The timer stays as the staleness
+    // backstop for when ticks STOP arriving; this call is what makes the
+    // normal, ticks-are-flowing case actually instant.
+    syncCgTestAlarm();
+  }
   const active=SimFencer.update(raw,simPrevRaw,t);
   simPrevRaw=raw;
   simPrev=p;

@@ -1859,8 +1859,12 @@ const HUD = {
     }
     if(BUNDLE.tileArtEnabled&&typeof TileFog!=='undefined') TileFog.reveal(sm.lat,sm.lon,sm.acc,60);
     checkHazardAhead(p, TravelHeading.heading, sm.speed, fix.t);
-    if(BUNDLE.chuteGuardEnabled && typeof ChuteGuard!=='undefined')
+    if(BUNDLE.chuteGuardEnabled && typeof ChuteGuard!=='undefined'){
       ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t:fix.t}, TravelHeading.heading);
+      // Sync eagerly on every real fix, not just the 200ms poll timer — see
+      // ridge-quest.html's identical call site for the bug this fixes.
+      syncCgEngineAlarm();
+    }
     const active=Geofencer.update(p,this.prev,fix.t);
     this.prev=p; this.pos=p;
     // Global functions (Code Objects dropped on the map, not a stop) run on
