@@ -1237,39 +1237,57 @@ const CG_ENGINE_TONE = [
   { freq:1046, gain:0.8,  vibratoHz:6, vibratoDepth:14 }
 ];
 const CG_ENGINE_VIBE = [ [500,150], [300,120], [200,90] ]; // long repeating vibrate() pattern per level, not a single pulse
-// Continuous alarm — owned by this page, not by GPS fix timing, same
-// reasoning as ridge-quest.html's identical construct: chute-guard.js calls
-// onWarn roughly once per fix, but the tone must keep sounding independent
-// of when the next fix lands. A ~20s watchdog stops it if no onWarn
-// heartbeat arrives (GPS dropout) rather than assuming they're back on
-// track — checked periodically now that there's no per-pulse reschedule
-// point to hang the check off of.
-let _cgEngineAlarm = null; // {corridorId, level, lastHeardAt, watchdog}
+// Continuous alarm — owned by this page. See chuteGuardStartEngineSync()'s
+// comment below for why this is no longer driven from chute-guard.js's
+// onWarn/onClear/onDisengage events at all.
+let _cgEngineAlarm = null; // {corridorId, level}
 function startCgEngineAlarm(corridorId, level){
   stopCgEngineAlarm();
   Audio.startAlarm(level);
-  _cgEngineAlarm = { corridorId, level, lastHeardAt:Date.now(),
-    watchdog: setInterval(()=>{ if(_cgEngineAlarm && Date.now()-_cgEngineAlarm.lastHeardAt>20000) stopCgEngineAlarm(); }, 4000) };
+  _cgEngineAlarm = { corridorId, level };
   if('vibrate' in navigator){ try{ navigator.vibrate(CG_ENGINE_VIBE[level-1]); }catch(e){} }
 }
 function updateCgEngineAlarmLevel(level){
   if(!_cgEngineAlarm) return;
   _cgEngineAlarm.level = level;
-  _cgEngineAlarm.lastHeardAt = Date.now();
   Audio.updateAlarm(level);
   if('vibrate' in navigator){ try{ navigator.vibrate(CG_ENGINE_VIBE[level-1]); }catch(e){} }
 }
 function stopCgEngineAlarm(){
-  if(_cgEngineAlarm && _cgEngineAlarm.watchdog) clearInterval(_cgEngineAlarm.watchdog);
   _cgEngineAlarm = null;
   Audio.stopAlarm();
   if('vibrate' in navigator){ try{ navigator.vibrate(0); }catch(e){} }
 }
-// Chute/Corridor Guard callbacks — the host (this file) decides HOW to
-// alert (vibration AND a fallback tone together — no longer an either/or,
-// which used to silence the tone outright on any device with the Vibration
-// API — plus a visual pulse); chute-guard.js itself only decides WHEN and
-// for how long, per its own header comment. Deliberately no spoken alert
+// Corridor Guard alarm sync loop — rewritten 2026-09-19, same reasoning as
+// ridge-quest.html's identical construct (see its own comment for the full
+// writeup): rather than driving the alarm from chute-guard.js's onWarn/
+// onClear/onDisengage EVENTS plus a bolted-on watchdog for the "no event at
+// all" case, a fixed-rate loop polls ChuteGuard.getActiveAlarm() 5x/second
+// and force-applies whatever it currently says — matching how real
+// automotive lane-departure/collision-warning systems drive their alarm
+// output from a continuously re-evaluated condition, not an event stream.
+// Nothing is edge-triggered, so nothing can be silently missed; a GPS
+// dropout self-heals via chute-guard.js's own STALE_MS staleness check
+// inside getActiveAlarm() itself. Started once, unconditionally, at module
+// load — this page has no explicit start/stop tracking gesture the way
+// ridge-quest.html does (watchPosition begins as soon as a project loads),
+// and polling an empty/unloaded ChuteGuard is a harmless no-op.
+let _cgEngineSyncTimer = setInterval(syncCgEngineAlarm, 200);
+function syncCgEngineAlarm(){
+  if(typeof ChuteGuard==="undefined") return;
+  const active = ChuteGuard.getActiveAlarm();
+  if(!active){
+    if(_cgEngineAlarm) stopCgEngineAlarm();
+    return;
+  }
+  if(!_cgEngineAlarm || _cgEngineAlarm.corridorId!==active.corridorId){
+    startCgEngineAlarm(active.corridorId, active.level);
+  }else if(active.level!==_cgEngineAlarm.level){
+    updateCgEngineAlarmLevel(active.level);
+  }
+}
+// Chute/Corridor Guard callbacks — LOGGING/visual-pulse ONLY as of
+// 2026-09-19 (see syncCgEngineAlarm() above). Deliberately no spoken alert
 // (unlike hazard warnings, which always pair speech + visual) — narration
 // would fight the rest of the tour's narration for something that fires
 // mid-run.
@@ -1277,26 +1295,14 @@ function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
       const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
-      if(!_cgEngineAlarm || _cgEngineAlarm.corridorId!==corridorId){
-        startCgEngineAlarm(corridorId, lvl);
-      }else if(lvl > _cgEngineAlarm.level){
-        updateCgEngineAlarmLevel(lvl);
-      }else{
-        _cgEngineAlarm.lastHeardAt = Date.now();
-      }
       showChuteGuardPulse();
       if(!info || info.alertCount===1 || info.levelChanged)
         HUD.log('ev-warn','⚠ off the line — outside "'+(name||'corridor')+'" (L'+lvl+')');
     },
     onClear(corridorId, name){
-      if(_cgEngineAlarm && _cgEngineAlarm.corridorId===corridorId){
-        stopCgEngineAlarm();
-        HUD.log('ev-sys','back inside "'+(name||'corridor')+'"');
-      }
+      HUD.log('ev-sys','back inside "'+(name||'corridor')+'"');
     },
-    onDisengage(corridorId, name){
-      if(_cgEngineAlarm && _cgEngineAlarm.corridorId===corridorId) stopCgEngineAlarm();
-    }
+    onDisengage(corridorId, name){}
   };
 }
 

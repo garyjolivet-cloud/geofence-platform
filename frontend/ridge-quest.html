@@ -1526,7 +1526,8 @@ document.addEventListener("visibilitychange", ()=>{
 // read as "multiple beeps" rather than one sustained tone). One oscillator
 // starts when the excursion begins and simply keeps sounding — frequency/
 // gain/vibrato ramp smoothly between levels rather than the tone ever being
-// silent — until stopCgAlarm() is called by onClear/onDisengage. A slow
+// silent — until stopCgAlarm() is called by syncCgAlarm()'s polling loop
+// finding no active alarm. A slow
 // frequency vibrato (a second LFO oscillator modulating the main one's
 // frequency) is what gives it an "alarm" character instead of a dull hum,
 // without ever introducing real silence the way discrete pulses did; it
@@ -1541,15 +1542,11 @@ const CG_TONE = [
 // so it also reads as continuous rather than a single buzz; re-issued
 // whenever the level changes, cancelled with vibrate(0) on stop.
 const CG_VIBE = [ [500,150], [300,120], [200,90] ];
-// Owned by this page, not by GPS fix timing — chute-guard.js calls onWarn
-// roughly once per GPS fix (which can be several seconds apart), but the
-// tone itself must keep sounding independent of when the next fix lands,
-// until stopCgAlarm() fires or a ~20s watchdog does (comfortably longer
-// than watchPosition's own 15s timeout) in case a GPS dropout means neither
-// onClear nor onDisengage ever arrives — treated as "lost signal, stop
-// nagging," checked every few seconds rather than tied to a per-pulse
-// reschedule (there are no pulses to reschedule any more).
-let _cgAlarm = null; // {corridorId, level, osc, gain, vibOsc, vibGain, lastHeardAt, watchdog}
+// Owned by this page, not by GPS fix timing or by chute-guard.js's own
+// onWarn/onClear/onDisengage events — see chuteGuardStartSync()'s comment
+// below for why. The tone itself just holds whatever state syncCgAlarm()
+// last set it to.
+let _cgAlarm = null; // {corridorId, level, osc, gain, vibOsc, vibGain}
 // Real bug found 2026-09 via a road-test log: chute-guard.js's onClear was
 // firing perfectly on time (confirmed — the log's CLEAR line lands on the
 // exact same tick the excess goes negative, every time), but the tone
@@ -1594,8 +1591,7 @@ function startCgAlarm(corridorId, level){
     g.gain.exponentialRampToValueAtTime(CG_TONE[0].gain, t+0.06); // quick fade-in, no click
     o.connect(g); g.connect(_cgMaster||_cgAc.destination);
     o.start(); vibOsc.start();
-    _cgAlarm = { corridorId, level:1, osc:o, gain:g, vibOsc, vibGain, lastHeardAt:Date.now(),
-      watchdog: setInterval(()=>{ if(_cgAlarm && Date.now()-_cgAlarm.lastHeardAt>20000) stopCgAlarm(); }, 4000) };
+    _cgAlarm = { corridorId, level:1, osc:o, gain:g, vibOsc, vibGain };
     _cgApplyLevel(level, 0.06);
     _cgAlarm.level = level;
     if("vibrate" in navigator){ try{ navigator.vibrate(CG_VIBE[level-1]); }catch(e){} }
@@ -1604,7 +1600,6 @@ function startCgAlarm(corridorId, level){
 function updateCgAlarmLevel(level){
   if(!_cgAlarm) return;
   _cgAlarm.level = level;
-  _cgAlarm.lastHeardAt = Date.now();
   try{ _cgApplyLevel(level, 0.15); }catch(e){} // smooth ramp between levels, never a restart/gap
   if("vibrate" in navigator){ try{ navigator.vibrate(CG_VIBE[level-1]); }catch(e){} }
 }
@@ -1624,10 +1619,52 @@ function stopCgAlarm(){
     try{ alarm.gain.disconnect(); }catch(e){}
     try{ alarm.osc.stop(); }catch(e){}       // stop() with no argument = immediately, not scheduled
     try{ alarm.vibOsc.stop(); }catch(e){}
-    if(alarm.watchdog) clearInterval(alarm.watchdog);
   }
   _cgAlarm = null;
   if("vibrate" in navigator){ try{ navigator.vibrate(0); }catch(e){} }
+}
+// Corridor Guard alarm sync loop — rewritten 2026-09-19. Every prior version
+// drove the tone from chute-guard.js's onWarn/onClear/onDisengage EVENTS:
+// start on the first onWarn, stop on onClear/onDisengage, plus a bolted-on
+// watchdog timer for the case where no event arrives at all (GPS dropout).
+// Several distinct real bugs traced back to the same shape — an event that
+// was supposed to fire exactly once silently didn't, and the tone had no
+// way to find out it should stop. Patching one more way an event could get
+// lost was not going to end.
+//
+// Real automotive lane-departure/collision-warning systems don't drive
+// their alarm output from a stream of enter/exit events either — a
+// fixed-rate control loop re-asks "should the alarm be on right now" every
+// cycle and force-applies the answer, so a lost cycle just means the very
+// next cycle (milliseconds later) gets it right again; nothing is
+// edge-triggered, so nothing can be silently missed. chute-guard.js's
+// ChuteGuard.getActiveAlarm() is that same query (see its own comment) —
+// this timer calls it 5x/second, independent of GPS fix arrival, and
+// unconditionally syncs the tone to match every time. It also folds in
+// what the old watchdog did: getActiveAlarm() itself reports "no alarm"
+// once a fix hasn't landed recently, so a GPS dropout self-heals within
+// chute-guard.js's own STALE_MS window with no separate timer needed here.
+let _cgSyncTimer = null;
+function chuteGuardStartSync(){
+  chuteGuardStopSync();
+  _cgSyncTimer = setInterval(syncCgAlarm, 200);
+}
+function chuteGuardStopSync(){
+  if(_cgSyncTimer){ clearInterval(_cgSyncTimer); _cgSyncTimer=null; }
+  stopCgAlarm();
+}
+function syncCgAlarm(){
+  if(typeof ChuteGuard==="undefined") return;
+  const active = ChuteGuard.getActiveAlarm();
+  if(!active){
+    if(_cgAlarm) stopCgAlarm();
+    return;
+  }
+  if(!_cgAlarm || _cgAlarm.corridorId!==active.corridorId){
+    startCgAlarm(active.corridorId, active.level);
+  }else if(active.level!==_cgAlarm.level){
+    updateCgAlarmLevel(active.level);
+  }
 }
 // Field-debug log — a player biking/skiing can't watch an on-screen
 // readout live, but CAN tap one button once they've stopped and have the
@@ -1655,36 +1692,39 @@ function exportCgLog(){
 // chuteGuardCallbacks() documents) — a continuous vibrate+tone alarm, plus
 // rqToast so it's visible too (this page has no map-edge visual pulse the
 // way the Tour Player does).
+//
+// LOGGING/TOAST ONLY as of 2026-09-19 — see chuteGuardStartSync()'s comment
+// above for why the actual alarm audio moved to a polled getActiveAlarm()
+// loop instead of being driven from these events. Toast text is still fine
+// to tie to these events (a "back on track" message exactly when a genuine
+// return happens is exactly what it should say), it just no longer decides
+// whether the tone itself is sounding.
+let _cgLastToastLevel = 0;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
       const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
       cgLog("WARN \""+(name||"corridor")+"\" L"+lvl+" +"+((info&&info.excessM)||0).toFixed(1)+"m alertCount="+(info&&info.alertCount));
-      if(!_cgAlarm || _cgAlarm.corridorId!==corridorId){
-        startCgAlarm(corridorId, lvl);
+      if(info && info.alertCount===1){
         rqToast("⚠ off the line — outside \""+(name||"corridor")+"\"");
-      }else if(lvl > _cgAlarm.level){
-        updateCgAlarmLevel(lvl);
+        _cgLastToastLevel = lvl;
+      }else if(lvl > _cgLastToastLevel){
         rqToast("⚠⚠ still off the line — \""+(name||"corridor")+"\"");
-      }else{
-        _cgAlarm.lastHeardAt = Date.now();
+        _cgLastToastLevel = lvl;
       }
     },
     onClear(corridorId, name){
       cgLog("CLEAR \""+(name||"corridor")+"\"");
-      if(_cgAlarm && _cgAlarm.corridorId===corridorId){
-        stopCgAlarm();
-        rqToast("✓ back on \""+(name||"corridor")+"\"");
-      }
+      _cgLastToastLevel = 0;
+      rqToast("✓ back on \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId, name, info){
       cgLog("DISENGAGE \""+(name||"corridor")+"\" max+"+((info&&info.maxExcessM)||0).toFixed(1)+"m");
+      _cgLastToastLevel = 0;
       // chute-guard.js concluded this is a deliberate departure (steady
-      // one-directional move away, not a correction attempt) — stop the
-      // alarm the same way onClear does, but without the "back on track"
-      // framing, since they aren't back on track, they've just shown
-      // they're headed somewhere else on purpose.
-      if(_cgAlarm && _cgAlarm.corridorId===corridorId) stopCgAlarm();
+      // one-directional move away, not a correction attempt) — no toast at
+      // all here, deliberately, since they aren't "back on track," they've
+      // just shown they're headed somewhere else on purpose.
     },
     // On-screen diagnostic (same idea as field-recorder.html's
     // #proxDebugText) AND the field-debug log (cgLog/exportCgLog, see their
@@ -1933,12 +1973,11 @@ function renderHome(){
       statusEl.textContent="";
       activityBtns.forEach(b=>b.style.opacity="1");
       releaseWakeLock();
-      // Bug fixed 2026-09: stopping tracking mid-alarm never silenced it —
-      // Quest.stop() tears down watchPosition, so no more onWarn/onClear
-      // fixes would ever arrive to naturally clear it, leaving the tone
-      // playing for up to the full 20s watchdog window (or forever, if the
-      // page stayed open with the tab backgrounded and its timers throttled).
-      stopCgAlarm();
+      // Stopping tracking tears down watchPosition, so no more GPS fixes
+      // (and therefore no more chute-guard.js ticks) will ever arrive —
+      // chuteGuardStopSync() stops the sync loop itself, not just the tone,
+      // so nothing keeps polling a corridor set that's about to be gone.
+      chuteGuardStopSync();
     } else {
       statusEl.textContent="waiting for GPS…";
       coverageEl.textContent="";
@@ -1948,6 +1987,7 @@ function renderHome(){
       acquireWakeLock();       // and the user-gesture context Wake Lock needs on some browsers — see its own comment
       const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity, onCoverage);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); releaseWakeLock(); return; }
+      chuteGuardStartSync();
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
       activityBtns.forEach(b=>b.style.opacity="0.4");
     }

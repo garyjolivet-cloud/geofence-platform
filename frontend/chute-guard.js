@@ -80,7 +80,8 @@
     SAMPLE_STEP_M: 20,           // corridor resampling step for the coverage gate
     NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
     MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while the player is somewhere else entirely
-    ACCURACY_CAP_M: 30           // ignore fixes worse than this
+    ACCURACY_CAP_M: 30,          // ignore fixes worse than this
+    STALE_MS: 5000               // getActiveAlarm() treats state older than this as untrustworthy (no fix has landed recently) and reports "no alarm," regardless of whatever level/committed state a corridor was last left in — see getActiveAlarm()'s own comment
   };
 
   const EARTH_R = 6371000;
@@ -146,6 +147,7 @@
   let corridors=[];             // [{id,name,sig,path,widthM,activityType,runType,minSpeed,samples,covered:Set<int>}]
   let stateByCorridor=new Map();
   let cb={};
+  let lastTickAtWall=0;         // real Date.now() at the last tick() call — see getActiveAlarm()
 
   function freshState(){
     return {
@@ -193,7 +195,7 @@
     }));
   }
 
-  function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; }
+  function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; }
 
   function emitWarn(c, st, now, excessM){
     st.alertCount++;
@@ -213,6 +215,7 @@
   // TravelHeading's other consumers).
   function tick(fix, headingDeg){
     if(!corridors.length || fix==null || (fix.acc!=null && fix.acc>TUNING.ACCURACY_CAP_M)) return;
+    lastTickAtWall = Date.now(); // real wall clock, independent of fix.t — see getActiveAlarm()
     const latLon=[fix.lat, fix.lon];
     const now = fix.t || Date.now();
 
@@ -409,6 +412,51 @@
     }
   }
 
+  // Pull-based, level-triggered alternative to the onWarn/onClear/onDisengage
+  // event stream above. Added 2026-09-19 after a string of field/Test-Mode
+  // reports ("tone never turns off") that each traced back to the SAME root
+  // shape: an edge-triggered event (onClear/onDisengage) that was supposed
+  // to fire exactly once, silently didn't, and the host's alarm was left
+  // with no way to notice. Three separate fixes closed three separate ways
+  // that could happen (an engaged-gate flicker, wandering out of relevant
+  // range, and a GPS/sim tick gap defeating the time-based commit checks)
+  // — but the pattern kept recurring because *any* event-sourced design has
+  // more ways to lose an event than a reviewer can enumerate in advance.
+  //
+  // Real automotive lane-departure/collision-warning systems don't drive
+  // their alarm output from a stream of enter/exit events at all — they run
+  // a fixed-rate control loop that re-derives "should the alarm be on right
+  // now" from the latest sensor state on every cycle, and force-applies
+  // that answer unconditionally. There is nothing to "miss," because
+  // nothing is edge-triggered: a lost cycle just means the very next cycle
+  // (milliseconds later) re-asks the same question from scratch and gets it
+  // right again. Stale sensor input is its own independent fail-safe check,
+  // not a special case bolted onto the alarm logic.
+  //
+  // getActiveAlarm() is that same shape here: a stateless (from the
+  // caller's perspective) query of "what should be sounding right now,"
+  // meant to be called on a host-owned fixed-rate timer (every ~150-250ms —
+  // far more often than GPS/sim fixes arrive) and have its answer applied
+  // to the alarm UNCONDITIONALLY every time, not just on a transition. If a
+  // fix hasn't landed inside STALE_MS, the answer is always "no alarm,"
+  // regardless of whatever level/committed state a corridor was last left
+  // in — this is what makes a stalled walk / GPS dropout self-heal within
+  // STALE_MS instead of depending on a separate watchdog timer bolted onto
+  // each host (the pattern this replaces). onWarn/onClear/onDisengage still
+  // fire as before, for hosts that only want log/toast text — they are no
+  // longer the source of truth for whether the alarm itself is sounding.
+  function getActiveAlarm(){
+    if(!lastTickAtWall || (Date.now()-lastTickAtWall) > TUNING.STALE_MS) return null;
+    let best=null;
+    for(const c of corridors){
+      const st = stateByCorridor.get(c.id);
+      if(st && st.level>0 && !st.committed){
+        if(!best || st.level>best.level) best = { corridorId:c.id, name:c.name, level:st.level, maxExcessM:st.maxExcessM };
+      }
+    }
+    return best;
+  }
+
   // Escalation level from the more urgent of the two ladders — how long
   // they've been outside, or how far outside they've gotten. Used both for
   // the very first alert (msOut=0, so only the distance ladder can bite —
@@ -421,5 +469,5 @@
     return Math.min(lvl, TUNING.MAX_LEVEL);
   }
 
-  window.ChuteGuard = { load, tick, unload, TUNING };
+  window.ChuteGuard = { load, tick, unload, getActiveAlarm, TUNING };
 })();

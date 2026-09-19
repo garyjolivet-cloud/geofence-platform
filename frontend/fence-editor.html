@@ -6904,7 +6904,7 @@ const CG_TEST_TONE = [
 // pulses (an earlier version was, on explicit field feedback it read as
 // "multiple beeps" rather than one sustained tone) — same design as the
 // other three surfaces.
-let _cgTestAlarm = null; // {osc, gain, vibOsc, vibGain, lastHeardAt, watchdog}
+let _cgTestAlarm = null; // {osc, gain, vibOsc, vibGain}
 function chuteGuardStartTone(level){
   if(!simSoundOn || !SimVoice.ctx){
     simLogEv("sev-sys","START_TONE skipped (simSoundOn="+simSoundOn+" SimVoice.ctx="+(!!SimVoice.ctx)+")");
@@ -6925,26 +6925,7 @@ function chuteGuardStartTone(level){
     g.gain.exponentialRampToValueAtTime(CG_TEST_TONE[0].gain,t+0.06);
     o.connect(g); g.connect(ctx.destination);
     o.start(); vibOsc.start();
-    // Field bug found 2026-09-19 (real Test Mode report: had to Exit Test to
-    // kill the tone, confirmed via a log gap — the simulated walk had
-    // paused, so feedSim()/ChuteGuard.tick() simply stopped being called at
-    // all): chute-guard.js's "unconditional" 15s give-up cap is only
-    // evaluated INSIDE tick(), so it can never fire if fixes stop arriving
-    // entirely (a paused walk here; a real GPS dropout or the phone going
-    // stationary long enough for watchPosition to throttle, in the field).
-    // ridge-quest.html already carries exactly this watchdog for the same
-    // reason (see its _cgAlarm comment) — ported verbatim: if no
-    // onWarn/onClear/onDisengage heartbeat lands for 20s (comfortably
-    // longer than a stalled sim or watchPosition's own 15s timeout), stop
-    // regardless of whether chute-guard.js itself ever got another tick to
-    // evaluate its own cap on.
-    _cgTestAlarm = { osc:o, gain:g, vibOsc, vibGain, lastHeardAt:Date.now(),
-      watchdog: setInterval(()=>{
-        if(_cgTestAlarm && Date.now()-_cgTestAlarm.lastHeardAt>20000){
-          simLogEv("sev-sys","WATCHDOG: no chuteGuard heartbeat for 20s — forcing tone off");
-          chuteGuardStopTone();
-        }
-      }, 4000) };
+    _cgTestAlarm = { osc:o, gain:g, vibOsc, vibGain };
     chuteGuardUpdateTone(level, 0.06);
     // Temporary diagnostic (see chuteGuardStopTone's matching log line) —
     // lets a "still playing" report be checked against exactly how many
@@ -6964,7 +6945,6 @@ function _cgTestRamp(param, target, t, rampS){
 }
 function chuteGuardUpdateTone(level, rampS){
   if(!_cgTestAlarm || !SimVoice.ctx) return;
-  _cgTestAlarm.lastHeardAt = Date.now(); // any real onWarn heartbeat resets the watchdog above
   const spec = CG_TEST_TONE[Math.max(0, Math.min(CG_TEST_TONE.length-1, ((level|0)||1)-1))];
   const t = SimVoice.ctx.currentTime, r = rampS!=null?rampS:0.15;
   try{
@@ -6987,7 +6967,6 @@ function chuteGuardStopTone(){
     try{ alarm.gain.disconnect(); }catch(e){ disconnectErr=e; }
     try{ alarm.osc.stop(); }catch(e){ oscErr=e; }       // stop() with no argument = immediately, not scheduled
     try{ alarm.vibOsc.stop(); }catch(e){ vibErr=e; }
-    if(alarm.watchdog) clearInterval(alarm.watchdog);
     // Temporary diagnostic (field report: tone reportedly kept sounding
     // even after this ran) — confirms in the exportable #simLog whether
     // this function actually executed and whether any of the three calls
@@ -6997,33 +6976,65 @@ function chuteGuardStopTone(){
   }
   _cgTestAlarm = null;
 }
-// Chute/Corridor Guard callbacks — same "log() instead of a visitor-facing
-// banner, desktop authoring tool" reasoning as checkHazardAhead() above.
+// Corridor Guard alarm sync loop — rewritten 2026-09-19. Every prior version
+// of this file drove the tone from chute-guard.js's onWarn/onClear/
+// onDisengage EVENTS: start on the first onWarn, stop on onClear/onDisengage.
+// Four separate real bugs traced back to this same shape — an event that was
+// supposed to fire exactly once silently didn't (an engaged-gate flicker, a
+// walk past maxRelevantM, a stalled sim defeating the time-based commit
+// checks), and the tone was left with no way to find out it should stop.
+// Patching a 4th, 5th, Nth way an event could get lost was not going to end.
+//
+// Real automotive lane-departure/collision-warning systems don't drive their
+// alarm output from a stream of enter/exit events either — a fixed-rate
+// control loop re-asks "should the alarm be on right now" every cycle and
+// force-applies the answer, so a lost cycle just means the very next cycle
+// (milliseconds later) gets it right again; nothing is edge-triggered, so
+// nothing can be silently missed. chute-guard.js's ChuteGuard.getActiveAlarm()
+// is that same query — see its own comment for the full reasoning. This
+// timer calls it 5x/second (independent of how often feedSim()/tick() itself
+// runs) and unconditionally syncs the tone to match, every time.
+let _cgSyncTimer = null;
+function chuteGuardStartSync(){
+  chuteGuardStopSync();
+  _cgSyncTimer = setInterval(syncCgTestAlarm, 200);
+}
+function chuteGuardStopSync(){
+  if(_cgSyncTimer){ clearInterval(_cgSyncTimer); _cgSyncTimer=null; }
+  chuteGuardStopTone();
+  _cgTestAlarmCorridorId = null;
+}
+function syncCgTestAlarm(){
+  if(typeof ChuteGuard==="undefined") return;
+  const active = ChuteGuard.getActiveAlarm();
+  if(!active){
+    if(_cgTestAlarmCorridorId!=null){ _cgTestAlarmCorridorId=null; chuteGuardStopTone(); }
+    return;
+  }
+  if(_cgTestAlarmCorridorId!==active.corridorId){
+    _cgTestAlarmCorridorId = active.corridorId;
+    chuteGuardStartTone(active.level);
+  }else{
+    chuteGuardUpdateTone(active.level);
+  }
+}
+// Chute/Corridor Guard callbacks — LOGGING ONLY as of 2026-09-19 (see
+// chuteGuardStartSync's comment above for why the tone itself moved to a
+// polled getActiveAlarm() loop instead of being driven from these events).
 // Still no TTS/spoken alert — Corridor Guard is never spoken, see
-// chute-guard.js's own header comment — but now plays a continuous tone
-// (chuteGuardStartTone/Update/Stop above) so a real excursion is actually
-// audible while testing, not just visible in the #simLog panel.
+// chute-guard.js's own header comment.
 let _cgTestAlarmCorridorId = null;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId,name,info){
-      const lvl = (info&&info.level)||1;
-      if(_cgTestAlarmCorridorId!==corridorId){
-        _cgTestAlarmCorridorId = corridorId;
-        chuteGuardStartTone(lvl);
-      }else{
-        chuteGuardUpdateTone(lvl);
-      }
       if(!info || info.alertCount===1 || info.levelChanged)
         simLogEv("sev-hazard","off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
     },
     onClear(corridorId,name){
-      if(_cgTestAlarmCorridorId===corridorId){ _cgTestAlarmCorridorId=null; chuteGuardStopTone(); }
       simLogEv("sev-sys","back inside \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId,name,info){
-      if(_cgTestAlarmCorridorId===corridorId){ _cgTestAlarmCorridorId=null; chuteGuardStopTone(); }
       simLogEv("sev-sys","left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
     },
     // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
@@ -7382,6 +7393,7 @@ function enterTestMode(){
   simBundle=editorToSimBundle();
   initTileArt(simBundle);
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
+  chuteGuardStartSync();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(simBundle.globalCodeObjects||[], simPipelineCallbacks());
   // forceReset:true — Test Mode always starts every entry from a clean
@@ -7457,7 +7469,7 @@ function exitTestMode(){
   // guarantee (see TourState.init's forceReset comment in enterTestMode()).
   // unload() forces enterTestMode()'s next ChuteGuard.load() to build
   // genuinely fresh state instead of reusing anything.
-  chuteGuardStopTone(); _cgTestAlarmCorridorId=null;
+  chuteGuardStopSync(); // stops the sync timer itself too, not just the tone
   if(typeof ChuteGuard!=="undefined") ChuteGuard.unload();
   if(simAmbientTimer){clearInterval(simAmbientTimer);simAmbientTimer=null;}
   Object.values(simAmbientMarkers).forEach(mk=>mk.remove());

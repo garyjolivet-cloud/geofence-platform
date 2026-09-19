@@ -262,7 +262,7 @@ const Audio = {
   // used to be `if('vibrate' in navigator) vibrate() else rumble()`, so on
   // any Chromium desktop browser this tone never played at all. Fixed at
   // the call site to fire both, always.
-  _alarm: null, // {osc, gain, vibOsc, vibGain, lastHeardAt, watchdog}
+  _alarm: null, // {osc, gain, vibOsc, vibGain}
   startAlarm(level){
     if(!this.on) return;
     this.stopAlarm();
@@ -279,14 +279,7 @@ const Audio = {
       g.gain.exponentialRampToValueAtTime(CG_SIM_TONE[0].gain,t+0.06);
       o.connect(g); g.connect(this.ctx.destination);
       o.start(); vibOsc.start();
-      // Field bug found 2026-09-19 (fence-editor.html Test Mode report, same
-      // shared chute-guard.js): the "unconditional" 15s give-up cap only
-      // gets evaluated inside tick(), so it never fires if fixes stop
-      // arriving entirely (a paused walk, or a real GPS dropout). Ported
-      // ridge-quest.html's watchdog verbatim: force-stop after 20s with no
-      // onWarn/onClear/onDisengage heartbeat, independent of ticks.
-      this._alarm = { osc:o, gain:g, vibOsc, vibGain, lastHeardAt:Date.now(),
-        watchdog: setInterval(()=>{ if(this._alarm && Date.now()-this._alarm.lastHeardAt>20000) this.stopAlarm(); }, 4000) };
+      this._alarm = { osc:o, gain:g, vibOsc, vibGain };
       this.updateAlarm(level, 0.06);
     }catch(e){}
   },
@@ -302,7 +295,6 @@ const Audio = {
   },
   updateAlarm(level, rampS){
     if(!this._alarm) return;
-    this._alarm.lastHeardAt = Date.now(); // any real onWarn heartbeat resets the watchdog above
     const spec = CG_SIM_TONE[Math.max(0, Math.min(CG_SIM_TONE.length-1, ((level|0)||1)-1))];
     const t = this.ctx.currentTime, r = rampS!=null?rampS:0.15;
     try{
@@ -324,7 +316,6 @@ const Audio = {
       try{ alarm.gain.disconnect(); }catch(e){}
       try{ alarm.osc.stop(); }catch(e){}       // stop() with no argument = immediately, not scheduled
       try{ alarm.vibOsc.stop(); }catch(e){}
-      if(alarm.watchdog) clearInterval(alarm.watchdog);
     }
     this._alarm = null;
   },
@@ -1179,27 +1170,41 @@ function checkHazardAhead(p, headingDeg, speedMps, nowMs){
 // per a 20s cooldown, so the log line is throttled here to first-alert/
 // level-change only — an unthrottled log would flood during a held excursion.
 let _cgSimAlarmCorridorId = null;
+// Corridor Guard alarm sync loop — rewritten 2026-09-19, same reasoning as
+// ridge-quest.html's identical construct (see its own comment for the full
+// writeup): a fixed-rate loop polls ChuteGuard.getActiveAlarm() 5x/second
+// and force-applies whatever it currently says, instead of driving the
+// alarm from onWarn/onClear/onDisengage events. Started once,
+// unconditionally, at module load — this simulator has no explicit
+// start/stop tracking gesture, and polling an empty/unloaded ChuteGuard is
+// a harmless no-op.
+let _cgSimSyncTimer = setInterval(syncCgSimAlarm, 200);
+function syncCgSimAlarm(){
+  if(typeof ChuteGuard==="undefined") return;
+  const active = ChuteGuard.getActiveAlarm();
+  if(!active){
+    if(_cgSimAlarmCorridorId!=null){ _cgSimAlarmCorridorId=null; Audio.stopAlarm(); }
+    return;
+  }
+  if(_cgSimAlarmCorridorId!==active.corridorId){
+    _cgSimAlarmCorridorId = active.corridorId;
+    if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
+    Audio.startAlarm(active.level);
+  }else{
+    Audio.updateAlarm(active.level);
+  }
+}
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
-      const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
-      if(_cgSimAlarmCorridorId!==corridorId){
-        _cgSimAlarmCorridorId = corridorId;
-        if('vibrate' in navigator){ try{ navigator.vibrate(110); }catch(e){} }
-        Audio.startAlarm(lvl);
-      }else{
-        Audio.updateAlarm(lvl);
-      }
       if(!info || info.alertCount===1 || info.levelChanged)
         log("ev-hazard", "off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
     },
     onClear(corridorId, name){
-      if(_cgSimAlarmCorridorId===corridorId){ _cgSimAlarmCorridorId=null; Audio.stopAlarm(); }
       log("ev-sys", "back inside \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId, name, info){
-      if(_cgSimAlarmCorridorId===corridorId){ _cgSimAlarmCorridorId=null; Audio.stopAlarm(); }
       log("ev-sys", "left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
     },
     // Temporary-use diagnostic (see chute-guard.js's own comment) — shows

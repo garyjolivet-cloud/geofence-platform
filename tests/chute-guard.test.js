@@ -577,5 +577,76 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(events.clear.length === 0, "this is not a genuine return inside, so onClear never fires");
 })();
 
+// ============================================================
+// 18. getActiveAlarm() — the pull-based, level-triggered query added
+// 2026-09-19 to replace event-sourced host alarm-driving entirely. Meant to
+// be polled on a host-owned fixed-rate timer and applied unconditionally,
+// so it must always answer correctly from CURRENT state alone, with no
+// dependency on which events did or didn't fire to get there.
+// ============================================================
+(function testGetActiveAlarmBasic(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  cg.load([corridor], {});
+  assert(cg.getActiveAlarm() === null, "no alarm before any tick at all");
+
+  const t0 = 1700000000000;
+  let forwardM = 0, t = 0;
+  function tick(lateralM){
+    const pos = trackPoint(forwardM, lateralM);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: t0 + t }, 0);
+    forwardM += 1.5; t += 1000;
+  }
+  for (let i = 0; i <= 50; i++) tick(0); // cover phase
+  assert(cg.getActiveAlarm() === null, "no alarm while still inside");
+
+  tick(14); // excess = 14-5.5 = 8.5m -> first alert
+  const active1 = cg.getActiveAlarm();
+  assert(active1 && active1.corridorId === "c1" && active1.level >= 1, "getActiveAlarm reports the corridor once outside, with a real level");
+
+  tick(0); // back inside
+  assert(cg.getActiveAlarm() === null, "no alarm again immediately after a genuine return inside — no separate onClear needed for this to be correct");
+})();
+
+(function testGetActiveAlarmIgnoresCommitted(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  cg.load([corridor], {});
+  // steady one-directional growth -> commits (same profile as testCommittedExit above)
+  const steps = excursionSteps({ coverM: 70, driftSeconds: 25, lateralPerSec: 1 });
+  steps.forEach(s => {
+    const pos = trackPoint(s.forwardM, s.lateralM);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: s.acc, speed: s.speed, t: 1700000000000 + s.t }, s.headingDeg);
+  });
+  assert(cg.getActiveAlarm() === null, "getActiveAlarm reports no alarm once the excursion has committed (deliberate departure), even though excessM is still large and positive");
+})();
+
+(function testGetActiveAlarmStaleness(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  cg.load([corridor], {});
+  let forwardM = 0, t = 0;
+  function tick(lateralM){
+    const pos = trackPoint(forwardM, lateralM);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: 1700000000000 + t }, 0);
+    forwardM += 1.5; t += 1000;
+  }
+  for (let i = 0; i <= 50; i++) tick(0);
+  tick(14); // excess=8.5m -> active alarm
+  assert(cg.getActiveAlarm() !== null, "sanity check: alarm is active right after the tick that triggered it");
+
+  // Real automotive-style fail-safe: even a genuinely still-outside, still-
+  // active (not committed) excursion must stop reporting an alarm once no
+  // fix has landed for STALE_MS of REAL wall-clock time — this is the exact
+  // "sim/GPS stalls mid-excursion" scenario that used to require a separate
+  // per-host watchdog timer (now removed) to recover from at all.
+  const origStale = cg.TUNING.STALE_MS;
+  cg.TUNING.STALE_MS = 30; // shrink for a fast, real (not simulated) wait
+  const spinUntil = Date.now() + 60;
+  while (Date.now() < spinUntil) { /* busy-wait past STALE_MS in real time, no more ticks fed */ }
+  assert(cg.getActiveAlarm() === null, "getActiveAlarm reports no alarm once real wall-clock time since the last tick exceeds STALE_MS, regardless of internal excursion state");
+  cg.TUNING.STALE_MS = origStale;
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
