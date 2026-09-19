@@ -1610,17 +1610,21 @@ function updateCgAlarmLevel(level){
 }
 function stopCgAlarm(){
   if(_cgAlarm){
-    try{
-      const t=_cgAc.currentTime;
-      // Cancel + re-anchor first (see _cgRamp's comment above) so a
-      // still-pending escalation ramp can't outlive this stop.
-      _cgAlarm.gain.gain.cancelScheduledValues(t);
-      _cgAlarm.gain.gain.setValueAtTime(_cgAlarm.gain.gain.value, t);
-      _cgAlarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.05);
-      _cgAlarm.osc.stop(t+0.06);
-      _cgAlarm.vibOsc.stop(t+0.06);
-    }catch(e){}
-    if(_cgAlarm.watchdog) clearInterval(_cgAlarm.watchdog);
+    const alarm = _cgAlarm; // capture before nulling below
+    // Field bug found 2026-09 (road-test log): cancelScheduledValues +
+    // a *scheduled future* stop() still wasn't reliably silencing the
+    // tone on a real device — that approach depends on the browser
+    // actually honoring a future timestamp, which is an assumption, not
+    // a guarantee, and something about real-device conditions (screen
+    // dimming/backgrounding mid-drive, most likely) was violating it.
+    // disconnect() is unconditional: a node severed from the audio graph
+    // produces no output from this exact synchronous instant, regardless
+    // of any pending automation curve or scheduled stop time. This is the
+    // one guarantee that doesn't rely on anything happening "later."
+    try{ alarm.gain.disconnect(); }catch(e){}
+    try{ alarm.osc.stop(); }catch(e){}       // stop() with no argument = immediately, not scheduled
+    try{ alarm.vibOsc.stop(); }catch(e){}
+    if(alarm.watchdog) clearInterval(alarm.watchdog);
   }
   _cgAlarm = null;
   if("vibrate" in navigator){ try{ navigator.vibrate(0); }catch(e){} }

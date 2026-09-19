@@ -990,14 +990,18 @@ const Audio = {
   },
   stopAlarm(){
     if(this._alarm){
-      try{
-        const t=this._alarm.ac.currentTime;
-        this._alarm.gain.gain.cancelScheduledValues(t);
-        this._alarm.gain.gain.setValueAtTime(this._alarm.gain.gain.value, t);
-        this._alarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.05);
-        this._alarm.osc.stop(t+0.06);
-        this._alarm.vibOsc.stop(t+0.06);
-      }catch(e){}
+      const alarm = this._alarm;
+      // Field bug found 2026-09 (road-test log): cancelScheduledValues + a
+      // *scheduled future* stop() still wasn't reliably silencing the tone
+      // on a real device — that depends on the browser actually honoring a
+      // future timestamp, which real-device conditions (screen dimming/
+      // backgrounding mid-drive, most likely) were violating. disconnect()
+      // is unconditional: a node severed from the graph produces no output
+      // from this exact synchronous instant, no matter what automation or
+      // scheduled stop is pending.
+      try{ alarm.gain.disconnect(); }catch(e){}
+      try{ alarm.osc.stop(); }catch(e){}       // stop() with no argument = immediately, not scheduled
+      try{ alarm.vibOsc.stop(); }catch(e){}
     }
     this._alarm = null;
   },

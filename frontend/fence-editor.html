@@ -6948,15 +6948,17 @@ function chuteGuardUpdateTone(level, rampS){
   }catch(e){}
 }
 function chuteGuardStopTone(){
-  if(_cgTestAlarm && SimVoice.ctx){
-    try{
-      const t=SimVoice.ctx.currentTime;
-      _cgTestAlarm.gain.gain.cancelScheduledValues(t);
-      _cgTestAlarm.gain.gain.setValueAtTime(_cgTestAlarm.gain.gain.value, t);
-      _cgTestAlarm.gain.gain.exponentialRampToValueAtTime(0.0001, t+0.05);
-      _cgTestAlarm.osc.stop(t+0.06);
-      _cgTestAlarm.vibOsc.stop(t+0.06);
-    }catch(e){}
+  if(_cgTestAlarm){
+    const alarm = _cgTestAlarm;
+    // Field bug found 2026-09 (road-test log, ridge-quest.html):
+    // cancelScheduledValues + a *scheduled future* stop() still wasn't
+    // reliably silencing the tone on a real device. disconnect() is
+    // unconditional: a node severed from the graph produces no output
+    // from this exact synchronous instant, no matter what automation or
+    // scheduled stop is pending.
+    try{ alarm.gain.disconnect(); }catch(e){}
+    try{ alarm.osc.stop(); }catch(e){}       // stop() with no argument = immediately, not scheduled
+    try{ alarm.vibOsc.stop(); }catch(e){}
   }
   _cgTestAlarm = null;
 }
