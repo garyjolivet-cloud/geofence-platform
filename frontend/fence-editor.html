@@ -6530,7 +6530,30 @@ let simCorridorLabels=[]; // name + diamond HTML markers
 // caused map.removeSource("runLines") to throw on re-entering Test Mode,
 // since a layer TileFog actually created was still attached) plus "-hit",
 // this file's own extra invisible click-target layer.
-const SIM_RUN_LAYERS=TileFog.CORRIDOR_LAYER_SUFFIXES.map(suf=>"runLines"+suf).concat(["runLines-hit"]);
+const SIM_RUN_LAYERS=TileFog.CORRIDOR_LAYER_SUFFIXES.map(suf=>"runLines"+suf).concat(["runLines-hit","runLines-edge"]);
+// Crisp trigger-boundary lines, Test Mode only — see chute-guard.js's own
+// edgeM = halfW + OUTSIDE_BUFFER_M. The piste-glow (fixed pixel width) and
+// even the true-width tint band are still an area, not a line a player can
+// line up against pixel-for-pixel; this draws the EXACT distance chute-guard
+// actually triggers on, so "which side of the line" is unambiguous. One
+// straight offset segment per input segment (no vertex miter/bevel join —
+// unnecessary for the mostly-straight corridors this is diagnosing, and a
+// wrong miter would be worse than a small visual gap at a bend).
+function _corridorEdgeSegments(pathLatLon, edgeM, side){
+  const ref=pathLatLon[0];
+  const mPerLon=111320*Math.cos(ref[0]*Math.PI/180);
+  const toXY=p=>({x:(p[1]-ref[1])*mPerLon, y:(p[0]-ref[0])*111320});
+  const toLL=pt=>[ref[1]+pt.x/mPerLon, ref[0]+pt.y/111320]; // [lon,lat] for GeoJSON
+  const lines=[];
+  for(let i=1;i<pathLatLon.length;i++){
+    const A=toXY(pathLatLon[i-1]), B=toXY(pathLatLon[i]);
+    const dx=B.x-A.x, dy=B.y-A.y, len=Math.hypot(dx,dy);
+    if(len===0) continue;
+    const ox=-dy/len*edgeM*side, oy=dx/len*edgeM*side;
+    lines.push([toLL({x:A.x+ox,y:A.y+oy}), toLL({x:B.x+ox,y:B.y+oy})]);
+  }
+  return lines;
+}
 const SIM_RUN_STYLE_DIFF={
   "green":        {col:"#57e06f",halo:"#22c246",tier:""},
   "blue":         {col:"#6bb6ff",halo:"#2f86ff",tier:""},
@@ -6611,6 +6634,7 @@ function clearSimCorridorLabels(){
   map.off("click","runLines-hit",_simRunClick);
   map.off("mouseenter","runLines-hit",_simRunEnter);
   map.off("mouseleave","runLines-hit",_simRunLeave);
+  if(map.getSource("runLinesEdge")) map.removeSource("runLinesEdge");
 }
 function refreshSimCorridorLabels(){
   clearSimCorridorLabels();
@@ -6651,6 +6675,25 @@ function refreshSimCorridorLabels(){
   TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",trueWidthOpacity:0.35});
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
     paint:{"line-color":"#000","line-opacity":0,"line-width":14}});
+  // Trigger-boundary lines (Test Mode only, per user request) — exact
+  // edgeM = halfW + OUTSIDE_BUFFER_M distance on each side of centerline,
+  // the literal position chute-guard.js's tick() decides tone on/off at.
+  const bufferM=(window.ChuteGuard && ChuteGuard.TUNING && ChuteGuard.TUNING.OUTSIDE_BUFFER_M!=null) ? ChuteGuard.TUNING.OUTSIDE_BUFFER_M : 0.5;
+  const edgeFeats=[];
+  cors.forEach(c=>{
+    const halfW=(c.widthM>0?c.widthM:10)/2, edgeM=halfW+bufferM;
+    [1,-1].forEach(side=>{
+      _corridorEdgeSegments(c.path,edgeM,side).forEach(seg=>{
+        edgeFeats.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:seg}});
+      });
+    });
+  });
+  if(edgeFeats.length){
+    map.addSource("runLinesEdge",{type:"geojson",data:{type:"FeatureCollection",features:edgeFeats}});
+    map.addLayer({id:"runLines-edge",type:"line",source:"runLinesEdge",
+      layout:{"line-cap":"butt","line-join":"round"},
+      paint:{"line-color":"#ff2fd0","line-width":1.6,"line-opacity":0.95,"line-dasharray":[2,1.6]}});
+  }
   _simRunCors=cors;
   _rebuildSimCorridorMarkers();
   map.on("moveend",_simRunMoveEnd);
