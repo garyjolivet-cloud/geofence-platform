@@ -6906,7 +6906,10 @@ const CG_TEST_TONE = [
 // other three surfaces.
 let _cgTestAlarm = null; // {osc, gain, vibOsc, vibGain}
 function chuteGuardStartTone(level){
-  if(!simSoundOn || !SimVoice.ctx) return;
+  if(!simSoundOn || !SimVoice.ctx){
+    simLogEv("sev-sys","START_TONE skipped (simSoundOn="+simSoundOn+" SimVoice.ctx="+(!!SimVoice.ctx)+")");
+    return;
+  }
   chuteGuardStopTone();
   try{
     const ctx=SimVoice.ctx;
@@ -6924,6 +6927,10 @@ function chuteGuardStartTone(level){
     o.start(); vibOsc.start();
     _cgTestAlarm = { osc:o, gain:g, vibOsc, vibGain };
     chuteGuardUpdateTone(level, 0.06);
+    // Temporary diagnostic (see chuteGuardStopTone's matching log line) —
+    // lets a "still playing" report be checked against exactly how many
+    // START_TONE/STOP_TONE pairs actually happened and in what order.
+    simLogEv("sev-sys","START_TONE fired ctxState="+ctx.state);
   }catch(e){}
 }
 // Real bug found 2026-09 via a road-test log (ridge-quest.html): every ramp
@@ -6956,9 +6963,16 @@ function chuteGuardStopTone(){
     // unconditional: a node severed from the graph produces no output
     // from this exact synchronous instant, no matter what automation or
     // scheduled stop is pending.
-    try{ alarm.gain.disconnect(); }catch(e){}
-    try{ alarm.osc.stop(); }catch(e){}       // stop() with no argument = immediately, not scheduled
-    try{ alarm.vibOsc.stop(); }catch(e){}
+    let disconnectErr=null, oscErr=null, vibErr=null;
+    try{ alarm.gain.disconnect(); }catch(e){ disconnectErr=e; }
+    try{ alarm.osc.stop(); }catch(e){ oscErr=e; }       // stop() with no argument = immediately, not scheduled
+    try{ alarm.vibOsc.stop(); }catch(e){ vibErr=e; }
+    // Temporary diagnostic (field report: tone reportedly kept sounding
+    // even after this ran) — confirms in the exportable #simLog whether
+    // this function actually executed and whether any of the three calls
+    // above threw, instead of that failing silently inside a try/catch.
+    simLogEv("sev-sys","STOP_TONE fired"+(disconnectErr?" disconnect()FAILED:"+disconnectErr.message:" disconnect()ok")+
+      (oscErr?" osc.stop()FAILED:"+oscErr.message:" osc.stop()ok")+(vibErr?" vibOsc.stop()FAILED:"+vibErr.message:" vibOsc.stop()ok"));
   }
   _cgTestAlarm = null;
 }
