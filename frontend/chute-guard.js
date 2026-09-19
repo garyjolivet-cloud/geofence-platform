@@ -77,7 +77,9 @@
     ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
     COMMIT_STREAK_MS: 4000,      // excess growing continuously (no intervening narrowing) for at least this long...
     COMMIT_GROWTH_M: 15,         // ...or the excess has grown at least this much past its value at the first alert, with no intervening fix narrowing it back...
-    MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging"
+    MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging" — only applies once the player has actually been inside this corridor at least once; see NEVER_ENTERED_MAX_ALERT_MS
+    NEVER_ENTERED_MAX_ALERT_MS: 3000, // same idea, but for a corridor merely sitting nearby that the player has never once entered (the "approach before first entry" case) — a much shorter leash, since nagging about a run you're not even on doesn't need 15s to prove it's not being approached, and a long-lived low background tone from an unrelated corridor masks the corridor actually being tested/ridden underneath it
+
     COMMIT_JITTER_M: 0.5,        // a change in excess smaller than this between fixes counts as neither growth nor a correction (GPS noise floor)
     SAMPLE_STEP_M: 20,           // corridor resampling step for the coverage gate
     NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
@@ -492,7 +494,22 @@
 
       const grownEnough = (excessM - st.excessAtFirstAlert) >= TUNING.COMMIT_GROWTH_M;
       const growingTooLong = st.growthStreakStartAt!=null && (now - st.growthStreakStartAt) >= TUNING.COMMIT_STREAK_MS;
-      const tooLong = (now - st.firstAlertAt) >= TUNING.MAX_ALERT_DURATION_MS;
+      // A never-entered corridor gets a much shorter leash than a genuine
+      // drift-off-a-run-you-were-on excursion. Found via a real Test Mode
+      // log (2026-09-19): loading near a second, never-visited corridor
+      // ("HorsetrailTwistedSister") kept a low background tone running for
+      // the FULL MAX_ALERT_DURATION_MS (15s) every time it was triggered,
+      // masking the actually-being-tested corridor's correct, crisp on/off
+      // transitions underneath it the entire time — every one of that
+      // corridor's own exits/entries resolved exactly on schedule, but the
+      // masking tone made it sound like nothing ever turned off. A distant
+      // "just happens to be nearby" corridor doesn't need 15 seconds of
+      // grace to prove it's not being approached; MAX_ALERT_DURATION_MS's
+      // full length stays reserved for a corridor the player was actually
+      // on and is drifting away from.
+      const tooLong = st.everInside
+        ? (now - st.firstAlertAt) >= TUNING.MAX_ALERT_DURATION_MS
+        : (now - st.firstAlertAt) >= TUNING.NEVER_ENTERED_MAX_ALERT_MS;
       if(growingTooLong || grownEnough || tooLong){
         st.committed = true;
         if(cb.onDisengage) cb.onDisengage(c.id, c.name, {

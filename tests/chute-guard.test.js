@@ -512,6 +512,35 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     "after genuinely being inside, a large excursion still escalates past level 1 normally");
 })();
 
+// Real Test Mode log, 2026-09-19: a never-entered corridor's low background
+// tone stayed on for the FULL MAX_ALERT_DURATION_MS (15s) every time it
+// triggered, masking the corridor actually under test's own correct, crisp
+// on/off transitions underneath it — START_TONE at 07.146, STOP_TONE only at
+// 22.267, spanning four separate real exit/entry cycles on the OTHER
+// corridor that all resolved exactly on schedule but were inaudible under
+// the masking tone. A never-entered corridor must commit (stop re-emitting
+// onWarn) within the much shorter NEVER_ENTERED_MAX_ALERT_MS, not the full
+// duration reserved for a genuine drift off a corridor the player was on.
+(function testNeverEnteredCorridorStopsNaggingQuickly(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  const events = { warn: [], disengage: [] };
+  cg.load([corridor], {
+    onWarn: (id, name, info) => events.warn.push(info),
+    onDisengage: (id, name, info) => events.disengage.push(info)
+  });
+  const t0 = 1700000000000;
+  // Stationary, never-entered, well within maxRelevantM the whole time —
+  // exactly the "there happens to be another run nearby" shape.
+  for (let i = 0; i < 20; i++) {
+    const pos = trackPoint(0, 20);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 0, t: t0 + i * 1000 }, null);
+  }
+  assert(events.disengage.length === 1, "a never-entered corridor commits (silences) exactly once, not never — got " + events.disengage.length);
+  const lastWarnT = events.warn.length ? events.warn[events.warn.length - 1].t : -1;
+  assert(lastWarnT - t0 < 15000, "must stop re-alerting well before the 15s reserved for a genuine drift-off — last warn at t+" + (lastWarnT - t0) + "ms");
+})();
+
 // ============================================================
 // 15. Field bug: committed-exit timing must be wall-clock consistent
 // regardless of fix rate (Test Mode's simulated walk ticks several times
