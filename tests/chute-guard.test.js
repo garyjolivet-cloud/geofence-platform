@@ -182,50 +182,47 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 })();
 
 // ============================================================
-// 4. Engage gate — heading
+// 4. "Hard line" requirement (2026-09-19): heading no longer gates whether
+// the alarm fires — being geometrically outside the width+buffer is
+// sufficient on its own, regardless of heading. `engaged` is still computed
+// and reported via onDebug for diagnostic purposes, but no longer decides
+// whether onWarn fires.
 // ============================================================
-(function testEngageHeading(){
+(function testHeadingNoLongerGatesAlarm(){
   const ChuteGuard = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
   const steps = excursionSteps({ lateralPerSec: 3, driftSeconds: 15 }).map(s => Object.assign({}, s, { headingDeg: null }));
   const events = drive(ChuteGuard, corridor, steps);
-  assert(events.warn.length === 0, "headingDeg=null never engages -> never alerts, even far outside");
+  assert(events.warn.length > 0, "headingDeg=null still alerts once geometrically outside — heading is no longer a gate");
+  assert(events.debug.some(d => d.engaged===false), "onDebug still correctly reports engaged=false for diagnostics even though it no longer blocks the alarm");
 
   const ChuteGuard2 = freshChuteGuard();
   const steps2 = excursionSteps({ lateralPerSec: 3, driftSeconds: 15 }).map(s => Object.assign({}, s, { headingDeg: 90 }));
   const events2 = drive(ChuteGuard2, corridor, steps2);
-  assert(events2.warn.length === 0, "heading perpendicular to the corridor (90deg off) never engages -> never alerts");
+  assert(events2.warn.length > 0, "heading perpendicular to the corridor (90deg off) still alerts — a mere crossing is now treated the same as a real departure, per explicit user request");
 })();
 
 // ============================================================
-// 5. Engage gate — per-activity minimum speed
+// 5. "Hard line" requirement: per-activity minimum speed no longer gates
+// the alarm either — same reasoning as heading above.
 // ============================================================
-(function testEngageSpeedByActivity(){
-  const ChuteGuardHike = freshChuteGuard();
-  const hikeCorridor = makeCorridor("c1", { lenM: 400, widthM: 10, activityType: "hike" });
-  const hikeEvents = drive(ChuteGuardHike, hikeCorridor, excursionSteps({ speedMps: 1.0, lateralPerSec: 2, driftSeconds: 15 }));
-  assert(hikeEvents.warn.length > 0, "hike-typed corridor engages at 1.0 m/s (below the old fixed 1.5 m/s floor)");
-
+(function testSpeedNoLongerGatesAlarm(){
   const ChuteGuardSki = freshChuteGuard();
   const skiCorridor = makeCorridor("c1", { lenM: 400, widthM: 10, activityType: "ski_chute" });
   const skiEvents = drive(ChuteGuardSki, skiCorridor, excursionSteps({ speedMps: 1.0, lateralPerSec: 2, driftSeconds: 15 }));
-  assert(skiEvents.warn.length === 0, "ski_chute-typed corridor does NOT engage at 1.0 m/s (its floor is 1.5 m/s)");
+  assert(skiEvents.warn.length > 0, "ski_chute-typed corridor now alerts even at 1.0 m/s (below its old 1.5 m/s engage floor) — speed no longer gates the alarm");
 })();
 
 // ============================================================
-// 6. Engage gate — coverage cap on a long corridor
+// 6. "Hard line" requirement: coverage no longer gates the alarm on a long
+// corridor either — a single geometrically-outside fix is enough regardless
+// of how much of the corridor has been traveled so far.
 // ============================================================
-(function testCoverageCap(){
-  // 6km corridor: 15% would be 900m, but the 150m cap should let it arm
-  // after ~150-160m of travel instead.
+(function testCoverageNoLongerGatesAlarm(){
   const shortCover = freshChuteGuard();
   const corridor6k = makeCorridor("c1", { lenM: 6000, widthM: 10 });
   const under = drive(shortCover, corridor6k, excursionSteps({ coverM: 100, lateralPerSec: 3, driftSeconds: 15 }));
-  assert(under.warn.length === 0, "6km corridor with only 100m covered (< 150m cap) never engages -> no alert");
-
-  const overCover = freshChuteGuard();
-  const over = drive(overCover, corridor6k, excursionSteps({ coverM: 160, lateralPerSec: 3, driftSeconds: 15 }));
-  assert(over.warn.length > 0, "6km corridor with 160m covered (> 150m cap) engages and alerts, without needing 900m (15%)");
+  assert(under.warn.length > 0, "6km corridor with only 100m covered (< the old 150m engage cap) still alerts now — coverage no longer gates the alarm");
 })();
 
 // ============================================================
@@ -441,11 +438,15 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 })();
 
 // ============================================================
-// 14. Field bug: no alert while approaching a corridor before ever
-// entering it THIS pass, even when coverage/heading/speed already carry
-// over from an earlier lap in the same session
+// 14. "Hard line" requirement (2026-09-19): approaching a corridor from
+// outside, before ever having entered it, now DOES alert — the everInside
+// latch that used to require "have you been inside this pass" before
+// arming was explicitly removed at the user's request, in favor of a pure
+// function of current position. This deliberately reverses the field-bug
+// fix this test used to guard (see git history for that original bug) —
+// the user weighed the tradeoff and chose simplicity/predictability.
 // ============================================================
-(function testNoAlertBeforeFirstEntry(){
+(function testAlertsOnApproachBeforeFirstEntry(){
   const cg = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=halfW+0.5=5.5
   const events = { warn: [] };
@@ -457,27 +458,17 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: t0 + t }, 0);
     forwardM += 1.5; t += 1000;
   }
-  // Pass 1: walk the corridor's centerline far enough to build coverage
-  // (60m clears the 150m-cap-of-15% gate for a 400m corridor) and to have
-  // genuinely been inside, then walk far enough away (well beyond
-  // maxRelevantM = edge5.5+60=65.5m) to fully leave its relevant range.
-  for (let i = 0; i <= 60; i++) tick(0);
-  for (let i = 0; i < 10; i++) tick(200);
-  const warnsAfterPass1 = events.warn.length;
-  assert(warnsAfterPass1 === 0, "walking the corridor once, then leaving, produces no false alert on its own");
+  // Approach the corridor from outside, without ever having entered it —
+  // this must alert immediately now, purely because it's geometrically
+  // outside the width+buffer and within maxRelevantM.
+  for (let i = 0; i < 8; i++) tick(20); // excess = 20-5.5 = 14.5m, outside but within maxRelevantM
+  assert(events.warn.length > 0, "approaching a corridor from outside, before ever entering it, alerts immediately under the hard-line rule");
 
-  // Pass 2: approach the SAME corridor again from outside — coverage,
-  // heading, and speed are all already satisfied from pass 1, so the field
-  // bug this test guards against would fire here purely from "currently
-  // outside," before ever having entered THIS pass.
-  for (let i = 0; i < 8; i++) tick(20); // excess = 20-5.5 = 14.5m, well outside but still within maxRelevantM
-  assert(events.warn.length === warnsAfterPass1,
-    "approaching a previously-walked corridor a second time, before re-entering it, produces no alert even though coverage/heading/speed already carry over");
-
-  // Now actually cross in, then exit — should alert normally.
+  // Now actually cross in, then exit — should alert normally too.
+  const beforeSecondExit = events.warn.length;
   for (let i = 0; i < 5; i++) tick(0);
   for (let i = 0; i < 3; i++) tick(20);
-  assert(events.warn.length > warnsAfterPass1, "after genuinely entering this pass, exiting alerts normally");
+  assert(events.warn.length > beforeSecondExit, "after genuinely entering and re-exiting, alerts continue normally");
 })();
 
 // ============================================================

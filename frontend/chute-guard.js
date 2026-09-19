@@ -18,17 +18,19 @@
 // no DOM/Audio/Vibration calls of its own" pattern as kalman-filter.js and
 // guidance-bot.js.
 //
-// Reaction is immediate, not distance- or time-accumulated: the first alert
-// fires on the very GPS fix that crosses the corridor's edge (its half-width
-// plus OUTSIDE_BUFFER_M's small "riding the line on purpose" tolerance) —
-// there is no separate "must be N meters past the edge" or "must stay
-// outside for N seconds/fixes" delay stacked on top of that. Anti-jitter
-// protection instead comes from the two checks that already have to be true
-// for a fix to reach that edge-crossing test at all: the `engaged` gate
-// (heading roughly parallel to the corridor, moving at a real travel speed —
-// the "direction" half) and the perpendicular-distance-to-nearest-segment
-// comparison against the edge itself (the "edge detection" half). A car and
-// a walker both get warned the instant either one crosses the line.
+// "Hard line in space" (2026-09-19, explicit user requirement): whether the
+// alarm is on is a pure function of CURRENT position against the corridor's
+// edge (half-width plus OUTSIDE_BUFFER_M's small "riding the line on
+// purpose" tolerance) — outside means on, inside means off, on every single
+// tick, with no history and no heading/speed requirement deciding whether a
+// crossing "counts." The first alert fires on the very GPS fix that crosses
+// the edge; there is no separate "must be N meters past it" or "must stay
+// outside for N seconds/fixes" delay. `engaged` (heading/speed/coverage) is
+// still computed and reported via onDebug for diagnostic purposes, but no
+// longer gates anything — an earlier version required it before a fresh
+// excursion could start, specifically to reject a mere perpendicular
+// crossing, but the user explicitly asked for that removed in favor of
+// predictability: any geometrically-outside fix counts, every time.
 //
 // Committed-exit detection: while alerting, this module also tracks whether
 // the player's distance from the corridor is trending back down (a real
@@ -260,26 +262,24 @@
       // and only cleared when the player leaves relevant range entirely
       // (a genuine "gone away," not just "currently between the true edge
       // and the buffer/relevant-range boundary").
-      if(near.distM <= halfW) st.everInside = true;
-      // Field bug found 2026-09-19: `engaged` (heading/speed gate) is meant
-      // to decide whether a FRESH excursion is trustworthy enough to start
-      // alerting over — but requiring it on every single tick meant a
-      // momentary flicker (a paused stride, noisy GPS heading) while
-      // ALREADY mid-excursion and still geometrically outside would fail
-      // this check, fall into the `!outsideNow` branch below, and get
-      // silently wiped via freshState() without excessM<=0 being true — so
-      // `onClear` never fired either. The host (already-started tone) was
-      // never told to stop, and the internal state "forgot" it was
-      // alerting, so the very next re-engaged tick looked like a brand new
-      // first alert instead of a continuation. Confirmed via a sim log
-      // showing no STOP_TONE for 25s despite excessM going negative
-      // (genuinely back inside) partway through. Fix: once already
-      // alerting (st.level>0), geometry alone decides "still outside" —
-      // engaged only gates whether a NEW excursion is allowed to begin.
-      const geometricallyOutside = excessM > 0 && near.distM <= maxRelevantM;
-      const outsideNow = st.level>0
-        ? geometricallyOutside
-        : (engaged && geometricallyOutside && st.everInside);
+      if(near.distM <= halfW) st.everInside = true; // still tracked for onDebug only, see below
+      // "Hard line in space" requirement, 2026-09-19: the user explicitly
+      // asked for the corridor's edge to be a pure function of CURRENT
+      // position — outside the width+buffer means the alarm is on, inside
+      // means it's off, full stop, no history and no heading/speed
+      // requirement deciding whether that's "trustworthy enough." `engaged`
+      // and `everInside` used to also have to be satisfied before a FRESH
+      // excursion could start (to avoid false-alarming on a mere
+      // perpendicular crossing, or an approach that hadn't reached the
+      // corridor yet) — removed from this decision entirely per that
+      // explicit request; they're computed above/below only so onDebug's
+      // existing log format keeps showing them for diagnostic purposes.
+      // The one exception the user explicitly chose to KEEP: the
+      // committed-exit detector further down can still silence an active,
+      // still-outside excursion once it concludes the departure is
+      // deliberate — otherwise skiing/riding away on purpose would alarm
+      // forever with no way to stop it short of returning.
+      const outsideNow = excessM > 0 && near.distM <= maxRelevantM;
 
       // Debug hook — Test Mode wires this into its log panel so an author
       // can see exactly which gate is blocking a warning (coverage/heading/
@@ -348,16 +348,10 @@
       if(st.level===0){
         // Fires on the very fix that crosses the edge — no extra distance or
         // accuracy-scaled delay stacked on top of OUTSIDE_BUFFER_M's small
-        // tolerance. "Direction" and "edge" are both already accounted for
-        // by the time we get here: `engaged` (above) is the direction check
-        // — heading roughly parallel to the corridor, moving at a real
-        // travel speed, not a stray reading while stationary — and
-        // `excessM > 0` against `near.distM` IS the edge check, a genuine
-        // perpendicular-distance-past-the-boundary crossing, not a
-        // time/distance-accumulated guess at one. A single noisy fix that
-        // isn't part of real engaged travel along the corridor never
-        // reaches this branch at all, so no separate anti-jitter delay is
-        // needed before sounding the alarm.
+        // tolerance. `excessM > 0` against `near.distM` IS the edge check, a
+        // genuine perpendicular-distance-past-the-boundary crossing — a pure
+        // function of current position (see the "hard line" comment above),
+        // not a time/distance-accumulated guess at one.
         st.firstAlertAt = now;
         st.excessAtFirstAlert = excessM;
         st.prevExcessM = excessM;
