@@ -258,7 +258,25 @@
       // (a genuine "gone away," not just "currently between the true edge
       // and the buffer/relevant-range boundary").
       if(near.distM <= halfW) st.everInside = true;
-      const outsideNow = engaged && excessM > 0 && near.distM <= maxRelevantM && st.everInside;
+      // Field bug found 2026-09-19: `engaged` (heading/speed gate) is meant
+      // to decide whether a FRESH excursion is trustworthy enough to start
+      // alerting over — but requiring it on every single tick meant a
+      // momentary flicker (a paused stride, noisy GPS heading) while
+      // ALREADY mid-excursion and still geometrically outside would fail
+      // this check, fall into the `!outsideNow` branch below, and get
+      // silently wiped via freshState() without excessM<=0 being true — so
+      // `onClear` never fired either. The host (already-started tone) was
+      // never told to stop, and the internal state "forgot" it was
+      // alerting, so the very next re-engaged tick looked like a brand new
+      // first alert instead of a continuation. Confirmed via a sim log
+      // showing no STOP_TONE for 25s despite excessM going negative
+      // (genuinely back inside) partway through. Fix: once already
+      // alerting (st.level>0), geometry alone decides "still outside" —
+      // engaged only gates whether a NEW excursion is allowed to begin.
+      const geometricallyOutside = excessM > 0 && near.distM <= maxRelevantM;
+      const outsideNow = st.level>0
+        ? geometricallyOutside
+        : (engaged && geometricallyOutside && st.everInside);
 
       // Debug hook — Test Mode wires this into its log panel so an author
       // can see exactly which gate is blocking a warning (coverage/heading/

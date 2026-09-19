@@ -521,5 +521,39 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     "ms) — a fix-count-based detector would have committed roughly 10x faster in wall-clock time at 10Hz than at 1Hz");
 })();
 
+// ============================================================
+// 16. Field bug: `engaged` flickering false mid-excursion (heading/speed
+// noise) while still geometrically outside must NOT silently discard the
+// active excursion without a stop signal. Found via a real sim log: a
+// disengage tick landed at a still-positive excessM, chute-guard.js reset
+// state without calling onClear (since excessM<=0 was false), the host's
+// already-started tone was orphaned, and the excursion looked "brand new"
+// the next time engaged came back true.
+// ============================================================
+(function testEngagedFlickerDoesNotOrphanAlarm(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  const steps = [];
+  let forwardM = 0, t = 0;
+  // cover phase, engaged
+  for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, headingDeg: 0, t }); forwardM += 1.5; t += 1000; }
+  // exit and alert, engaged
+  for (let i = 0; i < 3; i++) { steps.push({ forwardM, lateralM: 14, headingDeg: 0, t }); forwardM += 1.5; t += 1000; }
+  // engaged flickers false for a couple ticks WHILE STILL OUTSIDE (still lateralM=14,
+  // excess=8.5m, well above 0) — e.g. a momentary heading-noise dropout, not a return inside
+  for (let i = 0; i < 2; i++) { steps.push({ forwardM, lateralM: 14, headingDeg: null, t }); forwardM += 1.5; t += 1000; }
+  // re-engages, still outside at the same offset
+  for (let i = 0; i < 3; i++) { steps.push({ forwardM, lateralM: 14, headingDeg: 0, t }); forwardM += 1.5; t += 1000; }
+
+  const events = drive(cg, corridor, steps);
+  assert(events.clear.length === 0, "engaged flicker while still outside never fires onClear (they never returned inside)");
+  assert(events.disengage.length === 0, "engaged flicker alone (no real growth trend) never fires onDisengage either");
+  const warnsAfterFlicker = events.warn.filter(w => w.t >= 1700000053000);
+  assert(warnsAfterFlicker.length > 0, "alerting resumes/continues after the flicker (not silenced)");
+  const alertCounts = events.warn.map(w => w.alertCount);
+  assert(new Set(alertCounts).size === alertCounts.length,
+    "alertCount keeps incrementing straight through the flicker — proves the excursion state was never silently reset (alertCount would restart at 1 if it had been)");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
