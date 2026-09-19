@@ -471,6 +471,47 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(events.warn.length > beforeSecondExit, "after genuinely entering and re-exiting, alerts continue normally");
 })();
 
+// Real Test Mode field report, 2026-09-19: loading with the avatar merely
+// standing within maxRelevantM of a totally unrelated, never-visited
+// corridor (two stops placed near each other) immediately screamed at max
+// pitch/volume for up to MAX_ALERT_DURATION_MS, before the user had done
+// anything at all. A corridor never entered should still alert (the
+// approach case above), but must never escalate past level 1 — no siren for
+// "there happens to be some other run nearby."
+(function testNeverEnteredCorridorStaysAtLevelOne(){
+  const cg = freshChuteGuard();
+  // Same corridor shape as the field report: halfW=5m, huge fixed excess
+  // (44m, comfortably within maxRelevantM=halfW+0.5+60=65.5m) and a long
+  // stationary hold — both the distance ladder AND the time ladder would
+  // normally justify L3.
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  const events = { warn: [] };
+  cg.load([corridor], { onWarn: (id, name, info) => events.warn.push(info) });
+  const t0 = 1700000000000;
+  for (let i = 0; i < 20; i++) {
+    const pos = trackPoint(0, 44);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 0, t: t0 + i * 1000 }, null);
+  }
+  assert(events.warn.length > 0, "a never-entered nearby corridor still alerts (approach case)");
+  assert(events.warn.every(w => w.level === 1),
+    "a never-entered corridor never escalates past level 1, however large the excess or however long it holds — every level was: " + events.warn.map(w => w.level).join(","));
+
+  // Once genuinely entered, the ladder applies normally again.
+  const corridor2 = makeCorridor("c2", { lenM: 400, widthM: 10 });
+  const events2 = { warn: [] };
+  cg.load([corridor2], { onWarn: (id, name, info) => events2.warn.push(info) });
+  let forwardM = 0, t = 0;
+  function tick2(lateralM, speed){
+    const pos = trackPoint(forwardM, lateralM);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed, t: t0 + t }, 0);
+    forwardM += speed; t += 1000;
+  }
+  for (let i = 0; i < 5; i++) tick2(0, 1.5);   // actually inside first
+  for (let i = 0; i < 3; i++) tick2(44, 1.5);  // then a huge excursion
+  assert(events2.warn.some(w => w.level > 1),
+    "after genuinely being inside, a large excursion still escalates past level 1 normally");
+})();
+
 // ============================================================
 // 15. Field bug: committed-exit timing must be wall-clock consistent
 // regardless of fix rate (Test Mode's simulated walk ticks several times

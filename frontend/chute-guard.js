@@ -454,8 +454,17 @@
         // The escalation ladder applies from the very first alert too — a
         // single large excursion (e.g. 30m past the edge) starts at level 3
         // immediately, rather than easing in through 1->2->3 over the next
-        // 12s the way a gradual drift would.
-        st.level = ladderLevel(0, st.maxExcessM);
+        // 12s the way a gradual drift would. EXCEPT: if the player has never
+        // once been inside this specific corridor, a big excessM just means
+        // "there happens to be some other run within maxRelevantM of here" —
+        // not "you drifted far off the run you were on." Found via a real
+        // Test Mode log (2026-09-19): loading with the avatar merely within
+        // 66m of an unrelated, never-visited corridor immediately screamed
+        // at max pitch/volume for up to MAX_ALERT_DURATION_MS. A corridor
+        // you've never entered gets a gentle, constant-level nudge instead —
+        // still alerts (per the explicit "approach before first entry"
+        // decision), just never at siren severity.
+        st.level = st.everInside ? ladderLevel(0, st.maxExcessM) : 1;
         emitWarn(c, st, now, excessM);
         continue;
       }
@@ -497,7 +506,7 @@
       // per-fix signal into a continuous alarm; this module just reports
       // "still outside, here's the level" as often as it has a fix to check.
       const msOut = now - st.firstAlertAt;
-      st.level = Math.max(st.level, ladderLevel(msOut, st.maxExcessM));
+      st.level = st.everInside ? Math.max(st.level, ladderLevel(msOut, st.maxExcessM)) : 1;
       emitWarn(c, st, now, excessM);
     }
   }
