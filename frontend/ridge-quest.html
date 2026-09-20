@@ -2825,23 +2825,22 @@ function renderFogMap(){
     // Auto-orientation (2026-09-19) — replaces the old manual "Compass
     // mode" toggle + MapLibre's stock NavigationControl (zoom/PTZ widget)
     // with fully automatic behavior: whenever no one is touching the map,
-    // it rotates (bearing) AND tilts (pitch) to match the phone's own
-    // orientation, so whatever's drawn toward the top of the screen is
-    // genuinely in front of the player — the "point your phone at a chute
-    // and see it's ahead of you, not behind or to the side" use case a
-    // north-up map can't give you. The instant a finger touches the map,
-    // full pan/zoom/rotate/pitch gesture control hands back to the player
-    // (dragRotate etc. are never disabled); auto-orient resumes on its own
-    // AUTO_RESUME_MS after every finger lifts.
+    // it rotates (bearing) to match the phone's own compass heading, so
+    // whatever's drawn toward the top of the screen is genuinely in front
+    // of the player — the "point your phone at a chute and see it's ahead
+    // of you, not behind or to the side" use case a north-up map can't give
+    // you. The instant a finger touches the map, full pan/zoom/rotate/pitch
+    // gesture control hands back to the player (dragRotate etc. are never
+    // disabled); auto-orient resumes on its own AUTO_RESUME_MS after every
+    // finger lifts. Pan/zoom/pitch set by a gesture are never touched by
+    // auto-orient — it only ever calls setBearing, so whatever the player
+    // last set with their fingers (zoom level, pitch/tilt, pan position)
+    // stays exactly as they left it through every future compass-driven
+    // rotation, same as it already did for pan/zoom before this feature.
     let autoOrient = true;                 // on by default — no button to turn it on
     let orientResumeTimer = null;
     const AUTO_RESUME_MS = 2500;
     const activePointers = new Set();
-    function tiltToPitch(tiltDeg){
-      if(tiltDeg == null) return 0;
-      const LOW=15, HIGH=75, MAXP=60;      // dead zone near-flat, clamp at MapLibre's default max pitch
-      return Math.max(0, Math.min(MAXP, (tiltDeg-LOW)/(HIGH-LOW)*MAXP));
-    }
     function disableAutoOrient(){
       if(orientResumeTimer){ clearTimeout(orientResumeTimer); orientResumeTimer=null; }
       autoOrient = false;
@@ -2851,14 +2850,14 @@ function renderFogMap(){
       orientResumeTimer = setTimeout(()=>{
         orientResumeTimer = null;
         autoOrient = true;
-        map.easeTo({ bearing:(DeviceHeading.heading||0), pitch:tiltToPitch(DeviceHeading.tilt), duration:500 });
+        map.easeTo({ bearing:(DeviceHeading.heading||0), duration:500 });
       }, AUTO_RESUME_MS);
     }
     // Raw pointer events (not MapLibre's dragstart/zoomstart/etc.) so even a
     // stationary tap — not just a drag/pinch — suspends auto-orient; those
     // semantic events only fire for an actual camera-changing gesture.
-    // Never fired by our own programmatic easeTo/setBearing/setPitch calls
-    // below, so there's no feedback loop.
+    // Never fired by our own programmatic easeTo/setBearing calls below, so
+    // there's no feedback loop.
     const fogCanvas = map.getCanvasContainer();
     fogCanvas.addEventListener("pointerdown", e=>{ activePointers.add(e.pointerId); disableAutoOrient(); });
     ["pointerup","pointercancel"].forEach(ev=>fogCanvas.addEventListener(ev, e=>{
@@ -2871,18 +2870,16 @@ function renderFogMap(){
     // doc: it rotates true-north-relative, i.e. relative to a north-up map
     // specifically). 0 here means "straight up" in wedge terms.
     const wedgeHeadingFor = raw => autoOrient ? 0 : raw;
-    // Real-time compass+tilt -> needle (gesture mode) or map bearing/pitch
-    // (auto-orient), off the orientation event. This screen is rebuilt each
-    // time "My map" opens, so _unbindHeading (declared above) is called in
-    // the #fogBack teardown. h/t can each independently be null — some
-    // devices report tilt with no resolvable heading (or vice versa) — so
-    // each is applied only when present, never coerced into setBearing/
-    // setHeading as null/NaN.
-    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange((h,t)=>{
-      if(autoOrient){
-        if(h!=null) map.setBearing(h);
-        if(t!=null) map.setPitch(tiltToPitch(t));
-      }
+    // Real-time compass -> needle (gesture mode) or map bearing (auto-
+    // orient), off the orientation event. This screen is rebuilt each time
+    // "My map" opens, so _unbindHeading (declared above) is called in the
+    // #fogBack teardown. h can be null on a device that never resolves a
+    // heading (see device-heading.js) — applied only when present, never
+    // coerced into setBearing/setHeading as null/NaN. Tilt (2nd arg) drives
+    // only the DeviceHeading.tilt property for any future consumer — pitch
+    // itself is gesture-only here, per the comment above.
+    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange(h=>{
+      if(autoOrient && h!=null) map.setBearing(h);
       if(h!=null) here.setHeading(wedgeHeadingFor(h));
     });
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,
