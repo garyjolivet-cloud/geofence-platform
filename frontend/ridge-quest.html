@@ -126,8 +126,6 @@
   #fogMap{position:absolute;inset:0}
   .fogMapBack{position:absolute;top:14px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
   .fogMapTilt{position:absolute;top:58px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
-  .fogMapCompass{position:absolute;left:14px;z-index:2;width:44px;height:44px;margin:0;padding:0;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center;transition:transform .3s ease,background .15s,border-color .15s}
-  .fogMapCompass.on{background:var(--coral);border-color:var(--coral);color:#141d2b}
   .fogMapRecenter{position:absolute;left:14px;z-index:2;width:44px;height:44px;margin:0;padding:0;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center}
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
@@ -2656,8 +2654,7 @@ function renderFogMap(){
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
-    +'<button class="ghost fogMapCompass" id="fogCompass" style="top:'+(use3D?102:58)+'px" title="Compass mode — rotate the map to match which way you\'re facing">🧭</button>'
-    +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?146:102)+'px;display:none" title="Recenter map on your location">⌖</button>'
+    +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
@@ -2695,7 +2692,6 @@ function renderFogMap(){
       maxBounds: questPanBounds() || undefined
     }, _splashEndCamera ? { center:_splashEndCamera.center, zoom:_splashEndCamera.zoom, pitch:_splashEndCamera.pitch, bearing:_splashEndCamera.bearing } : {}));
     mapInstance = map;
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch:use3D }));
     if(!_splashEndCamera){
       const initialBounds = questMapBounds();
       if(initialBounds) map.fitBounds(initialBounds, { padding:70, maxZoom:17, duration:0 });
@@ -2826,55 +2822,61 @@ function renderFogMap(){
     // "Start tracking" primed it earlier this session and this is the very
     // first time My map has opened.
     if(window.DeviceHeading) DeviceHeading.start();
-    // Compass mode (2026-09-17) — off by default (map stays north-up, the
-    // familiar "browse the whole network" view). Toggled on via #fogCompass:
-    // the map itself rotates live to match the device compass heading, so
-    // whatever's drawn toward the top of the screen is genuinely in front of
-    // the player — the "point your phone at a chute and see it's ahead of
-    // you, not behind or to the side" use case a north-up map can't give you
-    // (a chute drawn "up" on a north-up map only means north of you, not
-    // in-front-of-you, unless you happen to be facing north). Distinct from
-    // the plain arrow rotation below, which only ever rotated the little
-    // avatar wedge, never the map itself.
-    let compassMode = false;
-    const compassBtn = document.getElementById("fogCompass");
-    // Once compassMode is on, the map's own bearing already equals "which
-    // way I'm facing" by construction — the avatar wedge pointing anywhere
-    // but straight up would be redundant at best, misleading at worst (see
-    // setWedge()'s own doc: it rotates true-north-relative, i.e. relative to
-    // a north-up map specifically). 0 here means "straight up" in wedge terms.
-    const wedgeHeadingFor = raw => compassMode ? 0 : raw;
-    function setCompassMode(on){
-      compassMode = on;
-      if(compassBtn) compassBtn.classList.toggle("on", on);
-      if(on) map.dragRotate.disable(); else map.dragRotate.enable();
-      map.easeTo({ bearing:on ? (DeviceHeading.heading||0) : 0, duration:300 });
+    // Auto-orientation (2026-09-19) — replaces the old manual "Compass
+    // mode" toggle + MapLibre's stock NavigationControl (zoom/PTZ widget)
+    // with fully automatic behavior: whenever no one is touching the map,
+    // it rotates (bearing) AND tilts (pitch) to match the phone's own
+    // orientation, so whatever's drawn toward the top of the screen is
+    // genuinely in front of the player — the "point your phone at a chute
+    // and see it's ahead of you, not behind or to the side" use case a
+    // north-up map can't give you. The instant a finger touches the map,
+    // full pan/zoom/rotate/pitch gesture control hands back to the player
+    // (dragRotate etc. are never disabled); auto-orient resumes on its own
+    // AUTO_RESUME_MS after every finger lifts.
+    let autoOrient = true;                 // on by default — no button to turn it on
+    let orientResumeTimer = null;
+    const AUTO_RESUME_MS = 2500;
+    const activePointers = new Set();
+    function tiltToPitch(tiltDeg){
+      if(tiltDeg == null) return 0;
+      const LOW=15, HIGH=75, MAXP=60;      // dead zone near-flat, clamp at MapLibre's default max pitch
+      return Math.max(0, Math.min(MAXP, (tiltDeg-LOW)/(HIGH-LOW)*MAXP));
     }
-    if(compassBtn) compassBtn.onclick = async ()=>{
-      if(compassMode){ setCompassMode(false); return; }
-      if(!window.DeviceHeading || !DeviceHeading.supported){
-        // No compass on this device/browser at all — nothing to turn on.
-        rqToast("This device doesn't support a compass.");
-        return;
-      }
-      // This tap IS the user gesture DeviceOrientationEvent.requestPermission()
-      // needs on iOS — same pattern as Quest.start()'s own call, but this
-      // button can turn compass mode on before "Start tracking" is ever
-      // tapped, so it needs its own gesture-backed request rather than
-      // assuming DeviceHeading is already listening.
-      const ok = await DeviceHeading.start();
-      if(!ok){
-        rqToast("Compass access is off for this site — check your browser's motion & orientation permission.");
-        return;
-      }
-      setCompassMode(true);
-    };
-    // Real-time compass -> needle (north-up mode) or map bearing (compass
-    // mode), off the orientation event. This screen is rebuilt each time "My
-    // map" opens, so _unbindHeading (declared above) is called in the
-    // #fogBack teardown.
-    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange(h=>{
-      if(compassMode) map.setBearing(h);
+    function disableAutoOrient(){
+      if(orientResumeTimer){ clearTimeout(orientResumeTimer); orientResumeTimer=null; }
+      autoOrient = false;
+    }
+    function scheduleOrientResume(){
+      if(orientResumeTimer) clearTimeout(orientResumeTimer);
+      orientResumeTimer = setTimeout(()=>{
+        orientResumeTimer = null;
+        autoOrient = true;
+        map.easeTo({ bearing:(DeviceHeading.heading||0), pitch:tiltToPitch(DeviceHeading.tilt), duration:500 });
+      }, AUTO_RESUME_MS);
+    }
+    // Raw pointer events (not MapLibre's dragstart/zoomstart/etc.) so even a
+    // stationary tap — not just a drag/pinch — suspends auto-orient; those
+    // semantic events only fire for an actual camera-changing gesture.
+    // Never fired by our own programmatic easeTo/setBearing/setPitch calls
+    // below, so there's no feedback loop.
+    const fogCanvas = map.getCanvasContainer();
+    fogCanvas.addEventListener("pointerdown", e=>{ activePointers.add(e.pointerId); disableAutoOrient(); });
+    ["pointerup","pointercancel"].forEach(ev=>fogCanvas.addEventListener(ev, e=>{
+      activePointers.delete(e.pointerId);
+      if(activePointers.size===0 && !autoOrient) scheduleOrientResume();
+    }));
+    // While auto-orient has the map pointed "which way I'm facing" by
+    // construction, the avatar wedge pointing anywhere but straight up
+    // would be redundant at best, misleading at worst (see setWedge()'s own
+    // doc: it rotates true-north-relative, i.e. relative to a north-up map
+    // specifically). 0 here means "straight up" in wedge terms.
+    const wedgeHeadingFor = raw => autoOrient ? 0 : raw;
+    // Real-time compass+tilt -> needle (gesture mode) or map bearing/pitch
+    // (auto-orient), off the orientation event. This screen is rebuilt each
+    // time "My map" opens, so _unbindHeading (declared above) is called in
+    // the #fogBack teardown.
+    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange((h,t)=>{
+      if(autoOrient){ map.setBearing(h); map.setPitch(tiltToPitch(t)); }
       here.setHeading(wedgeHeadingFor(h));
     });
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,

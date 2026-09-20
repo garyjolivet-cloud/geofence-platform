@@ -1,14 +1,22 @@
 /* device-heading.js — window.DeviceHeading
 
-   A small compass-heading source for the live map's "you are here" arrow:
-   which way the phone is physically POINTING, in true-north degrees [0,360),
-   from DeviceOrientationEvent.
+   A small compass-heading + tilt source for the live map's "you are here"
+   arrow and Ridge Quest's map auto-orientation: which way the phone is
+   physically POINTING (true-north degrees) and how far it's tilted up from
+   flat, both from DeviceOrientationEvent.
 
    This is deliberately NOT the old precision device-compass subsystem (that
    was removed because a magnetometer is too noisy for turn-by-turn
-   guidance). It only drives the map-dot orientation wedge, and every caller
-   falls back to GPS travel heading when this returns null (unsupported,
-   permission denied, or no reading yet).
+   guidance). It only drives the map-dot orientation wedge (+ Ridge Quest's
+   map bearing/pitch auto-follow), and every heading caller falls back to
+   GPS travel heading when this returns null (unsupported, permission
+   denied, or no reading yet).
+
+   Tilt tracking (`API.tilt`/the onChange 2nd arg) is portrait-only: `beta`
+   swaps meaning with `gamma` once the device rotates to landscape, and
+   unlike heading there's no screenAngle()-style correction applied here —
+   a known limitation, not solved, since nothing in this codebase uses tilt
+   in landscape today.
 
      DeviceHeading.start()    -> begin listening. On iOS 13+ this MUST be
                                  called from inside a user gesture (it calls
@@ -18,9 +26,13 @@
                                  "tap to enable" handler so iOS gets a
                                  gesture-backed retry. Returns a Promise<bool>.
      DeviceHeading.heading    -> smoothed heading in degrees [0,360), or null
+     DeviceHeading.tilt       -> smoothed front-back tilt in degrees [0,90]
+                                 (0 = flat, 90 = upright), or null
      DeviceHeading.supported  -> boolean (DeviceOrientationEvent exists)
      DeviceHeading.active     -> boolean (at least one reading in)
-     DeviceHeading.onChange(fn) -> fn(headingDeg) on every smoothed update
+     DeviceHeading.onChange(fn) -> fn(headingDeg, tiltDeg) on every smoothed
+                                 update — tiltDeg is an additive 2nd arg,
+                                 safe for callers that only read the 1st.
 */
 (function () {
   "use strict";
@@ -28,8 +40,9 @@
   var supported = typeof window !== "undefined" && "DeviceOrientationEvent" in window;
   var listening = false;
   var raw = null, smooth = null;
+  var rawTilt = null, smoothTilt = null;
   var subs = [];
-  var API = { start: start, onChange: onChange, heading: null, supported: supported, active: false };
+  var API = { start: start, onChange: onChange, heading: null, tilt: null, supported: supported, active: false };
 
   // Returns an unsubscribe fn (Ridge Quest tears its map down and rebuilds it).
   function onChange(fn) {
@@ -49,7 +62,7 @@
   }
 
   function emit() {
-    for (var i = 0; i < subs.length; i++) { try { subs[i](smooth); } catch (e) {} }
+    for (var i = 0; i < subs.length; i++) { try { subs[i](smooth, smoothTilt); } catch (e) {} }
   }
 
   function screenAngle() {
@@ -73,6 +86,14 @@
     raw = (h % 360 + 360) % 360;
     smooth = circSmooth(raw, smooth);
     API.heading = smooth;
+    // Front-back tilt (0 = flat, 90 = upright) — available on the same
+    // event regardless of which heading branch fired above. Plain EMA is
+    // enough (no wraparound like heading needs).
+    if (typeof e.beta === "number" && !isNaN(e.beta)) {
+      rawTilt = Math.max(0, Math.min(90, e.beta));
+      smoothTilt = smoothTilt == null ? rawTilt : smoothTilt + 0.25 * (rawTilt - smoothTilt);
+      API.tilt = smoothTilt;
+    }
     API.active = true;
     emit();
   }
