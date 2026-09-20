@@ -754,8 +754,8 @@
          ever reacts to a real fix, same as before dead reckoning existed). -->
     <div style="display:flex;align-items:center;gap:6px;margin:2px 0" title="How far ahead (real seconds) Corridor Guard predicts your position between fixes, from your last known speed+heading. Higher = the tone can turn on/off farther from the true edge but sooner in time. 0 disables prediction — the tone only ever reacts to a real fix.">
       <label class="k" style="flex:0 0 auto;margin:0">DR lookahead</label>
-      <input type="range" id="cgDrLookahead" min="0" max="3" step="0.1" value="2.5" style="flex:1;accent-color:var(--coral)">
-      <span id="cgDrLookaheadV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 40px;text-align:right">2.5s</span>
+      <input type="range" id="cgDrLookahead" min="0" max="4.5" step="0.1" value="3.75" style="flex:1;accent-color:var(--coral)">
+      <span id="cgDrLookaheadV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 40px;text-align:right">3.8s</span>
     </div>
     <div class="row">
       <button id="simMute" class="ghost" style="flex:1">Sound ◼</button>
@@ -8212,12 +8212,12 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
 (function(){
   const slider=document.getElementById("cgDrLookahead");
   const label=document.getElementById("cgDrLookaheadV");
-  slider.oninput=()=>{
-    const v=parseFloat(slider.value);
+  function apply(v){
     label.textContent=v.toFixed(1)+"s";
     if(typeof ChuteGuard!=="undefined") ChuteGuard.TUNING.DR_MAX_S=v;
-  };
-  if(typeof ChuteGuard!=="undefined") ChuteGuard.TUNING.DR_MAX_S=parseFloat(slider.value);
+  }
+  slider.oninput=()=>apply(parseFloat(slider.value));
+  apply(parseFloat(slider.value)); // sync label + TUNING to the slider's own default on load, one source of truth
 })();
 map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspended"&&SimVoice.ctx.resume();
   const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());});
