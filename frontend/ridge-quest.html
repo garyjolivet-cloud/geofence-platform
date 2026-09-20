@@ -2848,9 +2848,20 @@ function renderFogMap(){
     // Always shown (unlike #fogTilt) since it also pauses the compass and
     // Chute Guard's sync poll, useful even for a workspace with 3D off.
     const batteryBtn = document.getElementById("fogBattery");
+    // The override button only ever showed the MODE (Auto/On/Off), not
+    // whether Battery Saver is actually doing anything right now — with only
+    // a ~3s toast marking the moment it engages, there was no way to glance
+    // at the screen mid-ride and confirm it's live (real field confusion,
+    // 2026-09-20: "still tracking while on Catamount" — tracking itself was
+    // never supposed to change, see _onFix()'s own comment on GPS being left
+    // alone, but there was no persistent way to see anything HAD changed
+    // either). Now appends "· Saving" whenever Quest.liftModeActive is true,
+    // in Auto mode too, so engagement is verifiable at a glance, not just at
+    // the instant the toast happened to be visible.
     function renderBatteryBtn(){
       if(!batteryBtn) return;
-      batteryBtn.textContent = "🔋 " + (Quest.liftModeOverride==="on" ? "On" : Quest.liftModeOverride==="off" ? "Off" : "Auto");
+      const mode = Quest.liftModeOverride==="on" ? "On" : Quest.liftModeOverride==="off" ? "Off" : "Auto";
+      batteryBtn.textContent = "🔋 " + mode + (Quest.liftModeActive ? " · Saving" : "");
     }
     renderBatteryBtn();
     if(batteryBtn) batteryBtn.onclick = ()=>{
@@ -2873,6 +2884,7 @@ function renderFogMap(){
         if(terrainPausedByBattery){ terrainPausedByBattery = false; setTerrainOn(userWantsTerrain); }
         if(window.DeviceHeading) DeviceHeading.start();
       }
+      renderBatteryBtn();
     };
     // Pick up whatever liftModeActive already is (e.g. override is "on" from
     // a previous session, or the rider re-opened "My map" mid-lift-ride) —
