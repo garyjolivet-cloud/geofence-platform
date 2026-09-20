@@ -234,6 +234,7 @@
   let lastTickAtWall=0;         // real Date.now() at the last tick() call — see getActiveAlarm()
   let prevFixLatLon=null;       // [lat,lon] of the last ACCEPTED fix — see nearestOnPathSwept()
   let lastRealFix=null;         // {lat,lon,speed,headingDeg,tWall} from the last real tick() — see predictNow()/getActiveAlarm()
+  let currentlyOnLift=false;    // cached nearAnyLift() result from the most recent tick() — see isOnLift()
 
   // Dead reckoning between real fixes (2026-09-19): a real phone's GPS fix
   // arrives roughly once a second (sometimes much less often), so even a
@@ -323,7 +324,13 @@
     }));
   }
 
-  function unload(){ corridors=[]; liftCorridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; }
+  function unload(){ corridors=[]; liftCorridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; currentlyOnLift=false; }
+
+  // Whether the most recent tick() found the fix on/near a recorded lift
+  // corridor — see nearAnyLift() and tick()'s own lift gate. Exposed so a
+  // host (Ridge Quest's "My map") can build a battery-saver "lift mode" off
+  // the same single geometry check, rather than a second copy of it.
+  function isOnLift(){ return currentlyOnLift; }
 
   // True if latLon is currently within suppression range of ANY recorded
   // lift corridor — see LIFT_SUPPRESS_PAD_M's comment and tick()'s lift gate.
@@ -352,10 +359,18 @@
   // treated as "not engaged," same "no data = don't act" convention as
   // TravelHeading's other consumers).
   function tick(fix, headingDeg){
-    if(!corridors.length || fix==null || (fix.acc!=null && fix.acc>TUNING.ACCURACY_CAP_M)) return;
+    if(fix==null || (fix.acc!=null && fix.acc>TUNING.ACCURACY_CAP_M)) return;
+    const latLon=[fix.lat, fix.lon];
+    // Cached ahead of the corridors.length check below so isOnLift() works
+    // even for a project with zero *alertable* corridors (e.g. a summer
+    // sightseeing gondola with no ski chutes authored) — lift detection
+    // shouldn't depend on there being anything else for this module to
+    // guard. See isOnLift()'s own comment for why a host reads this instead
+    // of re-deriving it from Quest.corridors' own lift entries.
+    currentlyOnLift = nearAnyLift(latLon);
+    if(!corridors.length) return;
     lastTickAtWall = Date.now(); // real wall clock, independent of fix.t — see getActiveAlarm()
     lastRealFix = { lat:fix.lat, lon:fix.lon, speed:fix.speed, headingDeg, tWall:lastTickAtWall }; // see predictNow()
-    const latLon=[fix.lat, fix.lon];
     const now = fix.t || Date.now();
     const prevLatLon = prevFixLatLon; // captured before this tick updates it, below
     prevFixLatLon = latLon;
@@ -370,7 +385,7 @@
     // meaningful to say about any OTHER corridor right now — clear whatever
     // was already sounding and skip evaluation entirely for this tick, same
     // as if no corridors were relevant at all.
-    if(nearAnyLift(latLon)){
+    if(currentlyOnLift){
       for(const c of corridors){
         const st = stateByCorridor.get(c.id);
         if(st.level>0){
@@ -650,6 +665,19 @@
   // longer the source of truth for whether the alarm itself is sounding.
   function getActiveAlarm(){
     if(!lastTickAtWall || (Date.now()-lastTickAtWall) > TUNING.STALE_MS) return null;
+    // The last real tick found the fix on/near a lift line — tick() itself
+    // already cleared every corridor's level for exactly this reason (see
+    // its own lift-gate comment), but predictNow()'s dead reckoning below
+    // extrapolates purely from lastRealFix's speed/heading and has no idea
+    // about lift proximity at all. Without this check, DR could bridge a
+    // corridor's `everInside` state back to "audible" moments after tick()
+    // just cleared it (e.g. a still-outside-the-chute lastRealFix with a
+    // near-zero elapsed time), silently reopening the exact gondola false
+    // alarm the lift gate exists to close. currentlyOnLift is itself only
+    // ever refreshed by a real tick(), so this is "was the last real fix on
+    // a lift," the same recency guarantee the staleness check above gives
+    // every other field this function reads.
+    if(currentlyOnLift) return null;
     const predicted = predictNow(); // null when DR isn't trustworthy right now — see its own comment
     let best=null;
     for(const c of corridors){
@@ -714,5 +742,5 @@
     return Math.min(lvl, TUNING.MAX_LEVEL);
   }
 
-  window.ChuteGuard = { load, tick, unload, getActiveAlarm, TUNING };
+  window.ChuteGuard = { load, tick, unload, getActiveAlarm, isOnLift, TUNING };
 })();

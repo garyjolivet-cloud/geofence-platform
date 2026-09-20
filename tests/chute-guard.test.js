@@ -1011,5 +1011,40 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(events.warn.length > 0, "normal alerting resumes once off the lift");
 })();
 
+// ============================================================
+// isOnLift() (Battery Saver support): must work even for a project with NO
+// alertable corridors at all (e.g. a summer sightseeing gondola with no ski
+// chutes authored) — tick()'s corridors.length===0 early return must not
+// prevent lift detection from updating, since a host reads this signal
+// independent of whether ChuteGuard has anything else to guard.
+// ============================================================
+
+(function testIsOnLiftWorksWithNoAlertableCorridors(){
+  const cg = freshChuteGuard();
+  const lift = makeCorridor("lift1", { lenM: 400, widthM: 10, runType: "lift" });
+  cg.load([lift], {}); // no chute/run/hike corridors at all — corridors (alertable) is empty
+
+  assert(cg.isOnLift() === false, "isOnLift() starts false before any tick");
+
+  const onLine = trackPoint(50, 0); // dead center of the lift's own line
+  cg.tick({ lat: onLine[0], lon: onLine[1], acc: 5, speed: 4, t: 1700000000000 }, 0);
+  assert(cg.isOnLift() === true, "isOnLift() reflects lift proximity even with zero alertable corridors loaded");
+
+  const farAway = trackPoint(50, 500); // 500m east — well outside LIFT_SUPPRESS_PAD_M
+  cg.tick({ lat: farAway[0], lon: farAway[1], acc: 5, speed: 4, t: 1700000001000 }, 0);
+  assert(cg.isOnLift() === false, "isOnLift() clears once away from the lift line");
+})();
+
+(function testIsOnLiftResetsOnUnload(){
+  const cg = freshChuteGuard();
+  const lift = makeCorridor("lift1", { lenM: 400, widthM: 10, runType: "lift" });
+  cg.load([lift], {});
+  const onLine = trackPoint(50, 0);
+  cg.tick({ lat: onLine[0], lon: onLine[1], acc: 5, speed: 4, t: 1700000000000 }, 0);
+  assert(cg.isOnLift() === true, "sanity check: on the lift before unload");
+  cg.unload();
+  assert(cg.isOnLift() === false, "unload() resets isOnLift() to false");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

@@ -127,6 +127,7 @@
   .fogMapBack{position:absolute;top:14px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
   .fogMapTilt{position:absolute;top:58px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
   .fogMapRecenter{position:absolute;left:14px;z-index:2;width:44px;height:44px;margin:0;padding:0;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center}
+  .fogMapBattery{position:absolute;top:14px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:13px}
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
@@ -666,6 +667,15 @@ const RQ_MAX_TRACK = 6;
 function getTrackFriends(){ try{ return JSON.parse(localStorage.getItem("rq.trackFriends")||"[]"); }catch(e){ return []; } }
 function setTrackFriends(ids){ localStorage.setItem("rq.trackFriends", JSON.stringify(ids.slice(0, RQ_MAX_TRACK))); }
 
+// Battery Saver ("lift mode") — how long the raw ChuteGuard.isOnLift()
+// signal has to hold steady, one way or the other, before Quest._onFix
+// actually flips liftModeActive in "auto" mode. Real fixes land roughly
+// every 1-2s (watchPosition's own maximumAge:2000), so this is ~4-8
+// consistent fixes — long enough to ignore a momentary edge-graze (e.g.
+// walking past a lift's base station without boarding), short enough to
+// engage well within a normal multi-minute lift ride.
+const LIFT_MODE_DEBOUNCE_MS = 8000;
+
 // Elevation-checkpoint running total — persisted so an app reload mid-day
 // doesn't lose it. Shape: {day, total, lastElevM, lastAt, lastZoneId}, where
 // `day` is a questDateBucketClient() string; a different `day` on read means
@@ -806,6 +816,13 @@ const Quest = {
   onCheckpointVertical: null, // callback(totalM) — fired when _tickCheckpoints credits a descent, so Home's "Vertical today" tile ticks up live
   onNarrate: null,       // callback(sayText, zoneId) — fired once per band entry for a corridor with narration authored, wired up regardless of which screen (Home/My map) is showing
 
+  // Battery Saver ("lift mode") — see setLiftModeOverride()/_setLiftModeActive().
+  liftModeOverride: "auto", // "auto"|"on"|"off" — mirror of localStorage rq.liftMode, restored in start()
+  liftModeActive: false,    // effective battery-saver state right now — the one thing consumers actually read
+  onLiftModeChange: null,   // callback(active:boolean, reason:"auto"|"on"|"off") — set by renderFogMap() to pause/resume 3D+DeviceHeading while "My map" is open, nulled on #fogBack teardown; same on-slot convention as onShare/onStatus
+  _liftRaw: false,          // last raw ChuteGuard.isOnLift() reading, pre-debounce — see _onFix()
+  _liftRawSinceT: 0,        // fix.t the raw reading last changed — debounce clock, in fix time (not wall time) so it works the same for real GPS and simulateWalk()
+
   async loadCorridors(){
     try{
       const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
@@ -900,6 +917,10 @@ const Quest = {
     // reload mid-day resumes it); _tickCheckpoints resets it itself when the
     // stored day-bucket no longer matches. Per-checkpoint cooldowns are
     // session-only — a fresh session may legitimately re-hit a checkpoint.
+    this.liftModeOverride = localStorage.getItem("rq.liftMode") || "auto";
+    this.liftModeActive = false;
+    this._liftRaw = false;
+    this._liftRawSinceT = 0;
     this.checkpointVert = getCheckpointVert();
     this._cpCooldownUntil = {};
     this._cpLastPostAt = 0;
@@ -946,6 +967,51 @@ const Quest = {
   },
   active(){ return this.watchId!=null; },
 
+  // Battery Saver ("lift mode") — user-facing 3-way override, driven from
+  // the #fogBattery button on "My map". Always toasts (via rqToast) on a
+  // real change of mode, since this is a deliberate user action — distinct
+  // from _setLiftModeActive's own toast, which only fires for an AUTO
+  // transition (the effective on/off state actually flipping).
+  setLiftModeOverride(mode){
+    if(mode!=="auto" && mode!=="on" && mode!=="off") return;
+    this.liftModeOverride = mode;
+    localStorage.setItem("rq.liftMode", mode);
+    if(typeof rqToast==="function") rqToast(
+      mode==="on" ? "🔋 Battery Saver: Always On" :
+      mode==="off" ? "Battery Saver: Always Off" :
+      "Battery Saver: Auto"
+    );
+    if(mode==="on") this._setLiftModeActive(true, "on");
+    else if(mode==="off") this._setLiftModeActive(false, "off");
+    // "auto" is left alone here — the debounced check in _onFix() (driven
+    // by real position, via the already-warm _liftRaw/_liftRawSinceT) picks
+    // the effective state back up on its own, no need to force it here.
+  },
+
+  // The one place liftModeActive actually changes. No-ops if the state
+  // isn't actually changing (both to avoid redundant onLiftModeChange calls
+  // every single fix while override is "on"/"off", and so an "auto"
+  // transition's toast only fires on a genuine flip, not every tick that
+  // happens to re-confirm the same state).
+  _setLiftModeActive(active, reason){
+    if(this.liftModeActive === active) return;
+    this.liftModeActive = active;
+    // Chute Guard's own 200ms sync poll (chuteGuardStartSync/Stop) is pure
+    // waste while on a lift — ChuteGuard itself already refuses to sound an
+    // alarm in that state (see chute-guard.js's lift gate), this just stops
+    // spending CPU checking. Only restart it if tracking is actually still
+    // on — a lift-mode flip landing right as/after Stop tracking shouldn't
+    // resurrect the interval.
+    if(typeof chuteGuardStopSync==="function" && typeof chuteGuardStartSync==="function"){
+      if(active) chuteGuardStopSync();
+      else if(this.active()) chuteGuardStartSync();
+    }
+    if(reason==="auto" && typeof rqToast==="function"){
+      rqToast(active ? "🔋 Battery Saver on — lift detected" : "Battery Saver off — tracking resumed");
+    }
+    if(this.onLiftModeChange) this.onLiftModeChange(active, reason);
+  },
+
   _onFix(pos){
     const c=pos.coords;
     const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy||30, t:pos.timestamp||Date.now(),
@@ -966,6 +1032,18 @@ const Quest = {
     // along the line).
     if(typeof ChuteGuard!=="undefined"){
       ChuteGuard.tick({lat:p.lat,lon:p.lon,acc:p.acc,speed:p.speed,t:fix.t}, p.headingTravel);
+      // Battery Saver ("lift mode") — keep the raw on-lift reading warm on
+      // EVERY real fix regardless of override, so switching the override
+      // back to "auto" later reflects near-real-time state rather than
+      // starting the debounce window cold. Only actually drives
+      // liftModeActive when override is "auto" — "on"/"off" force it
+      // unconditionally every tick (cheap no-op via _setLiftModeActive's own
+      // equality check once already in that state).
+      const onLift = ChuteGuard.isOnLift();
+      if(onLift !== this._liftRaw){ this._liftRaw = onLift; this._liftRawSinceT = fix.t; }
+      if(this.liftModeOverride==="on") this._setLiftModeActive(true, "on");
+      else if(this.liftModeOverride==="off") this._setLiftModeActive(false, "off");
+      else if(fix.t - this._liftRawSinceT >= LIFT_MODE_DEBOUNCE_MS) this._setLiftModeActive(this._liftRaw, "auto");
       // Sync eagerly on every real fix, not just the 200ms poll timer — see
       // fence-editor.html's identical call site for the bug this fixes (a
       // real back-inside tick landed but the tone didn't stop for ~1.7s,
@@ -2655,6 +2733,7 @@ function renderFogMap(){
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
+    +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass while riding a lift. Tap to cycle Auto/On/Off.">🔋 Auto</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
@@ -2664,6 +2743,7 @@ function renderFogMap(){
   // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{
     Quest.onFogUpdated=null; Quest.onPosition=null;
+    Quest.onLiftModeChange=null;
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
     // ever actually shown (the arrow wedge / compass-mode bearing); nothing
@@ -2707,6 +2787,7 @@ function renderFogMap(){
     // for a workspace that never authored 3D support at all).
     const reducedMotionQ = (()=>{ try{ return matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){ return false; } })();
     let terrainOn = false;
+    let userWantsTerrain = false; // the rider's own #fogTilt choice, separate from terrainOn's "what the map is actually showing right now" — Battery Saver pauses/resumes terrainOn without touching this, so leaving a lift restores whatever the rider actually chose
     const tiltBtn = document.getElementById("fogTilt");
     function setTerrainOn(on){
       // setTerrain()/addSource() throw if the style isn't loaded yet — the
@@ -2733,15 +2814,51 @@ function renderFogMap(){
     }
     if(use3D && tiltBtn){
       tiltBtn.textContent = "3D";
-      tiltBtn.onclick = ()=> setTerrainOn(!terrainOn);
+      tiltBtn.onclick = ()=>{ userWantsTerrain = !terrainOn; setTerrainOn(userWantsTerrain); };
       // _splashEndCamera already opened the map at a real pitched/terrain
       // camera as part of the splash flyby — matching that with actual
       // terrain (not just an empty pitched view over the flat basemap) is
       // the one case still worth defaulting on, since the visual it's
       // already showing needs it, not a fresh choice made on this visitor's
       // behalf.
-      if(_splashEndCamera) setTerrainOn(true);
+      if(_splashEndCamera){ userWantsTerrain = true; setTerrainOn(true); }
     }
+
+    // Battery Saver ("lift mode") — override button + pause/resume wiring.
+    // Always shown (unlike #fogTilt) since it also pauses the compass and
+    // Chute Guard's sync poll, useful even for a workspace with 3D off.
+    const batteryBtn = document.getElementById("fogBattery");
+    function renderBatteryBtn(){
+      if(!batteryBtn) return;
+      batteryBtn.textContent = "🔋 " + (Quest.liftModeOverride==="on" ? "On" : Quest.liftModeOverride==="off" ? "Off" : "Auto");
+    }
+    renderBatteryBtn();
+    if(batteryBtn) batteryBtn.onclick = ()=>{
+      const next = Quest.liftModeOverride==="auto" ? "on" : Quest.liftModeOverride==="on" ? "off" : "auto";
+      Quest.setLiftModeOverride(next);
+      renderBatteryBtn();
+    };
+    // Only true while Battery Saver itself is the reason terrain got turned
+    // off — without this, the resume branch below would call setTerrainOn()
+    // (which forces pitch:0 via an easeTo) unconditionally on every lift
+    // disengage, even for a workspace with 3D never enabled, or a rider who
+    // manually pitched the map some other way — neither of those has
+    // anything to do with Battery Saver and shouldn't be touched by it.
+    let terrainPausedByBattery = false;
+    Quest.onLiftModeChange = (active)=>{
+      if(active){
+        if(terrainOn){ terrainPausedByBattery = true; setTerrainOn(false); }
+        if(window.DeviceHeading) DeviceHeading.stop();
+      }else{
+        if(terrainPausedByBattery){ terrainPausedByBattery = false; setTerrainOn(userWantsTerrain); }
+        if(window.DeviceHeading) DeviceHeading.start();
+      }
+    };
+    // Pick up whatever liftModeActive already is (e.g. override is "on" from
+    // a previous session, or the rider re-opened "My map" mid-lift-ride) —
+    // fire the same pause/resume logic once up front instead of waiting for
+    // the next fix to happen to change it.
+    if(Quest.liftModeActive) Quest.onLiftModeChange(true);
     function syncSource(){
       const shroudSrc = map.getSource("shroud");
       if(shroudSrc) shroudSrc.setData(shroudFeatureCollection());
