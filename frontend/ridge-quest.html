@@ -2716,21 +2716,25 @@ function _rebuildRunLabels(map, cors){
 // viewpoints, checkpoints — comes from the published bundle); nothing about
 // these peaks is per-project or author-editable, so there's no reason for
 // them to live in D1. Elevations given as authored (ft primary, m secondary).
+//
+// Every entry re-verified 2026-09-20 against PeakVisor/Wikipedia after a
+// field report ("T2 is currently at T1") — the original list actually had
+// T1 and T2's coordinates each pointing near the OTHER peak's real summit,
+// Mount 7 was ~4km off (fixed earlier the same day), Mount Vaux was ~9km
+// off, Mount Goodsir's longitude was ~15km off, and Mount Rogers was ~2km
+// off. Mount Dawson/Sir Donald/Cathedral Mountain/Temple were already
+// accurate (sub-km, within normal summit-vs-massif rounding) and left as-is.
 const NAMED_PEAKS = [
-  { name:"Terminator Peak (T1)",   elevFt:7897,  elevM:2407, lat:51.2825, lon:-117.0678 },
-  { name:"T2 Peak (Terminator 2)", elevFt:7970,  elevM:2429, lat:51.2728, lon:-117.0701 },
-  // Corrected 2026-09-20 — original coordinate (51.2647,-116.9208) was
-  // ~4km off the true summit (per field report "not at peak"). PeakVisor's
-  // Beaverhead Peak entry (Mount 7's official name) confirms both the
-  // corrected coordinate and elevation.
-  { name:"Mount Seven (Mount 7)",  elevFt:8504,  elevM:2592, lat:51.2539, lon:-116.8511 },
-  { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.2992, lon:-116.6561 },
-  { name:"Mount Goodsir",          elevFt:11677, elevM:3567, lat:51.2019, lon:-116.6083 },
-  { name:"Mount Dawson",           elevFt:11102, elevM:3377, lat:51.1511, lon:-117.4206 },
-  { name:"Mount Sir Donald",       elevFt:10774, elevM:3284, lat:51.2631, lon:-117.4300 },
-  { name:"Mount Rogers",           elevFt:10397, elevM:3169, lat:51.3742, lon:-117.5217 },
-  { name:"Cathedral Mountain",     elevFt:10463, elevM:3189, lat:51.3789, lon:-116.3986 },
-  { name:"Mount Temple",           elevFt:11627, elevM:3544, lat:51.3497, lon:-116.2064 }
+  { name:"Terminator Peak (T1)",   elevFt:7900,  elevM:2408, lat:51.273219, lon:-117.069982 },
+  { name:"T2 Peak (Terminator 2)", elevFt:7825,  elevM:2385, lat:51.269436, lon:-117.063919 },
+  { name:"Mount Seven (Mount 7)",  elevFt:8504,  elevM:2592, lat:51.2539,   lon:-116.8511 },
+  { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.25861,  lon:-116.53000 },
+  { name:"Mount Goodsir",          elevFt:11703, elevM:3567, lat:51.20167,  lon:-116.39667 },
+  { name:"Mount Dawson",           elevFt:11079, elevM:3377, lat:51.15167,  lon:-117.42056 },
+  { name:"Mount Sir Donald",       elevFt:10774, elevM:3284, lat:51.263111, lon:-117.431389 },
+  { name:"Mount Rogers",           elevFt:10397, elevM:3169, lat:51.35389,  lon:-117.53722 },
+  { name:"Cathedral Mountain",     elevFt:10463, elevM:3189, lat:51.39667,  lon:-116.39028 },
+  { name:"Mount Temple",           elevFt:11627, elevM:3544, lat:51.35056,  lon:-116.20667 }
 ];
 let _peakLabelMarkers = [];
 let _peakLabelMoveTimer = null;
