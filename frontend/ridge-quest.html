@@ -165,10 +165,11 @@
   .runDiamond i{width:6px;height:6px;background:#111;border:1px solid #eef3f0;
     transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
-  /* Named peak reference labels — deliberately smaller/muted vs. .runLabel
-     (sized for prominent, close-up run names): these are secondary
-     orientation info, often seen at extreme zoom-out toward distant ranges. */
-  .peakLabel{font:600 clamp(12px,2.6vw,15px)/1.25 "Barlow Condensed",system-ui,sans-serif;
+  /* Named peak reference labels — muted vs. .runLabel's color (these are
+     secondary orientation info, not skiable terrain), but sized up (doubled
+     2026-09-20 per field feedback — the original size read as unreadable at
+     the distances these labels are actually seen from) to match. */
+  .peakLabel{font:600 clamp(24px,5.2vw,30px)/1.25 "Barlow Condensed",system-ui,sans-serif;
     color:#c9d6e3;letter-spacing:.02em;white-space:nowrap;pointer-events:none;text-align:center;
     text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 3px #0c140f}
   .peakLabel .elev{display:block;font-weight:400;font-size:.85em;color:#93a3b3}
@@ -2718,7 +2719,11 @@ function _rebuildRunLabels(map, cors){
 const NAMED_PEAKS = [
   { name:"Terminator Peak (T1)",   elevFt:7897,  elevM:2407, lat:51.2825, lon:-117.0678 },
   { name:"T2 Peak (Terminator 2)", elevFt:7970,  elevM:2429, lat:51.2728, lon:-117.0701 },
-  { name:"Mount Seven (Mount 7)",  elevFt:8291,  elevM:2527, lat:51.2647, lon:-116.9208 },
+  // Corrected 2026-09-20 — original coordinate (51.2647,-116.9208) was
+  // ~4km off the true summit (per field report "not at peak"). PeakVisor's
+  // Beaverhead Peak entry (Mount 7's official name) confirms both the
+  // corrected coordinate and elevation.
+  { name:"Mount Seven (Mount 7)",  elevFt:8504,  elevM:2592, lat:51.2539, lon:-116.8511 },
   { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.2992, lon:-116.6561 },
   { name:"Mount Goodsir",          elevFt:11677, elevM:3567, lat:51.2019, lon:-116.6083 },
   { name:"Mount Dawson",           elevFt:11102, elevM:3377, lat:51.1511, lon:-117.4206 },
