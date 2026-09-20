@@ -7298,9 +7298,26 @@ function feedSim(lat,lon,acc,t,bleFix){
   const raw={lat,lon,acc,alt:effAlt};
   checkHazardAhead(raw, SimTravelHeading.heading, sm.speed, t);
   if(_chuteGuardOn && typeof ChuteGuard!=='undefined'){
-    _cgLastFixLatLon = {lat:sm.lat, lon:sm.lon};
-    _cgTrailAddPoint(sm.lat, sm.lon);
-    ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t}, SimTravelHeading.heading);
+    // Real bug found 2026-09-20 (field report: "the X is drawn in the
+    // right place but maybe a second after the avatar is dragged past
+    // that point," same delay audible in the tone): this fed the EKF-
+    // SMOOTHED position (sm.lat/lon) into ChuteGuard.tick(), the exact
+    // lag SimFencer's own `raw` position (right above) was already
+    // introduced to avoid for zone detection — see that comment. A fast
+    // mouse drag isn't like real jittery GPS noise; it's a large,
+    // deliberate, sudden position change, which is exactly what the
+    // EKF's outlier gate is designed to distrust and only gradually
+    // accept over several ticks (inflating measurement noise rather than
+    // snapping straight to it — see kalman-filter.js's own NIS-gate
+    // comment). That's correct behavior for real GPS jitter and wrong
+    // for a Test Mode throw. Position now uses `raw` (unsmoothed, same
+    // fix SimFencer already uses); speed/heading stay off the smoothed
+    // estimate — DR/coverage already treat those as approximate, and an
+    // instantaneous drag-to-drag speed would be far noisier than what
+    // the EKF reports.
+    _cgLastFixLatLon = {lat:raw.lat, lon:raw.lon};
+    _cgTrailAddPoint(raw.lat, raw.lon);
+    ChuteGuard.tick({lat:raw.lat,lon:raw.lon,acc:sm.acc,speed:sm.speed,t}, SimTravelHeading.heading);
     // Sync eagerly on every real tick, not just the 200ms poll timer — a
     // real bug found 2026-09-19 (first test run of the new polled design):
     // a genuine back-inside tick landed, but STOP_TONE didn't fire for
