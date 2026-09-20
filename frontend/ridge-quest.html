@@ -2724,9 +2724,19 @@ function _rebuildRunLabels(map, cors){
 // off, Mount Goodsir's longitude was ~15km off, and Mount Rogers was ~2km
 // off. Mount Dawson/Sir Donald/Cathedral Mountain/Temple were already
 // accurate (sub-km, within normal summit-vs-massif rounding) and left as-is.
+// Ozone + Dogtooth Peak added 2026-09-20 — Ozone is one of Kicking Horse's
+// five named on-resort summits (Ozone, Blue Heaven, Eagle's Eye, Terminator,
+// Terminator2), confirmed via a live OpenStreetMap node
+// (natural=peak, name="Ozone", ele=2504m) rather than a peak database (it's
+// a resort/local name, not in PeakVisor/Wikipedia's registry). Dogtooth Peak
+// is the Dogtooth Range's own namesake and highest point (Wikipedia), added
+// to represent "the Dogtooth Range" as a specific summit rather than an
+// unpinnable area label.
 const NAMED_PEAKS = [
   { name:"Terminator Peak (T1)",   elevFt:7900,  elevM:2408, lat:51.273219, lon:-117.069982 },
   { name:"T2 Peak (Terminator 2)", elevFt:7825,  elevM:2385, lat:51.269436, lon:-117.063919 },
+  { name:"Ozone Peak",             elevFt:8215,  elevM:2504, lat:51.283737, lon:-117.100631 },
+  { name:"Dogtooth Peak",          elevFt:9311,  elevM:2838, lat:51.2,      lon:-116.93306 },
   { name:"Mount Seven (Mount 7)",  elevFt:8504,  elevM:2592, lat:51.2539,   lon:-116.8511 },
   { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.25861,  lon:-116.53000 },
   { name:"Mount Goodsir",          elevFt:11703, elevM:3567, lat:51.20167,  lon:-116.39667 },
