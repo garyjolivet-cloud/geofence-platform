@@ -748,6 +748,15 @@
         <span id="simSpdV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 56px;text-align:right">🚴 Bike</span>
       </div>
     </div>
+    <!-- Corridor Guard's dead-reckoning lookahead (ChuteGuard.TUNING.DR_MAX_S)
+         — live-tunable here so an author can directly dial in "farther out /
+         sooner" instead of guessing at a code constant. 0 = off (tone only
+         ever reacts to a real fix, same as before dead reckoning existed). -->
+    <div style="display:flex;align-items:center;gap:6px;margin:2px 0" title="How far ahead (real seconds) Corridor Guard predicts your position between fixes, from your last known speed+heading. Higher = the tone can turn on/off farther from the true edge but sooner in time. 0 disables prediction — the tone only ever reacts to a real fix.">
+      <label class="k" style="flex:0 0 auto;margin:0">DR lookahead</label>
+      <input type="range" id="cgDrLookahead" min="0" max="3" step="0.1" value="2.5" style="flex:1;accent-color:var(--coral)">
+      <span id="cgDrLookaheadV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 40px;text-align:right">2.5s</span>
+    </div>
     <div class="row">
       <button id="simMute" class="ghost" style="flex:1">Sound ◼</button>
       <button id="simReset" class="ghost" style="flex:1">Reset</button>
@@ -8190,6 +8199,25 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
     document.querySelectorAll(".spd-btn").forEach(b=>b.classList.remove("on"));
   };
   setSpeed(20,"🚴 Bike");
+})();
+// Corridor Guard dead-reckoning lookahead — live-tunable per explicit
+// request ("modify speed and direction to turn tone off farther out or
+// sooner"): ChuteGuard.TUNING is a plain mutable object every internal
+// function reads fresh each call (same pattern tests/chute-guard.test.js
+// already relies on to shrink TUNING.STALE_MS for a real-wait test), so
+// writing to it here takes effect on the very next tick, live, without
+// reloading Test Mode. 0 fully disables prediction (predictNow() bails out
+// the instant elapsedS>0 exceeds a 0 ceiling) — an easy A/B "with vs
+// without DR" toggle via the slider's own left edge.
+(function(){
+  const slider=document.getElementById("cgDrLookahead");
+  const label=document.getElementById("cgDrLookaheadV");
+  slider.oninput=()=>{
+    const v=parseFloat(slider.value);
+    label.textContent=v.toFixed(1)+"s";
+    if(typeof ChuteGuard!=="undefined") ChuteGuard.TUNING.DR_MAX_S=v;
+  };
+  if(typeof ChuteGuard!=="undefined") ChuteGuard.TUNING.DR_MAX_S=parseFloat(slider.value);
 })();
 map.on("click",e=>{if(!simMode)return;SimVoice.ctx&&SimVoice.ctx.state==="suspended"&&SimVoice.ctx.resume();
   const ll=e.lngLat;simAvatar&&simAvatar.setLngLat([ll.lng,ll.lat]);feedSim(ll.lat,ll.lng,5,Date.now());});
