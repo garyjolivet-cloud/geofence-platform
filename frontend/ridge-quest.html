@@ -2874,10 +2874,16 @@ function renderFogMap(){
     // Real-time compass+tilt -> needle (gesture mode) or map bearing/pitch
     // (auto-orient), off the orientation event. This screen is rebuilt each
     // time "My map" opens, so _unbindHeading (declared above) is called in
-    // the #fogBack teardown.
+    // the #fogBack teardown. h/t can each independently be null — some
+    // devices report tilt with no resolvable heading (or vice versa) — so
+    // each is applied only when present, never coerced into setBearing/
+    // setHeading as null/NaN.
     if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange((h,t)=>{
-      if(autoOrient){ map.setBearing(h); map.setPitch(tiltToPitch(t)); }
-      here.setHeading(wedgeHeadingFor(h));
+      if(autoOrient){
+        if(h!=null) map.setBearing(h);
+        if(t!=null) map.setPitch(tiltToPitch(t));
+      }
+      if(h!=null) here.setHeading(wedgeHeadingFor(h));
     });
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,
       // Device compass (which way the phone points) when we have it, else

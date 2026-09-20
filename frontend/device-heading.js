@@ -73,6 +73,7 @@
   }
 
   function onEvent(e) {
+    var changed = false;
     var h = null;
     if (typeof e.webkitCompassHeading === "number" && !isNaN(e.webkitCompassHeading)) {
       // iOS Safari — already clockwise from true north.
@@ -82,18 +83,29 @@
       // rotation so a phone held in landscape still reads true.
       h = (360 - e.alpha + screenAngle()) % 360;
     }
-    if (h == null || !isFinite(h)) return;
-    raw = (h % 360 + 360) % 360;
-    smooth = circSmooth(raw, smooth);
-    API.heading = smooth;
-    // Front-back tilt (0 = flat, 90 = upright) — available on the same
-    // event regardless of which heading branch fired above. Plain EMA is
-    // enough (no wraparound like heading needs).
+    if (h != null && isFinite(h)) {
+      raw = (h % 360 + 360) % 360;
+      smooth = circSmooth(raw, smooth);
+      API.heading = smooth;
+      changed = true;
+    }
+    // Front-back tilt (0 = flat, 90 = upright either direction) — available
+    // on the same event regardless of whether heading resolved above, so
+    // this must NOT be gated behind the `h` check: plenty of real devices
+    // (no magnetometer / no absolute-orientation support) never resolve a
+    // heading at all, which used to skip this block entirely and leave
+    // tilt stuck at its initial null (map pitch permanently flat). abs()
+    // because a natural "hold the phone up to look at it" grip can read
+    // beta on either side of 0 depending on exact hand angle — clamping
+    // negative readings to 0 silently zeroed tilt out for some grips.
+    // Plain EMA is enough (no wraparound like heading needs).
     if (typeof e.beta === "number" && !isNaN(e.beta)) {
-      rawTilt = Math.max(0, Math.min(90, e.beta));
+      rawTilt = Math.max(0, Math.min(90, Math.abs(e.beta)));
       smoothTilt = smoothTilt == null ? rawTilt : smoothTilt + 0.25 * (rawTilt - smoothTilt);
       API.tilt = smoothTilt;
+      changed = true;
     }
+    if (!changed) return;
     API.active = true;
     emit();
   }
