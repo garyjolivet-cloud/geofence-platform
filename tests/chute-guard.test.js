@@ -857,15 +857,16 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
   cg.load([corridor], {});
   const pos1 = trackPoint(50, 8); // excess = 2.5m, genuinely outside
-  cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 5, t: 1700000000000 }, 270); // heading due "west" — straight back toward centerline
+  cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 8, t: 1700000000000 }, 270); // heading due "west" — straight back toward centerline
   assert(cg.getActiveAlarm() !== null, "sanity check: real fix alone reports an active alarm");
   // No further real tick — real wall-clock time passes with the player
-  // (per the last real fix) heading straight back in at 5 m/s. After ~0.6s
-  // real time, dead reckoning should predict roughly 5 - 5*0.6 = 2m lateral
-  // -> excess = 2 - 5.5 = negative -> already back inside.
-  const spinUntil = Date.now() + 650;
+  // (per the last real fix) heading straight back in at 8 m/s. After ~0.9s
+  // real time (comfortably inside the 1.5s DR ceiling): predicted lateral
+  // roughly 8 - 8*0.9 = 0.8m -> excess = 0.8 - 5.5 = -4.7m, well past
+  // DR_CONFIRM_MARGIN_M (1.0m) so this isn't just noise grazing zero.
+  const spinUntil = Date.now() + 900;
   while (Date.now() < spinUntil) { /* real busy-wait, no more ticks fed */ }
-  assert(cg.getActiveAlarm() === null, "dead reckoning silences the alarm early once the predicted (not yet confirmed) position is back inside");
+  assert(cg.getActiveAlarm() === null, "dead reckoning silences the alarm early once the predicted (not yet confirmed) position is clearly back inside");
 })();
 
 (function testDeadReckoningStartsAlarmEarlyOnPredictedExit(){
@@ -873,15 +874,40 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
   cg.load([corridor], {});
   const pos1 = trackPoint(50, 3); // excess = -2.5m, genuinely inside, no alarm yet
-  cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 5, t: 1700000000000 }, 90); // heading due "east" — straight out toward/past the edge
+  cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 8, t: 1700000000000 }, 90); // heading due "east" — straight out toward/past the edge
   assert(cg.getActiveAlarm() === null, "sanity check: real fix alone reports no alarm while inside");
-  // After ~0.6s real time heading east at 5 m/s: predicted lateral roughly
-  // 3 + 5*0.6 = 6m -> excess = 0.5m -> already past the edge.
-  const spinUntil = Date.now() + 650;
+  // After ~0.9s real time heading east at 8 m/s: predicted lateral roughly
+  // 3 + 8*0.9 = 10.2m -> excess = 4.7m, well past DR_CONFIRM_MARGIN_M (1.0m).
+  const spinUntil = Date.now() + 900;
   while (Date.now() < spinUntil) { /* real busy-wait, no more ticks fed */ }
   const alarm = cg.getActiveAlarm();
-  assert(alarm !== null, "dead reckoning starts the alarm early once the predicted (not yet confirmed) position is already past the edge");
+  assert(alarm !== null, "dead reckoning starts the alarm early once the predicted (not yet confirmed) position is clearly past the edge");
   if (alarm) assert(alarm.level === 1, "a DR-only alert (no real excursion history yet) starts at level 1, never a fabricated higher severity");
+})();
+
+// Real Test Mode log, 2026-09-20: with NO new real fix arriving (avatar not
+// being dragged, not a real GPS gap), DR kept extrapolating the last fix's
+// speed+heading as if the player were still moving — a stale straight-line
+// "coast" that phantom-drifted through a narrow corridor and back out the
+// other side, flipping the tone off then on with zero real movement
+// (STOP_TONE and the next START_TONE both fired with no chuteGuard debug
+// line, i.e. no real tick, anywhere between them). A borderline prediction
+// that only grazes the edge — the exact shape a stale/coasting velocity
+// guess produces — must NOT be trusted enough to flip the real state.
+(function testDeadReckoningIgnoresBorderlinePredictionsNearTheEdge(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  cg.load([corridor], {});
+  const pos1 = trackPoint(50, 6); // excess = 0.5m — just barely outside, real alarm active
+  cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 1, t: 1700000000000 }, 270); // slow drift back toward centerline
+  assert(cg.getActiveAlarm() !== null, "sanity check: real fix alone reports an active alarm");
+  // After ~0.6s at 1 m/s: predicted lateral roughly 6 - 0.6 = 5.4m -> excess
+  // = -0.1m — technically "predicted inside," but only by 0.1m, nowhere
+  // near DR_CONFIRM_MARGIN_M (1.0m). Must stay audible; this is exactly the
+  // kind of marginal guess a stopped-but-stale fix produces.
+  const spinUntil = Date.now() + 600;
+  while (Date.now() < spinUntil) { /* real busy-wait, no more ticks fed */ }
+  assert(cg.getActiveAlarm() !== null, "a borderline dead-reckoned prediction that only barely grazes the edge does not override the real (still-outside) state");
 })();
 
 (function testDeadReckoningIgnoresStationaryOrStaleFixes(){

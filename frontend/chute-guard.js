@@ -88,7 +88,8 @@
     STALE_MS: 5000,              // getActiveAlarm() treats state older than this as untrustworthy (no fix has landed recently) and reports "no alarm," regardless of whatever level/committed state a corridor was last left in — see getActiveAlarm()'s own comment
     MAX_CROSSING_JUMP_M: 30,     // sweptOppositeSideCrossing()'s own, tighter bound — a genuine single-tick lateral "skip" over a corridor's width realistically spans tens of meters near its OWN edge, not the full MAX_RELEVANT_PAD_M "still worth alerting" range; keeps a distant, unrelated corridor's infinite line from being coincidentally "crossed" by an unrelated movement 50+ meters away
     DR_MIN_SPEED_MPS: 0.3,       // dead-reckoning floor — below this, heading is noise (a near-stationary fix's travel heading swings wildly) and extrapolating position from it would too; see getActiveAlarm()'s DR comment
-    DR_MAX_S: 3.75               // dead-reckoning ceiling — only bridge the gap between real fixes for this long before falling back to "no prediction, use the last real fix as-is." A real phone's GPS fix interval is usually ~1s, so this comfortably bridges a missed/slow fix (or two) without guessing minutes into the future on stale data; raised 50% from the original 2.5s per field testing (2026-09-20) to also cover a degraded-signal 2-3s fix gap, not just a single dropped fix; STALE_MS (5000ms) remains the ultimate backstop if fixes stop arriving altogether
+    DR_MAX_S: 1.5,               // dead-reckoning ceiling — only bridge the gap between real fixes for this long before falling back to "no prediction, use the last real fix as-is." Lowered from an earlier 3.75s (2026-09-20) after a real Test Mode log caught a genuine bug: with no new real fix arriving (avatar simply not being moved/dragged, not a real GPS gap), DR kept extrapolating the LAST fix's speed+heading as if the player were still moving — a stale straight-line "coast" long enough to phantom-drift through a narrow corridor and back out the other side, flipping the tone off then on with zero real movement. A real phone's GPS fix interval is usually ~1s, so 1.5s still comfortably bridges one missed/slow fix; DR_CONFIRM_MARGIN_M (below) further guards against a borderline coast flipping the tone on noise. STALE_MS (5000ms) remains the ultimate backstop if fixes stop arriving altogether
+    DR_CONFIRM_MARGIN_M: 1.0     // a dead-reckoned excess has to clear the edge by at least this much (in whichever direction) before it's trusted enough to override the real state's on/off decision — a prediction that only barely grazes zero is exactly the noisy, low-confidence case a stale/coasting velocity produces, and shouldn't be allowed to flip the tone on its own
   };
 
   const EARTH_R = 6371000;
@@ -604,23 +605,26 @@
       let audible, level;
       if(st.level>0){
         // Real fixes say this corridor is currently alerting. DR can only
-        // silence it EARLY (predicted already back inside) — it never
+        // silence it EARLY (predicted CLEARLY already back inside, past
+        // DR_CONFIRM_MARGIN_M — not just barely grazing zero, which is
+        // exactly what a stale/coasting velocity guess produces) — it never
         // raises the level or invents urgency tick() itself hasn't earned.
         // Wrong in the "silence early" direction self-corrects within one
         // real fix: tick() never mutated st.level/committed here, so if the
         // player is genuinely still outside, the very next real fix sees
         // outsideNow again and re-emits onWarn, resuming the alarm.
-        audible = !(predExcessM!=null && predExcessM<=0);
+        audible = !(predExcessM!=null && predExcessM <= -TUNING.DR_CONFIRM_MARGIN_M);
         level = st.level;
       }else{
         // Real fixes say this corridor is currently quiet. DR can start it
-        // EARLY (predicted already outside) at a flat level 1 — the same
-        // severity a brand-new never-entered approach gets — since there's
-        // no real firstAlertAt/maxExcessM history yet to compute a proper
-        // ladder position from. The moment a real fix confirms it, tick()'s
-        // own st.level===0 branch takes over authoritatively and escalates
-        // normally from there; this is purely a bridge until it does.
-        audible = predExcessM!=null && predExcessM>0 && predExcessM<=TUNING.MAX_RELEVANT_PAD_M;
+        // EARLY (predicted CLEARLY already outside, past the same margin)
+        // at a flat level 1 — the same severity a brand-new never-entered
+        // approach gets — since there's no real firstAlertAt/maxExcessM
+        // history yet to compute a proper ladder position from. The moment
+        // a real fix confirms it, tick()'s own st.level===0 branch takes
+        // over authoritatively and escalates normally from there; this is
+        // purely a bridge until it does.
+        audible = predExcessM!=null && predExcessM>=TUNING.DR_CONFIRM_MARGIN_M && predExcessM<=TUNING.MAX_RELEVANT_PAD_M;
         level = 1;
       }
       if(audible && (!best || level>best.level)) best = { corridorId:c.id, name:c.name, level, maxExcessM:st.maxExcessM };
