@@ -438,15 +438,15 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 })();
 
 // ============================================================
-// 14. "Hard line" requirement (2026-09-19): approaching a corridor from
-// outside, before ever having entered it, now DOES alert — the everInside
-// latch that used to require "have you been inside this pass" before
-// arming was explicitly removed at the user's request, in favor of a pure
-// function of current position. This deliberately reverses the field-bug
-// fix this test used to guard (see git history for that original bug) —
-// the user weighed the tradeoff and chose simplicity/predictability.
+// 14. "Hard line in space" for a corridor already entered (2026-09-19),
+// combined with "no approach ping" (2026-09-20): approaching from outside
+// without ever having entered must NOT alert at all (see
+// testNeverEnteredCorridorNeverAlerts above) — but the very next real fix
+// once you cross in and back out again alerts immediately, purely because
+// it's geometrically outside the width+buffer and within maxRelevantM, with
+// no extra delay stacked on top now that everInside is satisfied.
 // ============================================================
-(function testAlertsOnApproachBeforeFirstEntry(){
+(function testAlertsOnExitAfterFirstEntryButNotBeforeIt(){
   const cg = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=halfW+0.5=5.5
   const events = { warn: [] };
@@ -459,42 +459,40 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
     forwardM += 1.5; t += 1000;
   }
   // Approach the corridor from outside, without ever having entered it —
-  // this must alert immediately now, purely because it's geometrically
-  // outside the width+buffer and within maxRelevantM.
+  // must NOT alert (no approach ping).
   for (let i = 0; i < 8; i++) tick(20); // excess = 20-5.5 = 14.5m, outside but within maxRelevantM
-  assert(events.warn.length > 0, "approaching a corridor from outside, before ever entering it, alerts immediately under the hard-line rule");
+  assert(events.warn.length === 0, "approaching a corridor from outside, before ever entering it, must not alert");
 
-  // Now actually cross in, then exit — should alert normally too.
-  const beforeSecondExit = events.warn.length;
+  // Now actually cross in, then exit — should alert immediately.
   for (let i = 0; i < 5; i++) tick(0);
   for (let i = 0; i < 3; i++) tick(20);
-  assert(events.warn.length > beforeSecondExit, "after genuinely entering and re-exiting, alerts continue normally");
+  assert(events.warn.length > 0, "after genuinely entering and re-exiting, alerts fire normally");
 })();
 
-// Real Test Mode field report, 2026-09-19: loading with the avatar merely
-// standing within maxRelevantM of a totally unrelated, never-visited
-// corridor (two stops placed near each other) immediately screamed at max
-// pitch/volume for up to MAX_ALERT_DURATION_MS, before the user had done
-// anything at all. A corridor never entered should still alert (the
-// approach case above), but must never escalate past level 1 — no siren for
-// "there happens to be some other run nearby."
-(function testNeverEnteredCorridorStaysAtLevelOne(){
+// No approach ping (2026-09-20, explicit user requirement, replacing the
+// earlier "level-1 approach ping" design tested here previously): a real
+// field test found that design still produced a full, sustained alarm well
+// before the corridor had ever actually been entered — a false alarm, not a
+// helpful heads-up. A corridor never entered must now never alert at all, no
+// matter how close or how long it sits within range.
+(function testNeverEnteredCorridorNeverAlerts(){
   const cg = freshChuteGuard();
-  // Same corridor shape as the field report: halfW=5m, huge fixed excess
-  // (44m, comfortably within maxRelevantM=halfW+0.5+60=65.5m) and a long
-  // stationary hold — both the distance ladder AND the time ladder would
-  // normally justify L3.
+  // Same corridor shape as the original field report: halfW=5m, huge fixed
+  // excess (44m, comfortably within maxRelevantM=halfW+0.5+60=65.5m) and a
+  // long stationary hold — both ladders would normally justify L3.
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
-  const events = { warn: [] };
-  cg.load([corridor], { onWarn: (id, name, info) => events.warn.push(info) });
+  const events = { warn: [], disengage: [] };
+  cg.load([corridor], {
+    onWarn: (id, name, info) => events.warn.push(info),
+    onDisengage: (id, name, info) => events.disengage.push(info)
+  });
   const t0 = 1700000000000;
   for (let i = 0; i < 20; i++) {
     const pos = trackPoint(0, 44);
     cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 0, t: t0 + i * 1000 }, null);
   }
-  assert(events.warn.length > 0, "a never-entered nearby corridor still alerts (approach case)");
-  assert(events.warn.every(w => w.level === 1),
-    "a never-entered corridor never escalates past level 1, however large the excess or however long it holds — every level was: " + events.warn.map(w => w.level).join(","));
+  assert(events.warn.length === 0, "a never-entered corridor must never alert, however large the excess or however long it holds — got " + events.warn.length + " warn(s)");
+  assert(events.disengage.length === 0, "nothing was ever active, so there's nothing to disengage from — got " + events.disengage.length);
 
   // Once genuinely entered, the ladder applies normally again.
   const corridor2 = makeCorridor("c2", { lenM: 400, widthM: 10 });
@@ -508,37 +506,26 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   }
   for (let i = 0; i < 5; i++) tick2(0, 1.5);   // actually inside first
   for (let i = 0; i < 3; i++) tick2(44, 1.5);  // then a huge excursion
+  assert(events2.warn.length > 0, "after genuinely being inside, drifting outside now alerts");
   assert(events2.warn.some(w => w.level > 1),
-    "after genuinely being inside, a large excursion still escalates past level 1 normally");
+    "after genuinely being inside, a large excursion escalates past level 1 normally");
 })();
 
-// Real Test Mode log, 2026-09-19: a never-entered corridor's low background
-// tone stayed on for the FULL MAX_ALERT_DURATION_MS (15s) every time it
-// triggered, masking the corridor actually under test's own correct, crisp
-// on/off transitions underneath it — START_TONE at 07.146, STOP_TONE only at
-// 22.267, spanning four separate real exit/entry cycles on the OTHER
-// corridor that all resolved exactly on schedule but were inaudible under
-// the masking tone. A never-entered corridor must commit (stop re-emitting
-// onWarn) within the much shorter NEVER_ENTERED_MAX_ALERT_MS, not the full
-// duration reserved for a genuine drift off a corridor the player was on.
-(function testNeverEnteredCorridorStopsNaggingQuickly(){
+// getActiveAlarm()'s dead-reckoning bridge must not invent an approach ping
+// either — only tick()'s own real-fix state (everInside) may ever start an
+// alarm for a corridor never actually entered.
+(function testNeverEnteredCorridorNoDeadReckonedPing(){
   const cg = freshChuteGuard();
-  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
-  const events = { warn: [], disengage: [] };
-  cg.load([corridor], {
-    onWarn: (id, name, info) => events.warn.push(info),
-    onDisengage: (id, name, info) => events.disengage.push(info)
-  });
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  cg.load([corridor], {});
   const t0 = 1700000000000;
-  // Stationary, never-entered, well within maxRelevantM the whole time —
-  // exactly the "there happens to be another run nearby" shape.
-  for (let i = 0; i < 20; i++) {
-    const pos = trackPoint(0, 20);
-    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 0, t: t0 + i * 1000 }, null);
-  }
-  assert(events.disengage.length === 1, "a never-entered corridor commits (silences) exactly once, not never — got " + events.disengage.length);
-  const lastWarnT = events.warn.length ? events.warn[events.warn.length - 1].t : -1;
-  assert(lastWarnT - t0 < 15000, "must stop re-alerting well before the 15s reserved for a genuine drift-off — last warn at t+" + (lastWarnT - t0) + "ms");
+  // A real fix well outside, moving fast and parallel to the corridor —
+  // exactly the shape that would otherwise let predictNow() extrapolate a
+  // further-outside position and light up the DR bridge.
+  const pos = trackPoint(0, 44);
+  cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 5, t: t0 }, 0);
+  const active = cg.getActiveAlarm();
+  assert(active === null, "a never-entered corridor's dead-reckoning bridge must not start an alarm either — got " + JSON.stringify(active));
 })();
 
 // ============================================================
@@ -792,8 +779,15 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 
   const t0 = 1700000000000;
   let t = 0;
-  // Get "distant" committed first: hold at a fixed point ~8m outside its
-  // edge (well within ITS OWN engage/relevance) for 15+ seconds so the
+  // No approach ping (2026-09-20): "distant" must actually be entered once
+  // before it can ever alert/commit — walk its own centerline briefly first.
+  for (let i = 0; i < 2; i++) {
+    const pos = trackPoint(0, distantOffset); // on distant's own axis, distM=0
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: t0 + t }, 0);
+    t += 1000;
+  }
+  // Get "distant" committed: hold at a fixed point ~8m outside its edge
+  // (well within ITS OWN engage/relevance) for 15+ seconds so the
   // unconditional MAX_ALERT_DURATION_MS cap commits it.
   for (let i = 0; i <= 16; i++) {
     const pos = trackPoint(0, distantOffset - 8); // ~8m from distant's axis, well outside its 5.5m edge
@@ -856,6 +850,10 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const cg = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
   cg.load([corridor], {});
+  // No approach ping (2026-09-20): must actually enter once before this
+  // corridor can alert at all.
+  const entry = trackPoint(48, 0);
+  cg.tick({ lat: entry[0], lon: entry[1], acc: 5, speed: 1.5, t: 1699999999000 }, 0);
   const pos1 = trackPoint(50, 8); // excess = 2.5m, genuinely outside
   cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 8, t: 1700000000000 }, 270); // heading due "west" — straight back toward centerline
   assert(cg.getActiveAlarm() !== null, "sanity check: real fix alone reports an active alarm");
@@ -898,6 +896,10 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const cg = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
   cg.load([corridor], {});
+  // No approach ping (2026-09-20): must actually enter once before this
+  // corridor can alert at all.
+  const entry = trackPoint(48, 0);
+  cg.tick({ lat: entry[0], lon: entry[1], acc: 5, speed: 1.5, t: 1699999999000 }, 0);
   const pos1 = trackPoint(50, 6); // excess = 0.5m — just barely outside, real alarm active
   cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 1, t: 1700000000000 }, 270); // slow drift back toward centerline
   assert(cg.getActiveAlarm() !== null, "sanity check: real fix alone reports an active alarm");
@@ -914,6 +916,10 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const cg = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
   cg.load([corridor], {});
+  // No approach ping (2026-09-20): must actually enter once before this
+  // corridor can alert at all.
+  const entry = trackPoint(48, 0);
+  cg.tick({ lat: entry[0], lon: entry[1], acc: 5, speed: 1.5, t: 1699999999000 }, 0);
   const posOutside = trackPoint(50, 8); // excess = 2.5m
   // Stationary (speed 0): heading is meaningless noise at zero speed, so DR
   // must not extrapolate away from what the real fix itself said.

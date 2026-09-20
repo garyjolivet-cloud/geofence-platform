@@ -32,6 +32,17 @@
 // crossing, but the user explicitly asked for that removed in favor of
 // predictability: any geometrically-outside fix counts, every time.
 //
+// No "approach ping" (removed 2026-09-20, explicit user requirement): a
+// corridor the player has never actually been inside NEVER alerts, no matter
+// how close or how long it sits within range — `everInside` (true the
+// instant near.distM<=halfW, real position only, never via predictNow()'s
+// dead reckoning) gates the very first alert. An earlier version alerted at
+// a capped level 1 for a "nearby but never entered" corridor as a quiet
+// approach warning; a real field test found this fired a full, sustained
+// alarm well before the player had ever set foot in the corridor, which read
+// as a false alarm rather than a helpful heads-up. Simpler and safer: no
+// alert at all until you've genuinely been inside at least once.
+//
 // Committed-exit detection: while alerting, this module also tracks whether
 // the player's distance from the corridor is trending back down (a real
 // correction attempt) or growing steadily with no narrowing in between
@@ -77,8 +88,7 @@
     ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
     COMMIT_STREAK_MS: 4000,      // excess growing continuously (no intervening narrowing) for at least this long...
     COMMIT_GROWTH_M: 15,         // ...or the excess has grown at least this much past its value at the first alert, with no intervening fix narrowing it back...
-    MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging" — only applies once the player has actually been inside this corridor at least once; see NEVER_ENTERED_MAX_ALERT_MS
-    NEVER_ENTERED_MAX_ALERT_MS: 3000, // same idea, but for a corridor merely sitting nearby that the player has never once entered (the "approach before first entry" case) — a much shorter leash, since nagging about a run you're not even on doesn't need 15s to prove it's not being approached, and a long-lived low background tone from an unrelated corridor masks the corridor actually being tested/ridden underneath it
+    MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging"
 
     COMMIT_JITTER_M: 0.5,        // a change in excess smaller than this between fixes counts as neither growth nor a correction (GPS noise floor)
     SAMPLE_STEP_M: 20,           // corridor resampling step for the coverage gate
@@ -373,23 +383,27 @@
       // and only cleared when the player leaves relevant range entirely
       // (a genuine "gone away," not just "currently between the true edge
       // and the buffer/relevant-range boundary").
-      if(near.distM <= halfW) st.everInside = true; // still tracked for onDebug only, see below
+      if(near.distM <= halfW) st.everInside = true; // gates whether an alert can ever start at all — see the "no approach ping" doc comment at the top of the file
       // "Hard line in space" requirement, 2026-09-19: the user explicitly
       // asked for the corridor's edge to be a pure function of CURRENT
       // position — outside the width+buffer means the alarm is on, inside
       // means it's off, full stop, no history and no heading/speed
       // requirement deciding whether that's "trustworthy enough." `engaged`
-      // and `everInside` used to also have to be satisfied before a FRESH
-      // excursion could start (to avoid false-alarming on a mere
-      // perpendicular crossing, or an approach that hadn't reached the
-      // corridor yet) — removed from this decision entirely per that
-      // explicit request; they're computed above/below only so onDebug's
-      // existing log format keeps showing them for diagnostic purposes.
-      // The one exception the user explicitly chose to KEEP: the
-      // committed-exit detector further down can still silence an active,
-      // still-outside excursion once it concludes the departure is
-      // deliberate — otherwise skiing/riding away on purpose would alarm
-      // forever with no way to stop it short of returning.
+      // used to also have to be satisfied before a FRESH excursion could
+      // start (to avoid false-alarming on a mere perpendicular crossing) —
+      // removed from this decision entirely per that explicit request; it's
+      // computed above only so onDebug's existing log format keeps showing
+      // it for diagnostic purposes. `everInside` DOES still gate the alert
+      // (see the "no approach ping" doc comment at the top of the file) —
+      // that's the one requirement the user asked to reinstate after a real
+      // field test found the un-gated approach case produced a real false
+      // alarm well before the corridor was ever entered.
+      // The one exception the user explicitly chose to KEEP from the
+      // original "hard line" change: the committed-exit detector further
+      // down can still silence an active, still-outside excursion once it
+      // concludes the departure is deliberate — otherwise skiing/riding away
+      // on purpose would alarm forever with no way to stop it short of
+      // returning.
       const outsideNow = excessM > 0 && near.distM <= maxRelevantM && !crossedOppositeSide;
 
       // Debug hook — Test Mode wires this into its log panel so an author
@@ -476,6 +490,19 @@
 
       if(excessM > st.maxExcessM) st.maxExcessM = excessM;
 
+      if(!st.everInside){
+        // No approach ping (2026-09-20) — a corridor the player has never
+        // once actually been inside never alerts, full stop. See the "no
+        // approach ping" doc comment at the top of the file. maxExcessM
+        // above is still tracked so onDebug stays informative, but nothing
+        // here ever escalates or emits — this state resets to fresh the
+        // instant the player leaves relevant range (see the !outsideNow
+        // branch above), and once they genuinely enter, everInside flips
+        // true and the normal alert flow below applies from then on.
+        st.prevExcessM = excessM;
+        continue;
+      }
+
       if(st.level===0){
         // Fires on the very fix that crosses the edge — no extra distance or
         // accuracy-scaled delay stacked on top of OUTSIDE_BUFFER_M's small
@@ -489,17 +516,10 @@
         // The escalation ladder applies from the very first alert too — a
         // single large excursion (e.g. 30m past the edge) starts at level 3
         // immediately, rather than easing in through 1->2->3 over the next
-        // 12s the way a gradual drift would. EXCEPT: if the player has never
-        // once been inside this specific corridor, a big excessM just means
-        // "there happens to be some other run within maxRelevantM of here" —
-        // not "you drifted far off the run you were on." Found via a real
-        // Test Mode log (2026-09-19): loading with the avatar merely within
-        // 66m of an unrelated, never-visited corridor immediately screamed
-        // at max pitch/volume for up to MAX_ALERT_DURATION_MS. A corridor
-        // you've never entered gets a gentle, constant-level nudge instead —
-        // still alerts (per the explicit "approach before first entry"
-        // decision), just never at siren severity.
-        st.level = st.everInside ? ladderLevel(0, st.maxExcessM) : 1;
+        // 12s the way a gradual drift would. Only reachable at all once
+        // everInside is true (see the guard above), so there's no longer a
+        // "capped at level 1" case to special-case here.
+        st.level = ladderLevel(0, st.maxExcessM);
         emitWarn(c, st, now, excessM);
         continue;
       }
@@ -527,22 +547,7 @@
 
       const grownEnough = (excessM - st.excessAtFirstAlert) >= TUNING.COMMIT_GROWTH_M;
       const growingTooLong = st.growthStreakStartAt!=null && (now - st.growthStreakStartAt) >= TUNING.COMMIT_STREAK_MS;
-      // A never-entered corridor gets a much shorter leash than a genuine
-      // drift-off-a-run-you-were-on excursion. Found via a real Test Mode
-      // log (2026-09-19): loading near a second, never-visited corridor
-      // ("HorsetrailTwistedSister") kept a low background tone running for
-      // the FULL MAX_ALERT_DURATION_MS (15s) every time it was triggered,
-      // masking the actually-being-tested corridor's correct, crisp on/off
-      // transitions underneath it the entire time — every one of that
-      // corridor's own exits/entries resolved exactly on schedule, but the
-      // masking tone made it sound like nothing ever turned off. A distant
-      // "just happens to be nearby" corridor doesn't need 15 seconds of
-      // grace to prove it's not being approached; MAX_ALERT_DURATION_MS's
-      // full length stays reserved for a corridor the player was actually
-      // on and is drifting away from.
-      const tooLong = st.everInside
-        ? (now - st.firstAlertAt) >= TUNING.MAX_ALERT_DURATION_MS
-        : (now - st.firstAlertAt) >= TUNING.NEVER_ENTERED_MAX_ALERT_MS;
+      const tooLong = (now - st.firstAlertAt) >= TUNING.MAX_ALERT_DURATION_MS;
       if(growingTooLong || grownEnough || tooLong){
         st.committed = true;
         if(cb.onDisengage) cb.onDisengage(c.id, c.name, {
@@ -556,7 +561,7 @@
       // per-fix signal into a continuous alarm; this module just reports
       // "still outside, here's the level" as often as it has a fix to check.
       const msOut = now - st.firstAlertAt;
-      st.level = st.everInside ? Math.max(st.level, ladderLevel(msOut, st.maxExcessM)) : 1;
+      st.level = Math.max(st.level, ladderLevel(msOut, st.maxExcessM));
       emitWarn(c, st, now, excessM);
     }
   }
@@ -615,17 +620,25 @@
         // outsideNow again and re-emits onWarn, resuming the alarm.
         audible = !(predExcessM!=null && predExcessM <= -TUNING.DR_CONFIRM_MARGIN_M);
         level = st.level;
-      }else{
-        // Real fixes say this corridor is currently quiet. DR can start it
-        // EARLY (predicted CLEARLY already outside, past the same margin)
-        // at a flat level 1 — the same severity a brand-new never-entered
-        // approach gets — since there's no real firstAlertAt/maxExcessM
-        // history yet to compute a proper ladder position from. The moment
-        // a real fix confirms it, tick()'s own st.level===0 branch takes
-        // over authoritatively and escalates normally from there; this is
-        // purely a bridge until it does.
+      }else if(st.everInside){
+        // Real fixes say this corridor is currently quiet, but the player
+        // HAS been inside it before (just not right now — e.g. reset after
+        // going out of relevant range, or mid-approach again). DR can start
+        // it EARLY (predicted CLEARLY already outside, past the same
+        // margin) at a flat level 1, since there's no real
+        // firstAlertAt/maxExcessM history yet to compute a proper ladder
+        // position from. The moment a real fix confirms it, tick()'s own
+        // st.level===0 branch takes over authoritatively and escalates
+        // normally from there; this is purely a bridge until it does.
         audible = predExcessM!=null && predExcessM>=TUNING.DR_CONFIRM_MARGIN_M && predExcessM<=TUNING.MAX_RELEVANT_PAD_M;
         level = 1;
+      }else{
+        // Never been inside this corridor — no approach ping, not even a
+        // dead-reckoned one. See the "no approach ping" doc comment at the
+        // top of the file; tick() itself won't start an alert here either,
+        // so DR must not invent one on its own.
+        audible = false;
+        level = 0;
       }
       if(audible && (!best || level>best.level)) best = { corridorId:c.id, name:c.name, level, maxExcessM:st.maxExcessM };
     }
