@@ -86,7 +86,9 @@
     MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while the player is somewhere else entirely
     ACCURACY_CAP_M: 30,          // ignore fixes worse than this
     STALE_MS: 5000,              // getActiveAlarm() treats state older than this as untrustworthy (no fix has landed recently) and reports "no alarm," regardless of whatever level/committed state a corridor was last left in — see getActiveAlarm()'s own comment
-    MAX_CROSSING_JUMP_M: 30      // sweptOppositeSideCrossing()'s own, tighter bound — a genuine single-tick lateral "skip" over a corridor's width realistically spans tens of meters near its OWN edge, not the full MAX_RELEVANT_PAD_M "still worth alerting" range; keeps a distant, unrelated corridor's infinite line from being coincidentally "crossed" by an unrelated movement 50+ meters away
+    MAX_CROSSING_JUMP_M: 30,     // sweptOppositeSideCrossing()'s own, tighter bound — a genuine single-tick lateral "skip" over a corridor's width realistically spans tens of meters near its OWN edge, not the full MAX_RELEVANT_PAD_M "still worth alerting" range; keeps a distant, unrelated corridor's infinite line from being coincidentally "crossed" by an unrelated movement 50+ meters away
+    DR_MIN_SPEED_MPS: 0.3,       // dead-reckoning floor — below this, heading is noise (a near-stationary fix's travel heading swings wildly) and extrapolating position from it would too; see getActiveAlarm()'s DR comment
+    DR_MAX_S: 2.5                // dead-reckoning ceiling — only bridge the gap between real fixes for this long before falling back to "no prediction, use the last real fix as-is." A real phone's GPS fix interval is usually ~1s, so this comfortably bridges one missed/slow fix without guessing minutes into the future on stale data; STALE_MS (5000ms) remains the ultimate backstop if fixes stop arriving altogether
   };
 
   const EARTH_R = 6371000;
@@ -218,6 +220,35 @@
   let cb={};
   let lastTickAtWall=0;         // real Date.now() at the last tick() call — see getActiveAlarm()
   let prevFixLatLon=null;       // [lat,lon] of the last ACCEPTED fix — see nearestOnPathSwept()
+  let lastRealFix=null;         // {lat,lon,speed,headingDeg,tWall} from the last real tick() — see predictNow()/getActiveAlarm()
+
+  // Dead reckoning between real fixes (2026-09-19): a real phone's GPS fix
+  // arrives roughly once a second (sometimes much less often), so even a
+  // perfectly-instant state machine can only react on whichever fix happens
+  // to land after the player actually crossed the line — up to a full fix
+  // interval of pure sensor latency, unrelated to anything in this module's
+  // own logic (confirmed clean in every Test Mode log this bug chain
+  // produced). Real automotive lane-keeping systems bridge exactly this gap
+  // by extrapolating position from the last known velocity vector between
+  // sensor samples, then correcting the instant a new sample lands —
+  // predictNow() is that same technique, kept deliberately narrow: it only
+  // ever answers "where is the player probably RIGHT NOW," never mutates any
+  // of tick()'s own persistent state (level/committed/growth-streak/etc.),
+  // so a wrong guess can't corrupt anything — the very next real tick() call
+  // re-derives the correct state from scratch regardless of what prediction
+  // said in between.
+  function destPointLocal(lat, lon, distM, bearingDeg){
+    const brg = bearingDeg*Math.PI/180;
+    const dy = Math.cos(brg)*distM, dx = Math.sin(brg)*distM;
+    return [ lat + dy/M_PER_DEG_LAT, lon + dx/mPerDegLon(lat) ];
+  }
+  function predictNow(){
+    if(!lastRealFix || lastRealFix.speed==null || lastRealFix.headingDeg==null) return null;
+    if(lastRealFix.speed < TUNING.DR_MIN_SPEED_MPS) return null; // near-stationary — heading is noise, nothing meaningful to extrapolate
+    const elapsedS = (Date.now()-lastRealFix.tWall)/1000;
+    if(elapsedS<=0 || elapsedS>TUNING.DR_MAX_S) return null;     // no time to bridge, or too stale to trust — use the last real fix as-is
+    return destPointLocal(lastRealFix.lat, lastRealFix.lon, lastRealFix.speed*elapsedS, lastRealFix.headingDeg);
+  }
 
   function freshState(){
     return {
@@ -265,7 +296,7 @@
     }));
   }
 
-  function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; }
+  function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; }
 
   function emitWarn(c, st, now, excessM){
     st.alertCount++;
@@ -286,6 +317,7 @@
   function tick(fix, headingDeg){
     if(!corridors.length || fix==null || (fix.acc!=null && fix.acc>TUNING.ACCURACY_CAP_M)) return;
     lastTickAtWall = Date.now(); // real wall clock, independent of fix.t — see getActiveAlarm()
+    lastRealFix = { lat:fix.lat, lon:fix.lon, speed:fix.speed, headingDeg, tWall:lastTickAtWall }; // see predictNow()
     const latLon=[fix.lat, fix.lon];
     const now = fix.t || Date.now();
     const prevLatLon = prevFixLatLon; // captured before this tick updates it, below
@@ -563,14 +595,45 @@
   // longer the source of truth for whether the alarm itself is sounding.
   function getActiveAlarm(){
     if(!lastTickAtWall || (Date.now()-lastTickAtWall) > TUNING.STALE_MS) return null;
+    const predicted = predictNow(); // null when DR isn't trustworthy right now — see its own comment
     let best=null;
     for(const c of corridors){
       const st = stateByCorridor.get(c.id);
-      if(st && st.level>0 && !st.committed){
-        if(!best || st.level>best.level) best = { corridorId:c.id, name:c.name, level:st.level, maxExcessM:st.maxExcessM };
+      if(!st || st.committed) continue;
+      const predExcessM = predicted!=null ? predictedExcessM(c, predicted) : null;
+      let audible, level;
+      if(st.level>0){
+        // Real fixes say this corridor is currently alerting. DR can only
+        // silence it EARLY (predicted already back inside) — it never
+        // raises the level or invents urgency tick() itself hasn't earned.
+        // Wrong in the "silence early" direction self-corrects within one
+        // real fix: tick() never mutated st.level/committed here, so if the
+        // player is genuinely still outside, the very next real fix sees
+        // outsideNow again and re-emits onWarn, resuming the alarm.
+        audible = !(predExcessM!=null && predExcessM<=0);
+        level = st.level;
+      }else{
+        // Real fixes say this corridor is currently quiet. DR can start it
+        // EARLY (predicted already outside) at a flat level 1 — the same
+        // severity a brand-new never-entered approach gets — since there's
+        // no real firstAlertAt/maxExcessM history yet to compute a proper
+        // ladder position from. The moment a real fix confirms it, tick()'s
+        // own st.level===0 branch takes over authoritatively and escalates
+        // normally from there; this is purely a bridge until it does.
+        audible = predExcessM!=null && predExcessM>0 && predExcessM<=TUNING.MAX_RELEVANT_PAD_M;
+        level = 1;
       }
+      if(audible && (!best || level>best.level)) best = { corridorId:c.id, name:c.name, level, maxExcessM:st.maxExcessM };
     }
     return best;
+  }
+  // Predicted excess distance (same edgeM threshold tick() itself uses) at a
+  // dead-reckoned position — read-only, no state mutation. See predictNow().
+  function predictedExcessM(c, predictedLatLon){
+    const ref=c.path[0];
+    const near=nearestOnPath(predictedLatLon, c.path, ref);
+    const edgeM = c.widthM/2 + TUNING.OUTSIDE_BUFFER_M;
+    return near.distM - edgeM;
   }
 
   // Escalation level from the more urgent of the two ladders — how long

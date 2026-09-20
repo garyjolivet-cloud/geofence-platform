@@ -844,5 +844,67 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   }
 })();
 
+// ============================================================
+// 23. Dead reckoning (2026-09-19): between real GPS fixes, getActiveAlarm()
+// extrapolates position from the last real fix's speed+heading to react
+// sooner than the real fix rate alone would allow — symmetric, per explicit
+// user decision (predicts both silencing early on re-entry AND alerting
+// early on exit). Uses real wall-clock busy-waits (same technique as
+// testGetActiveAlarmStaleness) since predictNow() reads Date.now() directly.
+// ============================================================
+(function testDeadReckoningSilencesAlarmEarlyOnPredictedReentry(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  cg.load([corridor], {});
+  const pos1 = trackPoint(50, 8); // excess = 2.5m, genuinely outside
+  cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 5, t: 1700000000000 }, 270); // heading due "west" — straight back toward centerline
+  assert(cg.getActiveAlarm() !== null, "sanity check: real fix alone reports an active alarm");
+  // No further real tick — real wall-clock time passes with the player
+  // (per the last real fix) heading straight back in at 5 m/s. After ~0.6s
+  // real time, dead reckoning should predict roughly 5 - 5*0.6 = 2m lateral
+  // -> excess = 2 - 5.5 = negative -> already back inside.
+  const spinUntil = Date.now() + 650;
+  while (Date.now() < spinUntil) { /* real busy-wait, no more ticks fed */ }
+  assert(cg.getActiveAlarm() === null, "dead reckoning silences the alarm early once the predicted (not yet confirmed) position is back inside");
+})();
+
+(function testDeadReckoningStartsAlarmEarlyOnPredictedExit(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  cg.load([corridor], {});
+  const pos1 = trackPoint(50, 3); // excess = -2.5m, genuinely inside, no alarm yet
+  cg.tick({ lat: pos1[0], lon: pos1[1], acc: 5, speed: 5, t: 1700000000000 }, 90); // heading due "east" — straight out toward/past the edge
+  assert(cg.getActiveAlarm() === null, "sanity check: real fix alone reports no alarm while inside");
+  // After ~0.6s real time heading east at 5 m/s: predicted lateral roughly
+  // 3 + 5*0.6 = 6m -> excess = 0.5m -> already past the edge.
+  const spinUntil = Date.now() + 650;
+  while (Date.now() < spinUntil) { /* real busy-wait, no more ticks fed */ }
+  const alarm = cg.getActiveAlarm();
+  assert(alarm !== null, "dead reckoning starts the alarm early once the predicted (not yet confirmed) position is already past the edge");
+  if (alarm) assert(alarm.level === 1, "a DR-only alert (no real excursion history yet) starts at level 1, never a fabricated higher severity");
+})();
+
+(function testDeadReckoningIgnoresStationaryOrStaleFixes(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  cg.load([corridor], {});
+  const posOutside = trackPoint(50, 8); // excess = 2.5m
+  // Stationary (speed 0): heading is meaningless noise at zero speed, so DR
+  // must not extrapolate away from what the real fix itself said.
+  cg.tick({ lat: posOutside[0], lon: posOutside[1], acc: 5, speed: 0, t: 1700000000000 }, 270);
+  const spinUntil1 = Date.now() + 120;
+  while (Date.now() < spinUntil1) { /* real busy-wait */ }
+  assert(cg.getActiveAlarm() !== null, "a stationary fix's alarm is never silenced by DR (no meaningful heading to extrapolate)");
+
+  // Stale: heading toward the corridor but old enough that DR gives up
+  // rather than guessing arbitrarily far into the future.
+  cg.TUNING.DR_MAX_S = 0.05; // shrink so a short real wait is already "too stale" to trust
+  const posOutside2 = trackPoint(60, 8);
+  cg.tick({ lat: posOutside2[0], lon: posOutside2[1], acc: 5, speed: 5, t: 1700000001000 }, 270); // 1s after the first tick's fix.t — well under NEVER_ENTERED_MAX_ALERT_MS, so the commit timer doesn't confound this DR-staleness check
+  const spinUntil2 = Date.now() + 120;
+  while (Date.now() < spinUntil2) { /* real busy-wait past the shrunk DR_MAX_S */ }
+  assert(cg.getActiveAlarm() !== null, "DR gives up (falls back to the last real fix) once its own prediction window has elapsed, rather than guessing indefinitely far ahead");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
