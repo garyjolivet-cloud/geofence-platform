@@ -39,6 +39,10 @@
      comment for the engage/coverage/heading gating; this page only supplies
      callbacks (WHAT happens), never touches its WHEN logic. -->
 <script src="/chute-guard.js"></script>
+<!-- Press-and-hold gesture (arm/disarm one corridor's Corridor Guard from
+     the map) — shared with fence-editor.html's Test Mode. See its own
+     header comment. -->
+<script src="/long-press.js"></script>
 <!-- Shared 3D DEM-terrain wiring (Terrarium DEM + setTerrain + tilt). Used
      here when the workspace's 3D flag is on; the older map surfaces still
      carry their own copy of this. -->
@@ -667,6 +671,20 @@ const RQ_MAX_TRACK = 6;
 function getTrackFriends(){ try{ return JSON.parse(localStorage.getItem("rq.trackFriends")||"[]"); }catch(e){ return []; } }
 function setTrackFriends(ids){ localStorage.setItem("rq.trackFriends", JSON.stringify(ids.slice(0, RQ_MAX_TRACK))); }
 
+// Corridor Guard per-chute selection (press-and-hold a run on "My map" to
+// arm/disarm it, 2026-09-20) — a rider typically only wants ONE chute
+// watched at a time (drop in, ride the lift back up, disarm, pick a new
+// one), not a tone firing for every incidental crossing on a project with
+// dozens of runs. Persisted per-device (survives an app reload between
+// runs/lift rides), same "small localStorage set" precedent as
+// rq.trackFriends above. Purely a runtime OUTPUT filter — chute-guard.js
+// keeps tracking every corridor's real state regardless (see
+// ChuteGuard.getActiveAlarm(isEligible)'s own comment: this is the same
+// Battery Saver lesson — filter the alarm output, not chute-guard.js's
+// input, or isOnLift() breaks too).
+function getGuardedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.guardedCorridors")||"[]"); }catch(e){ return []; } }
+function setGuardedCorridors(ids){ try{ localStorage.setItem("rq.guardedCorridors", JSON.stringify(ids)); }catch(e){} }
+
 // Battery Saver ("lift mode") — how long the raw ChuteGuard.isOnLift()
 // signal has to hold steady, one way or the other, before Quest._onFix
 // actually flips liftModeActive in "auto" mode. Real fixes land roughly
@@ -823,6 +841,21 @@ const Quest = {
   _liftRaw: false,          // last raw ChuteGuard.isOnLift() reading, pre-debounce — see _onFix()
   _liftRawSinceT: 0,        // fix.t the raw reading last changed — debounce clock, in fix time (not wall time) so it works the same for real GPS and simulateWalk()
 
+  // Corridor Guard per-chute selection — see getGuardedCorridors()'s own
+  // comment. Set of zoneIds (chute-guard.js corridorIds); restored from
+  // localStorage in start(). This default (empty) only matters before
+  // start() has run once.
+  guardedCorridors: new Set(),
+  // Toggles one corridor's armed state, persists it, and returns the new
+  // state — the single choke point renderFogMap()'s press-and-hold handler
+  // calls, so the map redraw + persistence always stay in sync.
+  toggleGuardedCorridor(zoneId){
+    if(this.guardedCorridors.has(zoneId)) this.guardedCorridors.delete(zoneId);
+    else this.guardedCorridors.add(zoneId);
+    setGuardedCorridors(Array.from(this.guardedCorridors));
+    return this.guardedCorridors.has(zoneId);
+  },
+
   async loadCorridors(){
     try{
       const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
@@ -921,6 +954,7 @@ const Quest = {
     this.liftModeActive = false;
     this._liftRaw = false;
     this._liftRawSinceT = 0;
+    this.guardedCorridors = new Set(getGuardedCorridors());
     this.checkpointVert = getCheckpointVert();
     this._cpCooldownUntil = {};
     this._cpLastPostAt = 0;
@@ -1743,7 +1777,7 @@ function syncCgAlarm(){
   // site's comment) so Battery Saver's isOnLift() works regardless of this
   // flag — the actual audible/vibration alarm still only sounds when the
   // workspace has opted into it.
-  const active = Quest.chuteGuardEnabled ? ChuteGuard.getActiveAlarm() : null;
+  const active = Quest.chuteGuardEnabled ? ChuteGuard.getActiveAlarm(id=>Quest.guardedCorridors.has(id)) : null;
   if(!active){
     if(_cgAlarm) stopCgAlarm();
     return;
@@ -1791,7 +1825,7 @@ let _cgLastToastLevel = 0;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
-      if(!Quest.chuteGuardEnabled) return; // geometry now always loads (Battery Saver) — this flag still gates the toast/log/debug output itself, same as before
+      if(!Quest.chuteGuardEnabled || !Quest.guardedCorridors.has(corridorId)) return; // geometry now always loads (Battery Saver) — these flags gate the toast/log/debug output itself, same as before
       const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
       cgLog("WARN \""+(name||"corridor")+"\" L"+lvl+" +"+((info&&info.excessM)||0).toFixed(1)+"m alertCount="+(info&&info.alertCount));
       if(info && info.alertCount===1){
@@ -1803,13 +1837,13 @@ function chuteGuardCallbacks(){
       }
     },
     onClear(corridorId, name){
-      if(!Quest.chuteGuardEnabled) return;
+      if(!Quest.chuteGuardEnabled || !Quest.guardedCorridors.has(corridorId)) return;
       cgLog("CLEAR \""+(name||"corridor")+"\"");
       _cgLastToastLevel = 0;
       rqToast("✓ back on \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId, name, info){
-      if(!Quest.chuteGuardEnabled) return;
+      if(!Quest.chuteGuardEnabled || !Quest.guardedCorridors.has(corridorId)) return;
       cgLog("DISENGAGE \""+(name||"corridor")+"\" max+"+((info&&info.maxExcessM)||0).toFixed(1)+"m");
       _cgLastToastLevel = 0;
       // chute-guard.js concluded this is a deliberate departure (steady
@@ -2675,9 +2709,11 @@ function drawAllRuns(map){
     const latRef = (c.path && c.path[0] && c.path[0][0]) || Quest.ref[0];
     return {
       type:"Feature",
-      properties:{ name:c.name||"Run", difficulty:c.difficulty||"", activityType:c.activityType||"",
+      properties:{ id:c.zoneId, name:c.name||"Run", difficulty:c.difficulty||"", activityType:c.activityType||"",
                    runType:c.runType||"run", lengthM:Math.round(c.lengthM||0),
                    col:st.col, halo:st.halo, dash:st.dash, tier:st.tier,
+                   // guarded: press-and-hold arms/disarms one chute at a time — see Quest.guardedCorridors
+                   guarded:Quest.guardedCorridors.has(c.zoneId),
                    // shared corridor renderer (width band + piste-glow, no dashes)
                    corridor:true, widthM:(c.widthM>0?c.widthM:10), pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(latRef) },
       geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
@@ -2704,18 +2740,50 @@ function drawAllRuns(map){
   _rebuildRunLabels(map, cors);
   map.on("moveend", ()=>{ clearTimeout(_runLabelMoveTimer); _runLabelMoveTimer=setTimeout(()=>_rebuildRunLabels(map,cors),150); });
 
-  map.on("click","runLines-hit",e=>{
-    const p = e.features && e.features[0] && e.features[0].properties; if(!p) return;
+  function showRunPopup(feature, lngLat){
+    const p = feature && feature.properties; if(!p) return;
     const act = p.activityType || (p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
     new maplibregl.Popup({ closeButton:true, offset:8 })
-      .setLngLat(e.lngLat)
+      .setLngLat(lngLat)
       .setHTML('<div style="font:600 16px/1.35 system-ui,sans-serif;color:#0a1018">'+
         esc(p.name)+'</div><div style="font:14px system-ui,sans-serif;color:#5b7088">'+
         [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
       .addTo(map);
-  });
+  }
+  // Press-and-hold a run to arm/disarm Corridor Guard for just that one
+  // (see Quest.guardedCorridors's own comment) — a normal quick tap keeps
+  // showing the popup above instead. `feats` is mutated in place and
+  // re-pushed via setData() so the map's bright-cyan highlight updates
+  // immediately, without rebuilding the whole runLines source/layer stack
+  // (which drawAllRuns() only ever expects to build once per map instance).
+  if(typeof LongPress!=="undefined"){
+    LongPress.bind(map,"runLines-hit",{
+      onTap: showRunPopup,
+      onLongPress(feature){
+        const zoneId = feature && feature.properties && feature.properties.id;
+        if(zoneId==null) return;
+        const guarded = Quest.toggleGuardedCorridor(zoneId);
+        const name = (feature.properties && feature.properties.name) || "run";
+        rqToast(guarded ? ("🛡 Now guarding: "+name) : ("Stopped guarding: "+name));
+        const feat = feats.find(f=>f.properties && f.properties.id===zoneId && f.properties.corridor);
+        if(feat) feat.properties.guarded = guarded;
+        const src = map.getSource("runLines");
+        if(src) src.setData({ type:"FeatureCollection", features:feats });
+      }
+    });
+  }else{
+    map.on("click","runLines-hit",e=>showRunPopup(e.features&&e.features[0], e.lngLat)); // long-press.js not loaded — fall back to tap-only
+  }
   map.on("mouseenter","runLines-hit",()=>{ map.getCanvas().style.cursor="pointer"; });
   map.on("mouseleave","runLines-hit",()=>{ map.getCanvas().style.cursor=""; });
+
+  // First-run discoverability hint — only once, only when nothing is armed
+  // yet (an experienced rider who already has a chute armed doesn't need
+  // reminding every time they open the map).
+  if(!Quest.guardedCorridors.size && !localStorage.getItem("rq.guardHintShown")){
+    try{ localStorage.setItem("rq.guardHintShown","1"); }catch(e){}
+    setTimeout(()=>rqToast("Press and hold a run to have Corridor Guard watch it"), 1200);
+  }
 }
 
 function renderFogMap(){

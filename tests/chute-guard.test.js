@@ -1046,5 +1046,52 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(cg.isOnLift() === false, "unload() resets isOnLift() to false");
 })();
 
+// ============================================================
+// 24. getActiveAlarm(isEligible) — additive optional filter (2026-09-20),
+// added for "press and hold a chute on the map to arm/disarm just that
+// one" (Corridor Guard per-chute selection). Must be applied INSIDE the
+// scan across corridors, not as a post-hoc check on the single already-
+// selected `best` — this function only ever returns the one loudest
+// currently-alerting corridor, so a post-hoc filter would wrongly report
+// "no alarm" whenever an ELIGIBLE corridor is alerting alongside a louder
+// INELIGIBLE one. Omitting the argument entirely must behave exactly as
+// before (every corridor eligible) — proven by every one of the 98 other
+// tests in this file, none of which pass an argument, still passing.
+// ============================================================
+(function testGetActiveAlarmEligibilityFilter(){
+  const cg = freshChuteGuard();
+  // Both corridors share the exact same centerline (makeCorridor always
+  // starts at the same START heading north) but different widths, so a
+  // single drifted-lateral position is simultaneously outside both, at
+  // different excess/level — "louder" (narrower) always outranks "quieter"
+  // (wider) when nothing is filtered.
+  const louder = makeCorridor("louder", { lenM: 400, widthM: 10 });  // halfW=5,  edge=5.5
+  const quieter = makeCorridor("quieter", { lenM: 400, widthM: 40 }); // halfW=20, edge=20.5
+  cg.load([louder, quieter], {});
+
+  const t0 = 1700000000000;
+  let forwardM = 0, t = 0;
+  function tick(lateralM){
+    const pos = trackPoint(forwardM, lateralM);
+    cg.tick({ lat: pos[0], lon: pos[1], acc: 5, speed: 1.5, t: t0 + t }, 0);
+    forwardM += 1.5; t += 1000;
+  }
+  for (let i = 0; i <= 50; i++) tick(0); // cover phase — both corridors share this centerline, so both get everInside=true
+
+  tick(25); // excess: louder=19.5 (ladder -> level 2), quieter=4.5 (ladder -> level 1)
+  const unfiltered = cg.getActiveAlarm();
+  assert(unfiltered && unfiltered.corridorId === "louder", "sanity check: with no filter, the louder (higher-level) corridor wins");
+
+  const eligibleQuieterOnly = cg.getActiveAlarm(id => id === "quieter");
+  assert(eligibleQuieterOnly !== null, "an eligible corridor that IS alerting must still be reported even though a louder INELIGIBLE one is also alerting");
+  assert(eligibleQuieterOnly && eligibleQuieterOnly.corridorId === "quieter", "the filtered call reports the eligible corridor, not the excluded louder one");
+
+  const eligibleLouderOnly = cg.getActiveAlarm(id => id === "louder");
+  assert(eligibleLouderOnly && eligibleLouderOnly.corridorId === "louder", "filtering to just the louder corridor still reports it normally");
+
+  assert(cg.getActiveAlarm(id => id === "nonexistent") === null, "no alarm when the filter matches no currently-alerting corridor");
+  assert(cg.getActiveAlarm(() => false) === null, "a filter that excludes everything reports no alarm at all");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

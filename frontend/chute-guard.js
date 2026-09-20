@@ -681,7 +681,25 @@
   // each host (the pattern this replaces). onWarn/onClear/onDisengage still
   // fire as before, for hosts that only want log/toast text — they are no
   // longer the source of truth for whether the alarm itself is sounding.
-  function getActiveAlarm(){
+  //
+  // `isEligible(corridorId)` (optional, 2026-09-20): lets a host restrict
+  // which corridors are allowed to actually sound the alarm, WITHOUT
+  // touching what this module tracks — added for "press and hold a chute on
+  // the map to arm/disarm just that one," where a rider typically only wants
+  // one or two corridors watched at a time on a project with dozens. tick()
+  // keeps computing every corridor's real state regardless (same reasoning
+  // as the Battery Saver precedent below: filtering load()'s INPUT instead
+  // of the alarm OUTPUT broke isOnLift()/lift detection for a lift-only
+  // project — this is the same lesson applied to a second case), so a
+  // corridor's escalation/commit history isn't lost or reset by toggling
+  // eligibility on and off. Applied INSIDE the loop below, not as a filter
+  // on the single returned `best` — this function only ever returns the one
+  // loudest active alarm across every corridor, so filtering after the fact
+  // could wrongly report "no alarm" when an eligible corridor IS alerting
+  // but a louder ineligible one also is. Omit entirely for unchanged
+  // behavior (every corridor eligible) — existing hosts that alert on every
+  // corridor need no changes.
+  function getActiveAlarm(isEligible){
     if(!lastTickAtWall || (Date.now()-lastTickAtWall) > TUNING.STALE_MS) return null;
     // The last real tick found the fix on/near a lift line — tick() itself
     // already cleared every corridor's level for exactly this reason (see
@@ -699,6 +717,7 @@
     const predicted = predictNow(); // null when DR isn't trustworthy right now — see its own comment
     let best=null;
     for(const c of corridors){
+      if(isEligible && !isEligible(c.id)) continue;
       const st = stateByCorridor.get(c.id);
       if(!st || st.committed) continue;
       const predExcessM = predicted!=null ? predictedExcessM(c, predicted) : null;

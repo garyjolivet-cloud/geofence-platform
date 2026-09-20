@@ -492,6 +492,7 @@
 <script src="/tour-state.js"></script>
 <script src="/kalman-filter.js"></script>
 <script src="/chute-guard.js"></script>
+<script src="/long-press.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="/code-objects.js"></script>
 <script src="/audio-tree.js"></script>
@@ -6633,6 +6634,7 @@ function _rebuildSimCorridorMarkers(){
   });
 }
 function _simRunMoveEnd(){ clearTimeout(_simRunMoveTimer); _simRunMoveTimer=setTimeout(_rebuildSimCorridorMarkers,150); }
+let _simRunLongPress=null;
 function clearSimCorridorLabels(){
   simCorridorLabels.forEach(m=>m.remove()); simCorridorLabels=[];
   _simRunCors=[];
@@ -6640,10 +6642,23 @@ function clearSimCorridorLabels(){
   map.off("moveend",_simRunMoveEnd);
   SIM_RUN_LAYERS.forEach(id=>{ if(map.getLayer(id)) map.removeLayer(id); });
   if(map.getSource("runLines")) map.removeSource("runLines");
-  map.off("click","runLines-hit",_simRunClick);
+  if(_simRunLongPress){ _simRunLongPress.unbind(); _simRunLongPress=null; }
   map.off("mouseenter","runLines-hit",_simRunEnter);
   map.off("mouseleave","runLines-hit",_simRunLeave);
   if(map.getSource("runLinesEdge")) map.removeSource("runLinesEdge");
+}
+// Press-and-hold a corridor to arm/disarm Corridor Guard for just that one
+// (a normal quick tap keeps showing the existing name/difficulty/length
+// popup instead — see long-press.js's own header for why both need one
+// gesture handler rather than a separate click listener that would double-
+// fire alongside it).
+function _simRunLongPressHandler(feature){
+  const id=feature && feature.properties && feature.properties.id;
+  if(id==null) return;
+  const name=(feature.properties&&feature.properties.name)||"corridor";
+  if(_cgGuardedIds.has(id)){ _cgGuardedIds.delete(id); simLogEv("sev-sys","Corridor Guard disarmed: \""+name+"\""); }
+  else { _cgGuardedIds.add(id); simLogEv("sev-sys","Corridor Guard armed: \""+name+"\""); }
+  refreshSimCorridorLabels();
 }
 function refreshSimCorridorLabels(){
   clearSimCorridorLabels();
@@ -6653,15 +6668,17 @@ function refreshSimCorridorLabels(){
     const path=tgt && tgt.geometry.path;
     if(!Array.isArray(path) || path.length<2) return null;
     let lm=0; for(let i=1;i<path.length;i++) lm+=SimGeo.hav(path[i-1],path[i]);
-    return {name:z.name||"Run",difficulty:z.difficulty||"",runType:z.runType||"run",
+    return {id:z.id, name:z.name||"Run",difficulty:z.difficulty||"",runType:z.runType||"run",
             activityType:z.activityType||"",path,lengthM:lm,widthM:(tgt.geometry.widthM||10)};
   }).filter(Boolean);
   if(!cors.length) return;
   const feats=cors.map(c=>{
     const st=simRunStyleFor(c);
     return {type:"Feature",
-      properties:{name:c.name,difficulty:c.difficulty,activityType:c.activityType,runType:c.runType,
+      properties:{id:c.id,name:c.name,difficulty:c.difficulty,activityType:c.activityType,runType:c.runType,
                   lengthM:Math.round(c.lengthM),col:st.col,halo:st.halo,dash:st.dash,tier:st.tier,
+                  // guarded: press-and-hold arms/disarms one chute at a time — see _cgGuardedIds
+                  guarded:_cgGuardedIds.has(c.id),
                   // shared corridor renderer (width band + piste-glow, no dashes)
                   corridor:true,widthM:(c.widthM>0?c.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(c.path[0][0])},
       geometry:{type:"LineString",coordinates:c.path.map(p=>[p[1],p[0]])}}; // [lat,lon] -> [lon,lat]
@@ -6709,7 +6726,14 @@ function refreshSimCorridorLabels(){
   _simRunCors=cors;
   _rebuildSimCorridorMarkers();
   map.on("moveend",_simRunMoveEnd);
-  map.on("click","runLines-hit",_simRunClick);
+  if(typeof LongPress!=="undefined"){
+    _simRunLongPress=LongPress.bind(map,"runLines-hit",{
+      onTap(feature,lngLat){ if(feature) _simRunClick({features:[feature],lngLat}); },
+      onLongPress:_simRunLongPressHandler
+    });
+  }else{
+    map.on("click","runLines-hit",_simRunClick); // long-press.js not loaded — fall back to tap-only
+  }
   map.on("mouseenter","runLines-hit",_simRunEnter);
   map.on("mouseleave","runLines-hit",_simRunLeave);
 }
@@ -7208,9 +7232,21 @@ function chuteGuardStopSync(){
   chuteGuardStopMeter();
   _cgTestAlarmCorridorId = null;
 }
+// Corridor Guard per-chute selection (press-and-hold a corridor on the map
+// to arm/disarm it, 2026-09-20) — a rider/tester typically only wants ONE
+// or two chutes watched at a time on a project with dozens (Kicking Horse:
+// ~60), not a tone firing for every incidental crossing. This is host-side,
+// runtime-only state — chute-guard.js keeps tracking every corridor
+// regardless (see getActiveAlarm(isEligible)'s own comment for why: the
+// Battery Saver precedent already established that filtering the alarm
+// OUTPUT, not chute-guard.js's input, is what keeps other signals like
+// isOnLift() correct). Ephemeral by design, reset on every Test Mode entry
+// — matches this file's existing "Test Mode always starts fresh" ChuteGuard
+// convention, unlike Ridge Quest's own persisted version of this same set.
+let _cgGuardedIds = new Set();
 function syncCgTestAlarm(){
   if(typeof ChuteGuard==="undefined") return;
-  const active = ChuteGuard.getActiveAlarm();
+  const active = ChuteGuard.getActiveAlarm(id=>_cgGuardedIds.has(id));
   if(!active){
     if(_cgTestAlarmCorridorId!=null){ _cgTestAlarmCorridorId=null; chuteGuardStopTone(); }
     return;
@@ -7231,14 +7267,17 @@ let _cgTestAlarmCorridorId = null;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId,name,info){
+      if(!_cgGuardedIds.has(corridorId)) return; // not armed — see _cgGuardedIds's own comment
       if(!info || info.alertCount===1 || info.levelChanged)
         simLogEv("sev-hazard","off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
     },
     onClear(corridorId,name){
+      if(!_cgGuardedIds.has(corridorId)) return;
       simLogEv("sev-sys","back inside \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId,name,info){
+      if(!_cgGuardedIds.has(corridorId)) return;
       simLogEv("sev-sys","left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
     },
     // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
@@ -7637,6 +7676,7 @@ function enterTestMode(){
   selectZone(-1);
   simBundle=editorToSimBundle();
   initTileArt(simBundle);
+  _cgGuardedIds = new Set(); // always start unarmed — see its own comment
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   chuteGuardStartSync();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);

@@ -276,10 +276,25 @@ function addCorridorLayers(map, o){
   // a lift cable per direct feedback.
   const only = ["all", ["==", ["get", "corridor"], true], ["has", "widthM"], ["!=", ["get", "runType"], "lift"]];
   const liftOnly = ["all", ["==", ["get", "corridor"], true], ["has", "widthM"], ["==", ["get", "runType"], "lift"]];
-  const col  = ["coalesce", ["get", "col"], "#ff6a3d"];
-  const halo = ["coalesce", ["get", "halo"], col];
+  // Corridor Guard "armed" state (press-and-hold to arm a chute, 2026-09-20):
+  // a `guarded:true` feature property, set per-corridor by whichever host
+  // page tracks its own runtime armed set (ridge-quest.html/fence-editor.html
+  // Test Mode — see chute-guard.js's getActiveAlarm(isEligible)). Every other
+  // caller simply never sets the property, so ["get","guarded"] reads
+  // undefined/false and this is a no-op for them (geofence-engine.html/
+  // geofence-sim.html unaffected). Bright color always wins over the normal
+  // grade/activity color, but a caller's own explicit coreColor override
+  // (e.g. the Fence Editor's selected-corridor green) still wins over THIS —
+  // set below.
+  const guardedExpr = ["==", ["get", "guarded"], true];
+  const GUARD_COLOR = "#00e5ff";
+  const rawCol  = ["coalesce", ["get", "col"], "#ff6a3d"];
+  const rawHalo = ["coalesce", ["get", "halo"], rawCol];
+  const col  = ["case", guardedExpr, GUARD_COLOR, rawCol];
+  const halo = ["case", guardedExpr, GUARD_COLOR, rawHalo];
   // Optional core-colour override (e.g. the Fence Editor turns the selected
-  // corridor's centre line green). Other surfaces just use the grade colour.
+  // corridor's centre line green). Other surfaces just use the grade colour
+  // (already guard-aware via `col` above).
   const coreCol = o.coreColor || col;
   const add = (def) => { try { map.addLayer(def, before); } catch(e){ console.warn("TileFog.addCorridorLayers:", def.id, e && e.message); } };
   // This band is the corridor's REAL declared width_m rendered true-to-scale
@@ -335,7 +350,10 @@ function addCorridorLayers(map, o){
   // desktop display at the "same" zoom. Sized down with that in mind.
   add({ id: pfx + "-halo", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": halo, "line-opacity": 0.45, "line-blur": 5, "line-width": runWByRunType(5.5, 9.5, 14) } });
+    paint: { "line-color": halo,
+      "line-opacity": ["case", guardedExpr, 0.8, 0.45],
+      "line-blur": ["case", guardedExpr, 3, 5],
+      "line-width": ["case", guardedExpr, ["*", 1.4, runWByRunType(5.5, 9.5, 14)], runWByRunType(5.5, 9.5, 14)] } });
   add({ id: pfx + "-casing", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": "#05070b", "line-opacity": 1, "line-width": runWByRunType(4, 7, 10.5) } });
