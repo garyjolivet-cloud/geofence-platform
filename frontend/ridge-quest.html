@@ -165,6 +165,13 @@
   .runDiamond i{width:6px;height:6px;background:#111;border:1px solid #eef3f0;
     transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
+  /* Named peak reference labels — deliberately smaller/muted vs. .runLabel
+     (sized for prominent, close-up run names): these are secondary
+     orientation info, often seen at extreme zoom-out toward distant ranges. */
+  .peakLabel{font:600 clamp(12px,2.6vw,15px)/1.25 "Barlow Condensed",system-ui,sans-serif;
+    color:#c9d6e3;letter-spacing:.02em;white-space:nowrap;pointer-events:none;text-align:center;
+    text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 3px #0c140f}
+  .peakLabel .elev{display:block;font-weight:400;font-size:.85em;color:#93a3b3}
   /* Friends — invite box + live map labels + transient toast */
   .inviteBox{display:flex;flex-direction:column;align-items:center;gap:10px;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:16px;margin-top:10px}
   .inviteBox img{background:#fff;border-radius:8px;padding:6px}
@@ -2701,6 +2708,49 @@ function _rebuildRunLabels(map, cors){
     }
   });
 }
+// Named peak reference labels (2026-09-20) — a fixed, real-world list of
+// mountains around Kicking Horse, most on-resort (T1/T2) or visible from it
+// at distance (up to ~48mi, e.g. Mount Temple). This is the first hardcoded
+// static geo-data array in this file (everything else — corridors,
+// viewpoints, checkpoints — comes from the published bundle); nothing about
+// these peaks is per-project or author-editable, so there's no reason for
+// them to live in D1. Elevations given as authored (ft primary, m secondary).
+const NAMED_PEAKS = [
+  { name:"Terminator Peak (T1)",   elevFt:7897,  elevM:2407, lat:51.2825, lon:-117.0678 },
+  { name:"T2 Peak (Terminator 2)", elevFt:7970,  elevM:2429, lat:51.2728, lon:-117.0701 },
+  { name:"Mount Seven (Mount 7)",  elevFt:8291,  elevM:2527, lat:51.2647, lon:-116.9208 },
+  { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.2992, lon:-116.6561 },
+  { name:"Mount Goodsir",          elevFt:11677, elevM:3567, lat:51.2019, lon:-116.6083 },
+  { name:"Mount Dawson",           elevFt:11102, elevM:3377, lat:51.1511, lon:-117.4206 },
+  { name:"Mount Sir Donald",       elevFt:10774, elevM:3284, lat:51.2631, lon:-117.4300 },
+  { name:"Mount Rogers",           elevFt:10397, elevM:3169, lat:51.3742, lon:-117.5217 },
+  { name:"Cathedral Mountain",     elevFt:10463, elevM:3189, lat:51.3789, lon:-116.3986 },
+  { name:"Mount Temple",           elevFt:11627, elevM:3544, lat:51.3497, lon:-116.2064 }
+];
+let _peakLabelMarkers = [];
+let _peakLabelMoveTimer = null;
+// Same screen-space onScreen() culling technique as _rebuildRunLabels()
+// above (reused, not reimplemented) — perspective-correct regardless of
+// pitch/bearing, unlike a getBounds() lat/lon box. No visible-count cap here
+// (unlike RUN_LABEL_MAX_VISIBLE): there are only ever 10 peaks total, so
+// clutter isn't the same risk a whole run network is.
+function _rebuildPeakLabels(map){
+  _peakLabelMarkers.forEach(m=>m.remove()); _peakLabelMarkers=[];
+  const w = map.getContainer().clientWidth, h = map.getContainer().clientHeight;
+  const onScreen=p=>{
+    const pt=map.project([p.lon, p.lat]);
+    return pt.x>=0 && pt.x<=w && pt.y>=0 && pt.y<=h;
+  };
+  NAMED_PEAKS.filter(onScreen).forEach(p=>{
+    const el = document.createElement("div"); el.className = "peakLabel";
+    el.innerHTML = esc(p.name) + '<span class="elev">' + p.elevFt.toLocaleString() + ' ft / ' + p.elevM.toLocaleString() + ' m</span>';
+    _peakLabelMarkers.push(new maplibregl.Marker({ element:el, anchor:"bottom", offset:[0,-2] }).setLngLat([p.lon, p.lat]).addTo(map));
+  });
+}
+function drawNamedPeaks(map){
+  _rebuildPeakLabels(map);
+  map.on("moveend", ()=>{ clearTimeout(_peakLabelMoveTimer); _peakLabelMoveTimer=setTimeout(()=>_rebuildPeakLabels(map),150); });
+}
 function drawAllRuns(map){
   const cors = Quest.corridors || [];
   if(!cors.length) return;
@@ -2966,6 +3016,11 @@ function renderFogMap(){
       if(src) src.setData(fogFeatureCollection());
     }
     map.on("load", ()=>{
+      // Named peak reference labels — independent of fog/tile-art mode
+      // (unlike drawAllRuns()'s run-network overlay below, these are always
+      // useful orientation context regardless of how the resort's own runs
+      // are rendered).
+      drawNamedPeaks(map);
       // R5 — admin-gated: fogFeatureCollection()/shroudFeatureCollection()
       // stay pure/untouched either way (Quest.fogCells itself is never
       // gated — only whether it gets DRAWN here is).
