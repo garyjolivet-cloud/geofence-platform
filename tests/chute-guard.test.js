@@ -938,5 +938,78 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(cg.getActiveAlarm() !== null, "DR gives up (falls back to the last real fix) once its own prediction window has elapsed, rather than guessing indefinitely far ahead");
 })();
 
+// ============================================================
+// Lift suppression (2026-09-20 gondola false-alarm fix): the guard's
+// distance check has no altitude axis, so a lift line recorded along/near a
+// chute must suppress that chute's alerting entirely while it's being
+// ridden — see chute-guard.js's nearAnyLift()/tick() lift gate.
+// ============================================================
+
+(function testLiftClearsAnAlreadyActiveAlarm(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  const events = { clear: [] };
+  const cb = { onClear: (id, name) => events.clear.push({ id, name }) };
+  cg.load([corridor], cb);
+
+  // Enter, then drift outside to trigger a real alarm — same shape as the
+  // "no approach ping" tests above.
+  const entry = trackPoint(48, 0);
+  cg.tick({ lat: entry[0], lon: entry[1], acc: 5, speed: 1.5, t: 1700000000000 }, 0);
+  const outside = trackPoint(50, 8); // excess = 2.5m, genuinely outside
+  cg.tick({ lat: outside[0], lon: outside[1], acc: 5, speed: 1.5, t: 1700000001000 }, 90);
+  assert(cg.getActiveAlarm() !== null, "sanity check: alarm is active before boarding the lift");
+
+  // "Board a gondola" recorded right along the same line (common at a
+  // resort) — reload with the lift zone added; the chute's live state
+  // (level>0) is preserved across the reload since its own sig is unchanged.
+  const lift = makeCorridor("lift1", { lenM: 400, widthM: 10, runType: "lift" });
+  cg.load([corridor, lift], cb);
+
+  // Same position as before (still "outside" the chute's band on paper) —
+  // but now also on the lift line, so the guard must clear rather than keep
+  // sounding.
+  cg.tick({ lat: outside[0], lon: outside[1], acc: 5, speed: 4, t: 1700000002000 }, 90);
+  assert(events.clear.length === 1 && events.clear[0].id === "c1", "boarding a co-located lift line clears an already-sounding chute alarm via onClear");
+  assert(cg.getActiveAlarm() === null, "no audible alarm while on a lift line, even though the chute corridor is still geometrically outside");
+})();
+
+(function testLiftPreventsANewAlarmFromStarting(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  const lift = makeCorridor("lift1", { lenM: 400, widthM: 10, runType: "lift" }); // co-located with the chute
+  const events = { warn: [] };
+  cg.load([corridor, lift], { onWarn: (id, name, info) => events.warn.push(Object.assign({ id, name }, info)) });
+
+  // Well outside the chute's band the whole time, but riding the co-located
+  // lift throughout — must never alert, this is the actual gondola bug.
+  const outside = trackPoint(50, 8);
+  cg.tick({ lat: outside[0], lon: outside[1], acc: 5, speed: 4, t: 1700000000000 }, 0);
+  assert(events.warn.length === 0, "no warn fires for a corridor approached only while riding a co-located lift");
+  assert(cg.getActiveAlarm() === null, "no audible alarm either");
+})();
+
+(function testNormalAlertingResumesAfterLeavingTheLift(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 }); // halfW=5, edge=5.5
+  const lift = makeCorridor("lift1", { lenM: 400, widthM: 10, runType: "lift" }); // co-located with the chute
+  const events = { warn: [] };
+  const cb = { onWarn: (id, name, info) => events.warn.push(Object.assign({ id, name }, info)) };
+  cg.load([corridor, lift], cb);
+
+  const entry = trackPoint(48, 0);
+  const outside = trackPoint(50, 8); // excess = 2.5m
+  cg.tick({ lat: entry[0], lon: entry[1], acc: 5, speed: 1.5, t: 1700000000000 }, 0); // on the lift -> suppressed
+  cg.tick({ lat: outside[0], lon: outside[1], acc: 5, speed: 1.5, t: 1700000001000 }, 90); // still on the lift -> suppressed
+  assert(events.warn.length === 0, "still suppressed the whole time co-located with the lift");
+
+  // Step off the lift (reload without it) and repeat the same positions —
+  // normal alerting must resume immediately.
+  cg.load([corridor], cb);
+  cg.tick({ lat: entry[0], lon: entry[1], acc: 5, speed: 1.5, t: 1700000002000 }, 0);
+  cg.tick({ lat: outside[0], lon: outside[1], acc: 5, speed: 1.5, t: 1700000003000 }, 90);
+  assert(events.warn.length > 0, "normal alerting resumes once off the lift");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

@@ -95,6 +95,7 @@
     NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
     MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while the player is somewhere else entirely
     ACCURACY_CAP_M: 30,          // ignore fixes worse than this
+    LIFT_SUPPRESS_PAD_M: 25,     // real field bug (2026-09-20): a gondola/lift line commonly runs horizontally close to (or over) a chute's centerline, and this module's distance check has no altitude axis at all — nearAnyLift() uses this pad on top of a lift corridor's own half-width to decide "currently riding a lift" and fully suppresses alerting (see tick()'s lift gate). Deliberately generous: a recorded lift line is only an approximation of the cable, cabin GPS has its own slack, and missing a real chute alert near a lift's boarding/unloading area (false negative) is far cheaper than a loud alarm while airborne (the actual bug report).
     STALE_MS: 5000,              // getActiveAlarm() treats state older than this as untrustworthy (no fix has landed recently) and reports "no alarm," regardless of whatever level/committed state a corridor was last left in — see getActiveAlarm()'s own comment
     MAX_CROSSING_JUMP_M: 30,     // sweptOppositeSideCrossing()'s own, tighter bound — a genuine single-tick lateral "skip" over a corridor's width realistically spans tens of meters near its OWN edge, not the full MAX_RELEVANT_PAD_M "still worth alerting" range; keeps a distant, unrelated corridor's infinite line from being coincidentally "crossed" by an unrelated movement 50+ meters away
     DR_MIN_SPEED_MPS: 0.3,       // dead-reckoning floor — below this, heading is noise (a near-stationary fix's travel heading swings wildly) and extrapolating position from it would too; see getActiveAlarm()'s DR comment
@@ -227,6 +228,7 @@
   }
 
   let corridors=[];             // [{id,name,sig,path,widthM,activityType,runType,minSpeed,samples,covered:Set<int>}]
+  let liftCorridors=[];         // [{id,path,widthM}] — runType:"lift" zones, kept separately (not alertable themselves, see load()) purely so nearAnyLift() can suppress OTHER corridors' alerts while a lift line is being ridden
   let stateByCorridor=new Map();
   let cb={};
   let lastTickAtWall=0;         // real Date.now() at the last tick() call — see getActiveAlarm()
@@ -294,6 +296,20 @@
       };
     }).filter(Boolean);
 
+    // Lift lines aren't alertable (see the runType==="lift" skip above), but
+    // their own geometry is exactly what nearAnyLift() needs to tell "rider
+    // is on the gondola" from "rider is near a chute" — same {path,widthM}
+    // extraction, just keyed the opposite way.
+    liftCorridors = (zones||[]).map(z=>{
+      if(z.runType!=="lift") return null;
+      const target = (z.layers||[]).find(l=>l.geometry && l.geometry.type==="corridor");
+      const path = target && target.geometry.path;
+      if(!path || path.length<2) return null;
+      const w = Number(target.geometry.widthM);
+      const widthM = (isFinite(w) && w>0) ? w : 10;
+      return { id:z.id, path, widthM };
+    }).filter(Boolean);
+
     // Reuse a corridor's live excursion state across a reload of the SAME
     // corridor (ridge-quest.html calls load() on every Home render) — the
     // old code wiped `covered`/state unconditionally, which was harmless
@@ -307,7 +323,17 @@
     }));
   }
 
-  function unload(){ corridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; }
+  function unload(){ corridors=[]; liftCorridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; }
+
+  // True if latLon is currently within suppression range of ANY recorded
+  // lift corridor — see LIFT_SUPPRESS_PAD_M's comment and tick()'s lift gate.
+  function nearAnyLift(latLon){
+    for(const lc of liftCorridors){
+      const near = nearestOnPath(latLon, lc.path, lc.path[0]);
+      if(near.distM <= lc.widthM/2 + TUNING.LIFT_SUPPRESS_PAD_M) return true;
+    }
+    return false;
+  }
 
   function emitWarn(c, st, now, excessM){
     st.alertCount++;
@@ -333,6 +359,29 @@
     const now = fix.t || Date.now();
     const prevLatLon = prevFixLatLon; // captured before this tick updates it, below
     prevFixLatLon = latLon;
+
+    // Real field bug (2026-09-20): a gondola/lift line commonly runs
+    // horizontally close to (or over) a chute's centerline, and every check
+    // below is 2D-only — it has no altitude axis to tell "close on the map"
+    // from "close on the map AND on the ground." Rather than add one (new
+    // plumbing through GPSFilter/the EKF, and phone GPS altitude is usually
+    // noisier than horizontal), reuse the lift corridor's own recorded line:
+    // if the current fix is on a known lift, this module has nothing
+    // meaningful to say about any OTHER corridor right now — clear whatever
+    // was already sounding and skip evaluation entirely for this tick, same
+    // as if no corridors were relevant at all.
+    if(nearAnyLift(latLon)){
+      for(const c of corridors){
+        const st = stateByCorridor.get(c.id);
+        if(st.level>0){
+          if(cb.onClear) cb.onClear(c.id, c.name);
+          const everInside = st.everInside; // not "gone out of relevant range" — just airborne; don't make them re-earn entry once they're back on the ground
+          Object.assign(st, freshState());
+          st.everInside = everInside;
+        }
+      }
+      return;
+    }
 
     for(const c of corridors){
       const ref=c.path[0];
