@@ -483,8 +483,26 @@
       // exact same edgeM threshold internally — this makes that threshold
       // directly verifiable from the log itself, not just from reading the
       // source. Not wired by the production engine/sim — diagnostic only.
+      //
+      // Routine (non-crossing) emission is further gated to corridors
+      // actually within maxRelevantM (2026-09-20, real perf report: a
+      // project with dozens of corridors — e.g. Kicking Horse's ~60 named
+      // runs — made every tick log ALL of them every 500ms regardless of
+      // how far away the player actually was, since this throttle alone
+      // doesn't care about relevance. Because every corridor's lastDebugAt
+      // starts at the same value, those bursts land in the SAME tick across
+      // every corridor, and each one does a real DOM append (simLogEv's
+      // createElement+prepend+toLocaleTimeString in fence-editor.html) —
+      // measured at ~15-20ms for a ~50-corridor burst, enough on its own to
+      // blow a 60fps frame budget and read as "very very slow." A corridor
+      // hundreds of meters away can never be mid-crossing (outsideNow
+      // itself already requires near.distM<=maxRelevantM), so restricting
+      // the throttled branch to in-range corridors only drops routine
+      // volume to whichever handful the player is actually near, with zero
+      // effect on which crossings get logged or on the real alarm state
+      // machine (onWarn/onClear/onDisengage/getActiveAlarm untouched).
       const outsideNowChanged = st.lastOutsideNow!=null && st.lastOutsideNow!==outsideNow;
-      if(cb.onDebug && (outsideNowChanged || now-(st.lastDebugAt||0)>=500)){
+      if(cb.onDebug && (outsideNowChanged || (near.distM<=maxRelevantM && now-(st.lastDebugAt||0)>=500))){
         st.lastDebugAt=now;
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
           bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside,
