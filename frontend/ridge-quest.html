@@ -2744,7 +2744,9 @@ function _rebuildPeakLabels(map){
   NAMED_PEAKS.filter(onScreen).forEach(p=>{
     const el = document.createElement("div"); el.className = "peakLabel";
     el.innerHTML = esc(p.name) + '<span class="elev">' + p.elevFt.toLocaleString() + ' ft / ' + p.elevM.toLocaleString() + ' m</span>';
-    _peakLabelMarkers.push(new maplibregl.Marker({ element:el, anchor:"bottom", offset:[0,-2] }).setLngLat([p.lon, p.lat]).addTo(map));
+    // anchor:"center" (not "bottom") — the label sits directly ON the
+    // summit's own coordinate, not hovering above it, per explicit request.
+    _peakLabelMarkers.push(new maplibregl.Marker({ element:el, anchor:"center" }).setLngLat([p.lon, p.lat]).addTo(map));
   });
 }
 function drawNamedPeaks(map){
