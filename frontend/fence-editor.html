@@ -754,8 +754,8 @@
          ever reacts to a real fix, same as before dead reckoning existed). -->
     <div style="display:flex;align-items:center;gap:6px;margin:2px 0" title="How far ahead (real seconds) Corridor Guard predicts your position between fixes, from your last known speed+heading. Higher = the tone can turn on/off farther from the true edge but sooner in time. 0 disables prediction — the tone only ever reacts to a real fix.">
       <label class="k" style="flex:0 0 auto;margin:0">DR lookahead</label>
-      <input type="range" id="cgDrLookahead" min="0" max="2.5" step="0.1" value="1.5" style="flex:1;accent-color:var(--coral)">
-      <span id="cgDrLookaheadV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 40px;text-align:right">1.5s</span>
+      <input type="range" id="cgDrLookahead" min="0" max="5" step="0.1" value="3" style="flex:1;accent-color:var(--coral)">
+      <span id="cgDrLookaheadV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 40px;text-align:right">3.0s</span>
     </div>
     <div class="row">
       <button id="simMute" class="ghost" style="flex:1">Sound ◼</button>
