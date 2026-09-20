@@ -1739,7 +1739,11 @@ function chuteGuardStopSync(){
 }
 function syncCgAlarm(){
   if(typeof ChuteGuard==="undefined") return;
-  const active = ChuteGuard.getActiveAlarm();
+  // ChuteGuard.load() now always gets the real geometry (see its call
+  // site's comment) so Battery Saver's isOnLift() works regardless of this
+  // flag — the actual audible/vibration alarm still only sounds when the
+  // workspace has opted into it.
+  const active = Quest.chuteGuardEnabled ? ChuteGuard.getActiveAlarm() : null;
   if(!active){
     if(_cgAlarm) stopCgAlarm();
     return;
@@ -1787,6 +1791,7 @@ let _cgLastToastLevel = 0;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
+      if(!Quest.chuteGuardEnabled) return; // geometry now always loads (Battery Saver) — this flag still gates the toast/log/debug output itself, same as before
       const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
       cgLog("WARN \""+(name||"corridor")+"\" L"+lvl+" +"+((info&&info.excessM)||0).toFixed(1)+"m alertCount="+(info&&info.alertCount));
       if(info && info.alertCount===1){
@@ -1798,11 +1803,13 @@ function chuteGuardCallbacks(){
       }
     },
     onClear(corridorId, name){
+      if(!Quest.chuteGuardEnabled) return;
       cgLog("CLEAR \""+(name||"corridor")+"\"");
       _cgLastToastLevel = 0;
       rqToast("✓ back on \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId, name, info){
+      if(!Quest.chuteGuardEnabled) return;
       cgLog("DISENGAGE \""+(name||"corridor")+"\" max+"+((info&&info.maxExcessM)||0).toFixed(1)+"m");
       _cgLastToastLevel = 0;
       // chute-guard.js concluded this is a deliberate departure (steady
@@ -1821,6 +1828,7 @@ function chuteGuardCallbacks(){
     // how far away it is, which would otherwise flood the log with noise
     // about corridors nowhere near the player.
     onDebug(corridorId, name, d){
+      if(!Quest.chuteGuardEnabled) return;
       const line = "guard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+" in="+(d.everInside?"Y":"n")+
         " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
         " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s")+
@@ -1956,7 +1964,19 @@ function renderHome(){
     // excursion's state across a same-corridor reload (see its own header
     // comment) — this used to just rebuild coverage tracking, but a reload
     // mid-alarm would now otherwise wipe an in-progress escalation.
-    if(typeof ChuteGuard!=="undefined") ChuteGuard.load(Quest.chuteGuardEnabled ? chuteGuardZonesFor(Quest.corridors) : [], chuteGuardCallbacks());
+    // Real bug found 2026-09-20 (field report: "Catamount chair is not
+    // activating battery saver"): this used to load [] instead of the real
+    // zones whenever Quest.chuteGuardEnabled was off (a per-workspace admin
+    // flag for the AUDIBLE off-course alarm feature) — which also emptied
+    // chute-guard.js's internal liftCorridors, since that's populated from
+    // the exact same load() call. Battery Saver's ChuteGuard.isOnLift() then
+    // silently had nothing to detect, for every workspace that simply never
+    // opted into the (unrelated) off-course alarm. Now always loads the real
+    // geometry so isOnLift() works regardless; chuteGuardEnabled instead
+    // gates the actual alarm sound/toast/log at their own call sites (see
+    // syncCgAlarm() and chuteGuardCallbacks() below) so a workspace with it
+    // off still gets exactly the same silence as before.
+    if(typeof ChuteGuard!=="undefined") ChuteGuard.load(chuteGuardZonesFor(Quest.corridors), chuteGuardCallbacks());
     Quest.onNarrate = narrateCorridor;
     const el = document.getElementById("exploredPct");
     if(!el) return; // navigated away before this resolved
