@@ -26,6 +26,26 @@
                         released before holdMs, without drifting past
                         moveTolerancePx. Never fires after onLongPress or a
                         cancelled (dragged) press.
+   opts.onDebug(event, info)          optional diagnostic hook (2026-09-20,
+                        added after four rounds of blind tuning — hold
+                        duration, move tolerance, hit-target width,
+                        preventDefault() — each fixed a real, verified bug,
+                        but arming still isn't fast enough in the field, so
+                        this replaces further guessing with actual evidence).
+                        Fired on every state transition with elapsedMs since
+                        press-down (and driftPx where relevant):
+                          "down"            — press started
+                          "move-cancel"     — cancelled: drifted past
+                                              moveTolerancePx (info.driftPx)
+                          "hold-fired"      — the hold completed, armed
+                          "up-tap"          — released early, counts as a tap
+                          "up-after-hold"   — released after already firing
+                          "cancel-event"    — a touchcancel landed
+                        A host can wire this straight into its own
+                        exportable log (cgLog() in ridge-quest.html,
+                        simLogEv() in fence-editor.html) so the NEXT report
+                        comes with real timing/drift numbers instead of
+                        another guess.
 
    Works for touch (gloved ski-resort use) and mouse (Fence Editor Test
    Mode) alike via MapLibre's own layer-scoped mousedown/touchstart plus a
@@ -60,8 +80,10 @@
     const holdMs = opts.holdMs!=null ? opts.holdMs : 600;
     const tolPx  = opts.moveTolerancePx!=null ? opts.moveTolerancePx : 20;
 
-    let timer=null, startPt=null, feature=null, lngLat=null;
+    let timer=null, startPt=null, feature=null, lngLat=null, startedAt=0;
     let pressing=false, dragging=false, holdFired=false, dragPanWasEnabled=false;
+
+    function dbg(event, info){ if(opts.onDebug) opts.onDebug(event, Object.assign({elapsedMs: Date.now()-startedAt}, info||{})); }
 
     function restoreDragPan(){
       if(dragPanWasEnabled && map.dragPan && !map.dragPan.isEnabled()) map.dragPan.enable();
@@ -81,8 +103,10 @@
 
     function onMove(e){
       if(!pressing || dragging || holdFired) return;
-      if(dist(e.point, startPt) > tolPx){
+      const d = dist(e.point, startPt);
+      if(d > tolPx){
         dragging = true;
+        dbg("move-cancel", {driftPx: Math.round(d)});
         if(timer!=null){ clearTimeout(timer); timer=null; }
         restoreDragPan(); // hand the rest of this gesture back to MapLibre's own pan
       }
@@ -92,11 +116,12 @@
       if(!pressing) return;
       const shouldTap = !dragging && !holdFired;
       const f=feature, ll=lngLat;
+      dbg(holdFired ? "up-after-hold" : (shouldTap ? "up-tap" : "up-after-drag"));
       endPress();
       if(shouldTap && opts.onTap) opts.onTap(f, ll);
     }
 
-    function onCancel(){ endPress(); }
+    function onCancel(){ dbg("cancel-event"); endPress(); }
 
     function onDown(e){
       if(pressing) return; // a second finger/button mid-press — ignore, let the first press resolve
@@ -118,8 +143,9 @@
       // a redundant safety net, not the primary mechanism anymore.
       if(e.preventDefault) e.preventDefault();
       pressing=true; dragging=false; holdFired=false;
-      startPt=e.point; lngLat=e.lngLat;
+      startPt=e.point; lngLat=e.lngLat; startedAt=Date.now();
       feature=(e.features && e.features[0]) || null;
+      dbg("down");
       if(map.dragPan && map.dragPan.isEnabled()){ dragPanWasEnabled=true; map.dragPan.disable(); }
       map.on("mousemove", onMove);
       map.on("touchmove", onMove);
@@ -130,6 +156,7 @@
         timer=null;
         if(!pressing || dragging) return;
         holdFired = true;
+        dbg("hold-fired");
         restoreDragPan();
         if(opts.onLongPress) opts.onLongPress(feature, lngLat);
       }, holdMs);

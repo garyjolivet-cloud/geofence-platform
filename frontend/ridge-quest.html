@@ -2846,6 +2846,15 @@ function drawAllRuns(map){
       // Still long enough that a brushing touch (in a pocket, on a lift)
       // won't accidentally arm/disarm a chute.
       holdMs: 2000,
+      // Diagnostic (2026-09-20) — four rounds of tuning (hold duration,
+      // move tolerance, hit-target width, preventDefault()) each fixed a
+      // real, verified bug, but arming is still reported as too slow in the
+      // field. Feeds the same exportable log Corridor Guard already uses
+      // (cgLog()/exportCgLog(), reachable from "My map") so the next report
+      // comes with real elapsedMs/driftPx numbers instead of another guess.
+      onDebug(event, info){
+        cgLog("longpress "+event+" +"+info.elapsedMs+"ms"+(info.driftPx!=null?" drift="+info.driftPx+"px":""));
+      },
       onTap: showRunPopup,
       onLongPress(feature){
         const zoneId = feature && feature.properties && feature.properties.id;

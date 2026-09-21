@@ -6730,6 +6730,11 @@ function refreshSimCorridorLabels(){
   if(typeof LongPress!=="undefined"){
     _simRunLongPress=LongPress.bind(map,"runLines-hit",{
       holdMs: 2000, // matches ridge-quest.html's live press-and-hold duration — see its own comment
+      // Diagnostic (2026-09-20), same purpose as ridge-quest.html's own —
+      // see its comment. Feeds the existing exportable Test Mode log.
+      onDebug(event,info){
+        simLogEv("sev-sys","longpress "+event+" +"+info.elapsedMs+"ms"+(info.driftPx!=null?" drift="+info.driftPx+"px":""));
+      },
       onTap(feature,lngLat){ if(feature) _simRunClick({features:[feature],lngLat}); },
       onLongPress:_simRunLongPressHandler
     });
