@@ -6702,8 +6702,9 @@ function refreshSimCorridorLabels(){
   // line IS the precise boundary now; a second faint band next to it only
   // confuses which one actually matters.
   TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines"});
+  // Widened 14->30px, matching ridge-quest.html's own fix — see its comment.
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
-    paint:{"line-color":"#000","line-opacity":0,"line-width":14}});
+    paint:{"line-color":"#000","line-opacity":0,"line-width":30}});
   // Trigger-boundary lines (Test Mode only, per user request) — exact
   // edgeM = halfW + OUTSIDE_BUFFER_M distance on each side of centerline,
   // the literal position chute-guard.js's tick() decides tone on/off at.

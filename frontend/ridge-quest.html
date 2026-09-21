@@ -2803,9 +2803,15 @@ function drawAllRuns(map){
   // one shared implementation used on every surface (see tile-fog.js). NO
   // dashes: activity used to be shown by line-dasharray, now by colour only.
   TileFog.addCorridorLayers(map, { source:"runLines", id:"runLines" });
-  // Invisible fat hit target for the tap popup (covers every core variant).
+  // Invisible fat hit target for tap AND press-and-hold (covers every core
+  // variant). Widened 14->30px (2026-09-20, field report: arming "still
+  // takes 10+ seconds" even after the hold-timing fixes) — a 14px target is
+  // fine for a mouse but a real finger, more so through a ski glove, misses
+  // it outright most of the time on a corridor that renders as a thin line
+  // at typical zoom, so most "attempts" never even register a touchstart at
+  // all; the delay was really several missed taps, not one slow hold.
   map.addLayer({ id:"runLines-hit", type:"line", source:"runLines",
-    paint:{ "line-color":"#000", "line-opacity":0, "line-width":14 } });
+    paint:{ "line-color":"#000", "line-opacity":0, "line-width":30 } });
 
   // Name label + ◆/◆◆ badges — see _rebuildRunLabels() above. Rebuilt on
   // moveend (debounced) so panning/zooming keeps only nearby labels drawn.
