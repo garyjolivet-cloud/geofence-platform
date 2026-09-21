@@ -2724,29 +2724,30 @@ function _rebuildRunLabels(map, cors){
 // off, Mount Goodsir's longitude was ~15km off, and Mount Rogers was ~2km
 // off. Mount Dawson/Sir Donald/Cathedral Mountain/Temple were already
 // accurate (sub-km, within normal summit-vs-massif rounding) and left as-is.
-// Ozone + Dogtooth Peak added 2026-09-20 — Ozone is one of Kicking Horse's
+// Ozone + Dogtooth Range added 2026-09-20 — Ozone is one of Kicking Horse's
 // five named on-resort summits (Ozone, Blue Heaven, Eagle's Eye, Terminator,
 // Terminator2), confirmed via a live OpenStreetMap node
 // (natural=peak, name="Ozone", ele=2504m) rather than a peak database (it's
-// a resort/local name, not in PeakVisor/Wikipedia's registry). Dogtooth Peak
-// is the Dogtooth Range's own namesake and highest point, added to represent
-// "the Dogtooth Range" as a specific summit rather than an unpinnable area
-// label — corrected 2026-09-20 (field report "not right location"): the
-// original coordinate (51.2,-116.93306) was Wikipedia's infobox coordinate
-// for the RANGE overall, not the peak itself (~25km off — that spot is
-// actually near Mount Goodsir/Vaux, nowhere near the actual range).
-// Peakbagger/PeakVisor have no separate page with the real summit's
-// lat/lon, but OpenStreetMap has an unnamed natural=peak node at exactly
-// 2838m elevation — matching Dogtooth Peak's known elevation precisely —
-// right beside "Moonraker Peak" (OSM, ele 2836m), which Wikipedia's
-// Dogtooth Range article explicitly names as a neighboring summit in the
-// same range. That combination (exact elevation match + adjacency to a
-// confirmed neighbor) is high-confidence enough to use.
+// a resort/local name, not in PeakVisor/Wikipedia's registry).
+//
+// The "Dogtooth Range" entry went through two corrections the same day:
+// (1) the true Dogtooth Peak summit (the range's highest point, 2838m) sits
+// ~15km west of the resort, deep in the range's interior — first placed at
+// the wrong spot entirely (Wikipedia's infobox coordinate for the RANGE, not
+// the peak, ~25km off near Mount Goodsir/Vaux), then corrected to the real
+// summit via an OSM node at exactly 2838m beside Moonraker Peak (a
+// confirmed neighbor per Wikipedia). (2) Per explicit field feedback ("move
+// to front of range east"), the interior true-summit position wasn't what
+// was wanted — moved instead to "Whitetooth," a distinctly OSM-named peak
+// (natural=peak, ele 2443m) on the range's eastern/front edge, essentially
+// adjacent to the resort itself (right next to Ozone). Relabeled to match
+// what's actually being pinned rather than keeping the "Dogtooth Peak" name
+// on a different mountain's coordinate.
 const NAMED_PEAKS = [
   { name:"Terminator Peak (T1)",   elevFt:7900,  elevM:2408, lat:51.273219, lon:-117.069982 },
   { name:"T2 Peak (Terminator 2)", elevFt:7825,  elevM:2385, lat:51.269436, lon:-117.063919 },
   { name:"Ozone Peak",             elevFt:8215,  elevM:2504, lat:51.283737, lon:-117.100631 },
-  { name:"Dogtooth Peak",          elevFt:9311,  elevM:2838, lat:51.293614, lon:-117.224042 },
+  { name:"Whitetooth (Dogtooth Range)", elevFt:8015, elevM:2443, lat:51.277730, lon:-117.092468 },
   { name:"Mount Seven (Mount 7)",  elevFt:8504,  elevM:2592, lat:51.2539,   lon:-116.8511 },
   { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.25861,  lon:-116.53000 },
   { name:"Mount Goodsir",          elevFt:11703, elevM:3567, lat:51.20167,  lon:-116.39667 },
