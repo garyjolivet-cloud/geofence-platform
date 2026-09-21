@@ -2729,14 +2729,24 @@ function _rebuildRunLabels(map, cors){
 // Terminator2), confirmed via a live OpenStreetMap node
 // (natural=peak, name="Ozone", ele=2504m) rather than a peak database (it's
 // a resort/local name, not in PeakVisor/Wikipedia's registry). Dogtooth Peak
-// is the Dogtooth Range's own namesake and highest point (Wikipedia), added
-// to represent "the Dogtooth Range" as a specific summit rather than an
-// unpinnable area label.
+// is the Dogtooth Range's own namesake and highest point, added to represent
+// "the Dogtooth Range" as a specific summit rather than an unpinnable area
+// label — corrected 2026-09-20 (field report "not right location"): the
+// original coordinate (51.2,-116.93306) was Wikipedia's infobox coordinate
+// for the RANGE overall, not the peak itself (~25km off — that spot is
+// actually near Mount Goodsir/Vaux, nowhere near the actual range).
+// Peakbagger/PeakVisor have no separate page with the real summit's
+// lat/lon, but OpenStreetMap has an unnamed natural=peak node at exactly
+// 2838m elevation — matching Dogtooth Peak's known elevation precisely —
+// right beside "Moonraker Peak" (OSM, ele 2836m), which Wikipedia's
+// Dogtooth Range article explicitly names as a neighboring summit in the
+// same range. That combination (exact elevation match + adjacency to a
+// confirmed neighbor) is high-confidence enough to use.
 const NAMED_PEAKS = [
   { name:"Terminator Peak (T1)",   elevFt:7900,  elevM:2408, lat:51.273219, lon:-117.069982 },
   { name:"T2 Peak (Terminator 2)", elevFt:7825,  elevM:2385, lat:51.269436, lon:-117.063919 },
   { name:"Ozone Peak",             elevFt:8215,  elevM:2504, lat:51.283737, lon:-117.100631 },
-  { name:"Dogtooth Peak",          elevFt:9311,  elevM:2838, lat:51.2,      lon:-116.93306 },
+  { name:"Dogtooth Peak",          elevFt:9311,  elevM:2838, lat:51.293614, lon:-117.224042 },
   { name:"Mount Seven (Mount 7)",  elevFt:8504,  elevM:2592, lat:51.2539,   lon:-116.8511 },
   { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.25861,  lon:-116.53000 },
   { name:"Mount Goodsir",          elevFt:11703, elevM:3567, lat:51.20167,  lon:-116.39667 },
