@@ -711,7 +711,7 @@ function getCheckpointVert(){ try{ return JSON.parse(localStorage.getItem("rq.ch
 function setCheckpointVert(o){ try{ localStorage.setItem("rq.checkpointVert", JSON.stringify(o)); }catch(e){} }
 
 const QUEST_TUNING = {
-  MIN_DURATION_S: 8,       // shorter than this = flicker/false start, discard (no run logged)
+  MIN_DURATION_S: 2,       // start-zone -> end-zone time below this is a timestamp glitch, not a run. Was 8 (whole-buffer flicker filter); the pass window is now just the zone-to-zone stretch of a corridor that can be only ~70-110 m long, which a genuine fast run covers in a few seconds
   MAX_DURATION_S: 5400,    // 90 min — something went wrong (GPS stuck in-band), discard
   SKI_SPEED_MIN_MPS: 2.5,  // ~9 km/h; below this while descending a run = skinning/walking it, not skiing it
   BIKE_SPEED_MIN_MPS: 3.0, // R8 — ~11 km/h; below this while descending a trail = walking/pushing the bike, not riding it
@@ -721,20 +721,64 @@ const QUEST_TUNING = {
   FOG_RESOLUTION: 10,      // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
   VIEWPOINT_RADIUS_M: 15,  // R4: a viewpoint is a spot to stand at, not a zone to cross — small trigger radius
   FOG_CELLS_POST_CHUNK: 500, // R4: /api/fog-cells caps at 500 cells/call; a full viewshed grant is chunked to this size
-  // R9 — tripline fix: a corridor only counts as "run" (points logged) once
-  // this fraction of ITS OWN length was actually traversed by the crossing,
-  // not just clipped. Sampled every CORRIDOR_SAMPLE_STEP_M along the
-  // corridor's authored path; a sample counts as hit if the crossing's
-  // buffer track passed within corridor width/2 + CORRIDOR_GPS_TOLERANCE_M
-  // of it. Fixes the "traverse a bowl, clip 3 chutes" over-crediting bug —
-  // a brief clip covers only a sliver of any one chute's own length, well
-  // under this threshold, while actually descending it covers nearly all
-  // of it. 0.5 is a starting point, not measured: it zeros mid-run drop-ins
-  // (traverse in, ski only the bottom half) by design — tune after field
-  // testing, same as every other QUEST_TUNING constant.
-  CORRIDOR_SAMPLE_STEP_M: 25,
-  CORRIDOR_COMPLETION_PCT: 0.5,
-  CORRIDOR_GPS_TOLERANCE_M: 15,
+  CORRIDOR_SAMPLE_STEP_M: 25, // spacing for QGeo.resamplePath() -- used by corridorPreviewCells() (My-map footprint), NOT by run verification (that uses COVER_BIN_M)
+  // --- Full-run verification (2026-09-21). Field report: skiing ACROSS a
+  // corridor (a traverse) logged it as skied. Root causes, all in the old
+  // detector: (1) coverage was "is the track within halfWidth+15m of >=50% of
+  // sample points", an UNORDERED nearness test -- on a short or narrow
+  // corridor a slow perpendicular crossing satisfied it; (2) nothing required
+  // starting at one end and finishing at the other; (3) direction only chose
+  // ski-vs-hike, it never rejected; (4) a chute always scored as ski at any
+  // speed/direction; (5) vertical came from the authored descent x coverage,
+  // so real elevation change was never looked at; (6) hiking UP scored the
+  // same points as skiing down (points use |vertical|). A corridor now counts
+  // only when QGeo.evaluateTraversal() verifies an ordered end-to-end pass.
+  // ACTUAL cause of the field false-positives, from prod quest_run + corridor
+  // rows: most Kicking Horse chutes are short and WIDE blobs (After Pride
+  // 75m x 111m, Alley 17 50m x 171m, South End Dump Run 50m x 161m; 46 of 70
+  // run/chute corridors are under 250m long). The old tolerance was halfWidth
+  // + 15m = 40-52m, so a 50-80m traverse through the middle of one was within
+  // tolerance of every sample point -> 100% "coverage" -> full authored
+  // descent credited, in 8-24 s. Three chutes logged inside one minute.
+  // Every value is a starting point, not measured -- tune after field tests.
+  RUN_ACC_MAX_M: 35,        // fixes worse than this are ignored entirely (a 200m-accuracy fix must never count as "at the top")
+  RUN_TOL_MIN_M: 8,         // a fix is ON the corridor within halfWidth + clamp(fix.acc, MIN, MAX)
+  RUN_TOL_MAX_M: 20,
+  ENDPOINT_ZONE_M: 40,      // the pass must touch within this arc-length of BOTH ends, in order; capped at 25% of a corridor's length so short corridors stay strict
+  COVER_BIN_M: 20,          // the corridor is cut into bins this long; coverage = fraction of bins the track actually passed through
+  CORRIDOR_COMPLETION_PCT: 0.8,
+  BRIDGE_S: 30,             // consecutive usable fixes further apart than this (GPS dropout) don't bridge the bins between them
+  CHORD_SLACK_M: 40,        // a jump in along-corridor position must be explainable by MAX_ALONG_SPEED_MPS x dt + this, else it's a GPS teleport and covers nothing
+  OFF_ROUTE_MAX_FRAC: 0.3,  // time-weighted share of the pass spent off the corridor
+  RETREAT_MIN_M: 40,        // deepest allowed back-slide along the corridor during the pass: max(this, RETREAT_FRAC x length)
+  RETREAT_FRAC: 0.15,
+  HEADING_MIN_MOVE_M: 6,    // bearing is measured over displacements at least this long, so GPS jitter can't fake a heading
+  HEADING_TOL_DEG: 80,      // a step "agrees" with the corridor when its bearing is within this of the corridor's local bearing
+  HEADING_AGREE_MIN: 0.5,   // share of steps that must agree -- a perpendicular traverse agrees ~0%
+  ELEV_CHECK_MIN_M: 60,     // elevation is only checked on downhill-run/chute/lift corridors with at least this much authored descent (phone GPS altitude is too noisy to judge small drops). Kicking Horse's short steep chutes lose ~80-110 m
+  ELEV_MIN_FRAC: 0.35,      // measured altitude change must reach this share of the authored descent (less ELEV_TOL_M)
+  ELEV_TOL_M: 25,
+  ELEV_MIN_SAMPLES: 6,      // fewer altitude readings than this = not reliable, elevation check is skipped (never fails a run on missing data)
+  MAX_ALONG_SPEED_MPS: 45,  // ~160 km/h along the corridor -- faster is a GPS jump, not a person
+  MIN_ALONG_SPEED_MPS: 0.15,
+  LIFT_SPEED_MIN_MPS: 1.8,  // walking up a lift line isn't a lift ride (a slow fixed-grip chair is ~2.2 m/s)
+  HIKE_SPEED_MAX_MPS: 5,    // faster than a fast trail run = mechanised (lift/vehicle) or skied, not hiked
+  CHUTE_SPEED_MIN_MPS: 0.7, // careful chute skiing is slow (side-slipping), but standing still isn't skiing it
+  XCSKI_SPEED_MIN_MPS: 0.6,
+  DRIVE_SPEED_MIN_MPS: 2.5, // walking a road with "drive" selected shouldn't score driving points
+  LIFT_OVERLAP_FRAC: 0.6,   // an "up" pass of a run that is >= this share inside a lift corridor's band was a lift ride, not a hike
+  // Run recorder (per corridor, independent of the narration band above):
+  // starts when a fix is within halfWidth+REC_HOLD_M, ends REC_GRACE_S after
+  // the last such fix. Much wider than the 3m narration band on purpose --
+  // the old exit-on-first-fix-outside-the-band chopped a real run into
+  // fragments on a narrow chute whenever GPS drifted a few metres.
+  SAY_PREFETCH_M: 200,      // start fetching a corridor's narration audio when the player is this close (walking ~2 min out, skiing ~25 s), so speech starts instantly on entry. Field log 2026-09-21: the first /api/tts fetch took 1762 ms from entry to sound
+  REC_HOLD_M: 40,
+  REC_GRACE_S: 15,
+  REC_MIN_STEP_M: 3,        // recorded fixes are decimated: kept when they moved this far...
+  REC_MAX_STEP_S: 10,       // ...or this long has passed, so a long hike's buffer stays small
+  REC_MAX_FIXES: 20000,
+  FEEDBACK_MIN_COVERAGE: 0.4, // only tell the player "not counted, because..." when they actually covered a meaningful part; a plain traverse stays silent
   // --- Elevation checkpoints (headline vertical, _tickCheckpoints) ---
   CHECKPOINT_RADIUS_M: 20,        // a pass-through spot on a lift/run line — a touch wider than VIEWPOINT_RADIUS_M since you're moving through it, not standing
   CHECKPOINT_COOLDOWN_MS: 60000,  // per-checkpoint: a lingering GPS hit can't re-credit the same lap
@@ -775,9 +819,9 @@ const QGeo = {
     for(let i=1;i<pts.length;i++) best=Math.min(best, this.segDist(P,pts[i-1],pts[i]));
     return best - (corridor.widthM||10)/2;
   },
-  // Resamples a [lat,lon] polyline into ~stepM-spaced points — same
-  // technique Quest.simulateWalk() already uses for synthetic-fix pacing,
-  // pulled out here as a shared pure helper for corridorCoverage below.
+  // Resamples a [lat,lon] polyline into ~stepM-spaced points -- same
+  // technique Quest.simulateWalk() uses for synthetic-fix pacing. Used by
+  // corridorPreviewCells() to lay the My-map footprint along a corridor.
   resamplePath(path, stepM){
     const pts=[];
     for(let i=1;i<path.length;i++){
@@ -792,28 +836,250 @@ const QGeo = {
     pts.push(path[path.length-1]);
     return pts;
   },
-  // R9 — what fraction of `corridor`'s own length (sampled every stepM) did
-  // this crossing's buffer track actually pass within corridor-width/2 +
-  // toleranceM of? Distinguishes "skied the whole chute" from "traverse
-  // clipped its edge for a few seconds" — both used to log identically as
-  // long as they crossed the band at all. Deliberately point-to-buffer-
-  // POLYLINE distance (not point-to-nearest-fix): a fast mover's fixes are
-  // sparse (~10-15m apart at speed with ~1s GPS intervals), so measuring
-  // against raw fix points would under-count a genuine fast descent between
-  // fixes; the polyline the fixes trace out doesn't have that gap.
-  corridorCoverage(corridor, buffer, stepM, toleranceM){
+  // ---- Full-run verification (QUEST_TUNING "Full-run verification") ----
+  // Corridor geometry in local metres, computed once per corridor: XY points,
+  // cumulative arc-length, per-segment bearing (deg clockwise from north).
+  // Cached on the corridor object but revalidated by path/ref identity, so an
+  // Object.assign() clone with a different path never reads a stale cache.
+  geom(corridor){
+    const c = corridor._g;
+    if(c && c.path===corridor.path && c.ref===corridor.ref) return c;
     const ref = corridor.ref;
-    const samples = this.resamplePath(corridor.path, stepM);
-    const bufXY = buffer.map(p=>this.toXY([p.lat,p.lon], ref));
-    const halfWidth = (corridor.widthM||10)/2;
-    let covered=0;
-    samples.forEach(s=>{
-      const S=this.toXY(s, ref);
-      let best=Infinity;
-      for(let i=1;i<bufXY.length;i++) best=Math.min(best, this.segDist(S, bufXY[i-1], bufXY[i]));
-      if(best <= halfWidth + toleranceM) covered++;
-    });
-    return samples.length ? covered/samples.length : 0;
+    const xy = corridor.path.map(pt=>this.toXY(pt, ref));
+    const cum = [0], brg = [];
+    for(let i=1;i<xy.length;i++){
+      const dx = xy[i].x-xy[i-1].x, dy = xy[i].y-xy[i-1].y;
+      cum.push(cum[i-1] + Math.hypot(dx,dy));
+      brg.push((Math.atan2(dx,dy)*180/Math.PI + 360) % 360);
+    }
+    return (corridor._g = { path:corridor.path, ref, xy, cum, brg, L:cum[cum.length-1] });
+  },
+  // Projects pt [lat,lon] onto the corridor centreline -> {s: arc-length from
+  // path[0] in m, d: perpendicular distance in m, seg: segment index}. On a
+  // corridor that doubles back (switchbacks) or loops, several legs can be
+  // about equally near; among legs within 8m of the nearest, prefer the one
+  // closest to hintS (where the previous on-corridor fix was), or the earliest
+  // when there's no hint -- so progress stays continuous instead of jumping
+  // between legs.
+  projectOnPath(pt, G, hintS){
+    const P = this.toXY(pt, G.ref);
+    const cands = []; let bestD = Infinity;
+    for(let i=1;i<G.xy.length;i++){
+      const A = G.xy[i-1], B = G.xy[i];
+      const vx = B.x-A.x, vy = B.y-A.y, len2 = vx*vx + vy*vy;
+      let t = len2>0 ? ((P.x-A.x)*vx + (P.y-A.y)*vy)/len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(P.x-(A.x+t*vx), P.y-(A.y+t*vy));
+      cands.push({ d, s:G.cum[i-1] + t*Math.sqrt(len2), seg:i-1 });
+      if(d < bestD) bestD = d;
+    }
+    let pick = null;
+    for(let i=0;i<cands.length;i++){
+      const c = cands[i];
+      if(c.d > bestD + 8) continue;
+      if(!pick) pick = c;
+      else if(hintS!=null ? Math.abs(c.s-hintS) < Math.abs(pick.s-hintS) : c.s < pick.s) pick = c;
+    }
+    return pick;
+  },
+  _median(a){
+    const b = a.slice().sort((x,y)=>x-y), n = b.length;
+    return n%2 ? b[(n-1)/2] : (b[n/2-1] + b[n/2])/2;
+  },
+  // Lateral tolerance (m, beyond half the corridor's width) for calling a fix
+  // "on" the corridor: the fix's own reported accuracy, clamped to
+  // [RUN_TOL_MIN_M, RUN_TOL_MAX_M] -- and additionally capped at ~8% of the
+  // corridor's length. On a ~90m corridor a generous 20m tolerance let a
+  // diagonal ski-across sit "on" it at both ends; short corridors get the
+  // tight minimum instead (a corridor >= 250m long is unaffected).
+  fixTol(acc, L, T){
+    const cap = Math.min(T.RUN_TOL_MAX_M, Math.max(T.RUN_TOL_MIN_M, L*0.08));
+    return Math.max(T.RUN_TOL_MIN_M, Math.min(cap, acc!=null ? acc : 10));
+  },
+  // Decides whether `buffer` (fixes [{lat,lon,t,acc?,alt?,speed?}]) contains a
+  // real END-TO-END pass of `corridor`, and if so measures it. This replaces
+  // the old unordered "was the track near half the corridor" coverage test.
+  // A pass must, in order:
+  //   1. start in the corridor's start zone and later arrive in its far end
+  //      zone, on the corridor (start/end point + direction). Top-first is a
+  //      "down" pass, bottom-first an "up" pass -- the caller decides which
+  //      activities each direction is worth;
+  //   2. cover >= CORRIDOR_COMPLETION_PCT of it, bin by bin, with no
+  //      teleports (progress along the line must be explainable by speed);
+  //   3. stay on it (time off-corridor, deepest back-slide);
+  //   4. actually head ALONG it (bearing of movement vs the corridor's local
+  //      bearing);
+  //   5. take a plausible time / speed for the distance;
+  //   6. where the corridor has a real authored descent, show a matching
+  //      altitude change (skipped when altitude is missing or unreliable).
+  // Returns {ok, reason, coverage, dir, durationS, avgSpeedMps, maxSpeedMps,
+  // distanceM, tStart, tEnd, fixes, ...metrics}. `reason` is player-facing.
+  evaluateTraversal(corridor, buffer, T){
+    const G = this.geom(corridor), L = G.L, ref = corridor.ref;
+    const halfW = (corridor.widthM||10)/2;
+    const fail = (reason, extra)=>Object.assign({ ok:false, reason, coverage:0, dir:null }, extra||{});
+    if(!(L>=20) || !buffer || buffer.length<2) return fail("not enough GPS data to check");
+
+    // 1. Project every usable fix onto the centreline.
+    const pts = []; let hint = null;
+    for(let i=0;i<buffer.length;i++){
+      const f = buffer[i];
+      if(f.acc!=null && f.acc > T.RUN_ACC_MAX_M) continue;
+      const pr = this.projectOnPath([f.lat,f.lon], G, hint);
+      const on = pr.d <= halfW + this.fixTol(f.acc, L, T);
+      if(on) hint = pr.s;
+      pts.push({ f, t:f.t, s:pr.s, seg:pr.seg, on });
+    }
+    if(pts.length<2) return fail("GPS accuracy too poor to check");
+
+    const zone = Math.max(10, Math.min(T.ENDPOINT_ZONE_M, L*0.25));
+    const nBins = Math.max(1, Math.ceil(L/T.COVER_BIN_M));
+    const maxDurationS = Math.max(T.MAX_DURATION_S, (corridor.lengthM||0) / 0.5);
+
+    // Bins of the corridor the track passed through, over pts[i0..i1]. With
+    // fillZones, the start/end zones count as covered outright: reaching a zone
+    // is what the zone test already proved, and a pass is logged the moment the
+    // far zone is entered, so its bins can't have been walked yet.
+    const cover = (i0, i1, fillZones)=>{
+      const hit = new Uint8Array(nBins);
+      const mark = (s0, s1)=>{
+        const lo = Math.min(s0,s1), hi = Math.max(s0,s1);
+        const b0 = Math.max(0, Math.min(nBins-1, Math.floor(lo/T.COVER_BIN_M)));
+        const b1 = Math.max(0, Math.min(nBins-1, Math.floor(hi/T.COVER_BIN_M)));
+        for(let k=b0;k<=b1;k++) hit[k] = 1;
+      };
+      let prev = null;
+      for(let i=i0;i<=i1;i++){
+        const q = pts[i];
+        if(!q.on) continue;
+        mark(q.s, q.s);
+        if(prev){
+          const dt = (q.t-prev.t)/1000, ds = Math.abs(q.s-prev.s);
+          if(dt>0 && dt<=T.BRIDGE_S && ds <= T.MAX_ALONG_SPEED_MPS*dt + T.CHORD_SLACK_M) mark(prev.s, q.s);
+        }
+        prev = q;
+      }
+      if(fillZones){
+        for(let k=0;k<=Math.min(nBins-1, Math.floor(zone/T.COVER_BIN_M));k++) hit[k] = 1;
+        for(let k=Math.max(0, Math.floor((L-zone)/T.COVER_BIN_M));k<nBins;k++) hit[k] = 1;
+      }
+      let n = 0; for(let k=0;k<nBins;k++) n += hit[k];
+      return n/nBins;
+    };
+
+    // First ordered start-zone -> end-zone pass in direction `dir`. `a` is the
+    // LAST start-zone fix before the first end-zone arrival, so time spent
+    // hanging around at the top (or an earlier lap) isn't counted as run time.
+    const findTrip = dir=>{
+      const inStart = q=> dir==="down" ? q.s<=zone : q.s>=L-zone;
+      const inEnd = q=> dir==="down" ? q.s>=L-zone : q.s<=zone;
+      let a = -1;
+      for(let i=0;i<pts.length;i++){
+        const q = pts[i];
+        if(!q.on) continue;
+        if(inStart(q)) a = i;
+        else if(a>=0 && inEnd(q)) return { a, b:i };
+      }
+      return null;
+    };
+
+    const judge = (dir, a, b)=>{
+      const A = pts[a], B = pts[b];
+      const durationS = (B.t-A.t)/1000;
+      let pathM = 0, maxStep = 0, gpsMax = 0;
+      for(let i=a+1;i<=b;i++){
+        const d = this.haversineM([pts[i-1].f.lat,pts[i-1].f.lon], [pts[i].f.lat,pts[i].f.lon]);
+        const dt = (pts[i].t-pts[i-1].t)/1000;
+        pathM += d;
+        if(dt>0) maxStep = Math.max(maxStep, d/dt);
+      }
+      for(let i=a;i<=b;i++) gpsMax = Math.max(gpsMax, pts[i].f.speed||0);
+      const alongM = Math.abs(B.s-A.s);
+      const alongSpeed = durationS>0 ? alongM/durationS : Infinity;
+      const cov = cover(a, b, true);
+
+      // time-weighted share spent off the corridor
+      let offT = 0, totT = 0;
+      for(let i=a;i<b;i++){
+        const dt = pts[i+1].t-pts[i].t; totT += dt;
+        if(!pts[i].on || !pts[i+1].on) offT += dt;
+      }
+      const offFrac = totT>0 ? offT/totT : 0;
+
+      // deepest back-slide (progress measured in the pass's own direction)
+      let runMax = -Infinity, retreatM = 0;
+      for(let i=a;i<=b;i++){
+        if(!pts[i].on) continue;
+        const u = dir==="down" ? pts[i].s : L-pts[i].s;
+        if(u>runMax) runMax = u;
+        retreatM = Math.max(retreatM, runMax-u);
+      }
+
+      // bearing agreement: anchor-based so a step is >= HEADING_MIN_MOVE_M long
+      let agree = 0, steps = 0, anchor = pts[a];
+      for(let i=a+1;i<=b;i++){
+        const q = pts[i];
+        const P0 = this.toXY([anchor.f.lat,anchor.f.lon], ref), P1 = this.toXY([q.f.lat,q.f.lon], ref);
+        const dx = P1.x-P0.x, dy = P1.y-P0.y;
+        if(Math.hypot(dx,dy) < T.HEADING_MIN_MOVE_M) continue;
+        anchor = q;
+        if(!q.on) continue;
+        const mv = (Math.atan2(dx,dy)*180/Math.PI + 360) % 360;
+        let cb = G.brg[q.seg]; if(dir==="up") cb = (cb+180) % 360;
+        let diff = Math.abs(mv-cb); if(diff>180) diff = 360-diff;
+        steps++; if(diff<=T.HEADING_TOL_DEG) agree++;
+      }
+      const headingAgree = steps>=3 ? agree/steps : null;
+
+      // altitude: median of the first vs last few readings, compared with the
+      // authored descent -- only on runs where net descent is what was authored
+      const alts = [];
+      for(let i=a;i<=b;i++){ const al = pts[i].f.alt; if(al!=null && isFinite(al)) alts.push(al); }
+      let altChangeM = null;
+      if(alts.length>=T.ELEV_MIN_SAMPLES){
+        const k = Math.min(3, Math.floor(alts.length/3));
+        altChangeM = this._median(alts.slice(-k)) - this._median(alts.slice(0,k));
+      }
+      const netDescentRun = corridor.runType==="lift" ||
+        ((corridor.runType==="run" || corridor.runType==="chute") &&
+         ["xcountry","walking_city","bike","hike"].indexOf(corridor.activityType)<0);
+      const need = corridor.descentM;
+      let elevChecked = false, elevFail = false;
+      if(netDescentRun && need!=null && need>=T.ELEV_CHECK_MIN_M && altChangeM!=null){
+        elevChecked = true;
+        const signed = dir==="down" ? -altChangeM : altChangeM;
+        elevFail = signed < T.ELEV_MIN_FRAC*need - T.ELEV_TOL_M;
+      }
+
+      const r = { ok:false, reason:null, dir, coverage:cov, durationS, alongM, alongSpeedMps:alongSpeed,
+        pathM, avgSpeedMps: durationS>0 ? pathM/durationS : 0, maxSpeedMps: gpsMax>0 ? gpsMax : maxStep,
+        distanceM: Math.min(pathM, L*1.25), tStart:A.t, tEnd:B.t, offFrac, retreatM, headingAgree,
+        altChangeM, elevChecked, fixes: pts.slice(a,b+1).map(q=>q.f) };
+      if(durationS < T.MIN_DURATION_S) r.reason = "too quick to be a real run";
+      else if(durationS > maxDurationS) r.reason = "took too long";
+      else if(alongSpeed > T.MAX_ALONG_SPEED_MPS) r.reason = "GPS jumped (impossibly fast)";
+      else if(alongSpeed < T.MIN_ALONG_SPEED_MPS) r.reason = "barely moved";
+      else if(cov < T.CORRIDOR_COMPLETION_PCT) r.reason = "didn't follow it all the way";
+      else if(offFrac > T.OFF_ROUTE_MAX_FRAC) r.reason = "strayed off it";
+      else if(retreatM > Math.max(T.RETREAT_MIN_M, T.RETREAT_FRAC*L)) r.reason = "doubled back partway";
+      else if(headingAgree!=null && headingAgree < T.HEADING_AGREE_MIN) r.reason = "wasn't heading along it";
+      else if(elevFail) r.reason = "elevation didn't change like a real "+(dir==="down" ? "descent" : "climb");
+      else r.ok = true;
+      return r;
+    };
+
+    const cands = ["down","up"].map(dir=>{ const tr = findTrip(dir); return tr ? judge(dir, tr.a, tr.b) : null; }).filter(Boolean);
+    const good = cands.find(c=>c.ok);
+    if(good) return good;
+    if(cands.length) return cands.sort((x,y)=>y.coverage-x.coverage)[0];
+    // No ordered start -> finish pass at all: say which end was missed.
+    let top = false, bottom = false;
+    pts.forEach(q=>{ if(q.on){ if(q.s<=zone) top = true; if(q.s>=L-zone) bottom = true; } });
+    const why = (!top && !bottom) ? "didn't run it end to end"
+      : !top ? "never reached the top of it"
+      : !bottom ? "never reached the bottom of it"
+      : "didn't run it end to end";
+    return fail(why, { coverage: cover(0, pts.length-1) });
   }
 };
 
@@ -824,7 +1090,7 @@ const Quest = {
   allowedActivities: null, // R12: this project's activity-relevance filter — null=all, else array of activity strings — set by loadCorridors()
   threeDEnabled: false, // workspace 3D-terrain flag (bundle.threeDEnabled, injected server-side) — gates 3D terrain on "My map"
   season: null,         // project.season (bundle.season, injected server-side) — My map applies the winter treatment only when this is 'winter' (same rule as every other map view)
-  states: {},           // zoneId -> {phase:"idle"|"inRun", buffer:[fix,...], cooldownUntil}
+  states: {},           // zoneId -> {phase:"idle"|"inRun" (narration band only), narrCooldownUntil, cooldownUntil (post-log), rec:{buf,lastNearT,lastS,sawTop,sawBottom}|null (run recorder)}
   fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
   viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
   enteredViewpoints: new Set(), // zoneId set — a viewpoint grants once per session; the server's upgrade-only upsert makes a duplicate POST harmless but wasteful, so this avoids re-sending every fix while lingering at a viewpoint
@@ -838,8 +1104,9 @@ const Quest = {
   onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
   onShare: null,        // callback(p) — same p as onPosition; set by renderHome to POST /api/presence (throttled) while sharing-with-friends is on. Independent of onPosition so it survives Home<->Map navigation.
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
-  onCoverage: null,     // R9 — callback(corridorName, pct, passed) — fired once per band exit (whether it logged a run or was discarded), so a partial/clipped crossing isn't silent the way a below-threshold discard otherwise would be
+  onCoverage: null,     // callback(corridorName, pct, passed, reason) — fired when a run is logged (passed:true) or when the player leaves a corridor having covered a meaningful part without completing it / a genuine pass is rejected (passed:false, reason = player-facing why), so a partial/rejected pass isn't silent. A plain traverse (little covered) stays silent.
   onCheckpointVertical: null, // callback(totalM) — fired when _tickCheckpoints credits a descent, so Home's "Vertical today" tile ticks up live
+  onPrefetch: null,      // callback(sayText) — fired once per corridor per session when the player comes within QUEST_TUNING.SAY_PREFETCH_M, so the narration audio is already cached when they enter
   onNarrate: null,       // callback(sayText, zoneId) — fired once per band entry for a corridor with narration authored, wired up regardless of which screen (Home/My map) is showing
 
   // Battery Saver ("lift mode") — see setLiftModeOverride()/_setLiftModeActive().
@@ -1073,7 +1340,20 @@ const Quest = {
     // "engaged" on or off regardless of whether the skier is actually moving
     // along the line).
     if(typeof ChuteGuard!=="undefined"){
-      ChuteGuard.tick({lat:p.lat,lon:p.lon,acc:p.acc,speed:p.speed,t:fix.t}, p.headingTravel);
+      // RESPONSIVE feed (2026-09-21, "2s is not acceptable"): hand the guard the
+      // RAW fix plus the phone's own Doppler velocity (coords.speed/heading --
+      // low-noise, no smoothing lag) and let chute-guard.js fuse + look ahead
+      // (see its TUNING.RESP_*). The EKF-smoothed position p.* lagged a real
+      // step-out by 1-2 s on top of the 1 Hz fix cadence. No usable speed from
+      // the browser (or the walk simulator) -> the old smoothed feed, unchanged.
+      let cgFix = {lat:p.lat,lon:p.lon,acc:p.acc,speed:p.speed,t:fix.t};
+      if(c.speed!=null && isFinite(c.speed)){
+        const moving = c.speed>=0.3 && c.heading!=null && isFinite(c.heading);
+        cgFix = { lat:fix.lat, lon:fix.lon, acc:fix.acc, speed:c.speed, t:fix.t,
+                  velE: moving ? c.speed*Math.sin(c.heading*Math.PI/180) : 0,
+                  velN: moving ? c.speed*Math.cos(c.heading*Math.PI/180) : 0 };
+      }
+      ChuteGuard.tick(cgFix, p.headingTravel);
       // Battery Saver ("lift mode") — keep the raw on-lift reading warm on
       // EVERY real fix regardless of override, so switching the override
       // back to "auto" later reflects near-real-time state rather than
@@ -1256,91 +1536,136 @@ const Quest = {
   },
 
   _tick(corridor, p, selectedActivity){
-    const st = this.states[corridor.zoneId] || (this.states[corridor.zoneId] = { phase:"idle", buffer:[], cooldownUntil:0 });
+    const st = this.states[corridor.zoneId] || (this.states[corridor.zoneId] = { phase:"idle", narrCooldownUntil:0, cooldownUntil:0, rec:null });
+    // cooldownUntil is set only right after a run is logged; the narration
+    // band's own re-entry cooldown is separate (narrCooldownUntil) so a burst
+    // of band flicker can never make the run recorder below drop fixes.
     if(Date.now() < st.cooldownUntil) return;
-    // Hysteresis (see QUEST_TUNING.NARRATE_HYSTERESIS_M): while already
-    // in-run, a fix has to be clearly PAST the edge (dist >= +margin) to
-    // count as exiting; while idle, a fix has to be clearly INSIDE
+    // Narration band hysteresis (see QUEST_TUNING.NARRATE_HYSTERESIS_M): while
+    // already in-run, a fix has to be clearly PAST the edge (dist >= +margin)
+    // to count as exiting; while idle, a fix has to be clearly INSIDE
     // (dist < -margin) to count as (re-)entering. A single dist<0 boundary
     // with no tolerance let ordinary GPS jitter right at the line flip
     // idle<->inRun back and forth, re-speaking the corridor's narration on
     // what was really just noise near the far edge, not a genuine re-entry.
     //
     // Bug fixed 2026-09 (field report: "the voice does not announce the
-    // corridor" — a real road test on a narrow corridor): corridorDist()'s
+    // corridor" -- a real road test on a narrow corridor): corridorDist()'s
     // minimum possible value is -halfWidth (standing exactly on the
     // centerline), so a FIXED 3m entry margin made entry mathematically
-    // impossible for any corridor narrower than 6m wide — this project's
+    // impossible for any corridor narrower than 6m wide -- this project's
     // "test Chute" is only 4m wide (halfWidth 2m), so dist could never go
     // below -2, and the entry condition (dist< -3) never once fired. Margin
     // is now capped to half the corridor's own half-width, so entry always
     // has room to be satisfied regardless of how narrow the corridor is.
+    //
+    // This band now drives NARRATION ONLY. Run detection is the recorder
+    // further down: a 3m band around a 4m chute is far tighter than GPS
+    // error, so ending a run at the first fix outside it chopped one real
+    // descent into fragments.
     const halfW = (corridor.widthM||10)/2;
     const margin = Math.min(QUEST_TUNING.NARRATE_HYSTERESIS_M, halfW*0.5);
     const dist = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref);
     const inBand = st.phase==="inRun"
       ? dist < margin
       : dist < -margin;
+    // Re-arm narration only once the player has genuinely LEFT the area
+    // (beyond the run recorder's hold band), not merely stepped out of the
+    // narrow entry band. Field log 2026-09-21 (4 m test chute): GPS wander
+    // carried the smoothed position in and out of that ~1 m entry band ~17 times
+    // in 4 minutes, and each re-entry restarted the spoken narration.
+    if((dist + halfW) > halfW + QUEST_TUNING.REC_HOLD_M) st.narrArmed = true;
+    if(corridor.say && this.onPrefetch && !st.sayPrefetched && (dist + halfW) <= halfW + QUEST_TUNING.SAY_PREFETCH_M){
+      st.sayPrefetched = true;
+      this.onPrefetch(corridor.say);
+    }
     if(st.phase==="idle" && inBand){
-      st.phase="inRun"; st.buffer=[p];
-      // Spoken narration (2026-09-17) — fires once per band entry, same
-      // moment the Tour Player's own zone.fires_on:"enter" trigger would.
-      // Cooldown-gated the same as everything else in this state machine
-      // (st.cooldownUntil, set on exit below), so re-entering right after
-      // leaving doesn't re-speak.
-      if(corridor.say && this.onNarrate) this.onNarrate(corridor.say, corridor.zoneId);
-    } else if(st.phase==="inRun" && inBand){
-      st.buffer.push(p);
+      if(Date.now() >= st.narrCooldownUntil){
+        st.phase="inRun";
+        // Spoken narration (2026-09-17) -- fires once per approach.
+        if(corridor.say && this.onNarrate && st.narrArmed!==false){
+          st.narrArmed = false;
+          this.onNarrate(corridor.say, corridor.zoneId);
+        }
+      }
     } else if(st.phase==="inRun" && !inBand){
-      st.buffer.push(p);
-      this._classifyAndLog(corridor, st.buffer, selectedActivity);
-      st.phase="idle"; st.buffer=[]; st.cooldownUntil=Date.now()+QUEST_TUNING.COOLDOWN_MS;
+      st.phase="idle"; st.narrCooldownUntil=Date.now()+QUEST_TUNING.COOLDOWN_MS;
+    }
+
+    // ---- Run recorder ----
+    // Records everything near the corridor, then asks QGeo.evaluateTraversal
+    // (via _classifyAndLog) whether it was a real end-to-end pass. A pass is
+    // logged the moment the far end zone is reached -- not when the player
+    // eventually wanders off -- so lingering at a lift base can't delay or
+    // fold laps together. When the player leaves without completing, one final
+    // check runs purely to report WHY it didn't count.
+    const R = QUEST_TUNING;
+    const near = (dist + halfW) <= halfW + R.REC_HOLD_M;
+    let rec = st.rec;
+    if(!rec){
+      if(!near) return;
+      rec = st.rec = { buf:[], lastNearT:p.t, lastS:null, sawTop:false, sawBottom:false };
+    }
+    if(near) rec.lastNearT = p.t;
+    const lastRec = rec.buf[rec.buf.length-1];
+    if(!lastRec || p.t-lastRec.t >= R.REC_MAX_STEP_S*1000 || QGeo.haversineM([lastRec.lat,lastRec.lon],[p.lat,p.lon]) >= R.REC_MIN_STEP_M){
+      rec.buf.push({ lat:p.lat, lon:p.lon, acc:p.acc, t:p.t, speed:p.speed, alt:p.alt });
+      if(rec.buf.length > R.REC_MAX_FIXES) rec.buf.shift();
+    }
+    if(near && (p.acc==null || p.acc <= R.RUN_ACC_MAX_M)){
+      const G = QGeo.geom(corridor);
+      const pr = QGeo.projectOnPath([p.lat,p.lon], G, rec.lastS);
+      if(pr.d <= halfW + QGeo.fixTol(p.acc, G.L, R)){
+        rec.lastS = pr.s;
+        const zone = Math.max(10, Math.min(R.ENDPOINT_ZONE_M, G.L*0.25));
+        const atTop = pr.s <= zone, atBottom = pr.s >= G.L - zone;
+        // Only worth a full evaluation when an end zone is reached having
+        // already visited the OTHER one (the flags are set after the probe so
+        // a fix never counts as its own opposite end).
+        if((atBottom && rec.sawTop) || (atTop && rec.sawBottom)){
+          const r = this._classifyAndLog(corridor, rec.buf, selectedActivity, false);
+          if(r===true || r==="rejected"){
+            st.rec = null; st.cooldownUntil = Date.now()+R.COOLDOWN_MS;
+            return;
+          }
+        }
+        if(atTop) rec.sawTop = true;
+        if(atBottom) rec.sawBottom = true;
+      }
+    }
+    if(!near && p.t - rec.lastNearT > R.REC_GRACE_S*1000){
+      this._classifyAndLog(corridor, rec.buf, selectedActivity, true);
+      st.rec = null;
     }
   },
 
-  _classifyAndLog(corridor, buffer, selectedActivity){
-    if(buffer.length<2) return;
-    const first=buffer[0], last=buffer[buffer.length-1];
-    const durationS = (last.t-first.t)/1000;
-    // R12 — MAX_DURATION_S alone (90 min) silently discarded real long
-    // corridor crossings: a genuinely long trail confirmed to take longer
-    // than 90 min at a plausible pace (demonstrated live, 2026-08-19, on a
-    // ~9.9km corridor at ski pace) would exceed it and vanish with no
-    // feedback, indistinguishable from a real GPS-stuck failure. Scale the
-    // cap by the corridor's OWN length instead of discarding on a fixed
-    // ceiling — 0.5 m/s (~1.8 km/h) is an implausibly slow floor pace, so
-    // this only ever RAISES the cap for long corridors, never lowers it for
-    // short ones (Math.max keeps the original 90-min floor).
-    const maxDurationS = Math.max(QUEST_TUNING.MAX_DURATION_S, (corridor.lengthM||0) / 0.5);
-    if(durationS < QUEST_TUNING.MIN_DURATION_S || durationS > maxDurationS) return;
-
-    // R9 — tripline fix: gate on how much of THIS corridor's own length the
-    // crossing actually covered, not just whether the band was entered and
-    // exited at all. A bowl traverse that clips 3 nearby chutes' bands only
-    // covers a sliver of each one's length; a real descent of one covers
-    // nearly all of it. See QUEST_TUNING.CORRIDOR_* for the tunable knobs.
-    const coverage = QGeo.corridorCoverage(corridor, buffer, QUEST_TUNING.CORRIDOR_SAMPLE_STEP_M, QUEST_TUNING.CORRIDOR_GPS_TOLERANCE_M);
-    const coveragePassed = coverage >= QUEST_TUNING.CORRIDOR_COMPLETION_PCT;
-    if(this.onCoverage) this.onCoverage(corridor.name, coverage, coveragePassed);
-    if(!coveragePassed) return;
-
-    // Direction: which drawn endpoint (path[0]="top" vs path[last]="bottom",
-    // by authoring convention) the player was nearer to at entry vs exit —
-    // no authored top/bottom triplines needed (R1's scope simplification).
-    const endTop = corridor.path[0], endBottom = corridor.path[corridor.path.length-1];
-    const nearTop = (pt)=> QGeo.haversineM([pt.lat,pt.lon], endTop) < QGeo.haversineM([pt.lat,pt.lon], endBottom);
-    const descending = nearTop(first) && !nearTop(last);
-    const ascending = !nearTop(first) && nearTop(last);
-
-    let distanceM=0;
-    for(let i=1;i<buffer.length;i++) distanceM += QGeo.haversineM([buffer[i-1].lat,buffer[i-1].lon],[buffer[i].lat,buffer[i].lon]);
-    const speeds = buffer.map(p=>p.speed||0);
-    const avgSpeedMps = speeds.reduce((a,b)=>a+b,0)/speeds.length;
-    const maxSpeedMps = Math.max.apply(null, speeds);
+  // Verifies `buffer` is a real end-to-end pass of `corridor`, classifies it
+  // (ski/hike/bike/...), and logs it. Returns true when logged, "rejected"
+  // when the pass was genuine but isn't creditable (consumed -- don't re-try),
+  // false when it isn't a completed pass (yet). `isFinal` is true only when
+  // the player has left the corridor: that's the one time a failure is
+  // explained to them via onCoverage; mid-recording probes stay silent.
+  _classifyAndLog(corridor, buffer, selectedActivity, isFinal){
+    const S = QUEST_TUNING;
+    const trip = QGeo.evaluateTraversal(corridor, buffer, S);
+    if(!trip.ok){
+      if(isFinal && this.onCoverage && trip.coverage >= S.FEEDBACK_MIN_COVERAGE) this.onCoverage(corridor.name, trip.coverage, false, trip.reason);
+      return false;
+    }
+    const coverage = trip.coverage, durationS = trip.durationS;
+    const first = trip.fixes[0], last = trip.fixes[trip.fixes.length-1];
+    // Direction comes from the verified ORDER of the pass (start zone first,
+    // then the far end zone), not from which endpoint the first/last fix
+    // happened to be nearer -- the old nearest-endpoint test called any run
+    // that merely ended in the lower half "descending".
+    const descending = trip.dir==="down", ascending = trip.dir==="up";
+    const distanceM = trip.distanceM, avgSpeedMps = trip.avgSpeedMps, maxSpeedMps = trip.maxSpeedMps;
+    // Genuine pass, not creditable: tell the player why, and consume it.
+    const reject = (why)=>{ if(this.onCoverage) this.onCoverage(corridor.name, coverage, false, why); return "rejected"; };
     // verticalM (which feeds POINTS) is assigned after the activity block
-    // below — it depends on the classified activity.
+    // below -- it depends on the classified activity.
 
-    // R8 — selectedActivity is the player's own manual choice (Ski/Hike/
+    // R8 -- selectedActivity is the player's own manual choice (Ski/Hike/
     // Bike/Drive on Home) and is now the PRIMARY driver of classification,
     // with three exceptions that stay authoritative regardless of what was
     // selected: a lift is mechanized transport, physically detected by
@@ -1349,37 +1674,53 @@ const Quest = {
     // runType:"hike" (a real hiking-only trail) stays hike even if a fast
     // trail-runner briefly clears the ski-speed threshold on it; and a
     // corridor marked runType:"chute" (expert-only technical ski terrain by
-    // definition — Chute Guard exists specifically because these are narrow
-    // and consequential) always counts as ski, the same way — real bug,
-    // 2026-09-17: without this, the generic speed/direction heuristic below
-    // silently downgraded a completed chute to "hike" any time it was
-    // skied cautiously/slowly (sideslipping a tight line, a low-vis lap) or
-    // walked for testing, confirmed live on a real chute corridor that
-    // registered as a hike in the leaderboard despite being authored and
-    // rendered as a chute everywhere else.
+    // definition -- Chute Guard exists specifically because these are narrow
+    // and consequential) counts as ski when DESCENDED, at any pace (real bug,
+    // 2026-09-17: the generic speed heuristic silently downgraded a cautiously
+    // skied or side-slipped chute to "hike"). 2026-09-21: an ASCENT of a chute
+    // is a hike -- it used to score as ski whichever way you went.
     let activity;
     if(corridor.runType==="lift"){
-      if(!ascending) return; // downhill lift-line foot traffic isn't a lift ride
+      if(!ascending) return "rejected"; // downhill lift-line foot traffic isn't a lift ride (silent, as before)
       activity="lift";
     } else if(corridor.runType==="hike"){
       activity="hike";
     } else if(corridor.runType==="chute"){
-      activity="ski";
+      activity = descending ? "ski" : "hike";
     } else if(selectedActivity==="hike" || selectedActivity==="drive" || selectedActivity==="xcski"){
       // xcski (Nordic/cross-country) goes here, not in the ski branch below:
       // Nordic terrain is flat/rolling, so the ski branch's `descending &&`
       // speed-gate would misclassify a real xc outing as hike almost every
-      // time — like hike/drive, it's a manual selection with no auto-detect.
-      activity=selectedActivity; // manual override, no speed check
+      // time -- like hike/drive, it's a manual selection with no auto-detect.
+      activity=selectedActivity; // manual override, no direction check
     } else if(selectedActivity==="bike"){
-      activity = (descending && avgSpeedMps >= QUEST_TUNING.BIKE_SPEED_MIN_MPS) ? "bike" : "hike";
+      activity = (descending && avgSpeedMps >= S.BIKE_SPEED_MIN_MPS) ? "bike" : "hike";
     } else {
-      activity = (descending && avgSpeedMps >= QUEST_TUNING.SKI_SPEED_MIN_MPS) ? "ski" : "hike";
+      activity = (descending && avgSpeedMps >= S.SKI_SPEED_MIN_MPS) ? "ski" : "hike";
+    }
+
+    // Per-activity speed plausibility, on the verified pass's own pace: the
+    // manual overrides above used to accept ANY speed, so walking a road with
+    // "drive" selected, or riding a chair up a hike trail, scored.
+    if(activity==="lift" && avgSpeedMps < S.LIFT_SPEED_MIN_MPS) return reject("too slow to be a lift ride");
+    if(activity==="hike" && avgSpeedMps > S.HIKE_SPEED_MAX_MPS) return reject("too fast to be on foot");
+    if(activity==="xcski" && avgSpeedMps < S.XCSKI_SPEED_MIN_MPS) return reject("too slow to count as skiing");
+    if(activity==="drive" && avgSpeedMps < S.DRIVE_SPEED_MIN_MPS) return reject("too slow to count as driving");
+    if(corridor.runType==="chute" && descending && avgSpeedMps < S.CHUTE_SPEED_MIN_MPS) return reject("too slow to count as skiing it");
+    // A hike "up" a run that is really a lift line overhead (gondola over a
+    // run) isn't a hike: mostly inside a lift corridor's band = a lift ride.
+    if(activity==="hike" && ascending && corridor.runType!=="lift"){
+      const lifts = (this.corridors||[]).filter(c=>c.runType==="lift" && c.zoneId!==corridor.zoneId);
+      if(lifts.length){
+        let onLift = 0;
+        trip.fixes.forEach(f=>{ if(lifts.some(l=>QGeo.corridorDist([f.lat,f.lon], l, l.ref) < 0)) onLift++; });
+        if(onLift/trip.fixes.length >= S.LIFT_OVERLAP_FRAC) return reject("that was a lift ride, not a hike");
+      }
     }
 
     // Vertical for scoring. Ski/hike score on descent, so use the corridor's
     // AUTHORED descent (corridor.descentM, the library's elev_loss_m) scaled
-    // by how much of the run was actually covered — deterministic, GPS-
+    // by how much of the run was actually covered -- deterministic, GPS-
     // altitude-independent, and never null when the run has an authored
     // descent (which killed the old "no altitude fix => 0 points" bug). Sign
     // is negative to match every Math.abs() consumer downstream. Falls back
@@ -1397,9 +1738,10 @@ const Quest = {
 
     const run = {
       zoneId: corridor.zoneId, runName: corridor.name, difficulty: corridor.difficulty, runType: corridor.runType,
-      activity, startedAt: new Date(first.t).toISOString(), endedAt: new Date(last.t).toISOString(),
+      activity, startedAt: new Date(trip.tStart).toISOString(), endedAt: new Date(trip.tEnd).toISOString(),
       durationS, verticalM, distanceM: Math.round(distanceM), avgSpeedMps, maxSpeedMps
     };
+    if(this.onCoverage) this.onCoverage(corridor.name, coverage, true);
     // A failed save here used to vanish silently (bare .catch(()=>{})) — the
     // ONLY feedback a player got about this crossing was onCoverage firing
     // moments ago with passed:true, which is now misleading if the save
@@ -1409,6 +1751,7 @@ const Quest = {
     api("/api/quest-runs", { method:"POST", body: JSON.stringify(run) })
       .then(()=>{ if(this.onRunLogged) this.onRunLogged(run); })
       .catch(()=>{ if(this.onSaveError) this.onSaveError(corridor.name); });
+    return true;
   }
 };
 
@@ -1660,14 +2003,13 @@ document.addEventListener("visibilitychange", ()=>{
 // widens/speeds up at higher levels for urgency.
 const CG_TONE = [
   { freq:740,  gain:0.5,  vibratoHz:0, vibratoDepth:0  },
-  { freq:880,  gain:0.65, vibratoHz:4, vibratoDepth:7  },
   { freq:1046, gain:0.8,  vibratoHz:6, vibratoDepth:14 }
 ];
 // Long, repeating on/off pattern per level — navigator.vibrate() plays a
 // pattern like this in full, unattended (not just a single 110ms pulse),
 // so it also reads as continuous rather than a single buzz; re-issued
 // whenever the level changes, cancelled with vibrate(0) on stop.
-const CG_VIBE = [ [500,150], [300,120], [200,90] ];
+const CG_VIBE = [ [500,150], [200,90] ];
 // Owned by this page, not by GPS fix timing or by chute-guard.js's own
 // onWarn/onClear/onDisengage events — see chuteGuardStartSync()'s comment
 // below for why. The tone itself just holds whatever state syncCgAlarm()
@@ -1720,17 +2062,20 @@ function startCgAlarm(corridorId, level){
     _cgAlarm = { corridorId, level:1, osc:o, gain:g, vibOsc, vibGain };
     _cgApplyLevel(level, 0.06);
     _cgAlarm.level = level;
+    cgLog("TONE start L"+level+" (ctx "+_cgAc.state+")");
     if("vibrate" in navigator){ try{ navigator.vibrate(CG_VIBE[level-1]); }catch(e){} }
   }catch(e){}
 }
 function updateCgAlarmLevel(level){
   if(!_cgAlarm) return;
+  cgLog("TONE level L"+_cgAlarm.level+" -> L"+level);
   _cgAlarm.level = level;
   try{ _cgApplyLevel(level, 0.15); }catch(e){} // smooth ramp between levels, never a restart/gap
   if("vibrate" in navigator){ try{ navigator.vibrate(CG_VIBE[level-1]); }catch(e){} }
 }
 function stopCgAlarm(){
   if(_cgAlarm){
+    cgLog("TONE stop (was L"+_cgAlarm.level+")");
     const alarm = _cgAlarm; // capture before nulling below
     // Field bug found 2026-09 (road-test log): cancelScheduledValues +
     // a *scheduled future* stop() still wasn't reliably silencing the
@@ -1834,7 +2179,7 @@ function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
       if(!Quest.chuteGuardEnabled || !Quest.guardedCorridors.has(corridorId)) return; // geometry now always loads (Battery Saver) — these flags gate the toast/log/debug output itself, same as before
-      const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
+      const lvl = Math.max(1, Math.min(2, (info&&info.level)||1));
       cgLog("WARN \""+(name||"corridor")+"\" L"+lvl+" +"+((info&&info.excessM)||0).toFixed(1)+"m alertCount="+(info&&info.alertCount));
       if(info && info.alertCount===1){
         rqToast("⚠ off the line — outside \""+(name||"corridor")+"\"");
@@ -1874,7 +2219,7 @@ function chuteGuardCallbacks(){
       const line = "guard \""+(name||"corridor")+"\": cov="+(d.coverage*100).toFixed(0)+"% eng="+(d.engaged?"Y":"n")+" in="+(d.everInside?"Y":"n")+
         " dist="+d.distM.toFixed(1)+"m half="+d.halfW.toFixed(1)+"m(+"+d.bufferM+" buf, max"+d.maxRelevantM.toFixed(0)+"m)"+
         " hdg="+(d.headingDeg==null?"null":d.headingDeg.toFixed(0)+"°")+" spd="+(d.speed==null?"null":d.speed.toFixed(2)+"m/s")+
-        " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":"")+
+        " exc="+d.excessM.toFixed(1)+"m L"+d.level+(d.committed?" (committed)":"")+(d.responsive?" bias="+(d.biasM||0).toFixed(1)+"m":"")+
         " pos="+d.lat.toFixed(6)+","+d.lon.toFixed(6); // raw position, so an exported log shows exactly where each crossing happened
       const el = document.getElementById("cgDebug");
       if(el) el.textContent = line;
@@ -1957,11 +2302,13 @@ let _sayGen = 0;
 function narrateCorridor(text){
   if(!text) return;
   const gen = ++_sayGen;
+  const t0 = Date.now(), cached = _sayTtsCache.has(text);
+  cgLog("SAY requested"+(cached ? " (cached audio)" : " (fetching /api/tts)")+": \""+text.slice(0,40)+"\"");
   sayViaTts(text).then(url=>{
-    if(gen!==_sayGen) return; // superseded by a newer entry while this was in flight
+    if(gen!==_sayGen){ cgLog("SAY dropped (superseded) after "+(Date.now()-t0)+"ms"); return; } // superseded by a newer entry while this was in flight
     const el=_ensureSayEl();
-    el.src=url; el.play().catch(()=>{});
-  }).catch(()=>speakViaBrowserTts(text));
+    el.src=url; el.play().then(()=>cgLog("SAY playing, "+(Date.now()-t0)+"ms after request")).catch(e=>cgLog("SAY play() rejected: "+(e&&e.name)));
+  }).catch(e=>{ cgLog("SAY tts failed ("+(e&&e.message)+") -> browser voice fallback"); speakViaBrowserTts(text); });
 }
 function renderHome(){
   const s=getSession();
@@ -2020,6 +2367,7 @@ function renderHome(){
     // off still gets exactly the same silence as before.
     if(typeof ChuteGuard!=="undefined") ChuteGuard.load(chuteGuardZonesFor(Quest.corridors), chuteGuardCallbacks());
     Quest.onNarrate = narrateCorridor;
+    Quest.onPrefetch = (text)=>{ sayViaTts(text).then(()=>cgLog("SAY prefetched: \""+text.slice(0,40)+"\"")).catch(()=>{}); };
     const el = document.getElementById("exploredPct");
     if(!el) return; // navigated away before this resolved
     const pct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
@@ -2051,18 +2399,18 @@ function renderHome(){
       ? "last fix "+new Date(st.t).toLocaleTimeString()+", ±"+Math.round(st.acc)+"m"
       : "location error: "+st.message+" — check your browser's location permission for this site";
   };
-  // R9 — surfaces every band-exit's coverage check, not just the ones that
-  // logged a run: a clipped/partial crossing used to vanish silently the
-  // same way a too-short flicker always has, with no way to tell them
-  // apart. Sticks until the next crossing (not cleared on Stop) so a player
+  // R9 — surfaces a logged run, and WHY a partial/rejected pass didn't count
+  // (reason, from QGeo.evaluateTraversal): a partial run used to vanish silently
+  // the same way a too-short flicker always has, with no way to tell them
+  // apart. A plain traverse (barely any of the corridor covered) stays silent. Sticks until the next crossing (not cleared on Stop) so a player
   // who just finished sees the result of their last run before it scrolls
   // into Today's list.
-  const onCoverage=(name, pct, passed)=>{
+  const onCoverage=(name, pct, passed, reason)=>{
     if(!coverageEl) return;
     const pctStr = Math.round(pct*100)+"%";
     coverageEl.textContent = passed
       ? name+" — "+pctStr+" ✓ logged"
-      : name+" — "+pctStr+" (not enough of it covered to count)";
+      : name+" — "+pctStr+" — not counted: "+(reason||"not enough of it covered");
   };
   // Debug audit, 2026-08-21 — POST /api/quest-runs failing used to be a
   // silent no-op (bare .catch(()=>{})): a real crossing (real vertical/

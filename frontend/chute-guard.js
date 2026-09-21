@@ -83,9 +83,9 @@
       hike: 0.7, walking_city: 0.7, xcountry: 1.2, bike: 1.5, ski_chute: 1.5, drive: 3.0
     },
     OUTSIDE_BUFFER_M: 0.5,       // small margin past the nominal half-width — float/GPS-geometry noise tolerance right at the line ONLY, not a "wait before alerting/clearing" delay. Shared symmetrically by both the alert-trigger edge and the back-inside/clear edge (see the first-alert comment and backInside below), so this is also how close to the TRUE authored width the alarm has to get before it stops — field feedback (2026-09) was that the previous 2m value cleared the alarm well before the avatar visually re-entered a narrow corridor's drawn line, which read as "not turning off fast enough." Kept nonzero only because an exact 0 boundary can flicker on floating-point noise alone.
-    MAX_LEVEL: 3,
-    ESCALATE_AFTER_MS: [0, 5000, 12000],  // time-since-first-alert ladder -> level (index+1)
-    ESCALATE_EXCESS_M: [0, 10, 25],       // peak-excess-so-far ladder -> level (index+1); actual level is the more urgent of the two ladders
+    MAX_LEVEL: 2,
+    ESCALATE_AFTER_MS: [0, Infinity],  // time never escalates (2026-09-21): a level-2 that appeared exactly 5 s after leaving read as random, since it said nothing about how far out you were. Kept as an array so a host could re-enable a time ladder
+    ESCALATE_EXCESS_M: [0, 10],           // level 1 = just past the edge; level 2 = clearly outside (10 m+ past it). Distance only, so the pitch change always means "you're further out"
     COMMIT_STREAK_MS: 4000,      // excess growing continuously (no intervening narrowing) for at least this long...
     COMMIT_GROWTH_M: 15,         // ...or the excess has grown at least this much past its value at the first alert, with no intervening fix narrowing it back...
     MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging"
@@ -100,6 +100,41 @@
     MAX_CROSSING_JUMP_M: 30,     // sweptOppositeSideCrossing()'s own, tighter bound — a genuine single-tick lateral "skip" over a corridor's width realistically spans tens of meters near its OWN edge, not the full MAX_RELEVANT_PAD_M "still worth alerting" range; keeps a distant, unrelated corridor's infinite line from being coincidentally "crossed" by an unrelated movement 50+ meters away
     DR_MIN_SPEED_MPS: 0.3,       // dead-reckoning floor — below this, heading is noise (a near-stationary fix's travel heading swings wildly) and extrapolating position from it would too; see getActiveAlarm()'s DR comment
     DR_MAX_S: 3.0,               // dead-reckoning ceiling — only bridge the gap between real fixes for this long before falling back to "no prediction, use the last real fix as-is." Doubled from 1.5s (2026-09-20) once DR_CONFIRM_MARGIN_M (below) existed as a safety net — the earlier incident at 3.75s (a stale, no-longer-true velocity reading "coasting" through a narrow corridor and back out the other side with zero real movement, since nothing was correcting it) was a real bug, but the fix that actually closed it was the confirmation margin, not the ceiling itself; a longer ceiling still increases how far a stale coast CAN travel before that margin catches it, so if a future log shows the same phantom-drift shape again, shrink this first before touching the margin. STALE_MS (5000ms) remains the ultimate backstop if fixes stop arriving altogether
+    // ---- Responsive (fused) path — only when the host supplies fix.velE/fix.velN ----
+    // 2026-09-21 field report: "2s is not acceptable." Measured (250 randomised
+    // step-outs, real kalman-filter.js): feeding the guard the EKF-smoothed
+    // position put the alarm ON a median 1.2-1.75 s (p90 2-2.75 s) after a real
+    // exit and OFF a median 2.1-2.7 s (p90 3.5-4.6 s) after a real re-entry --
+    // the EKF's smoothing lag stacked on the 1 Hz fix cadence, and the old DR
+    // only ran at >=0.3 m/s with a heading and needed a further 1 m margin.
+    // The fused path instead takes the RAW fix plus the phone's own Doppler
+    // velocity (low-noise, no smoothing lag): a complementary filter advances
+    // the last estimate with that velocity and corrects toward each new fix,
+    // then the alarm is decided on the position extrapolated to "now + lead".
+    // Measured: ON median ~0 s (p90 ~0.8-1 s), OFF median 0-0.5 s (p90 ~1.2-1.9 s).
+    // What's left is the 1 Hz GPS itself -- the floor no software removes.
+    RESP_FUSE_K: 0.5,            // gain toward each new raw fix (1 = trust the fix outright, 0 = trust only velocity dead-reckoning)
+    RESP_FIX_LATENCY_S: 0.3,     // a fix describes where the player WAS this long ago; the correction compares against the estimate at that earlier time
+    RESP_LEAD_S: 0.4,            // look-ahead = known pipeline delay (~0.3 s fix age + ~0.1 s audio start), not a tuned number: alarm at where the player is when the sound actually arrives
+    RESP_MAX_GAP_S: 5,           // a longer gap between fixes restarts the fused estimate from the raw fix
+    RESP_MARGIN_M: 0.0,          // the predicted position IS the decision (no extra margin either way) -- DR_CONFIRM_MARGIN_M below exists for the slower, less trustworthy velocity of the non-fused path
+    // ---- Offset cancelling (responsive path only) ----
+    // Cars keep a lane by MEASURING it (camera) rather than trusting an
+    // absolute position; GPS-only lane-level work calibrates the sensor's
+    // offset against the map while the vehicle is known to be on the road.
+    // Same idea here: while the rider is moving and clearly on the corridor,
+    // learn the slowly-drifting lateral offset between where GPS says they are
+    // and the authored centreline (GPS bias + the recorded line's own error,
+    // both slowly varying / constant) and subtract it, so only a DEPARTURE
+    // relative to that baseline alarms. Simulated 4 m bike path: false alarms
+    // 4.1/min -> 1.1/min at good-sky GPS, 2.2 -> 0.1/min on dual-frequency GPS
+    // (no help at poor 3 m GPS). KNOWN LIMIT: a very slow drift outward over
+    // ~30 s+ is absorbed (bounded by BIAS_MAX_M) -- fine for "left the path",
+    // not for "gradually wandered off".
+    BIAS_TAU_S: 30,              // learning time constant
+    BIAS_MAX_M: 3,               // the correction can never exceed this, so a genuine departure beyond it still alarms
+    BIAS_GATE_M: 1.0,            // learn only while within (edge + this) of the baseline -- never while actually outside
+    BIAS_MIN_SPEED_MPS: 0.5,     // learn only while moving along the corridor, not while standing at its edge
     DR_CONFIRM_MARGIN_M: 1.0     // a dead-reckoned excess has to clear the edge by at least this much (in whichever direction) before it's trusted enough to override the real state's on/off decision — a prediction that only barely grazes zero is exactly the noisy, low-confidence case a stale/coasting velocity produces, and shouldn't be allowed to flip the tone on its own
   };
 
@@ -154,6 +189,35 @@
     const len=Math.hypot(vx,vy);
     if(len===0) return 0;
     return (vx*(P.y-A.y) - vy*(P.x-A.x)) / len;
+  }
+  // Signed lateral offset of latLon from the corridor centreline (m, sign =
+  // side of the nearest segment's line), or null when the nearest point is a
+  // segment END rather than a perpendicular foot (past the corridor's end,
+  // where "lateral" isn't meaningful).
+  function lateralOffsetM(c, latLon, near){
+    const ref=c.path[0];
+    const A=toXY(c.path[near.segIdx], ref), B=toXY(c.path[Math.min(near.segIdx+1, c.path.length-1)], ref);
+    const s=signedDistToLineXY(toXY(latLon, ref), A, B);
+    return Math.abs(s) >= near.distM - 0.05 ? s : null;
+  }
+  // Responsive path only: learn/apply the corridor's lateral offset (see
+  // TUNING.BIAS_*) and rewrite near.distM as the distance from the CORRECTED
+  // centreline. Everything downstream (excess, everInside, levels, debug)
+  // then works off the corrected distance unchanged.
+  function applyBias(c, latLon, near, fix, everInside, edgeM){
+    const s=lateralOffsetM(c, latLon, near);
+    near.biasM=0;
+    if(s==null) return;
+    const tw=Date.now();
+    let b=biasByCorridor.get(c.id);
+    if(!b){ b={v:0, tWall:tw}; biasByCorridor.set(c.id, b); }
+    const dt=Math.max(0, Math.min(5, (tw-b.tWall)/1000)); b.tWall=tw;
+    if(everInside && fix.speed!=null && fix.speed>=TUNING.BIAS_MIN_SPEED_MPS && Math.abs(s-b.v) < edgeM+TUNING.BIAS_GATE_M){
+      b.v += Math.min(1, dt/TUNING.BIAS_TAU_S)*(s-b.v);
+      b.v = Math.max(-TUNING.BIAS_MAX_M, Math.min(TUNING.BIAS_MAX_M, b.v));
+    }
+    near.biasM=b.v;
+    near.distM=Math.abs(s-b.v);
   }
   // "Hard line in space" (2026-09-19, second real gap found under the same
   // requirement): checking only the CURRENT fix's distance to the corridor
@@ -233,6 +297,8 @@
   let cb={};
   let lastTickAtWall=0;         // real Date.now() at the last tick() call — see getActiveAlarm()
   let prevFixLatLon=null;       // [lat,lon] of the last ACCEPTED fix — see nearestOnPathSwept()
+  let biasByCorridor=new Map(); // corridorId -> {v: learned lateral offset (m, signed), tWall} — see applyBias()
+  let fused=null;               // {lat,lon,velE,velN,tWall} — responsive-path estimate, see fuseFix()
   let lastRealFix=null;         // {lat,lon,speed,headingDeg,tWall} from the last real tick() — see predictNow()/getActiveAlarm()
   let currentlyOnLift=false;    // cached nearAnyLift() result from the most recent tick() — see isOnLift()
 
@@ -256,7 +322,37 @@
     const dy = Math.cos(brg)*distM, dx = Math.sin(brg)*distM;
     return [ lat + dy/M_PER_DEG_LAT, lon + dx/mPerDegLon(lat) ];
   }
+  // Complementary filter for the responsive path (see TUNING.RESP_*). Advances
+  // the previous estimate with the previous Doppler velocity, then corrects
+  // toward the new raw fix by RESP_FUSE_K -- comparing against where the
+  // estimate was RESP_FIX_LATENCY_S ago, since that's the instant the fix
+  // describes. Returns the new estimate as of this tick.
+  function fuseFix(fix){
+    const tw = Date.now();
+    let lat = fix.lat, lon = fix.lon;
+    if(fused){
+      const dt = (tw - fused.tWall)/1000;
+      if(dt>0 && dt<=TUNING.RESP_MAX_GAP_S){
+        const pLat = fused.lat + fused.velN*dt/M_PER_DEG_LAT;
+        const pLon = fused.lon + fused.velE*dt/mPerDegLon(fused.lat);
+        const oLat = pLat - fix.velN*TUNING.RESP_FIX_LATENCY_S/M_PER_DEG_LAT;
+        const oLon = pLon - fix.velE*TUNING.RESP_FIX_LATENCY_S/mPerDegLon(pLat);
+        lat = pLat + TUNING.RESP_FUSE_K*(fix.lat - oLat);
+        lon = pLon + TUNING.RESP_FUSE_K*(fix.lon - oLon);
+      }
+    }
+    fused = { lat, lon, velE:fix.velE, velN:fix.velN, tWall:tw };
+    return [lat, lon];
+  }
   function predictNow(){
+    if(lastRealFix && lastRealFix.responsive){
+      const elapsedS = (Date.now()-lastRealFix.tWall)/1000;
+      if(elapsedS<0 || elapsedS>TUNING.DR_MAX_S) return null;
+      const sp = Math.hypot(lastRealFix.velE, lastRealFix.velN);
+      if(sp < TUNING.DR_MIN_SPEED_MPS) return [lastRealFix.lat, lastRealFix.lon]; // effectively stationary: velocity is noise, but the fused position itself is still the best answer
+      const ahead = elapsedS + TUNING.RESP_LEAD_S;
+      return [ lastRealFix.lat + lastRealFix.velN*ahead/M_PER_DEG_LAT, lastRealFix.lon + lastRealFix.velE*ahead/mPerDegLon(lastRealFix.lat) ];
+    }
     if(!lastRealFix || lastRealFix.speed==null || lastRealFix.headingDeg==null) return null;
     if(lastRealFix.speed < TUNING.DR_MIN_SPEED_MPS) return null; // near-stationary — heading is noise, nothing meaningful to extrapolate
     const elapsedS = (Date.now()-lastRealFix.tWall)/1000;
@@ -324,7 +420,7 @@
     }));
   }
 
-  function unload(){ corridors=[]; liftCorridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; currentlyOnLift=false; }
+  function unload(){ corridors=[]; liftCorridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; fused=null; biasByCorridor=new Map(); currentlyOnLift=false; }
 
   // Whether the most recent tick() found the fix on/near a recorded lift
   // corridor — see nearAnyLift() and tick()'s own lift gate. Exposed so a
@@ -360,7 +456,12 @@
   // TravelHeading's other consumers).
   function tick(fix, headingDeg){
     if(fix==null || (fix.acc!=null && fix.acc>TUNING.ACCURACY_CAP_M)) return;
-    const latLon=[fix.lat, fix.lon];
+    // Responsive path: only when the host passes the phone's own velocity
+    // (fix.velE/fix.velN, m/s) alongside a RAW position. Otherwise the fix is
+    // used exactly as given -- every other host is unchanged.
+    const responsive = fix.velE!=null && fix.velN!=null && isFinite(fix.velE) && isFinite(fix.velN);
+    const latLon = responsive ? fuseFix(fix) : [fix.lat, fix.lon];
+    if(!responsive) fused = null;
     // Cached ahead of the corridors.length check below so isOnLift() works
     // even for a project with zero *alertable* corridors (e.g. a summer
     // sightseeing gondola with no ski chutes authored) — lift detection
@@ -370,7 +471,7 @@
     currentlyOnLift = nearAnyLift(latLon);
     if(!corridors.length) return;
     lastTickAtWall = Date.now(); // real wall clock, independent of fix.t — see getActiveAlarm()
-    lastRealFix = { lat:fix.lat, lon:fix.lon, speed:fix.speed, headingDeg, tWall:lastTickAtWall }; // see predictNow()
+    lastRealFix = { lat:latLon[0], lon:latLon[1], speed:fix.speed, headingDeg, tWall:lastTickAtWall, responsive, velE:responsive?fix.velE:null, velN:responsive?fix.velN:null }; // see predictNow()
     const now = fix.t || Date.now();
     const prevLatLon = prevFixLatLon; // captured before this tick updates it, below
     prevFixLatLon = latLon;
@@ -403,6 +504,7 @@
       const near=nearestOnPath(latLon, c.path, ref); // current true distance — unaffected by the crossing check below
       const halfW=c.widthM/2;
       const st=stateByCorridor.get(c.id);
+      if(responsive) applyBias(c, latLon, near, fix, st.everInside, halfW+TUNING.OUTSIDE_BUFFER_M);
 
       // Coverage — mark any resampled point currently within the band as
       // "tracked," same idea as QGeo.corridorCoverage but incremental.
@@ -507,7 +609,7 @@
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
           bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside,
           headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed,
-          lat:fix.lat, lon:fix.lon, crossing:outsideNowChanged }); // raw position + a "crossing" flag marking the exact tick outsideNow flipped
+          lat:latLon[0], lon:latLon[1], responsive, biasM:near.biasM||0, crossing:outsideNowChanged }); // raw position + a "crossing" flag marking the exact tick outsideNow flipped
       }
       st.lastOutsideNow = outsideNow;
 
@@ -536,6 +638,7 @@
         // maxExcessM so a genuinely-still-active excursion always gets a
         // stop signal one way or another before its state is wiped.
         const wasCommitted = st.committed;
+        if(outOfRelevantRange) biasByCorridor.delete(c.id); // gone away: the learned offset described THAT pass, start fresh next approach
         const levelAtReset = st.level;
         const maxExcessAtReset = st.maxExcessM;
         Object.assign(st, freshState());
@@ -715,6 +818,7 @@
     // every other field this function reads.
     if(currentlyOnLift) return null;
     const predicted = predictNow(); // null when DR isn't trustworthy right now — see its own comment
+    const drMargin = (lastRealFix && lastRealFix.responsive) ? TUNING.RESP_MARGIN_M : TUNING.DR_CONFIRM_MARGIN_M;
     let best=null;
     for(const c of corridors){
       if(isEligible && !isEligible(c.id)) continue;
@@ -732,7 +836,7 @@
         // real fix: tick() never mutated st.level/committed here, so if the
         // player is genuinely still outside, the very next real fix sees
         // outsideNow again and re-emits onWarn, resuming the alarm.
-        audible = !(predExcessM!=null && predExcessM <= -TUNING.DR_CONFIRM_MARGIN_M);
+        audible = !(predExcessM!=null && predExcessM <= -drMargin);
         level = st.level;
       }else if(st.everInside){
         // Real fixes say this corridor is currently quiet, but the player
@@ -744,7 +848,7 @@
         // position from. The moment a real fix confirms it, tick()'s own
         // st.level===0 branch takes over authoritatively and escalates
         // normally from there; this is purely a bridge until it does.
-        audible = predExcessM!=null && predExcessM>=TUNING.DR_CONFIRM_MARGIN_M && predExcessM<=TUNING.MAX_RELEVANT_PAD_M;
+        audible = predExcessM!=null && predExcessM>=drMargin && predExcessM>0 && predExcessM<=TUNING.MAX_RELEVANT_PAD_M;
         level = 1;
       }else{
         // Never been inside this corridor — no approach ping, not even a
@@ -763,6 +867,10 @@
   function predictedExcessM(c, predictedLatLon){
     const ref=c.path[0];
     const near=nearestOnPath(predictedLatLon, c.path, ref);
+    if(lastRealFix && lastRealFix.responsive){
+      const b=biasByCorridor.get(c.id), s=b ? lateralOffsetM(c, predictedLatLon, near) : null;
+      if(s!=null) near.distM=Math.abs(s-b.v);
+    }
     const edgeM = c.widthM/2 + TUNING.OUTSIDE_BUFFER_M;
     return near.distM - edgeM;
   }

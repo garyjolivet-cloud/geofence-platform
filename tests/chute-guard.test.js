@@ -291,10 +291,11 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 (function testEscalationLadder(){
   const cg = freshChuteGuard();
   const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
-  // Constant 5m excess (below both distance-ladder thresholds of 10m/25m),
-  // held for 13 fixes at 1Hz (max msOutside=12000, under the 15s give-up
-  // cap tested separately below) -> escalation must come purely from the
-  // time ladder.
+  // Constant 8.5m excess (below the 10m distance threshold), held for 13
+  // fixes at 1Hz (max msOutside=12000, under the 15s give-up cap tested
+  // separately below). Two levels, distance only (2026-09-21): time alone
+  // must NEVER escalate -- a level-2 that appeared exactly 5 s after leaving
+  // read as random since it said nothing about how far out the player was.
   const steps = [];
   { let forwardM = 0, t = 0;
     for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
@@ -307,8 +308,9 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(levelsNonDecreasing, "level never decreases within a single excursion");
   const byMsOutside = ms => events.warn.find(w => w.msOutside >= ms);
   const at5s = byMsOutside(5000), at12s = byMsOutside(12000);
-  assert(at5s && at5s.level >= 2, "reaches level 2 by ~5s outside");
-  assert(at12s && at12s.level >= 3, "reaches level 3 by ~12s outside");
+  assert(at5s && at5s.level === 1, "still level 1 at ~5s outside: time no longer escalates");
+  assert(at12s && at12s.level === 1, "still level 1 at ~12s outside, and there is no level 3");
+  assert(events.warn.every(w => w.level === 1), "every alert of a modest (8.5m) excursion stays level 1 however long it lasts");
   const alertCounts = events.warn.map(w => w.alertCount);
   assert(alertCounts.every((v, i) => i === 0 || v === alertCounts[i-1] + 1), "alertCount increments by exactly 1 on every alert");
 })();
@@ -336,8 +338,27 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(events.warn.length >= 14 && events.warn.length <= 16, "roughly 15 warns fired before the cap cut it off (t=0..~14000ms at 1Hz)");
 })();
 
+// Level 2 is purely distance: cross the 10 m-past-the-edge line and it rises, and it never depends on time.
+(function testLevelTwoIsDistanceOnly(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 10 });
+  const steps = [];
+  { let forwardM = 0, t = 0;
+    for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
+    // hold 6.5 m past the edge for 3 fixes (level 1), then step out to 11.5 m past it. (A STEADY drift
+    // outward is silenced as a deliberate departure after 4 s, so it can't be used to reach 10 m.)
+    for (let i = 1; i <= 3; i++) { steps.push({ forwardM, lateralM: 12, t }); forwardM += 1.5; t += 1000; }
+    for (let i = 1; i <= 2; i++) { steps.push({ forwardM, lateralM: 17, t }); forwardM += 1.5; t += 1000; }
+  }
+  const events = drive(cg, corridor, steps);
+  const first2 = events.warn.find(w => w.level === 2);
+  assert(first2, "an excursion that drifts past 10 m outside reaches level 2");
+  assert(first2 && first2.excessM >= 10, "level 2 begins only once the excess is >= 10 m, got " + (first2 && first2.excessM));
+  assert(events.warn.filter(w => w.excessM < 10).every(w => w.level === 1), "every alert under 10 m excess is level 1");
+})();
+
 // ============================================================
-// 10. A single large excursion reaches level 3 immediately
+// 10. A single large excursion reaches level 2 (the top level) immediately
 // ============================================================
 (function testImmediateHighLevel(){
   const cg = freshChuteGuard();
@@ -345,12 +366,12 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   const steps = [];
   { let forwardM = 0, t = 0;
     for (let i = 0; i <= 50; i++) { steps.push({ forwardM, lateralM: 0, t }); forwardM += 1.5; t += 1000; }
-    // Jump straight to 39m offset -> excess = 39-5.5 = 33.5m, past ESCALATE_EXCESS_M[2]=25.
+    // Jump straight to 39m offset -> excess = 39-5.5 = 33.5m, past ESCALATE_EXCESS_M[1]=10.
     steps.push({ forwardM, lateralM: 39, t: 51000 });
   }
   const events = drive(cg, corridor, steps);
   assert(events.warn.length === 1, "a single large excursion produces exactly one alert so far");
-  assert(events.warn[0].level === 3, "a 30m excursion starts at level 3 immediately, not easing in through 1->2->3 (got level " + events.warn[0].level + ")");
+  assert(events.warn[0].level === 2, "a 30m excursion starts at level 2 (the top level) immediately, not easing in (got level " + events.warn[0].level + ")");
 })();
 
 // ============================================================
@@ -1091,6 +1112,154 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
 
   assert(cg.getActiveAlarm(id => id === "nonexistent") === null, "no alarm when the filter matches no currently-alerting corridor");
   assert(cg.getActiveAlarm(() => false) === null, "a filter that excludes everything reports no alarm at all");
+})();
+
+// ---------------------------------------------------------------------------
+// 24. Responsive (fused) path, 2026-09-21 ("2s is not acceptable"). When the
+// host passes fix.velE/velN (the phone's Doppler velocity) with a RAW
+// position, the guard fuses them, looks ahead RESP_LEAD_S, and decides the
+// tone from the predicted position -- so it reacts BETWEEN 1 Hz fixes. A
+// controllable clock replaces the busy-waits used elsewhere in this file.
+// ---------------------------------------------------------------------------
+function freshChuteGuardClock() {
+  let clock = 1700000000000;
+  const sandbox = { console, window: {}, Date: { now: () => clock } };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../frontend/chute-guard.js"), "utf8"), sandbox);
+  return { cg: sandbox.window.ChuteGuard, advance: ms => { clock += ms; }, now: () => clock };
+}
+// a 4 m wide north-south corridor (edge = 2.0 + 0.5 = 2.5 m from the centreline)
+function respSetup() {
+  const { cg, advance, now } = freshChuteGuardClock();
+  cg.load([makeCorridor("r1", { lenM: 400, widthM: 4 })], {});
+  const tickAt = (fwd, lat, velE, velN, extra) => {
+    const p = trackPoint(fwd, lat);
+    cg.tick(Object.assign({ lat: p[0], lon: p[1], acc: 5, speed: Math.hypot(velE, velN), t: now(), velE, velN }, extra || {}), 0);
+  };
+  return { cg, advance, tickAt };
+}
+
+(function testResponsiveAlarmStartsBetweenFixes() {
+  const { cg, advance, tickAt } = respSetup();
+  // walking north along the centreline at 1.5 m/s: establish "been inside"
+  for (let i = 0; i < 5; i++) { tickAt(20 + i * 1.5, 0, 0, 1.5); advance(1000); }
+  assert(cg.getActiveAlarm() === null, "responsive: inside the corridor, no alarm");
+  // a fix at 2.0 m east, now moving east at 2 m/s (stepping out). The fusion pulls a fix only
+  // halfway (K=0.5) against where the estimate was 0.3 s ago: fused = 0 + 0.5*(2.0 - (0 - 2*0.3)) = 1.3 m.
+  tickAt(28, 2.0, 2, 0);
+  assert(cg.getActiveAlarm() === null, "responsive: fused 1.3 m + 0.4 s look-ahead (predicts 2.1 m) is not yet past the 2.5 m edge");
+  // ...but 300 ms later, with NO new fix, the prediction (1.3 + 2*(0.3+0.4) = 2.7 m) is past it
+  advance(300);
+  const a = cg.getActiveAlarm();
+  assert(a && a.corridorId === "r1", "responsive: the alarm starts BETWEEN fixes once the look-ahead position crosses the edge, without waiting for the next 1 Hz fix");
+})();
+
+(function testResponsiveAlarmStopsBetweenFixes() {
+  const { cg, advance, tickAt } = respSetup();
+  for (let i = 0; i < 5; i++) { tickAt(20 + i * 1.5, 0, 0, 1.5); advance(1000); }
+  tickAt(28, 4, 2, 0); advance(1000); tickAt(29.5, 4.5, 2, 0);   // clearly out, moving away
+  assert(cg.getActiveAlarm() !== null, "sanity: alarm on while outside and moving away");
+  tickAt(31, 3.5, -2, 0);                                        // a fix 3.5 m out, now heading back at 2 m/s
+  assert(cg.getActiveAlarm() !== null, "responsive: 3.5 m out returning at 2 m/s (predicts 2.7 m) is still past the edge");
+  advance(300);                                                   // 3.5 - 2*(0.3+0.4) = 2.1 m -> back inside
+  assert(cg.getActiveAlarm() === null, "responsive: the alarm STOPS between fixes as soon as the look-ahead position is back inside (the old path took 2-4 s)");
+})();
+
+(function testResponsiveNeverAlarmsBeforeEverInside() {
+  const { cg, advance, tickAt } = respSetup();
+  // approaching from outside and never having been inside: no approach ping, even predicted
+  tickAt(20, 6, -3, 0); advance(300);
+  assert(cg.getActiveAlarm() === null, "responsive: still no approach ping for a corridor never entered");
+})();
+
+(function testResponsiveFusionSmoothsANoisyFix() {
+  const { cg, advance, tickAt } = respSetup();
+  const seen = [];
+  cg.load([makeCorridor("r1", { lenM: 400, widthM: 4 })], { onDebug: (id, name, d) => seen.push(d) });
+  for (let i = 0; i < 4; i++) { tickAt(20 + i * 1.5, 0, 0, 1.5); advance(1000); }
+  tickAt(26, 5, 0, 1.5);                                          // a single 5 m GPS outlier while truly still on the line
+  const last = seen[seen.length - 1];
+  const fusedLatOffsetM = Math.abs(last.distM);
+  assert(last.responsive === true, "debug reports the responsive path");
+  assert(fusedLatOffsetM < 4, "an isolated 5 m outlier is pulled roughly halfway back by the fusion gain, not swallowed whole, got " + fusedLatOffsetM.toFixed(2));
+})();
+
+(function testNoVelocityMeansExactlyTheOldBehaviour() {
+  const { cg, advance } = freshChuteGuardClock();
+  cg.load([makeCorridor("r2", { lenM: 400, widthM: 4 })], {});
+  const p0 = trackPoint(20, 0), p1 = trackPoint(21, 3.2);
+  cg.tick({ lat: p0[0], lon: p0[1], acc: 5, speed: 1.5, t: 1 }, 0); advance(1000);
+  cg.tick({ lat: p1[0], lon: p1[1], acc: 5, speed: 1.5, t: 1001 }, 0);
+  const a = cg.getActiveAlarm();
+  assert(a && a.corridorId === "r2", "no fix.velE/velN -> the fix is used exactly as given (3.2 m out is outside the 2.5 m edge)");
+})();
+
+
+
+// ---------------------------------------------------------------------------
+// 25. Offset cancelling (2026-09-21, 4 m bike path). While moving and clearly
+// on the corridor, the guard learns the slowly-varying lateral offset between
+// GPS and the authored centreline and subtracts it, so only a departure
+// RELATIVE to that baseline alarms. Responsive (velocity-supplying) path only.
+// ---------------------------------------------------------------------------
+function biasSetup() {
+  const { cg, advance, now } = freshChuteGuardClock();
+  const dbg = [];
+  cg.load([makeCorridor("b1", { lenM: 900, widthM: 4 })], { onDebug: (id, n, d) => dbg.push(d) });
+  let fwd = 20;
+  // one 1 Hz fix riding north at `speed`, GPS reading `lateral` m east of the centreline, moving east at velE
+  const rideAt = (lateral, speed, velE) => {
+    const p = trackPoint(fwd, lateral);
+    cg.tick({ lat: p[0], lon: p[1], acc: 5, speed, t: now(), velE: velE || 0, velN: speed }, 0);
+    fwd += speed; advance(1000);
+  };
+  return { cg, dbg, rideAt, advance };
+}
+
+(function testConstantGpsOffsetIsLearnedAndStopsAlarming() {
+  const { cg, dbg, rideAt } = biasSetup();
+  rideAt(0, 5); rideAt(0, 5); rideAt(0, 5);                   // genuinely on the line first (everInside)
+  for (let i = 0; i < 3; i++) rideAt(3.4, 5);                  // GPS now reads a constant 3.4 m off: past the 2.5 m edge
+  assert(cg.getActiveAlarm() !== null, "before it has learned anything, a constant 3.4 m reading is past the 2.5 m edge and alarms");
+  for (let i = 0; i < 150; i++) rideAt(3.4, 5);                // 2.5 minutes of riding with that same offset
+  assert(cg.getActiveAlarm() === null, "after riding with a constant offset it is learned and no longer alarms");
+  const last = dbg[dbg.length - 1];
+  assert(Math.abs(last.biasM) > 2.5 && Math.abs(last.biasM) <= 3.0001, "the learned offset approaches (and never exceeds) the 3 m cap, got " + last.biasM.toFixed(2));
+})();
+
+(function testRealDepartureStillAlarmsFromTheLearnedBaseline() {
+  const { cg, rideAt } = biasSetup();
+  rideAt(0, 5); rideAt(0, 5); rideAt(0, 5);
+  for (let i = 0; i < 150; i++) rideAt(3.4, 5);
+  assert(cg.getActiveAlarm() === null, "sanity: offset learned, quiet");
+  rideAt(7.0, 5, 2); rideAt(7.4, 5, 2);                        // steps a further ~4 m sideways, still moving east
+  assert(cg.getActiveAlarm() !== null, "a real ~4 m departure from the learned baseline alarms within two fixes");
+})();
+
+(function testNeverLearnsWhileClearlyOutside() {
+  const { cg, dbg, rideAt } = biasSetup();
+  rideAt(0, 5); rideAt(0, 5); rideAt(0, 5);
+  for (let i = 0; i < 4; i++) rideAt(5.0, 5);                  // 5 m off: outside the learning gate
+  assert(cg.getActiveAlarm() !== null, "a 5 m offset alarms (it is not absorbed)");
+  for (let i = 0; i < 40; i++) rideAt(5.0, 5);                 // (the guard later goes quiet on a held offset by its own deliberate-departure rule)
+  assert(Math.abs(dbg[dbg.length - 1].biasM) < 0.3, "an offset beyond the learning gate is never absorbed (only the brief fusion ramp-up is), got " + dbg[dbg.length - 1].biasM);
+})();
+
+(function testNoLearningWhileStationary() {
+  const { dbg, rideAt } = biasSetup();
+  rideAt(0, 5); rideAt(0, 5); rideAt(0, 5);
+  for (let i = 0; i < 90; i++) rideAt(2.0, 0.2);               // standing near the edge
+  assert(dbg[dbg.length - 1].biasM === 0, "standing still near the edge never shifts the baseline, got " + dbg[dbg.length - 1].biasM);
+})();
+
+(function testOffsetCancellingIsInertWithoutVelocity() {
+  const { cg, advance, now } = freshChuteGuardClock();
+  cg.load([makeCorridor("b2", { lenM: 900, widthM: 4 })], {});
+  let fwd = 20;
+  const plain = lat => { const p = trackPoint(fwd, lat); cg.tick({ lat: p[0], lon: p[1], acc: 5, speed: 5, t: now() }, 0); fwd += 5; advance(1000); };
+  plain(0); plain(0); plain(0);
+  for (let i = 0; i < 8; i++) plain(3.4);
+  assert(cg.getActiveAlarm() !== null, "without fix.velE/velN nothing is learned or cancelled: a constant 3.4 m offset keeps alarming, exactly as before");
 })();
 
 console.log("\n" + pass + " passed, " + fail + " failed");

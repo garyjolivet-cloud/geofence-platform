@@ -1233,10 +1233,9 @@ function showChuteGuardPulse(){
 // Frequency/gain/vibrato per escalation level (see Audio.startAlarm above).
 const CG_ENGINE_TONE = [
   { freq:740,  gain:0.5,  vibratoHz:0, vibratoDepth:0  },
-  { freq:880,  gain:0.65, vibratoHz:4, vibratoDepth:7  },
   { freq:1046, gain:0.8,  vibratoHz:6, vibratoDepth:14 }
 ];
-const CG_ENGINE_VIBE = [ [500,150], [300,120], [200,90] ]; // long repeating vibrate() pattern per level, not a single pulse
+const CG_ENGINE_VIBE = [ [500,150], [200,90] ]; // long repeating vibrate() pattern per level, not a single pulse
 // Continuous alarm — owned by this page. See chuteGuardStartEngineSync()'s
 // comment below for why this is no longer driven from chute-guard.js's
 // onWarn/onClear/onDisengage events at all.
@@ -1294,7 +1293,7 @@ function syncCgEngineAlarm(){
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
-      const lvl = Math.max(1, Math.min(3, (info&&info.level)||1));
+      const lvl = Math.max(1, Math.min(2, (info&&info.level)||1));
       showChuteGuardPulse();
       if(!info || info.alertCount===1 || info.levelChanged)
         HUD.log('ev-warn','⚠ off the line — outside "'+(name||'corridor')+'" (L'+lvl+')');
