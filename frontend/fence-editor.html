@@ -6728,7 +6728,7 @@ function refreshSimCorridorLabels(){
   map.on("moveend",_simRunMoveEnd);
   if(typeof LongPress!=="undefined"){
     _simRunLongPress=LongPress.bind(map,"runLines-hit",{
-      holdMs: 3000, // matches ridge-quest.html's live press-and-hold duration — see its own comment
+      holdMs: 2000, // matches ridge-quest.html's live press-and-hold duration — see its own comment
       onTap(feature,lngLat){ if(feature) _simRunClick({features:[feature],lngLat}); },
       onLongPress:_simRunLongPressHandler
     });

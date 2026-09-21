@@ -218,12 +218,27 @@ function realWidthExpr(opts){
 // deliberately decoupled, see chute-guard.js's own header comment) so the
 // drawn line matches the actual distance the alarm triggers on, not just
 // the corridor's nominal half-width.
-function realOffsetExpr(edgeBufferM){
+//
+// `sign` (1 or -1) flips which side this offsets to. Real bug found
+// 2026-09-20 (field report: "only a border line on skier's right"): the
+// first version of this always returned the POSITIVE expression, and the
+// left-side caller wrapped it in `["*", -1, expr]` to flip it -- exactly
+// the failure class realWidthExpr()'s own comment already documents
+// elsewhere in this file (a zoom expression must be the SOLE top-level
+// expression; wrapping ["interpolate",...,["zoom"],...] inside another
+// operator like `*` makes MapLibre's addLayer() throw, silently caught by
+// add()'s own try/catch, so the layer never gets created at all). Fixed by
+// baking the sign into each interpolate STOP's value instead -- each
+// stop's value is an ordinary data expression (no zoom inside it), so
+// negating it there doesn't touch the outer interpolate's own top-level
+// shape.
+function realOffsetExpr(edgeBufferM, sign){
+  sign = sign || 1;
   const pp = "pxPerMeterAtZ0";
   const edgeM = ["+", ["/", ["get", "widthM"], 2], edgeBufferM];
   const expr = ["interpolate", ["exponential", 2], ["zoom"]];
   WIDTH_STOPS.forEach(s => {
-    const scaled = s[1] === 1 ? ["*", edgeM, ["get", pp]] : ["*", edgeM, ["get", pp], s[1]];
+    const scaled = s[1] === 1 ? ["*", sign, edgeM, ["get", pp]] : ["*", sign, edgeM, ["get", pp], s[1]];
     expr.push(s[0], scaled);
   });
   return expr;
@@ -403,13 +418,15 @@ function addCorridorLayers(map, o){
   // about to cross the line" marker for whichever corridor is actually
   // armed right now.
   const guardedAndAlertable = ["all", only, guardedExpr];
-  const edgeOffsetPx = realOffsetExpr(0.5); // 0.5 mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M
+  // 0.5 mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M. Two SEPARATE
+  // interpolate expressions (sign baked in per-stop), not one expression
+  // negated afterward — see realOffsetExpr()'s own comment for why.
   add({ id: pfx + "-edge-r", type: "line", source: src, filter: guardedAndAlertable,
     layout: { "line-cap": "butt", "line-join": "round" },
-    paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": edgeOffsetPx } });
+    paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": realOffsetExpr(0.5, 1) } });
   add({ id: pfx + "-edge-l", type: "line", source: src, filter: guardedAndAlertable,
     layout: { "line-cap": "butt", "line-join": "round" },
-    paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": ["*", -1, edgeOffsetPx] } });
+    paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": realOffsetExpr(0.5, -1) } });
   // Lift: a single thin plain black line, no halo/casing/width-band glow --
   // the previous graded stack (scaled 1.5x wider than a normal run) read as
   // too bold for a lift cable per direct feedback. Towers (added below)

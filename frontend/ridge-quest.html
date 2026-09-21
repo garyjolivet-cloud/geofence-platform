@@ -2831,10 +2831,15 @@ function drawAllRuns(map){
   // (which drawAllRuns() only ever expects to build once per map instance).
   if(typeof LongPress!=="undefined"){
     LongPress.bind(map,"runLines-hit",{
-      // 3000ms per explicit request — a deliberately long, unmistakable
-      // hold so a gloved hand brushing the screen (in a pocket, on a lift,
-      // adjusting a pole strap) can't accidentally arm/disarm a chute.
-      holdMs: 3000,
+      // 2000ms per explicit request (revised down from an initial 3000ms —
+      // real-world testing found 3s combined with the too-tight 8px move
+      // tolerance made it feel like it took "over 10 seconds," since a
+      // gloved finger's natural drift kept silently cancelling the attempt
+      // as a "drag" before the timer ever completed — see long-press.js's
+      // own moveTolerancePx comment for the actual fix to that part).
+      // Still long enough that a brushing touch (in a pocket, on a lift)
+      // won't accidentally arm/disarm a chute.
+      holdMs: 2000,
       onTap: showRunPopup,
       onLongPress(feature){
         const zoneId = feature && feature.properties && feature.properties.id;

@@ -9,7 +9,16 @@
 
    opts.holdMs          press duration to count as a hold (default 600)
    opts.moveTolerancePx pointer drift beyond this cancels the hold — it was
-                        a drag/pan, not a press-and-hold (default 8)
+                        a drag/pan, not a press-and-hold (default 20 — raised
+                        2026-09-20 from an original 8px: real touch input
+                        (a finger, more so through a ski glove) drifts more
+                        than a mouse pointer just from natural pressure/
+                        contact-area changes while holding still, and 8px
+                        was tight enough to spuriously cancel a genuine hold
+                        attempt as "dragging" well before holdMs elapsed —
+                        field report: a press "taking over 10 seconds"
+                        turned out to be several silently-cancelled attempts
+                        in a row, not one slow one)
    opts.onLongPress(feature, lngLat)  fires once, the instant the hold
                         completes while still pressed. `feature` is the
                         MapLibre feature under the pointer at press-start.
@@ -49,7 +58,7 @@
   function bind(map, layerId, opts){
     opts = opts || {};
     const holdMs = opts.holdMs!=null ? opts.holdMs : 600;
-    const tolPx  = opts.moveTolerancePx!=null ? opts.moveTolerancePx : 8;
+    const tolPx  = opts.moveTolerancePx!=null ? opts.moveTolerancePx : 20;
 
     let timer=null, startPt=null, feature=null, lngLat=null;
     let pressing=false, dragging=false, holdFired=false, dragPanWasEnabled=false;
