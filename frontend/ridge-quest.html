@@ -2831,6 +2831,10 @@ function drawAllRuns(map){
   // (which drawAllRuns() only ever expects to build once per map instance).
   if(typeof LongPress!=="undefined"){
     LongPress.bind(map,"runLines-hit",{
+      // 3000ms per explicit request — a deliberately long, unmistakable
+      // hold so a gloved hand brushing the screen (in a pocket, on a lift,
+      // adjusting a pole strap) can't accidentally arm/disarm a chute.
+      holdMs: 3000,
       onTap: showRunPopup,
       onLongPress(feature){
         const zoneId = feature && feature.properties && feature.properties.id;

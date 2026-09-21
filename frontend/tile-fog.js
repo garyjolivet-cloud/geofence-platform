@@ -70,7 +70,7 @@ const loadedImageKeys = new Set();
 // layers above whatever else got added later, without every caller having
 // to know each other's layer ids.
 const corridorLayerPrefixes = new Map();  // map -> Set<prefix>
-const CORRIDOR_LAYER_SUFFIXES = ["-width", "-halo", "-casing", "-core", "-liftline", "-hot", "-tower"];
+const CORRIDOR_LAYER_SUFFIXES = ["-width", "-halo", "-casing", "-core", "-liftline", "-hot", "-tower", "-edge-l", "-edge-r"];
 
 function tileKey(terrainType, variantIndex){ return terrainType + "_" + (variantIndex || 0); }
 
@@ -202,6 +202,29 @@ function realWidthExpr(opts){
       ? ["*", ["get", wp], ["get", pp]]
       : ["*", ["get", wp], ["get", pp], s[1]];
     expr.push(s[0], ["max", scaled, floors[i]]);
+  });
+  return expr;
+}
+
+// Real-world-metre PERPENDICULAR OFFSET in pixels, same "one top-level
+// interpolate, exact meter-to-pixel via pxPerMeterAtZ0" technique as
+// realWidthExpr() above (see its own comment for why this must stay a
+// single top-level zoom expression). Used for the Corridor Guard boundary
+// lines below -- `edgeM` (half the corridor's real widthM, plus a small
+// buffer) computed inline from the feature's own `widthM` property, not a
+// separate feature property, since it's simple arithmetic on data already
+// there. `edgeBufferM` mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M
+// (kept as a literal here, not imported -- these two files are
+// deliberately decoupled, see chute-guard.js's own header comment) so the
+// drawn line matches the actual distance the alarm triggers on, not just
+// the corridor's nominal half-width.
+function realOffsetExpr(edgeBufferM){
+  const pp = "pxPerMeterAtZ0";
+  const edgeM = ["+", ["/", ["get", "widthM"], 2], edgeBufferM];
+  const expr = ["interpolate", ["exponential", 2], ["zoom"]];
+  WIDTH_STOPS.forEach(s => {
+    const scaled = s[1] === 1 ? ["*", edgeM, ["get", pp]] : ["*", edgeM, ["get", pp], s[1]];
+    expr.push(s[0], scaled);
   });
   return expr;
 }
@@ -360,6 +383,33 @@ function addCorridorLayers(map, o){
   add({ id: pfx + "-core", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": coreCol, "line-width": runWByRunType(2, 3.3, 4.8) } });
+  // Corridor Guard boundary lines (2026-09-20, per explicit request): when a
+  // corridor is armed ("guarded":true — see the press-and-hold feature in
+  // ridge-quest.html/fence-editor.html Test Mode), draw the EXACT left/right
+  // trigger edge as a solid, high-contrast line — not the decorative
+  // piste-glow width band above, which has no relationship to Corridor
+  // Guard's real edgeM threshold (a narrow corridor's glow is a fixed
+  // cosmetic pixel width, per runWByRunType()'s own comment). `line-offset`
+  // (perpendicular to the line, in pixels) computed via realOffsetExpr() so
+  // this is the true edgeM = halfWidthM + OUTSIDE_BUFFER_M distance in real
+  // metres at every zoom, the identical math chute-guard.js's tick() itself
+  // uses to decide the tone. Filtered to guarded corridors only — an
+  // unarmed corridor never sounds the alarm, so its boundary isn't relevant
+  // to show. Bright yellow, solid (not dashed), deliberately distinct from
+  // both the cyan "armed" halo/core color and the separate pink DASHED
+  // diagnostic edge lines Test Mode already draws for every corridor
+  // (`runLines-edge` in fence-editor.html) — that one stays as its own
+  // always-on authoring diagnostic; this one is the rider-facing "you are
+  // about to cross the line" marker for whichever corridor is actually
+  // armed right now.
+  const guardedAndAlertable = ["all", only, guardedExpr];
+  const edgeOffsetPx = realOffsetExpr(0.5); // 0.5 mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M
+  add({ id: pfx + "-edge-r", type: "line", source: src, filter: guardedAndAlertable,
+    layout: { "line-cap": "butt", "line-join": "round" },
+    paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": edgeOffsetPx } });
+  add({ id: pfx + "-edge-l", type: "line", source: src, filter: guardedAndAlertable,
+    layout: { "line-cap": "butt", "line-join": "round" },
+    paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": ["*", -1, edgeOffsetPx] } });
   // Lift: a single thin plain black line, no halo/casing/width-band glow --
   // the previous graded stack (scaled 1.5x wider than a normal run) read as
   // too bold for a lift cable per direct feedback. Towers (added below)
