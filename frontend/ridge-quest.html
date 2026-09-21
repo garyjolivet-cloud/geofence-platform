@@ -2724,30 +2724,17 @@ function _rebuildRunLabels(map, cors){
 // off, Mount Goodsir's longitude was ~15km off, and Mount Rogers was ~2km
 // off. Mount Dawson/Sir Donald/Cathedral Mountain/Temple were already
 // accurate (sub-km, within normal summit-vs-massif rounding) and left as-is.
-// Ozone + Dogtooth Range added 2026-09-20 — Ozone is one of Kicking Horse's
-// five named on-resort summits (Ozone, Blue Heaven, Eagle's Eye, Terminator,
-// Terminator2), confirmed via a live OpenStreetMap node
-// (natural=peak, name="Ozone", ele=2504m) rather than a peak database (it's
-// a resort/local name, not in PeakVisor/Wikipedia's registry).
-//
-// The "Dogtooth Range" entry went through two corrections the same day:
-// (1) the true Dogtooth Peak summit (the range's highest point, 2838m) sits
-// ~15km west of the resort, deep in the range's interior — first placed at
-// the wrong spot entirely (Wikipedia's infobox coordinate for the RANGE, not
-// the peak, ~25km off near Mount Goodsir/Vaux), then corrected to the real
-// summit via an OSM node at exactly 2838m beside Moonraker Peak (a
-// confirmed neighbor per Wikipedia). (2) Per explicit field feedback ("move
-// to front of range east"), the interior true-summit position wasn't what
-// was wanted — moved instead to "Whitetooth," a distinctly OSM-named peak
-// (natural=peak, ele 2443m) on the range's eastern/front edge, essentially
-// adjacent to the resort itself (right next to Ozone). Relabeled to match
-// what's actually being pinned rather than keeping the "Dogtooth Peak" name
-// on a different mountain's coordinate.
+// Ozone added 2026-09-20 — one of Kicking Horse's five named on-resort
+// summits (Ozone, Blue Heaven, Eagle's Eye, Terminator, Terminator2),
+// confirmed via a live OpenStreetMap node (natural=peak, name="Ozone",
+// ele=2504m) rather than a peak database (it's a resort/local name, not in
+// PeakVisor/Wikipedia's registry). A Dogtooth Range entry (Dogtooth Peak,
+// then relocated to "Whitetooth" per field feedback) was tried the same day
+// and removed by request.
 const NAMED_PEAKS = [
   { name:"Terminator Peak (T1)",   elevFt:7900,  elevM:2408, lat:51.273219, lon:-117.069982 },
   { name:"T2 Peak (Terminator 2)", elevFt:7825,  elevM:2385, lat:51.269436, lon:-117.063919 },
   { name:"Ozone Peak",             elevFt:8215,  elevM:2504, lat:51.283737, lon:-117.100631 },
-  { name:"Whitetooth (Dogtooth Range)", elevFt:8015, elevM:2443, lat:51.277730, lon:-117.092468 },
   { name:"Mount Seven (Mount 7)",  elevFt:8504,  elevM:2592, lat:51.2539,   lon:-116.8511 },
   { name:"Mount Vaux",             elevFt:10860, elevM:3310, lat:51.25861,  lon:-116.53000 },
   { name:"Mount Goodsir",          elevFt:11703, elevM:3567, lat:51.20167,  lon:-116.39667 },
