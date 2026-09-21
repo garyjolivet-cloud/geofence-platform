@@ -100,6 +100,23 @@
 
     function onDown(e){
       if(pressing) return; // a second finger/button mid-press — ignore, let the first press resolve
+      // Real bug found 2026-09-20 (field report: arming "still takes 10+
+      // seconds" even after fixing the hold timing, move tolerance, and hit
+      // target width): `map.dragPan.disable()` below was called from INSIDE
+      // this layer-filtered event handler, which MapLibre dispatches AFTER
+      // its own internal gesture handlers (DragPanHandler etc.) have already
+      // started processing the same raw touchstart — so disable() often
+      // landed too late to stop that gesture from continuing, meaning the
+      // map itself kept drifting/panning slightly under the held finger for
+      // the whole "hold," which either got read as a cancel-worthy drag or
+      // just made the interaction feel broken enough that a rider gave up
+      // and retried, repeatedly. e.preventDefault() (a method MapLibre's own
+      // MapMouseEvent/MapTouchEvent objects expose specifically for this —
+      // "prevent the map's own default handling of this event") stops
+      // DragPanHandler from ever starting in the first place, which is the
+      // correct fix; the dragPan.disable()/enable() dance below is kept as
+      // a redundant safety net, not the primary mechanism anymore.
+      if(e.preventDefault) e.preventDefault();
       pressing=true; dragging=false; holdFired=false;
       startPt=e.point; lngLat=e.lngLat;
       feature=(e.features && e.features[0]) || null;
