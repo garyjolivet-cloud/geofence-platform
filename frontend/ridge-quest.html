@@ -3503,6 +3503,20 @@ function renderFogMap(){
       // are rendered).
       drawNamedPeaks(map);
       drawMedals(map);
+      // Home kicks off loadCompletedChutes() fire-and-forget (renderHome()'s
+      // Promise.all is an un-awaited IIFE) — if this screen is opened fast
+      // enough that fetch hasn't resolved yet, the drawMedals() call above
+      // just ran against an empty completedChuteIds and nothing else would
+      // ever re-trigger it (moveend only fires on a real pan). Re-fetch here
+      // too — cheap no-op redraw if it was already current by the time this
+      // ran — so a medal a player already earned shows on open, not only
+      // after they first pan the map. Confirmed live this actually happens
+      // (Kicking Horse's real network is far smaller than Home's other
+      // fetches, so this one can trail behind by a beat).
+      const _medalSession = getSession();
+      if(_medalSession && _medalSession.player){
+        Quest.loadCompletedChutes(_medalSession.player.id).then(()=>_rebuildMedalMarkers(map, Quest.corridors||[]));
+      }
       // A chute completed WHILE this screen is open lights up immediately,
       // independent of the moveend debounce above — same on-slot convention
       // as onFogUpdated/onLiftModeChange, nulled in the #fogBack handler.
