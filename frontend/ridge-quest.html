@@ -307,7 +307,10 @@ const ScreenSleep = {
     if(this.lockReleased){ this.lockReleased = false; acquireWakeLock(); }
   },
   noteFix(fix){
-    this.anchor = stationaryStep(this.anchor, { lat:fix.lat, lon:fix.lon, acc:fix.acc, at:Date.now() }, QGeo.haversineM);
+    // Arrow wrapper, NOT `QGeo.haversineM` passed bare: haversineM reads
+    // `this.R`, and detached in strict mode `this` is undefined — that threw
+    // from the 2nd fix on and killed _onFix (no avatar, no corridor ticks).
+    this.anchor = stationaryStep(this.anchor, { lat:fix.lat, lon:fix.lon, acc:fix.acc, at:Date.now() }, (a,b)=>QGeo.haversineM(a,b));
   },
   // Unlocking the phone is itself a deliberate touch (the visibilitychange
   // handler below re-acquires the wake lock on the same event).
@@ -1234,6 +1237,7 @@ const Quest = {
   // right before tracking has ever begun.
   chuteGuardMaster: getChuteGuardMaster(),          // the yellow button; default ON
   mutedCorridors: new Set(getMutedCorridors()),     // zoneIds muted by press-and-hold
+  onGuardChanged: null,     // callback() — set by drawAllRuns() while "My map" is open so the boundary lines/mute look redraw live; nulled on #fogBack
   isGuarded(zoneId){
     return isCorridorGuarded(this.chuteGuardEnabled, this.chuteGuardMaster, this.mutedCorridors, zoneId);
   },
@@ -1254,6 +1258,7 @@ const Quest = {
     setChuteGuardMaster(this.chuteGuardMaster);
     if(typeof syncCgAlarm==="function") syncCgAlarm();
     if(typeof paintGuardButtons==="function") paintGuardButtons();
+    if(this.onGuardChanged) this.onGuardChanged();   // an open map redraws its boundary lines
     if(typeof rqToast==="function") rqToast(this.chuteGuardMaster ? "🛡 Corridor Guard on — every run" : "Corridor Guard off");
     return this.chuteGuardMaster;
   },
@@ -1454,7 +1459,10 @@ const Quest = {
     const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy||30, t:pos.timestamp||Date.now(),
                   alt: c.altitude!=null ? c.altitude : null, altAcc: c.altitudeAccuracy!=null ? c.altitudeAccuracy : null };
     const p = GPSFilter.push(fix);
-    ScreenSleep.noteFix(fix);   // before the _offsite return below: a stationary stretch counts wherever it is
+    // Before the _offsite return below: a stationary stretch counts wherever it is.
+    // Isolated on purpose — this is only a battery nicety, and an exception here once
+    // took the whole fix handler (avatar, corridor ticks, Corridor Guard) down with it.
+    try{ ScreenSleep.noteFix(fix); }catch(e){}
     // Feed the avatar FIRST — its site gate flips Quest._offsite and keeps
     // re-evaluating the boundary so tracking resumes on return.
     if(this.onPosition) this.onPosition(p);   // live avatar on an open map
@@ -2668,6 +2676,20 @@ function renderHome(){
       activityBtns.forEach(b=>b.style.opacity="0.4");
     }
   };
+  // Coming back to Home (e.g. from "My map") while tracking is STILL running:
+  // the template above always renders "Start tracking", so without this the
+  // button lied — and, since the handler branches on Quest.active(), tapping
+  // that "Start tracking" actually STOPPED tracking. Field report: "when I
+  // select start tracking it toggles off when I go to map". Also re-point the
+  // status/coverage/run callbacks at THIS render's elements: the ones start()
+  // captured belong to the Home DOM that was just replaced.
+  if(Quest.active()){
+    trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
+    activityBtns.forEach(b=>b.style.opacity="0.4");
+    Quest.onStatus = onStatus;
+    Quest.onCoverage = onCoverage;
+    Quest.onRunLogged = ()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); };
+  }
   if(IS_SIM_MODE){
     const simBtn=document.getElementById("btnSim");
     simBtn.onclick=()=>{
@@ -3315,10 +3337,11 @@ function drawAllRuns(map){
                    runType:c.runType||"run", lengthM:Math.round(c.lengthM||0),
                    col:st.col, halo:st.halo, dash:st.dash, tier:st.tier,
                    // muted: press-and-hold mutes/unmutes Corridor Guard for one chute — see Quest.mutedCorridors.
-                   // Deliberately NOT `guarded`: everything is guarded by default, and that property's cyan
-                   // highlight + two offset edge lines on ~40-60 corridors would be exactly the map clutter
-                   // (and per-corridor layer cost) not worth paying for the default state.
+                   // guardEdges: draw the yellow trigger-boundary lines on every corridor Guard is
+                   // actually watching. Deliberately NOT `guarded` — that also recolors the corridor
+                   // cyan, which with everything guarded by default would erase the grade colors.
                    muted:Quest.mutedCorridors.has(c.zoneId),
+                   guardEdges:Quest.isGuarded(c.zoneId),
                    // shared corridor renderer (width band + piste-glow, no dashes)
                    corridor:true, widthM:(c.widthM>0?c.widthM:10), pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(latRef) },
       geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
@@ -3361,6 +3384,21 @@ function drawAllRuns(map){
         [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
       .addTo(map);
   }
+  // Re-derive every corridor's muted/guardEdges from Quest state and re-push
+  // the source, so the yellow boundary lines and the muted grey track the
+  // master button and press-and-hold live (Quest.onGuardChanged, nulled on
+  // #fogBack) without rebuilding the layer stack.
+  function refreshGuardProps(){
+    feats.forEach(f=>{
+      const p = f.properties;
+      if(!p || !p.corridor) return;
+      p.muted = Quest.mutedCorridors.has(p.id);
+      p.guardEdges = Quest.isGuarded(p.id);
+    });
+    const src = map.getSource("runLines");
+    if(src) src.setData({ type:"FeatureCollection", features:feats });
+  }
+  Quest.onGuardChanged = refreshGuardProps;
   // Press-and-hold a run to mute/unmute Corridor Guard for just that one
   // (see Quest.mutedCorridors's own comment) — a normal quick tap keeps
   // showing the popup above instead. `feats` is mutated in place and
@@ -3394,10 +3432,7 @@ function drawAllRuns(map){
         const muted = Quest.toggleMutedCorridor(zoneId);
         const name = (feature.properties && feature.properties.name) || "run";
         rqToast(muted ? ("Stopped guarding: "+name) : ("🛡 Guarding "+name+" again"));
-        const feat = feats.find(f=>f.properties && f.properties.id===zoneId && f.properties.corridor);
-        if(feat) feat.properties.muted = muted;
-        const src = map.getSource("runLines");
-        if(src) src.setData({ type:"FeatureCollection", features:feats });
+        refreshGuardProps();
       }
     });
   }else{
@@ -3461,7 +3496,7 @@ function renderFogMap(){
   // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{
     Quest.onFogUpdated=null; Quest.onPosition=null;
-    Quest.onLiftModeChange=null;
+    Quest.onLiftModeChange=null; Quest.onGuardChanged=null;
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
     // ever actually shown (the arrow wedge / compass-mode bearing); nothing

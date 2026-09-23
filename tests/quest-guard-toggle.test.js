@@ -97,5 +97,23 @@ const store = v => ({ getItem: () => v });
   assert(saved.length === 2 && saved[0].join() === "z1" && saved[1].length === 0, "every toggle is persisted, got " + JSON.stringify(saved));
 })();
 
+// ---- boundary lines stay wired up (regression, 2026-09-23) ----
+// The yellow trigger-boundary lines were dropped once without being asked for
+// (guarding moved to on-by-default, so the old `guarded` flag — which also turns
+// the corridor cyan — was no longer set). They are keyed on `guardEdges` now.
+// This can't render a map, but it stops the wiring from silently disappearing again.
+const tileFog = fs.readFileSync(path.join(__dirname, "../frontend/tile-fog.js"), "utf8");
+(function testBoundaryLinesAreWiredEndToEnd() {
+  assert(/guardEdges/.test(tileFog) && /-edge-r[\s\S]{0,80}filter:\s*guardedAndAlertable/.test(tileFog),
+    "tile-fog.js draws the -edge-r/-edge-l boundary lines for guardEdges corridors");
+  assert(/const edgesExpr = \["any", guardedExpr, \["==", \["get", "guardEdges"\], true\]\]/.test(tileFog),
+    "the boundary-line filter accepts guardEdges as well as the old guarded flag (other hosts unchanged)");
+  assert(/guardEdges:Quest\.isGuarded\(c\.zoneId\)/.test(html),
+    "ridge-quest.html sets guardEdges from Quest.isGuarded() on every corridor");
+  assert(/p\.guardEdges = Quest\.isGuarded\(p\.id\)/.test(html) && /if\(this\.onGuardChanged\) this\.onGuardChanged\(\)/.test(html),
+    "the lines redraw live when the master button or a mute changes");
+  assert(!/guarded:Quest\./.test(html), "Ridge Quest must not set `guarded` (it would recolor every corridor cyan)");
+})();
+
 console.log(pass + " passed, " + fail + " failed");
 if (fail > 0) process.exit(1);

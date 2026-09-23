@@ -126,5 +126,41 @@ const st = o => Object.assign({ now: NOW, lastTouchAt: NOW - 5 * S, liftModeActi
   assert(lift === "awake" && lunch === "awake", "Battery Saver 'Always Off' disables both stages, got " + lift + "/" + lunch);
 })();
 
+// ---- noteFix, with the REAL QGeo (regression, 2026-09-23) ----
+// noteFix used to hand `QGeo.haversineM` to stationaryStep as a bare function.
+// haversineM reads `this.R`, and detached in the page's strict mode `this` is
+// undefined, so it threw from the SECOND GPS fix on — killing Quest._onFix
+// before the avatar, corridor ticks and Corridor Guard (no blue dot, dead
+// recenter, no runs recorded). The tests above pass their own distance
+// function, which is exactly why they could not see it; this one does not.
+const qgeoM = html.match(/const QGeo = \{[\s\S]*?\n\};/);
+if (!qgeoM) { console.log("FAIL: could not extract QGeo from ridge-quest.html"); process.exit(1); }
+const QGeo = eval("(" + qgeoM[0].replace(/^const QGeo = /, "").replace(/;$/, "") + ")");
+// eslint-disable-next-line no-new-func
+const noteFixRaw = new Function("fix", "stationaryStep", "QGeo", "SLEEP_TUNING",
+  "'use strict';\n" + extractFunctionBody("noteFix(fix){"));   // strict, like the page
+const realStep = (a, f, d) => stationaryStep(a, f, d, SLEEP_TUNING);
+function noteFix(self, fix) { return noteFixRaw.call(self, fix, realStep, QGeo, SLEEP_TUNING); }
+
+(function testNoteFixSurvivesEveryFixWithRealQGeo() {
+  const self = { anchor: null };
+  let threw = null;
+  try {
+    for (let i = 0; i < 5; i++) noteFix(self, { lat: 51.3 + i * 0.000001, lon: -117.05, acc: 10 });
+  } catch (e) { threw = e.message; }
+  assert(threw === null, "noteFix must not throw on the 2nd+ fix (it took Quest._onFix down with it), got: " + threw);
+})();
+
+(function testNoteFixAnchorBehavesWithRealQGeo() {
+  const self = { anchor: null };
+  noteFix(self, { lat: 51.3000, lon: -117.05, acc: 10 });
+  const first = self.anchor;
+  noteFix(self, { lat: 51.30004, lon: -117.05, acc: 10 });   // ~4 m of jitter
+  assert(self.anchor === first, "a few metres of jitter keeps the stationary anchor");
+  noteFix(self, { lat: 51.3015, lon: -117.05, acc: 10 });    // ~167 m: really moved
+  assert(self.anchor !== first && Math.abs(self.anchor.lat - 51.3015) < 1e-9,
+    "a real move restarts the stationary clock (NaN distance would leave it stuck forever), got " + JSON.stringify(self.anchor));
+})();
+
 console.log(pass + " passed, " + fail + " failed");
 if (fail > 0) process.exit(1);

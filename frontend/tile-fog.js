@@ -424,7 +424,13 @@ function addCorridorLayers(map, o){
   // always-on authoring diagnostic; this one is the rider-facing "you are
   // about to cross the line" marker for whichever corridor is actually
   // armed right now.
-  const guardedAndAlertable = ["all", only, guardedExpr];
+  // `guardEdges:true` (2026-09-23, ridge-quest.html) draws these lines WITHOUT
+  // also recoloring the corridor cyan: Ridge Quest guards every run by default,
+  // so `guarded` (cyan) would erase the grade colors everywhere, but the
+  // boundary lines are exactly what a rider wants to see on every guarded run.
+  // `guarded` still draws them too, so every other host is unchanged.
+  const edgesExpr = ["any", guardedExpr, ["==", ["get", "guardEdges"], true]];
+  const guardedAndAlertable = ["all", only, edgesExpr];
   // 0.5 mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M. Two SEPARATE
   // interpolate expressions (sign baked in per-stop), not one expression
   // negated afterward — see realOffsetExpr()'s own comment for why.
