@@ -1707,14 +1707,37 @@ const Quest = {
     if(activity==="xcski" && avgSpeedMps < S.XCSKI_SPEED_MIN_MPS) return reject("too slow to count as skiing");
     if(activity==="drive" && avgSpeedMps < S.DRIVE_SPEED_MIN_MPS) return reject("too slow to count as driving");
     if(corridor.runType==="chute" && descending && avgSpeedMps < S.CHUTE_SPEED_MIN_MPS) return reject("too slow to count as skiing it");
-    // A hike "up" a run that is really a lift line overhead (gondola over a
-    // run) isn't a hike: mostly inside a lift corridor's band = a lift ride.
-    if(activity==="hike" && ascending && corridor.runType!=="lift"){
-      const lifts = (this.corridors||[]).filter(c=>c.runType==="lift" && c.zoneId!==corridor.zoneId);
+    // A pass of a run that is really a lift line overhead (gondola over a
+    // run) isn't a run at all: mostly inside a lift corridor's band = a lift
+    // ride. Two ways in:
+    //   1. an ascending "hike" — the original case, kept unconditional;
+    //   2. ANY pass whose elevation check never ran (trip.elevChecked false).
+    // Case 2 is a field report (2026-09-23): riding the gondola up credited
+    // the runs underneath as SKIED. Direction here comes purely from the
+    // corridor's own geometry (which end zone was reached first), so a run
+    // whose "top" end the gondola reaches first — e.g. one authored
+    // bottom->top — reads as a DOWN pass, takes the ski branch above at
+    // gondola speed, and sailed straight past the old hike-only guard. Phone
+    // GPS altitude is usually too poor to contradict it, and the elevation
+    // check is SKIPPED (never failed) when altitude is missing, so nothing
+    // else caught it either.
+    // Deliberately NOT applied when trip.elevChecked is true: real altitude
+    // evidence already confirmed a genuine descent/climb and beats this 2D
+    // overlap test, so a run legitimately skied directly under a gondola
+    // still scores on a device with usable altitude. Only the ambiguous
+    // no-altitude case lets the lift band decide.
+    // Depends on the resort's lift/gondola line being authored as its own
+    // runType:"lift" corridor — same prerequisite Corridor Guard's lift
+    // suppression already has (see CLAUDE.md). With no lift corridor
+    // recorded, there's nothing to test against and this can't fire.
+    if(corridor.runType!=="lift" && ((activity==="hike" && ascending) || !trip.elevChecked)){
+      const lifts = ((this && this.corridors) || []).filter(c=>c.runType==="lift" && c.zoneId!==corridor.zoneId);
       if(lifts.length){
         let onLift = 0;
         trip.fixes.forEach(f=>{ if(lifts.some(l=>QGeo.corridorDist([f.lat,f.lon], l, l.ref) < 0)) onLift++; });
-        if(onLift/trip.fixes.length >= S.LIFT_OVERLAP_FRAC) return reject("that was a lift ride, not a hike");
+        if(onLift/trip.fixes.length >= S.LIFT_OVERLAP_FRAC){
+          return reject(activity==="hike" ? "that was a lift ride, not a hike" : "that was a lift ride, not a run");
+        }
       }
     }
 

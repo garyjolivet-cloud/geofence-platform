@@ -518,6 +518,31 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run === undefined, "riding a lift that runs along a run is not a hike, got " + JSON.stringify(run && run.activity));
 })();
 
+(function testGondolaOverARunIsNotASkiedRun() {
+  // Field report 2026-09-23: riding the gondola up credited the runs
+  // underneath as SKIED. Direction comes from the corridor's own geometry
+  // (which end zone was reached first), so a run whose "top" end the gondola
+  // reaches first reads as a DOWN pass and takes the ski branch at gondola
+  // speed -- the old guard only covered an ASCENDING HIKE, so nothing caught
+  // it. No altitude here (mkTrack's default), so the elevation check is
+  // skipped and the lift-band overlap has to be what decides.
+  const self = { corridors: [liftLine, straightRun] };
+  const run = classify.call(self, straightRun, mkTrack(straightRun, { from: 0, to: 1, speed: 5, dt: 2 }), "ski", QGeo, QUEST_TUNING);
+  assert(run === undefined, "a 'down' pass at gondola speed inside a lift band is a lift ride, not a skied run, got " + JSON.stringify(run && run.activity));
+})();
+
+(function testRunUnderALiftStillScoresWhenAltitudeConfirmsIt() {
+  // The flip side of the guard above: a run genuinely skied directly under a
+  // gondola must STILL score when the device has usable altitude -- a
+  // verified descent beats the 2D lift-band overlap test. Without this the
+  // fix would just trade false credits for false rejections on exactly the
+  // runs that lie under a lift line.
+  const c = withDescent(straightRun, 300);
+  const self = { corridors: [liftLine, c] };
+  const run = classify.call(self, c, mkTrack(c, { from: 0, to: 1, speed: 5, dt: 2, alt0: 2300, alt1: 2000 }), "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "ski", "a real descent under a lift line still scores when altitude confirms it, got " + JSON.stringify(run && run.activity));
+})();
+
 // ---- duration ----
 
 (function testTooQuickDiscarded() {
