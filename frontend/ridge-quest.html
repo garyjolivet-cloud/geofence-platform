@@ -239,6 +239,105 @@ function releaseWakeLock(){
   _wakeLock = null;
 }
 
+// Screen sleep (battery, 2026-09-23). Most of a ski day is lift rides and
+// restaurant stops, and the Wake Lock above keeps the screen lit through all
+// of it. Two stages while tracking, and any touch overrides both:
+//   1. black overlay — after IDLE_MS untouched while on a lift (Battery Saver's
+//      lift mode) OR stationary for STATIONARY_DIM_MS. The wake lock is kept, so
+//      GPS/tracking are untouched; on an OLED panel black pixels draw almost
+//      nothing (on an LCD the backlight stays on, so this saves little there).
+//   2. release the wake lock — stationary for STATIONARY_LOCK_MS AND untouched
+//      that long (lunch), so the phone can really lock. NEVER on a lift: a locked
+//      phone suspends the page's JS on iOS and would miss the dismount and the
+//      first run. Cost: tracking pauses until the app is reopened.
+// A touch resets the idle clock rather than latching an override, so someone
+// actively reading the map on a lift is never blacked out, and the screen
+// dims again after IDLE_MS like a normal phone timeout.
+const SLEEP_TUNING = {
+  IDLE_MS: 30000,
+  STATIONARY_DIM_MS: 5*60000,
+  STATIONARY_LOCK_MS: 10*60000,
+  STATIONARY_RADIUS_M: 30      // indoor GPS wanders 30-60 m at a desk; widened by the fix's own accuracy below
+};
+// Pure — the anchor is where the current stationary stretch began; it only
+// moves when a fix lands farther away than max(radius, that fix's accuracy).
+function stationaryStep(anchor, fix, distFn){
+  if(!anchor) return { lat:fix.lat, lon:fix.lon, at:fix.at };
+  const limit = Math.max(SLEEP_TUNING.STATIONARY_RADIUS_M, fix.acc||0);
+  return distFn([anchor.lat, anchor.lon], [fix.lat, fix.lon]) > limit
+    ? { lat:fix.lat, lon:fix.lon, at:fix.at }
+    : anchor;
+}
+// Pure — "awake" | "dim" | "dim-release". Lift always wins over stationary and
+// never releases the lock. saverOff = Battery Saver "Always Off".
+function sleepDecision(s){
+  const T = SLEEP_TUNING;
+  if(s.saverOff) return "awake";
+  const idle = s.now - s.lastTouchAt;
+  const stationary = s.stationaryForMs >= T.STATIONARY_DIM_MS;
+  if(idle < T.IDLE_MS || !(s.liftModeActive || stationary)) return "awake";
+  if(!s.liftModeActive && s.stationaryForMs >= T.STATIONARY_LOCK_MS && idle >= T.STATIONARY_LOCK_MS) return "dim-release";
+  return "dim";
+}
+const ScreenSleep = {
+  el:null, timer:null, anchor:null, lastTouchAt:Date.now(), dimmed:false, lockReleased:false, _onTouch:null,
+  start(){
+    this.stop();
+    this.lastTouchAt = Date.now(); this.anchor = null;
+    this._onTouch = ()=>this.touch();
+    ["pointerdown","touchstart","keydown"].forEach(ev=>document.addEventListener(ev, this._onTouch, {capture:true, passive:true}));
+    // Wall-clock timer, not fix-driven: indoors fixes can be sparse or stop.
+    this.timer = setInterval(()=>this._tick(), 5000);
+  },
+  stop(){
+    if(this.timer){ clearInterval(this.timer); this.timer = null; }
+    if(this._onTouch){
+      ["pointerdown","touchstart","keydown"].forEach(ev=>document.removeEventListener(ev, this._onTouch, {capture:true}));
+      this._onTouch = null;
+    }
+    this._hide(); this.lockReleased = false;
+  },
+  touch(){
+    this.lastTouchAt = Date.now();
+    if(this.lockReleased){ this.lockReleased = false; acquireWakeLock(); }
+  },
+  noteFix(fix){
+    this.anchor = stationaryStep(this.anchor, { lat:fix.lat, lon:fix.lon, acc:fix.acc, at:Date.now() }, QGeo.haversineM);
+  },
+  // Unlocking the phone is itself a deliberate touch (the visibilitychange
+  // handler below re-acquires the wake lock on the same event).
+  onVisible(){ this.lastTouchAt = Date.now(); this.lockReleased = false; this._hide(); },
+  _tick(){
+    if(!Quest.active()){ this.stop(); return; }
+    const now = Date.now();
+    const d = sleepDecision({ now, lastTouchAt:this.lastTouchAt, liftModeActive:Quest.liftModeActive,
+      saverOff:Quest.liftModeOverride==="off", stationaryForMs: this.anchor ? now - this.anchor.at : 0 });
+    if(d==="awake"){
+      if(this.dimmed) this._hide();
+      if(this.lockReleased){ this.lockReleased = false; acquireWakeLock(); }
+      return;
+    }
+    if(!this.dimmed) this._show();
+    if(d==="dim-release" && !this.lockReleased){ this.lockReleased = true; releaseWakeLock(); }
+  },
+  _show(){
+    if(!this.el){
+      const el = document.createElement("div");
+      el.id = "rqSleep";
+      el.setAttribute("role","button");
+      el.setAttribute("aria-label","Screen dimmed to save battery. Tap to wake. Tracking is still on.");
+      el.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483000;background:#000;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none";
+      el.innerHTML = '<span style="color:#2b2b2b;font:12px/1.4 system-ui,sans-serif;letter-spacing:.06em">TAP TO WAKE · STILL TRACKING</span>';
+      // Consume the waking tap here so it can't fall through to whatever button sits underneath.
+      el.onclick = e=>{ e.preventDefault(); e.stopPropagation(); this.touch(); this._hide(); };
+      document.body.appendChild(el);
+      this.el = el;
+    }
+    this.el.style.display = "flex"; this.dimmed = true;
+  },
+  _hide(){ if(this.el) this.el.style.display = "none"; this.dimmed = false; }
+};
+
 // Screen-lock / backgrounding awareness (battery — 2026-09-17). Wake Lock
 // above stops the common case (idle auto-lock) from happening at all, but
 // can't stop a deliberate side-button press or switching to another app —
@@ -259,6 +358,7 @@ document.addEventListener("visibilitychange", ()=>{
     rqToast("Tracking pauses while your screen is locked — reopen to keep logging this run.");
   } else {
     acquireWakeLock();
+    ScreenSleep.onVisible();
     if(_rqHiddenSince!=null){
       const awaySec = (Date.now()-_rqHiddenSince)/1000;
       _rqHiddenSince = null;
@@ -1326,6 +1426,7 @@ const Quest = {
     const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy||30, t:pos.timestamp||Date.now(),
                   alt: c.altitude!=null ? c.altitude : null, altAcc: c.altitudeAccuracy!=null ? c.altitudeAccuracy : null };
     const p = GPSFilter.push(fix);
+    ScreenSleep.noteFix(fix);   // before the _offsite return below: a stationary stretch counts wherever it is
     // Feed the avatar FIRST — its site gate flips Quest._offsite and keeps
     // re-evaluating the boundary so tracking resumes on return.
     if(this.onPosition) this.onPosition(p);   // live avatar on an open map
@@ -2416,6 +2517,7 @@ function renderHome(){
       trackBtn.textContent="Start tracking"; trackBtn.classList.remove("tracking");
       activityBtns.forEach(b=>b.style.opacity="1");
       releaseWakeLock();
+      ScreenSleep.stop();
     }
     if(!statusEl) return;
     statusEl.textContent = st.ok
@@ -2491,6 +2593,7 @@ function renderHome(){
       statusEl.textContent="";
       activityBtns.forEach(b=>b.style.opacity="1");
       releaseWakeLock();
+      ScreenSleep.stop();
       // Stopping tracking tears down watchPosition, so no more GPS fixes
       // (and therefore no more chute-guard.js ticks) will ever arrive —
       // chuteGuardStopSync() stops the sync loop itself, not just the tone,
@@ -2506,6 +2609,7 @@ function renderHome(){
       const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity, onCoverage);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); releaseWakeLock(); return; }
       chuteGuardStartSync();
+      ScreenSleep.start();
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
       activityBtns.forEach(b=>b.style.opacity="0.4");
     }
@@ -3289,7 +3393,7 @@ function renderFogMap(){
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
-    +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass while riding a lift. Tap to cycle Auto/On/Off.">🔋 Auto</button>'
+    +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass and dims the screen while riding a lift or sitting still (tap the screen to wake). Tap to cycle Auto/On/Off.">🔋 Auto</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
