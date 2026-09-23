@@ -1537,23 +1537,6 @@ async function api(request, env, url) {
     const chutes = aggregateChuteCounts(results || [], questSeasonId, seasonId);
     return json({ seasonId, chutes }, 200, AC);
   }
-  // Lifetime "ever skied it" set for the "My map" gold-medal marker — unlike
-  // /daily and /season above, this is unbounded (no date filter) and returns
-  // a flat zone_id list, not per-corridor counts/names, so it's kept as its
-  // own route rather than bolting an extra all-time query onto those two.
-  // activity='ski' (not just any row for the zone_id) deliberately excludes
-  // a hike UP a chute — CLAUDE.md's run-verification rules classify an
-  // ascended chute as activity='hike', and the medal means "you skied it."
-  const mpcc = path.match(/^\/api\/players\/([^/]+)\/chutes\/completed$/);
-  if (mpcc && method === "GET") {
-    const P = await playerAuth(request, env);
-    if (!P || P.playerId !== decodeURIComponent(mpcc[1])) return json({ error: "not authenticated" }, 401, AC);
-    if (!env.DB) return json({ error: "D1 not bound" }, 500);
-    const { results } = await env.DB.prepare(
-      "SELECT DISTINCT zone_id FROM quest_run WHERE player_id=? AND run_type='chute' AND activity='ski'"
-    ).bind(P.playerId).all();
-    return json({ completedZoneIds: (results || []).map(r => r.zone_id) }, 200, AC);
-  }
 
   // --- Ridge Quest: checkpoint-measured daily vertical ---
   // The headline "Vertical today" / "This season" number. Unlike vertical_m

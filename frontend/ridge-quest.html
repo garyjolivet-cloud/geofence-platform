@@ -165,17 +165,6 @@
   .runDiamond i{width:6px;height:6px;background:#111;border:1px solid #eef3f0;
     transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
-  /* Gold medal — sits at a chute's authored BOTTOM point once the player has
-     ever skied it (never a hike-up). Circular, deliberately distinct from
-     the diamond difficulty badges above. pointer-events:none for the same
-     reason those use it: decorative only, must never steal taps meant for
-     the runLines-hit layer underneath. */
-  .runMedal{position:relative;width:15px;height:15px;border-radius:50%;pointer-events:none;
-    background:radial-gradient(circle at 34% 30%, #fff6cf 0%, #ffd23f 55%, #c8951a 100%);
-    border:1.5px solid #7a5a12;
-    box-shadow:0 0 3px rgba(0,0,0,.65),0 1px 2px rgba(0,0,0,.5)}
-  .runMedal::after{content:"";position:absolute;inset:3px;border-radius:50%;
-    border:1px solid rgba(255,255,255,.5)}
   /* Named peak reference labels — muted vs. .runLabel's color (these are
      secondary orientation info, not skiable terrain), but sized up (doubled
      2026-09-20 per field feedback — the original size read as unreadable at
@@ -1094,15 +1083,6 @@ const QGeo = {
   }
 };
 
-// Gold-medal eligibility for a just-logged run — kept a standalone pure
-// function (not inlined in _classifyAndLog's callback) so it's testable
-// without a real Quest instance, and so it can't silently drift from the
-// backend's identical /chutes/completed WHERE clause. A hike UP a chute
-// deliberately does not count — see CLAUDE.md's run-verification section.
-function medalEligible(run){
-  return !!run && run.runType==="chute" && run.activity==="ski";
-}
-
 const Quest = {
   corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,lengthM,ref}]
   _offsite: false,     // set by the "My map" HereMarker site gate — true => device is >10 km outside the run network; _onFix pauses ticks/fog/sharing
@@ -1112,7 +1092,6 @@ const Quest = {
   season: null,         // project.season (bundle.season, injected server-side) — My map applies the winter treatment only when this is 'winter' (same rule as every other map view)
   states: {},           // zoneId -> {phase:"idle"|"inRun" (narration band only), narrCooldownUntil, cooldownUntil (post-log), rec:{buf,lastNearT,lastS,sawTop,sawBottom}|null (run recorder)}
   fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
-  completedChuteIds: new Set(), // zoneIds the player has ever skied (activity='ski', run_type='chute') — "My map"'s gold-medal marker
   viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
   enteredViewpoints: new Set(), // zoneId set — a viewpoint grants once per session; the server's upgrade-only upsert makes a duplicate POST harmless but wasteful, so this avoids re-sending every fix while lingering at a viewpoint
   checkpoints: [],       // [{zoneId,name,center:[lat,lon],elevM}] — authored known-elevation spots; _tickCheckpoints subtracts between them for the headline daily vertical
@@ -1129,7 +1108,6 @@ const Quest = {
   onCheckpointVertical: null, // callback(totalM) — fired when _tickCheckpoints credits a descent, so Home's "Vertical today" tile ticks up live
   onPrefetch: null,      // callback(sayText) — fired once per corridor per session when the player comes within QUEST_TUNING.SAY_PREFETCH_M, so the narration audio is already cached when they enter
   onNarrate: null,       // callback(sayText, zoneId) — fired once per band entry for a corridor with narration authored, wired up regardless of which screen (Home/My map) is showing
-  onCompletionChanged: null, // callback(zoneId) — fired the moment a NEW chute is credited (completedChuteIds just grew), so an open "My map" can redraw its gold medals live without a refetch
 
   // Battery Saver ("lift mode") — see setLiftModeOverride()/_setLiftModeActive().
   liftModeOverride: "auto", // "auto"|"on"|"off" — mirror of localStorage rq.liftMode, restored in start()
@@ -1231,13 +1209,6 @@ const Quest = {
       const j = await api("/api/players/"+playerId+"/fog");
       this.fogCells = new Map((j.cells||[]).map(c=>[c.h3_cell, c.state]));
     }catch(e){ /* keep whatever was already loaded (or empty) — a failed fetch here shouldn't block tracking */ }
-  },
-
-  async loadCompletedChutes(playerId){
-    try{
-      const j = await api("/api/players/"+playerId+"/chutes/completed");
-      this.completedChuteIds = new Set(j.completedZoneIds||[]);
-    }catch(e){ /* keep whatever was already loaded — a failed fetch here shouldn't block "My map" */ }
   },
 
   start(onRunLogged, onFogUpdated, onStatus, selectedActivity, onCoverage){
@@ -1778,15 +1749,7 @@ const Quest = {
     // correct that with a visible message instead of a run just disappearing
     // with no explanation.
     api("/api/quest-runs", { method:"POST", body: JSON.stringify(run) })
-      .then(()=>{
-        // Gold-medal eligibility mirrors the backend's /chutes/completed
-        // query exactly (run_type='chute' + activity='ski') — see medalEligible()
-        if(medalEligible(run) && !this.completedChuteIds.has(run.zoneId)){
-          this.completedChuteIds.add(run.zoneId);
-          if(this.onCompletionChanged) this.onCompletionChanged(run.zoneId);
-        }
-        if(this.onRunLogged) this.onRunLogged(run);
-      })
+      .then(()=>{ if(this.onRunLogged) this.onRunLogged(run); })
       .catch(()=>{ if(this.onSaveError) this.onSaveError(corridor.name); });
     return true;
   }
@@ -2383,7 +2346,7 @@ function renderHome(){
   // here instead of the old fire-and-forget pair so the stat has real data
   // by the time it paints, without fetching either one twice.
   (async ()=>{
-    await Promise.all([Quest.loadCorridors(), Quest.loadFogCells(s.player.id), Quest.loadCompletedChutes(s.player.id)]);
+    await Promise.all([Quest.loadCorridors(), Quest.loadFogCells(s.player.id)]);
     // Re-load on every Home render, same as applyActivityFilter() below —
     // corridors may have just changed (a different resort/project).
     // ChuteGuard.load() is cheap/idempotent AND preserves any live
@@ -3094,44 +3057,6 @@ function _rebuildRunLabels(map, cors){
     }
   });
 }
-// Gold-medal markers — one per chute the player has ever skied
-// (Quest.completedChuteIds), planted at the corridor's authored BOTTOM point
-// (path[path.length-1] — corridors are authored top->bottom by convention).
-// Deliberately its own rebuild pass, not folded into _rebuildRunLabels()
-// above: that function hides ALL labels/diamonds once more than
-// RUN_LABEL_MAX_VISIBLE corridors are on screen at once, which "My map"
-// always is on open (resort-wide fitBounds). A "persistent" medal going
-// invisible until the player zooms in would defeat the point, so this uses
-// a generous top-N-nearest cap instead (matching fence-editor.html Test
-// Mode's SIM_RUN_MARKER_CAP precedent) rather than an all-or-nothing cutoff.
-// Screen-space map.project(), not map.getBounds() — see the onScreen()
-// comment on _rebuildRunLabels above for why getBounds() is unreliable on
-// this screen's pitched camera.
-function medalCandidates(cors, completedChuteIds){
-  if(!cors.length || !completedChuteIds || !completedChuteIds.size) return [];
-  return cors.filter(c=>c.runType==="chute" && (c.path||[]).length>=2 && completedChuteIds.has(c.zoneId));
-}
-const MEDAL_MARKER_CAP = 60; // generous — this resort's real corridor set (38) never gets close
-let _medalMarkers = [];
-function _rebuildMedalMarkers(map, cors){
-  _medalMarkers.forEach(m=>m.remove()); _medalMarkers=[];
-  const candidates = medalCandidates(cors, Quest.completedChuteIds);
-  if(!candidates.length) return;
-  const w = map.getContainer().clientWidth, h = map.getContainer().clientHeight;
-  const bottomOf = c => c.path[c.path.length-1]; // [lat,lon]
-  const onScreen = p => { const pt=map.project([p[1], p[0]]); return pt.x>=-40 && pt.x<=w+40 && pt.y>=-40 && pt.y<=h+40; };
-  let vis = candidates.filter(c=>onScreen(bottomOf(c)));
-  if(vis.length>MEDAL_MARKER_CAP){
-    const ctr = map.getCenter();
-    vis = vis.map(c=>{ const b=bottomOf(c); return {c,d:(b[1]-ctr.lng)**2+(b[0]-ctr.lat)**2}; })
-      .sort((a,b)=>a.d-b.d).slice(0,MEDAL_MARKER_CAP).map(x=>x.c);
-  }
-  vis.forEach(c=>{
-    const b = bottomOf(c);
-    const el = document.createElement("div"); el.className = "runMedal";
-    _medalMarkers.push(new maplibregl.Marker({ element:el, anchor:"bottom", offset:[0,-4] }).setLngLat([b[1], b[0]]).addTo(map));
-  });
-}
 // Named peak reference labels (2026-09-20) — a fixed, real-world list of
 // mountains around Kicking Horse, most on-resort (T1/T2) or visible from it
 // at distance (up to ~48mi, e.g. Mount Temple). This is the first hardcoded
@@ -3196,17 +3121,6 @@ function _rebuildPeakLabels(map){
 function drawNamedPeaks(map){
   _rebuildPeakLabels(map);
   map.on("moveend", ()=>{ clearTimeout(_peakLabelMoveTimer); _peakLabelMoveTimer=setTimeout(()=>_rebuildPeakLabels(map),150); });
-}
-// Gold medals, like drawNamedPeaks() above, are independent of fog/tile-art
-// mode — "you skied this chute" is true regardless of how the resort's runs
-// are currently being rendered, so this is called unconditionally alongside
-// drawNamedPeaks(), not nested inside drawAllRuns() (which only runs when
-// fog-of-war AND tile art are both off).
-let _medalMoveTimer = null;
-function drawMedals(map){
-  const cors = Quest.corridors || [];
-  _rebuildMedalMarkers(map, cors);
-  map.on("moveend", ()=>{ clearTimeout(_medalMoveTimer); _medalMoveTimer=setTimeout(()=>_rebuildMedalMarkers(map,cors),150); });
 }
 function drawAllRuns(map){
   const cors = Quest.corridors || [];
@@ -3362,7 +3276,7 @@ function renderFogMap(){
   // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{
     Quest.onFogUpdated=null; Quest.onPosition=null;
-    Quest.onLiftModeChange=null; Quest.onCompletionChanged=null;
+    Quest.onLiftModeChange=null;
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
     // ever actually shown (the arrow wedge / compass-mode bearing); nothing
@@ -3502,25 +3416,6 @@ function renderFogMap(){
       // useful orientation context regardless of how the resort's own runs
       // are rendered).
       drawNamedPeaks(map);
-      drawMedals(map);
-      // Home kicks off loadCompletedChutes() fire-and-forget (renderHome()'s
-      // Promise.all is an un-awaited IIFE) — if this screen is opened fast
-      // enough that fetch hasn't resolved yet, the drawMedals() call above
-      // just ran against an empty completedChuteIds and nothing else would
-      // ever re-trigger it (moveend only fires on a real pan). Re-fetch here
-      // too — cheap no-op redraw if it was already current by the time this
-      // ran — so a medal a player already earned shows on open, not only
-      // after they first pan the map. Confirmed live this actually happens
-      // (Kicking Horse's real network is far smaller than Home's other
-      // fetches, so this one can trail behind by a beat).
-      const _medalSession = getSession();
-      if(_medalSession && _medalSession.player){
-        Quest.loadCompletedChutes(_medalSession.player.id).then(()=>_rebuildMedalMarkers(map, Quest.corridors||[]));
-      }
-      // A chute completed WHILE this screen is open lights up immediately,
-      // independent of the moveend debounce above — same on-slot convention
-      // as onFogUpdated/onLiftModeChange, nulled in the #fogBack handler.
-      Quest.onCompletionChanged = ()=>_rebuildMedalMarkers(map, Quest.corridors||[]);
       // R5 — admin-gated: fogFeatureCollection()/shroudFeatureCollection()
       // stay pure/untouched either way (Quest.fogCells itself is never
       // gated — only whether it gets DRAWN here is).
