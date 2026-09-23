@@ -326,10 +326,17 @@ function addCorridorLayers(map, o){
   // set below.
   const guardedExpr = ["==", ["get", "guarded"], true];
   const GUARD_COLOR = "#00e5ff";
+  // Corridor Guard "muted" state (2026-09-23, ridge-quest.html): guarding is
+  // on for EVERY run by default there, so highlighting guarded ones would light
+  // up the whole map — instead only the ones a rider deliberately muted are
+  // drawn differently (greyed). Same additive pattern as `guarded`: any caller
+  // that never sets a `muted` property reads it as false and is unaffected.
+  const mutedExpr = ["==", ["get", "muted"], true];
+  const MUTED_COLOR = "#6b7a89";
   const rawCol  = ["coalesce", ["get", "col"], "#ff6a3d"];
   const rawHalo = ["coalesce", ["get", "halo"], rawCol];
-  const col  = ["case", guardedExpr, GUARD_COLOR, rawCol];
-  const halo = ["case", guardedExpr, GUARD_COLOR, rawHalo];
+  const col  = ["case", guardedExpr, GUARD_COLOR, mutedExpr, MUTED_COLOR, rawCol];
+  const halo = ["case", guardedExpr, GUARD_COLOR, mutedExpr, MUTED_COLOR, rawHalo];
   // Optional core-colour override (e.g. the Fence Editor turns the selected
   // corridor's centre line green). Other surfaces just use the grade colour
   // (already guard-aware via `col` above).

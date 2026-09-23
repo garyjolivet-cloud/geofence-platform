@@ -55,7 +55,7 @@
      previewed there is exactly what plays here. -->
 <script src="/splash-flight.js"></script>
 <style>
-  :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e; }
+  :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e;--amber:#ffd23f; }
   *{box-sizing:border-box}
   html,body{margin:0;min-height:100%;background:var(--night);color:var(--snow);font-family:"Barlow",system-ui,sans-serif}
   a{color:inherit}
@@ -132,6 +132,11 @@
   .fogMapTilt{position:absolute;top:58px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
   .fogMapRecenter{position:absolute;left:14px;z-index:2;width:44px;height:44px;margin:0;padding:0;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center}
   .fogMapBattery{position:absolute;top:14px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px;font-size:13px}
+  /* Corridor Guard on/off — the yellow button (Home + "My map"). ON = solid
+     amber, OFF = amber outline, so state reads at a glance without the label. */
+  .guardBtn.on{background:var(--amber);border:1px solid var(--amber);color:#1a1400;font-weight:700}
+  .guardBtn.off{background:transparent;border:1.5px solid var(--amber);color:var(--amber);font-weight:600}
+  .fogMapGuard{position:absolute;top:58px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;border-radius:10px;font-size:13px}
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
@@ -779,19 +784,27 @@ const RQ_MAX_TRACK = 6;
 function getTrackFriends(){ try{ return JSON.parse(localStorage.getItem("rq.trackFriends")||"[]"); }catch(e){ return []; } }
 function setTrackFriends(ids){ localStorage.setItem("rq.trackFriends", JSON.stringify(ids.slice(0, RQ_MAX_TRACK))); }
 
-// Corridor Guard per-chute selection (press-and-hold a run on "My map" to
-// arm/disarm it, 2026-09-20) — a rider typically only wants ONE chute
-// watched at a time (drop in, ride the lift back up, disarm, pick a new
-// one), not a tone firing for every incidental crossing on a project with
-// dozens of runs. Persisted per-device (survives an app reload between
-// runs/lift rides), same "small localStorage set" precedent as
-// rq.trackFriends above. Purely a runtime OUTPUT filter — chute-guard.js
-// keeps tracking every corridor's real state regardless (see
-// ChuteGuard.getActiveAlarm(isEligible)'s own comment: this is the same
-// Battery Saver lesson — filter the alarm output, not chute-guard.js's
-// input, or isOnLift() breaks too).
-function getGuardedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.guardedCorridors")||"[]"); }catch(e){ return []; } }
-function setGuardedCorridors(ids){ try{ localStorage.setItem("rq.guardedCorridors", JSON.stringify(ids)); }catch(e){} }
+// Corridor Guard on/off (2026-09-23). Guarding is ON for every chute and run
+// by default: a master switch (the yellow button on Home and "My map") plus a
+// per-chute MUTE set (press-and-hold a run on "My map" to mute/unmute just
+// that one). Before this it was opt-in per chute (rq.guardedCorridors, default
+// empty, 2026-09-20) because a tone firing on every incidental crossing of a
+// project with dozens of runs read as annoying — that legacy key is now
+// ignored. Both are persisted per-device (survive an app reload between
+// runs/lift rides), same "small localStorage" precedent as rq.trackFriends
+// above. Purely a runtime OUTPUT filter — chute-guard.js keeps tracking every
+// corridor's real state regardless (see ChuteGuard.getActiveAlarm(isEligible)'s
+// own comment: this is the same Battery Saver lesson — filter the alarm
+// output, not chute-guard.js's input, or isOnLift() breaks too).
+function getChuteGuardMaster(){ try{ return localStorage.getItem("rq.chuteGuard")!=="off"; }catch(e){ return true; } }
+function setChuteGuardMaster(on){ try{ localStorage.setItem("rq.chuteGuard", on ? "on" : "off"); }catch(e){} }
+function getMutedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.mutedCorridors")||"[]"); }catch(e){ return []; } }
+function setMutedCorridors(ids){ try{ localStorage.setItem("rq.mutedCorridors", JSON.stringify(ids)); }catch(e){} }
+// Pure — a corridor alerts iff its workspace has the feature on, the rider's
+// master switch is on, and that one corridor isn't muted.
+function isCorridorGuarded(workspaceOn, masterOn, mutedSet, id){
+  return !!workspaceOn && !!masterOn && !mutedSet.has(id);
+}
 
 // Battery Saver ("lift mode") — how long the raw ChuteGuard.isOnLift()
 // signal has to hold steady, one way or the other, before Quest._onFix
@@ -1216,19 +1229,33 @@ const Quest = {
   _liftRaw: false,          // last raw ChuteGuard.isOnLift() reading, pre-debounce — see _onFix()
   _liftRawSinceT: 0,        // fix.t the raw reading last changed — debounce clock, in fix time (not wall time) so it works the same for real GPS and simulateWalk()
 
-  // Corridor Guard per-chute selection — see getGuardedCorridors()'s own
-  // comment. Set of zoneIds (chute-guard.js corridorIds); restored from
-  // localStorage in start(). This default (empty) only matters before
-  // start() has run once.
-  guardedCorridors: new Set(),
-  // Toggles one corridor's armed state, persists it, and returns the new
-  // state — the single choke point renderFogMap()'s press-and-hold handler
-  // calls, so the map redraw + persistence always stay in sync.
-  toggleGuardedCorridor(zoneId){
-    if(this.guardedCorridors.has(zoneId)) this.guardedCorridors.delete(zoneId);
-    else this.guardedCorridors.add(zoneId);
-    setGuardedCorridors(Array.from(this.guardedCorridors));
-    return this.guardedCorridors.has(zoneId);
+  // Corridor Guard on/off — see getChuteGuardMaster()'s own comment. Both are
+  // read from localStorage HERE (not only in start()) so Home and "My map" are
+  // right before tracking has ever begun.
+  chuteGuardMaster: getChuteGuardMaster(),          // the yellow button; default ON
+  mutedCorridors: new Set(getMutedCorridors()),     // zoneIds muted by press-and-hold
+  isGuarded(zoneId){
+    return isCorridorGuarded(this.chuteGuardEnabled, this.chuteGuardMaster, this.mutedCorridors, zoneId);
+  },
+  // Toggles one corridor's muted state, persists it, and returns the NEW
+  // muted state — the single choke point renderFogMap()'s press-and-hold
+  // handler calls, so the map redraw + persistence always stay in sync.
+  toggleMutedCorridor(zoneId){
+    if(this.mutedCorridors.has(zoneId)) this.mutedCorridors.delete(zoneId);
+    else this.mutedCorridors.add(zoneId);
+    setMutedCorridors(Array.from(this.mutedCorridors));
+    return this.mutedCorridors.has(zoneId);
+  },
+  // The yellow button. Re-evaluates the alarm at once so a tone that is
+  // sounding when the rider turns Guard off stops on the spot, not on the next
+  // GPS fix, and repaints every button so Home and "My map" stay in sync.
+  setChuteGuardMaster(on){
+    this.chuteGuardMaster = !!on;
+    setChuteGuardMaster(this.chuteGuardMaster);
+    if(typeof syncCgAlarm==="function") syncCgAlarm();
+    if(typeof paintGuardButtons==="function") paintGuardButtons();
+    if(typeof rqToast==="function") rqToast(this.chuteGuardMaster ? "🛡 Corridor Guard on — every run" : "Corridor Guard off");
+    return this.chuteGuardMaster;
   },
 
   async loadCorridors(){
@@ -1329,7 +1356,8 @@ const Quest = {
     this.liftModeActive = false;
     this._liftRaw = false;
     this._liftRawSinceT = 0;
-    this.guardedCorridors = new Set(getGuardedCorridors());
+    this.chuteGuardMaster = getChuteGuardMaster();
+    this.mutedCorridors = new Set(getMutedCorridors());
     this.checkpointVert = getCheckpointVert();
     this._cpCooldownUntil = {};
     this._cpLastPostAt = 0;
@@ -2248,13 +2276,26 @@ function chuteGuardStopSync(){
   if(_cgSyncTimer){ clearInterval(_cgSyncTimer); _cgSyncTimer=null; }
   stopCgAlarm();
 }
+// Repaints every yellow Guard button (Home's #btnGuard and "My map"'s
+// #fogGuard) from Quest state, so the two can never disagree. Hidden for a
+// workspace without Corridor Guard — there is nothing for it to switch.
+function paintGuardButtons(){
+  const on = Quest.chuteGuardMaster;
+  document.querySelectorAll(".guardBtn").forEach(b=>{
+    b.classList.toggle("on", on);
+    b.classList.toggle("off", !on);
+    b.textContent = on ? "🛡 Guard ON" : "🛡 Guard OFF";
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.style.display = Quest.chuteGuardEnabled ? "" : "none";
+  });
+}
 function syncCgAlarm(){
   if(typeof ChuteGuard==="undefined") return;
   // ChuteGuard.load() now always gets the real geometry (see its call
   // site's comment) so Battery Saver's isOnLift() works regardless of this
   // flag — the actual audible/vibration alarm still only sounds when the
   // workspace has opted into it.
-  const active = Quest.chuteGuardEnabled ? ChuteGuard.getActiveAlarm(id=>Quest.guardedCorridors.has(id)) : null;
+  const active = Quest.chuteGuardEnabled ? ChuteGuard.getActiveAlarm(id=>Quest.isGuarded(id)) : null;
   if(!active){
     if(_cgAlarm) stopCgAlarm();
     return;
@@ -2302,7 +2343,7 @@ let _cgLastToastLevel = 0;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId, name, info){
-      if(!Quest.chuteGuardEnabled || !Quest.guardedCorridors.has(corridorId)) return; // geometry now always loads (Battery Saver) — these flags gate the toast/log/debug output itself, same as before
+      if(!Quest.isGuarded(corridorId)) return; // geometry now always loads (Battery Saver) — these flags gate the toast/log/debug output itself, same as before
       const lvl = Math.max(1, Math.min(2, (info&&info.level)||1));
       cgLog("WARN \""+(name||"corridor")+"\" L"+lvl+" +"+((info&&info.excessM)||0).toFixed(1)+"m alertCount="+(info&&info.alertCount));
       if(info && info.alertCount===1){
@@ -2314,13 +2355,13 @@ function chuteGuardCallbacks(){
       }
     },
     onClear(corridorId, name){
-      if(!Quest.chuteGuardEnabled || !Quest.guardedCorridors.has(corridorId)) return;
+      if(!Quest.isGuarded(corridorId)) return;
       cgLog("CLEAR \""+(name||"corridor")+"\"");
       _cgLastToastLevel = 0;
       rqToast("✓ back on \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId, name, info){
-      if(!Quest.chuteGuardEnabled || !Quest.guardedCorridors.has(corridorId)) return;
+      if(!Quest.isGuarded(corridorId)) return;
       cgLog("DISENGAGE \""+(name||"corridor")+"\" max+"+((info&&info.maxExcessM)||0).toFixed(1)+"m");
       _cgLastToastLevel = 0;
       // chute-guard.js concluded this is a deliberate departure (steady
@@ -2446,6 +2487,7 @@ function renderHome(){
       +QUEST_ACTIVITIES.map(a=>'<button class="ghost" data-activity="'+a.key+'" style="flex:1;margin:0">'+a.label+'</button>').join('')
     +'</div>'
     +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
+    +'<button class="ghost guardBtn on" id="btnGuard" style="display:none;margin-top:8px" title="Corridor Guard — sounds a tone when you drift off a run. Tap to turn it on or off for every chute and run.">🛡 Guard ON</button>'
     +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0"></p>'
     +'<p class="scrollhint" id="cgDebug" style="margin:0 0 6px;font-size:11px;opacity:.7"></p>'
     +'<button class="ghost" id="btnExportCgLog" style="font-size:11px;padding:4px 8px;margin:0 0 10px" title="Download this session\'s Corridor Guard log as a text file">⬇ Export guard log</button>'
@@ -2490,10 +2532,19 @@ function renderHome(){
     // syncCgAlarm() and chuteGuardCallbacks() below) so a workspace with it
     // off still gets exactly the same silence as before.
     if(typeof ChuteGuard!=="undefined") ChuteGuard.load(chuteGuardZonesFor(Quest.corridors), chuteGuardCallbacks());
+    // The workspace flag is only known now, so this is when the yellow button
+    // can be shown (it stays hidden for a workspace with no Corridor Guard).
+    paintGuardButtons();
     Quest.onNarrate = narrateCorridor;
     Quest.onPrefetch = (text)=>{ sayViaTts(text).then(()=>cgLog("SAY prefetched: \""+text.slice(0,40)+"\"")).catch(()=>{}); };
     const el = document.getElementById("exploredPct");
     if(!el) return; // navigated away before this resolved
+    // One-time notice: guarding used to be opt-in per chute, so a returning
+    // rider would otherwise be surprised by alarms on every run.
+    if(Quest.chuteGuardEnabled && !localStorage.getItem("rq.guardDefaultOnNoticeShown")){
+      try{ localStorage.setItem("rq.guardDefaultOnNoticeShown","1"); }catch(e){}
+      rqToast("Corridor Guard is now on for every run. Use the yellow button to turn it off.");
+    }
     const pct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
     el.textContent = pct==null ? "" : Math.round(pct*100)+"% of this map explored (lifetime)";
     // R12 — corridors just (re)loaded, so Quest.allowedActivities now
@@ -2502,6 +2553,9 @@ function renderHome(){
     // previous project, if any — harmless flash, corrected here).
     if(typeof applyActivityFilter==="function") applyActivityFilter();
   })();
+  const guardBtn=document.getElementById("btnGuard");
+  if(guardBtn) guardBtn.onclick=()=>Quest.setChuteGuardMaster(!Quest.chuteGuardMaster);
+  paintGuardButtons();   // right state at first paint (the flag may already be loaded from a previous Home render)
   const trackBtn=document.getElementById("btnTrack");
   const statusEl=document.getElementById("gpsStatus");
   const coverageEl=document.getElementById("coverageStatus");
@@ -3260,8 +3314,11 @@ function drawAllRuns(map){
       properties:{ id:c.zoneId, name:c.name||"Run", difficulty:c.difficulty||"", activityType:c.activityType||"",
                    runType:c.runType||"run", lengthM:Math.round(c.lengthM||0),
                    col:st.col, halo:st.halo, dash:st.dash, tier:st.tier,
-                   // guarded: press-and-hold arms/disarms one chute at a time — see Quest.guardedCorridors
-                   guarded:Quest.guardedCorridors.has(c.zoneId),
+                   // muted: press-and-hold mutes/unmutes Corridor Guard for one chute — see Quest.mutedCorridors.
+                   // Deliberately NOT `guarded`: everything is guarded by default, and that property's cyan
+                   // highlight + two offset edge lines on ~40-60 corridors would be exactly the map clutter
+                   // (and per-corridor layer cost) not worth paying for the default state.
+                   muted:Quest.mutedCorridors.has(c.zoneId),
                    // shared corridor renderer (width band + piste-glow, no dashes)
                    corridor:true, widthM:(c.widthM>0?c.widthM:10), pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(latRef) },
       geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
@@ -3304,10 +3361,10 @@ function drawAllRuns(map){
         [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
       .addTo(map);
   }
-  // Press-and-hold a run to arm/disarm Corridor Guard for just that one
-  // (see Quest.guardedCorridors's own comment) — a normal quick tap keeps
+  // Press-and-hold a run to mute/unmute Corridor Guard for just that one
+  // (see Quest.mutedCorridors's own comment) — a normal quick tap keeps
   // showing the popup above instead. `feats` is mutated in place and
-  // re-pushed via setData() so the map's bright-cyan highlight updates
+  // re-pushed via setData() so the dimmed "muted" look updates
   // immediately, without rebuilding the whole runLines source/layer stack
   // (which drawAllRuns() only ever expects to build once per map instance).
   if(typeof LongPress!=="undefined"){
@@ -3334,11 +3391,11 @@ function drawAllRuns(map){
       onLongPress(feature){
         const zoneId = feature && feature.properties && feature.properties.id;
         if(zoneId==null) return;
-        const guarded = Quest.toggleGuardedCorridor(zoneId);
+        const muted = Quest.toggleMutedCorridor(zoneId);
         const name = (feature.properties && feature.properties.name) || "run";
-        rqToast(guarded ? ("🛡 Now guarding: "+name) : ("Stopped guarding: "+name));
+        rqToast(muted ? ("Stopped guarding: "+name) : ("🛡 Guarding "+name+" again"));
         const feat = feats.find(f=>f.properties && f.properties.id===zoneId && f.properties.corridor);
-        if(feat) feat.properties.guarded = guarded;
+        if(feat) feat.properties.muted = muted;
         const src = map.getSource("runLines");
         if(src) src.setData({ type:"FeatureCollection", features:feats });
       }
@@ -3349,12 +3406,12 @@ function drawAllRuns(map){
   map.on("mouseenter","runLines-hit",()=>{ map.getCanvas().style.cursor="pointer"; });
   map.on("mouseleave","runLines-hit",()=>{ map.getCanvas().style.cursor=""; });
 
-  // First-run discoverability hint — only once, only when nothing is armed
-  // yet (an experienced rider who already has a chute armed doesn't need
-  // reminding every time they open the map).
-  if(!Quest.guardedCorridors.size && !localStorage.getItem("rq.guardHintShown")){
-    try{ localStorage.setItem("rq.guardHintShown","1"); }catch(e){}
-    setTimeout(()=>rqToast("Press and hold a run to have Corridor Guard watch it"), 1200);
+  // First-run discoverability hint — only once, and only for a workspace that
+  // actually has Corridor Guard. (New key: the old rq.guardHintShown announced
+  // the previous opt-in-per-chute behavior, which no longer exists.)
+  if(Quest.chuteGuardEnabled && !localStorage.getItem("rq.guardHint2Shown")){
+    try{ localStorage.setItem("rq.guardHint2Shown","1"); }catch(e){}
+    setTimeout(()=>rqToast("Corridor Guard watches every run — press and hold one to mute it"), 1200);
   }
 }
 
@@ -3394,6 +3451,7 @@ function renderFogMap(){
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
     +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass and dims the screen while riding a lift or sitting still (tap the screen to wake). Tap to cycle Auto/On/Off.">🔋 Auto</button>'
+    +'<button class="ghost guardBtn fogMapGuard on" id="fogGuard" style="display:none" title="Corridor Guard — tap to turn it on or off for every chute and run. Press and hold a run to mute just that one.">🛡 Guard ON</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
@@ -3487,6 +3545,10 @@ function renderFogMap(){
     // Battery Saver ("lift mode") — override button + pause/resume wiring.
     // Always shown (unlike #fogTilt) since it also pauses the compass and
     // Chute Guard's sync poll, useful even for a workspace with 3D off.
+    // Corridor Guard yellow button — same switch as Home's #btnGuard.
+    const mapGuardBtn = document.getElementById("fogGuard");
+    if(mapGuardBtn) mapGuardBtn.onclick = ()=>Quest.setChuteGuardMaster(!Quest.chuteGuardMaster);
+    paintGuardButtons();
     const batteryBtn = document.getElementById("fogBattery");
     // The override button only ever showed the MODE (Auto/On/Off), not
     // whether Battery Saver is actually doing anything right now — with only
