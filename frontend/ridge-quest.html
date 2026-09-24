@@ -3430,14 +3430,15 @@ function applyTimeOfDayLight(map){
 }
 function setupRideVisuals(map, cors){
   if(typeof RidgeVisuals==="undefined") return;
-  const TRACK_KEY="rq.showTrack", SKIED_KEY="rq.showSkied";
-  let showTrack=getRideToggle(TRACK_KEY), showSkied=getRideToggle(SKIED_KEY);
+  // ONE "Skied" switch drives both the stripe on completed chutes and today's track line.
+  const SKIED_KEY="rq.showSkied";
+  let showSkied=getRideToggle(SKIED_KEY);
   try{
     map.addSource("myTrack", { type:"geojson", data: RidgeVisuals.trackFeatureCollection(RQTrack ? RQTrack.segments() : []) });
     const firstRunLayer = ["runLines-width","runLines-halo","runLines-casing"].find(id=>map.getLayer(id));
     map.addLayer(RidgeVisuals.trackLayer("myTrack-line","myTrack"), firstRunLayer);
     map.addLayer(RidgeVisuals.skiedLayer("runLines-skied","runLines"));
-    map.setLayoutProperty("myTrack-line","visibility", showTrack?"visible":"none");
+    map.setLayoutProperty("myTrack-line","visibility", showSkied?"visible":"none");
     map.setLayoutProperty("runLines-skied","visibility", showSkied?"visible":"none");
     orderRideLayers(map);
   }catch(e){ console.warn("ride visuals:", e && e.message); return; }
@@ -3467,30 +3468,37 @@ function setupRideVisuals(map, cors){
   el.addEventListener("pointercancel", up, { passive:true });
   const timer = setInterval(()=>{
     if(!map.getContainer().isConnected){ clearInterval(timer); return; }
-    if(!RQTrack || down>0 || map.isMoving()) return;
+    if(!RQTrack || !showSkied || down>0 || map.isMoving()) return;
     const n = RQTrack.segments().reduce((a,s)=>a+s.length,0);
     if(n===lastN) return;
     lastN = n;
     try{ map.getSource("myTrack").setData(RidgeVisuals.trackFeatureCollection(RQTrack.segments())); }catch(e){}
   }, 15000);
 
-  // The two toggles, stacked under the 3D button on the left.
+  // The single "Skied" button, in the right column directly UNDER the Guard button. Guard's
+  // height changes with its label ("Guard OFF · 12 armed") and it is hidden until Guard state
+  // is known, so the top is measured from it (and re-measured when it resizes) instead of
+  // hard-coded — a fixed offset put this button on top of Guard.
   const host = map.getContainer().parentNode;
-  function mkBtn(id, top, label, on, onClick){
-    const b = document.createElement("button");
-    b.className = "ghost fogMapLayer"; b.id = id; b.style.top = top+"px";
-    const paint = ()=>{ b.textContent = label+(on()?" on":" off"); b.setAttribute("aria-pressed", on()?"true":"false"); };
-    b.onclick = ()=>{ onClick(); paint(); };
-    paint(); host.appendChild(b); return b;
-  }
-  mkBtn("fogTrackBtn", 102, "Track", ()=>showTrack, ()=>{
-    showTrack=!showTrack; setRideToggle(TRACK_KEY, showTrack);
-    try{ map.setLayoutProperty("myTrack-line","visibility", showTrack?"visible":"none"); }catch(e){}
-  });
-  mkBtn("fogSkiedBtn", 146, "Skied", ()=>showSkied, ()=>{
-    showSkied=!showSkied; setRideToggle(SKIED_KEY, showSkied);
-    try{ map.setLayoutProperty("runLines-skied","visibility", showSkied?"visible":"none"); }catch(e){}
-  });
+  const b = document.createElement("button");
+  b.className = "ghost fogMapLayer"; b.id = "fogSkiedBtn";
+  const paint = ()=>{ b.textContent = "Skied "+(showSkied?"on":"off"); b.setAttribute("aria-pressed", showSkied?"true":"false"); };
+  const guardBtn = document.getElementById("fogGuard");
+  const place = ()=>{
+    const gh = guardBtn && guardBtn.offsetHeight ? guardBtn.offsetTop + guardBtn.offsetHeight + 8 : 58;
+    b.style.top = gh+"px";
+  };
+  b.onclick = ()=>{
+    showSkied = !showSkied; setRideToggle(SKIED_KEY, showSkied);
+    if(showSkied) lastN = -1;   // refresh the track on the next tick
+    try{
+      map.setLayoutProperty("runLines-skied","visibility", showSkied?"visible":"none");
+      map.setLayoutProperty("myTrack-line","visibility", showSkied?"visible":"none");
+    }catch(e){}
+    paint();
+  };
+  paint(); place(); host.appendChild(b);
+  try{ if(guardBtn && typeof ResizeObserver!=="undefined") new ResizeObserver(place).observe(guardBtn); }catch(e){}
 }
 function drawAllRuns(map){
   const cors = Quest.corridors || [];

@@ -159,25 +159,31 @@ function runSetup(overrides = {}) {
     localStorage: overrides.localStorage || store,
     setTimeout: (f, ms) => { timers.push({ f, ms }); return timers.length; },
     setInterval: () => 1, clearInterval() {},
-    document: { createElement: () => ({ style: {}, setAttribute() {}, set onclick(f) { this._c = f; }, get onclick() { return this._c; } }) },
+    document: {
+      createElement: () => ({ style: {}, setAttribute() {}, set onclick(f) { this._c = f; }, get onclick() { return this._c; } }),
+      getElementById: id => (id === "fogGuard" ? guard : null),
+    },
+    ResizeObserver: class { constructor(cb) { ro.cb = cb; } observe() {} },
     console,
   };
+  var guard = overrides.guard || { offsetTop: 58, offsetHeight: 40 }; // eslint-disable-line no-var
+  var ro = {}; // eslint-disable-line no-var
   const src = ["function getRideToggle(", "function setRideToggle(", "function orderRideLayers(", "function setupRideVisuals("].map(extract).join("\n");
   const fn = new Function(...Object.keys(scope), src + "; return { setupRideVisuals };");
   const api = fn(...Object.values(scope));
   const cors = [{ zoneId: "c1", runType: "chute" }, { zoneId: "c2", runType: "chute" }, { zoneId: "r1", runType: "run" }, { zoneId: "l1", runType: "lift" }];
   api.setupRideVisuals(map, cors);
-  return { scope, layers, sources, states, calls, host, timers, cors };
+  return { scope, layers, sources, states, calls, host, timers, cors, guard, ro };
 }
 
-test("setupRideVisuals adds the track under the runs, the stripe on the runLines source, and two toggles", () => {
+test("setupRideVisuals adds the track under the runs, the stripe on the runLines source, and ONE Skied toggle", () => {
   const r = runSetup();
   const ids = r.layers.map(l => l.def.id);
   assert.deepStrictEqual(ids, ["myTrack-line", "runLines-skied"]);
   assert.strictEqual(r.layers[0].before, "runLines-width", "track goes beneath the run lines");
   assert.strictEqual(r.layers[1].def.source, "runLines");
-  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogTrackBtn", "fogSkiedBtn"]);
-  assert.ok(r.host.kids.every(b => b.textContent.endsWith(" on")), "both default ON");
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn"], "Track and Skied are one button");
+  assert.strictEqual(r.host.kids[0].textContent, "Skied on", "default ON");
 });
 
 test("skied state is set only on chutes, via feature-state, with no source reload", () => {
@@ -199,23 +205,32 @@ test("finishing a chute flashes its stripe for ~2 s then clears it; repeats and 
   assert.ok(!("r1" in r.states) && !("l1" in r.states));
 });
 
-test("toggle buttons hide/show their layer and remember the choice", () => {
+test("the one Skied button hides/shows BOTH the stripe and the track, and remembers the choice", () => {
   const r = runSetup();
-  r.host.kids[0].onclick();   // Track
-  assert.strictEqual(r.calls.vis["myTrack-line"], "none");
-  assert.strictEqual(r.scope.localStorage.m["rq.showTrack"], "0");
-  assert.ok(r.host.kids[0].textContent.endsWith(" off"));
-  r.host.kids[1].onclick();   // Skied
+  r.host.kids[0].onclick();
   assert.strictEqual(r.calls.vis["runLines-skied"], "none");
-  r.host.kids[1].onclick();
+  assert.strictEqual(r.calls.vis["myTrack-line"], "none");
+  assert.strictEqual(r.scope.localStorage.m["rq.showSkied"], "0");
+  assert.strictEqual(r.host.kids[0].textContent, "Skied off");
+  r.host.kids[0].onclick();
   assert.strictEqual(r.calls.vis["runLines-skied"], "visible");
+  assert.strictEqual(r.calls.vis["myTrack-line"], "visible");
+  assert.strictEqual(r.host.kids[0].textContent, "Skied on");
 });
 
-test("a remembered 'off' is honoured on the next open", () => {
-  const store = mkStore(); store.setItem("rq.showTrack", "0");
+test("a remembered 'off' is honoured on the next open (both layers)", () => {
+  const store = mkStore(); store.setItem("rq.showSkied", "0");
   const r = runSetup({ localStorage: store });
   assert.strictEqual(r.calls.vis["myTrack-line"], "none");
-  assert.strictEqual(r.calls.vis["runLines-skied"], "visible");
+  assert.strictEqual(r.calls.vis["runLines-skied"], "none");
+});
+
+test("no flash while Skied is off", () => {
+  const store = mkStore(); store.setItem("rq.showSkied", "0");
+  const r = runSetup({ localStorage: store });
+  r.scope.Quest.skiedToday.add("c2");
+  r.scope.Quest.onSkiedChanged("c2", true);
+  assert.ok(!r.states.c2.flash);
 });
 
 test("Quest._celebrate marks a chute skied, shows the toast and never throws", () => {
@@ -242,11 +257,20 @@ test("source wiring: track feed is isolated in try/catch, back-out clears the ho
   assert.ok(!/setData\(RidgeVisuals\.trackFeatureCollection[\s\S]*skied/.test(applySkiedBody.split("function applySkied")[1].split("Quest.onSkiedChanged")[0]), "skied state never reloads a source");
 });
 
-test("Track/Skied buttons sit in the right column, clear of Recenter (left column)", () => {
+test("Skied button sits in the right column directly under Guard, wherever Guard's height goes", () => {
   const rule = html.replace(/\/\*[\s\S]*?\*\//g, "").match(/button\.fogMapLayer\{[^}]*\}/)[0];
   assert.ok(/right:14px/.test(rule) && !/left:14px/.test(rule), rule);
-  const tops = [...html.matchAll(/mkBtn\("fog\w+Btn", (\d+),/g)].map(m => +m[1]);
-  assert.deepStrictEqual(tops, [102, 146]);
-  // right column already holds Battery (top 14) and Guard (top 58); mine start below it
-  assert.ok(/\.fogMapGuard\{position:absolute;top:58px;right:14px/.test(html));
+  assert.ok(html.includes(".fogMapGuard{position:absolute;top:58px;right:14px"), "Guard is top:58 right:14");
+  const guard = { offsetTop: 58, offsetHeight: 40 };
+  const r = runSetup({ guard });
+  const btn = r.host.kids[0];
+  assert.strictEqual(btn.style.top, "106px", "40 px Guard at 58 -> 8 px gap below it");
+  assert.ok(parseInt(btn.style.top) >= guard.offsetTop + guard.offsetHeight + 8);
+  guard.offsetHeight = 64;   // label wraps ("Guard OFF · 12 armed")
+  r.ro.cb();
+  assert.strictEqual(btn.style.top, "130px", "moves down with a taller Guard");
+  guard.offsetHeight = 0;    // Guard hidden
+  r.ro.cb();
+  assert.strictEqual(btn.style.top, "58px");
+  assert.ok(!html.includes("mkBtn("), "no fixed-offset Track/Skied buttons left");
 });
