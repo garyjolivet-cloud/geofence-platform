@@ -3043,6 +3043,18 @@ async function renderFriends(){
    see the discovery-osm-tile-cors-block memory, already worked around
    elsewhere in this codebase). A fixed full-viewport overlay, deliberately
    outside .wrap's 520px card width — a map needs the whole screen. */
+// Phone tilt -> map pitch (2026-09-23). DeviceHeading.tilt is the phone's front-back
+// tilt in degrees: 0 = lying flat face-up, 90 = held upright. The map's pitch is the
+// same idea (0 = straight down, up to MapLibre's default maxPitch of 60), so the map
+// simply follows the phone: flat = top-down, raised toward the horizon = tilted view.
+// null when the device gives no tilt (no permission / unsupported) — the caller then
+// leaves pitch to the two-finger gesture, exactly as before. Pure, so it is unit-tested.
+const TILT_PITCH_MAX_DEG = 60;
+const TILT_PITCH_DEADBAND_DEG = 1.5;   // ignore hand tremor: don't re-render the map for a sub-1.5 degree wobble
+function pitchForPhoneTilt(tiltDeg){
+  if(typeof tiltDeg !== "number" || !isFinite(tiltDeg)) return null;
+  return Math.max(0, Math.min(TILT_PITCH_MAX_DEG, tiltDeg));
+}
 function fogFeatureCollection(){
   const features=[];
   Quest.fogCells.forEach((state, cell)=>{
@@ -3784,11 +3796,13 @@ function renderFogMap(){
     // you. The instant a finger touches the map, full pan/zoom/rotate/pitch
     // gesture control hands back to the player (dragRotate etc. are never
     // disabled); auto-orient resumes on its own AUTO_RESUME_MS after every
-    // finger lifts. Pan/zoom/pitch set by a gesture are never touched by
-    // auto-orient — it only ever calls setBearing, so whatever the player
-    // last set with their fingers (zoom level, pitch/tilt, pan position)
-    // stays exactly as they left it through every future compass-driven
-    // rotation, same as it already did for pan/zoom before this feature.
+    // finger lifts. Pan and zoom set by a gesture are never touched by
+    // auto-orient. It drives BEARING (from the compass) and, since 2026-09-23,
+    // PITCH (from the phone's own front-back tilt — tilt the phone and the map
+    // tilts with it; see pitchForPhoneTilt). Before that pitch was gesture-only,
+    // so tilting the phone did nothing and only a two-finger drag could tilt
+    // the map. A gesture still overrides both, and phone-tilt takes over again
+    // 2.5 s after the fingers lift.
     let autoOrient = true;                 // on by default — no button to turn it on
     let orientResumeTimer = null;
     const AUTO_RESUME_MS = 2500;
@@ -3802,7 +3816,8 @@ function renderFogMap(){
       orientResumeTimer = setTimeout(()=>{
         orientResumeTimer = null;
         autoOrient = true;
-        map.easeTo({ bearing:(DeviceHeading.heading||0), duration:500 });
+        const tp = pitchForPhoneTilt(DeviceHeading.tilt);
+        map.easeTo(Object.assign({ bearing:(DeviceHeading.heading||0), duration:500 }, tp!=null ? { pitch:tp } : {}));
       }, AUTO_RESUME_MS);
     }
     // Raw pointer events (not MapLibre's dragstart/zoomstart/etc.) so even a
@@ -3827,11 +3842,21 @@ function renderFogMap(){
     // "My map" opens, so _unbindHeading (declared above) is called in the
     // #fogBack teardown. h can be null on a device that never resolves a
     // heading (see device-heading.js) — applied only when present, never
-    // coerced into setBearing/setHeading as null/NaN. Tilt (2nd arg) drives
-    // only the DeviceHeading.tilt property for any future consumer — pitch
-    // itself is gesture-only here, per the comment above.
-    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange(h=>{
-      if(autoOrient && h!=null) map.setBearing(h);
+    // coerced into setBearing/setHeading as null/NaN. Tilt (2nd arg) drives the
+    // map's PITCH the same way (2026-09-23): tilt the phone and the map tilts
+    // with it — see pitchForPhoneTilt(). Applied together with the bearing in
+    // ONE camera update (one redraw, not two), and only past a small deadband
+    // so hand tremor doesn't re-render the map on every event. Like bearing it
+    // only runs while nobody is touching the map (autoOrient), so a two-finger
+    // gesture still wins and phone-tilt takes over again 2.5 s after the fingers lift.
+    if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange((h, tilt)=>{
+      if(autoOrient){
+        const cam = {};
+        if(h!=null) cam.bearing = h;
+        const tp = pitchForPhoneTilt(tilt);
+        if(tp!=null && Math.abs(tp - map.getPitch()) >= TILT_PITCH_DEADBAND_DEG) cam.pitch = tp;
+        if(cam.bearing!=null || cam.pitch!=null) map.jumpTo(cam);
+      }
       if(h!=null) here.setHeading(wedgeHeadingFor(h));
     });
     Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,
