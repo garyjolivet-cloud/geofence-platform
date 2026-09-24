@@ -35,6 +35,7 @@ const zoomCurves = expr => (JSON.stringify(expr).match(/\["zoom"\]/g) || []).len
 
 const MODES = [
   ["ridge-quest (guardByState)", { source: "runLines", id: "runLines", guardByState: true }],
+  ["fence-editor Test Mode (smoothEdges)", { source: "runLines", id: "runLines", smoothEdges: true }],
   ["everything else (property-based)", { source: "runLines", id: "runLines" }],
 ];
 
@@ -42,6 +43,7 @@ MODES.forEach(([label, opts]) => {
   const { layers, warns } = build(opts);
   const ids = layers.map(l => l.id);
   const stateMode = !!opts.guardByState;
+  const drawsOwnEdges = stateMode || !!opts.smoothEdges;   // hosts that draw the smooth GuardEdge outline themselves
 
   (function testEveryExpectedLayerIsBuilt() {
     ["-width", "-halo", "-casing", "-core", "-liftline", "-tower"].forEach(sfx =>
@@ -54,8 +56,8 @@ MODES.forEach(([label, opts]) => {
     // Ridge Quest (guardByState) draws the true boundary from real geometry instead
     // (frontend/guard-edge.js), so it must NOT also get these; every other host keeps them.
     const hasOffsetEdges = ids.includes("runLines-edge-r") && ids.includes("runLines-edge-l");
-    assert(stateMode ? !ids.some(i => /-edge-/.test(i)) : hasOffsetEdges,
-      label + ": " + (stateMode ? "no line-offset boundary layers (the host draws real geometry)" : "keeps its line-offset boundary layers") + " (got " + ids.join(",") + ")");
+    assert(drawsOwnEdges ? !ids.some(i => /-edge-/.test(i)) : hasOffsetEdges,
+      label + ": " + (drawsOwnEdges ? "no line-offset boundary layers (the host draws real geometry)" : "keeps its line-offset boundary layers") + " (got " + ids.join(",") + ")");
   })();
 
   (function testNoPropertyHasTwoZoomCurves() {

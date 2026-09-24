@@ -461,7 +461,9 @@ function addCorridorLayers(map, o){
   // (ridge-quest.html) draw the TRUE boundary from real geometry instead — see
   // frontend/guard-edge.js — so this offset version is skipped for them; every other
   // host (fence-editor Test Mode, the engine, the sim) keeps it unchanged.
-  if(!stateMode){
+  // `smoothEdges:true` (fence-editor Test Mode) opts out of the offset lines the same way, because
+  // that host draws the smooth GuardEdge outline itself.
+  if(!stateMode && !o.smoothEdges){
     // 0.5 mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M. Two SEPARATE
     // interpolate expressions (sign baked in per-stop), not one expression
     // negated afterward — see realOffsetExpr()'s own comment for why.

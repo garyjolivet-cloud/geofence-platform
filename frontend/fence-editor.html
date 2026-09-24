@@ -15,6 +15,7 @@
      ridge-quest.html already loads. -->
 <script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
+<script src="/guard-edge.js"></script>
 <!-- Live 3D AR-object preview (this repo's second ES module, after
      ar-view.js) — three.js ships ESM-only, so this needs an importmap;
      asset-preview-layer.js exposes window.AssetPreviewLayer, only ever
@@ -6540,7 +6541,7 @@ let simCorridorLabels=[]; // name + diamond HTML markers
 // caused map.removeSource("runLines") to throw on re-entering Test Mode,
 // since a layer TileFog actually created was still attached) plus "-hit",
 // this file's own extra invisible click-target layer.
-const SIM_RUN_LAYERS=TileFog.CORRIDOR_LAYER_SUFFIXES.map(suf=>"runLines"+suf).concat(["runLines-hit","runLines-edge"]);
+const SIM_RUN_LAYERS=TileFog.CORRIDOR_LAYER_SUFFIXES.map(suf=>"runLines"+suf).concat(["runLines-hit","runLines-edge","runLines-edge-armed"]);
 // Crisp trigger-boundary lines, Test Mode only — see chute-guard.js's own
 // edgeM = halfW + OUTSIDE_BUFFER_M. The piste-glow (fixed pixel width) and
 // even the true-width tint band are still an area, not a line a player can
@@ -6549,21 +6550,6 @@ const SIM_RUN_LAYERS=TileFog.CORRIDOR_LAYER_SUFFIXES.map(suf=>"runLines"+suf).co
 // straight offset segment per input segment (no vertex miter/bevel join —
 // unnecessary for the mostly-straight corridors this is diagnosing, and a
 // wrong miter would be worse than a small visual gap at a bend).
-function _corridorEdgeSegments(pathLatLon, edgeM, side){
-  const ref=pathLatLon[0];
-  const mPerLon=111320*Math.cos(ref[0]*Math.PI/180);
-  const toXY=p=>({x:(p[1]-ref[1])*mPerLon, y:(p[0]-ref[0])*111320});
-  const toLL=pt=>[ref[1]+pt.x/mPerLon, ref[0]+pt.y/111320]; // [lon,lat] for GeoJSON
-  const lines=[];
-  for(let i=1;i<pathLatLon.length;i++){
-    const A=toXY(pathLatLon[i-1]), B=toXY(pathLatLon[i]);
-    const dx=B.x-A.x, dy=B.y-A.y, len=Math.hypot(dx,dy);
-    if(len===0) continue;
-    const ox=-dy/len*edgeM*side, oy=dx/len*edgeM*side;
-    lines.push([toLL({x:A.x+ox,y:A.y+oy}), toLL({x:B.x+ox,y:B.y+oy})]);
-  }
-  return lines;
-}
 const SIM_RUN_STYLE_DIFF={
   "green":        {col:"#57e06f",halo:"#22c246",tier:""},
   "blue":         {col:"#6bb6ff",halo:"#2f86ff",tier:""},
@@ -6701,7 +6687,7 @@ function refreshSimCorridorLabels(){
   // the tint band's edge was the other "line" being seen). The dashed edge
   // line IS the precise boundary now; a second faint band next to it only
   // confuses which one actually matters.
-  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines"});
+  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",smoothEdges:true});
   // Widened 14->30px, matching ridge-quest.html's own fix — see its comment.
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
     paint:{"line-color":"#000","line-opacity":0,"line-width":30}});
@@ -6709,21 +6695,24 @@ function refreshSimCorridorLabels(){
   // edgeM = halfW + OUTSIDE_BUFFER_M distance on each side of centerline,
   // the literal position chute-guard.js's tick() decides tone on/off at.
   const bufferM=(window.ChuteGuard && ChuteGuard.TUNING && ChuteGuard.TUNING.OUTSIDE_BUFFER_M!=null) ? ChuteGuard.TUNING.OUTSIDE_BUFFER_M : 0.5;
-  const edgeFeats=[];
-  cors.forEach(c=>{
-    const halfW=(c.widthM>0?c.widthM:10)/2, edgeM=halfW+bufferM;
-    [1,-1].forEach(side=>{
-      _corridorEdgeSegments(c.path,edgeM,side).forEach(seg=>{
-        edgeFeats.push({type:"Feature",properties:{},geometry:{type:"LineString",coordinates:seg}});
-      });
-    });
-  });
-  if(edgeFeats.length){
-    map.addSource("runLinesEdge",{type:"geojson",data:{type:"FeatureCollection",features:edgeFeats}});
-    map.addLayer({id:"runLines-edge",type:"line",source:"runLinesEdge",
-      layout:{"line-cap":"butt","line-join":"round"},
-      paint:{"line-color":"#ff2fd0","line-width":1.6,"line-opacity":0.95,"line-dasharray":[2,1.6]}});
-  }
+  // Smooth TRUE boundary (frontend/guard-edge.js: round-join offset, folded loops trimmed, Bezier-smoothed),
+  // replacing per-segment offsets that left gaps and overlaps at every bend. Same pink dashed look for all
+  // corridors; armed ones (`guarded`) also get the solid yellow line Ridge Quest shows. Cosmetic only:
+  // it must never be able to abort the rest of Test Mode's corridor setup (markers, press-and-hold).
+  try{
+    const edgeFc=GuardEdge.featureCollection(cors,bufferM);
+    edgeFc.features.forEach(f=>{ f.properties.guarded=_cgGuardedIds.has(f.properties.id); });
+    if(edgeFc.features.length){
+      map.addSource("runLinesEdge",{type:"geojson",data:edgeFc});
+      map.addLayer({id:"runLines-edge",type:"line",source:"runLinesEdge",
+        layout:{"line-cap":"butt","line-join":"round"},
+        paint:{"line-color":"#ff2fd0","line-width":1.6,"line-opacity":0.95,"line-dasharray":[2,1.6]}});
+      map.addLayer({id:"runLines-edge-armed",type:"line",source:"runLinesEdge",
+        filter:["==",["get","guarded"],true],
+        layout:{"line-cap":"round","line-join":"round"},
+        paint:{"line-color":"#ffe600","line-opacity":1,"line-width":_simRunW(2,2.6,3.2)}});
+    }
+  }catch(e){ console.warn("test-mode guard edges:",e&&e.message); }
   _simRunCors=cors;
   _rebuildSimCorridorMarkers();
   map.on("moveend",_simRunMoveEnd);

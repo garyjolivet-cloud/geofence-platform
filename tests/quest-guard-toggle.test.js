@@ -156,7 +156,7 @@ const tileFog = fs.readFileSync(path.join(__dirname, "../frontend/tile-fog.js"),
     "tile-fog.js still draws the -edge-r/-edge-l line-offset boundary lines for the hosts that use them");
   assert(/const edgesExpr = \["any", guardedExpr, \["==", \["get", "guardEdges"\], true\]\]/.test(tileFog),
     "the property-based boundary-line filter still accepts guardEdges/guarded (every other host unchanged)");
-  assert(/if\(!stateMode\)\{[\s\S]{0,700}-edge-r/.test(tileFog),
+  assert(/if\(!stateMode( && !o\.smoothEdges)?\)\{[\s\S]{0,700}-edge-r/.test(tileFog),
     "in guardByState mode tile-fog skips the line-offset boundary lines (Ridge Quest draws real-geometry ones)");
   assert(/guardByState:\s*true/.test(html) && /promoteId:\s*"id"/.test(html),
     "ridge-quest.html builds its runLines source with promoteId and opts into guardByState");
