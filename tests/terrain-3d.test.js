@@ -4,8 +4,8 @@
 // terrain-3d.js is a browser IIFE (assigns window.Terrain3D); it's loaded
 // here into a stub `window` with a fake MapLibre map, same approach the
 // other DOM-free-ish modules are tested with. If the DEM source spec
-// changes, backend/worker.js's sampleElevation() must change with it — the
-// last test guards that.
+// changes, nothing on the server depends on it any more (the tile-art terrain classifier
+// that sampled the same DEM server-side was removed 2026-09-24).
 //
 // Run: `node tests/terrain-3d.test.js` (or the full `node --test tests/`).
 "use strict";
@@ -127,12 +127,6 @@ function fakeMapWithBase(pitch) {
   assert(m2._eases[m2._eases.length - 1].duration === 400, "normal motion -> easeTo duration 400");
 })();
 
-(function testDemUrlMatchesServer() {
-  const worker = fs.readFileSync(path.join(__dirname, "..", "backend", "worker.js"), "utf8");
-  assert(worker.includes("elevation-tiles-prod/terrarium/"),
-    "worker.js still fetches the same Terrarium DEM host (sampleElevation) — client & server must not drift");
-})();
-
 (function testWorkerInjectsThreeDEnabled() {
   const worker = fs.readFileSync(path.join(__dirname, "..", "backend", "worker.js"), "utf8");
   const gate = worker.slice(worker.indexOf("live owner"));
@@ -196,11 +190,11 @@ function fakeMapWithBase(pitch) {
   assert(!!m.getLayer("winter-wash"), "the cheap layers still apply");
 })();
 
-(function testApplyWinterAnchorsBelowShroud() {
+(function testApplyWinterAnchorsBelowTheRunLines() {
   const m = fakeMapWithBase();
-  m.addLayer({ id: "shroud-fill", type: "fill", source: "shroud" });
+  m.addLayer({ id: "runLines-halo", type: "line", source: "runLines" });
   T.applyWinter(m, { dem: false });
-  assert(m.getLayer("winter-wash").__before === "shroud-fill", "winter-wash is inserted before shroud-fill");
+  assert(m.getLayer("winter-wash").__before === "runLines-halo", "winter-wash is inserted before runLines-halo");
 })();
 
 (function testApplyWinterIdempotent() {

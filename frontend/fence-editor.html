@@ -1193,28 +1193,12 @@
     <input type="checkbox" id="pQuestPublic" style="width:auto;flex:0 0 auto"> 🎿 list this tour in Ridge Quest
   </label>
   <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
-  <label class="k" style="margin-top:2px" title="Only used when a corridor/path cell has no OpenStreetMap tag match and elevation/slope is inconclusive — a single project-wide default, not per-cell painting.">🗺️ artistic map — terrain biome (fallback default)</label>
-  <select id="terrainBiome">
-    <option value="">— generic (meadow) —</option>
-    <option value="alpine">Alpine</option>
-    <option value="forest">Forest</option>
-    <option value="coastal">Coastal</option>
-    <option value="urban">Urban</option>
-    <option value="farmland">Farmland</option>
-  </select>
-  <label class="k" style="margin-top:6px" title="Which season's tile art (and corridor ribbon look) this tour uses — a ski/XC-ski corridor is winter-only, bike/hike are summer-only, city walks can be either.">🗺️ artistic map — season</label>
+  <label class="k" style="margin-top:2px" title="Which season this tour's map uses. Winter gives Ridge Quest's blue-white snow look (and 3D snow relief); leave unset for the plain satellite map.">🗺️ map season</label>
   <select id="tileSeason">
     <option value="">— not set —</option>
     <option value="summer">Summer</option>
     <option value="winter">Winter</option>
   </select>
-  <button id="generateTerrainBtn" class="ghost" style="width:100%;margin-top:6px">Generate Terrain</button>
-  <div class="hint" id="terrainStatus" style="margin:4px 0 0">Not yet generated.</div>
-  <label style="margin-top:8px;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ice)">
-    <input type="checkbox" id="showTerrainChk" checked style="width:auto"> show painted terrain on the map
-  </label>
-  <!-- "Open Map Paint" link removed 2026-08-30 — redundant with the "Map
-       Paint" tool link in the persistent top nav (top-nav.js TOOLS). -->
 </div>
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
@@ -1435,7 +1419,7 @@ let _season=null;
 function updateWinter(){
   if(typeof Terrain3D==="undefined") return;
   const go=()=>{
-    if(_season==="winter") Terrain3D.applyWinter(map,{dem:_threeDOn, beforeId:"terrain-preview-fill"});
+    if(_season==="winter") Terrain3D.applyWinter(map,{dem:_threeDOn, beforeId:"walkpath-line"});
     else Terrain3D.clearWinter(map);
   };
   // NOT map.once("idle") — this editor's many frequently-re-setData()'d
@@ -2350,30 +2334,10 @@ function render(){
   renderSources();
   drawList();
   autoSave();
-  // Artistic Fog-of-War Tiles -- confirmed live (2026-08-25): deleting (or
-  // copying/dragging/editing) a corridor zone updates the normal "fences"
-  // map layer correctly via renderSources() above, but the separate
-  // TileFog-managed ribbon layer is its own independent source that only
-  // ever gets (re)populated when explicitly told to -- it was never wired
-  // into the app's own render() cycle, so a deleted corridor's ribbon
-  // silently kept showing on the map. Cheap (just a setData() call) and
-  // only runs when Test Mode + tile art are actually active.
-  if(simMode&&typeof TileFog!=='undefined'&&simBundle&&simBundle.tileArtEnabled){
-    TileFog.renderCorridors(liveTileCorridors());
-  }
   if(sel>=0&&zones[sel]) refreshHandles(zones[sel]); else clearHandles();
 }
 
 map.on("load",()=>{
-  // Artistic Fog-of-War Tiles Phase C — flat-color-coded coverage preview
-  // for "Generate Terrain" (not the real art; that only renders in the
-  // engine/sim). Added first/below everything else so it never obscures
-  // zone editing handles.
-  map.addSource("terrain-preview",{type:"geojson",data:fc([])});
-  map.addLayer({id:"terrain-preview-fill",type:"fill",source:"terrain-preview",
-     paint:{"fill-color":["get","color"],"fill-opacity":0.45}});
-  map.addLayer({id:"terrain-preview-line",type:"line",source:"terrain-preview",
-     paint:{"line-color":["get","color"],"line-width":1,"line-opacity":0.7}});
   map.addSource("fences",{type:"geojson",data:fc([])});
   map.addSource("draft",{type:"geojson",data:fc([])});
   map.addSource("walkpath",{type:"geojson",data:fc([])});
@@ -2391,7 +2355,7 @@ map.on("load",()=>{
             "line-dasharray":["case",["get","isPath"],["literal",[3,1.5]],["literal",[2,1.2]]]}});
   // Shared corridor renderer — width band + piste-glow, grade-coloured,
   // NO dashes. Same stack as Test Mode / Ridge Quest / engine / sim /
-  // map-paint / gpx-editor. Selected corridor's core turns green.
+  // gpx-editor. Selected corridor's core turns green.
   TileFog.addCorridorLayers(map,{source:"fences",id:"fenceCorr",
     coreColor:["case",["get","sel"],"#38e0a6",["coalesce",["get","col"],"#ff6a3d"]]});
   // Invisible wider click target for tripline (see TRIPLINE_HIT_HALF_WIDTH_M) —
@@ -3739,38 +3703,22 @@ document.getElementById("pQuestPublic")?.addEventListener("change",async()=>{
   }catch(e){ alert("couldn't save: "+e.message); cb.checked=!cb.checked; }
 });
 
-// Artistic Fog-of-War Tiles Phase C — terrain biome (project-level
-// classification fallback) + "Generate Terrain". Same load-fresh-on-popover-
-// open pattern as loadRecordRetention() above.
-async function loadTerrainBiome(){
-  const sel=document.getElementById("terrainBiome"); if(!sel) return;
-  const seasonSel=document.getElementById("tileSeason");
+// Project season (the winter map look). Same load-fresh-on-popover-open pattern as
+// loadRecordRetention() above. (This popover also held a terrain biome + "Generate Terrain"
+// for the tile-art feature, removed 2026-09-24.)
+async function loadProjectSeason(){
+  const seasonSel=document.getElementById("tileSeason"); if(!seasonSel) return;
   const pid=afProjectId();
-  if(!pid){ sel.value=""; if(seasonSel) seasonSel.value=""; document.getElementById("terrainStatus").textContent="Save/publish this tour first."; return; }
+  if(!pid){ seasonSel.value=""; return; }
   try{
     const r=await fetch("/api/projects?org="+encodeURIComponent(afOrgId()||""),{headers:{authorization:"Bearer "+getToken()}});
     if(r.ok){
       const j=await r.json();
       const proj=(j.projects||[]).find(p=>p.id===pid);
-      sel.value=(proj&&proj.terrainBiome)||"";
-      if(seasonSel) seasonSel.value=(proj&&proj.season)||"";
+      seasonSel.value=(proj&&proj.season)||"";
     }
   }catch(e){}
-  renderTerrainPreview(pid);
 }
-document.getElementById("terrainBiome")?.addEventListener("change",async()=>{
-  const sel=document.getElementById("terrainBiome");
-  const pid=afProjectId();
-  if(!pid){ alert("Save/publish this tour first."); return; }
-  try{
-    const r=await fetch("/api/projects/"+encodeURIComponent(pid),{
-      method:"PATCH",
-      headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
-      body:JSON.stringify({terrainBiome:sel.value||null})
-    });
-    if(!r.ok){ const e=await r.json().catch(()=>({})); alert("couldn't save terrain biome: "+(e.error||r.status)); }
-  }catch(e){ alert("couldn't save terrain biome: "+e.message); }
-});
 document.getElementById("tileSeason")?.addEventListener("change",async()=>{
   const sel=document.getElementById("tileSeason");
   const pid=afProjectId();
@@ -3785,79 +3733,6 @@ document.getElementById("tileSeason")?.addEventListener("change",async()=>{
   }catch(e){ alert("couldn't save season: "+e.message); }
   _season = sel.value || null;   // live-update the map (authoring + Test Mode)
   updateWinter();
-});
-
-// Flat sanity-check colors only — the real art only ever renders in
-// geofence-engine.html/geofence-sim.html, never in the editor.
-const TERRAIN_PREVIEW_COLORS={
-  forest:"#2f6b3a",scrub:"#7a8f4a",rock_face:"#8a8f94",scree:"#a3a8ad",
-  snow:"#e8eef2",meadow:"#8fbf5a",water_lake:"#2f7d8a",water_river:"#3f96a3",
-  wetland:"#4a8f7d",farmland:"#c9a23f",sand:"#d9c07a",urban_block:"#c9714a",
-  plaza:"#c98f6a",trail:"#a3743f"
-};
-function gatherTileCorridors(){
-  return zones.filter(z=>z.shape.type==="corridor")
-    .map(z=>({coords:z.shape.coords,widthM:z.shape.widthM||null,activityType:z.activityType||"hike"}));
-}
-async function generateTerrain(){
-  const pid=afProjectId();
-  if(!pid){ alert("Save/publish this tour first."); return; }
-  const corridors=gatherTileCorridors();
-  const statusEl=document.getElementById("terrainStatus");
-  if(!corridors.length){ statusEl.textContent="Draw at least one corridor or path stop first."; return; }
-  const btn=document.getElementById("generateTerrainBtn");
-  btn.disabled=true; statusEl.textContent="Classifying terrain… (this can take a few seconds)";
-  try{
-    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/classify-terrain",{
-      method:"POST",headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
-      body:JSON.stringify({corridors})
-    });
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
-    statusEl.textContent=j.cellCount+" cells classified: "+Object.entries(j.summary||{}).map(([k,v])=>k+" "+v).join(", ");
-    await renderTerrainPreview(pid);
-  }catch(e){
-    statusEl.textContent="Failed: "+e.message;
-  }finally{ btn.disabled=false; }
-}
-async function renderTerrainPreview(pid){
-  const src=map.getSource("terrain-preview"); if(!src||!pid) return;
-  try{
-    const r=await fetch("/api/projects/"+encodeURIComponent(pid)+"/terrain-cells");
-    if(!r.ok) return;
-    const j=await r.json();
-    const feats=(j.cells||[]).map(c=>{
-      // h3-js v4's cellToBoundary(cell,true) already returns a closed ring
-      // (confirmed live) -- only append the closing point if it isn't one.
-      const ring=h3.cellToBoundary(c.h3Cell,true);
-      const first=ring[0],last=ring[ring.length-1];
-      if(!(first[0]===last[0]&&first[1]===last[1])) ring.push(first);
-      return {type:"Feature",properties:{color:TERRAIN_PREVIEW_COLORS[c.terrainType]||"#888"},
-        geometry:{type:"Polygon",coordinates:[ring]}};
-    });
-    src.setData(fc(feats));
-    if(feats.length && !document.getElementById("terrainStatus").textContent.includes("classified")){
-      document.getElementById("terrainStatus").textContent=feats.length+" terrain hexes painted.";
-    }
-    applyTerrainVisibility();
-  }catch(e){}
-}
-document.getElementById("generateTerrainBtn")?.addEventListener("click",generateTerrain);
-
-// Show/hide the painted-terrain preview (the terrain_cell hexes authored in
-// Map Paint / Generate Terrain) on the editing map. On by default; choice
-// persists per browser.
-function applyTerrainVisibility(){
-  const on = document.getElementById("showTerrainChk")?.checked ?? true;
-  ["terrain-preview-fill","terrain-preview-line"].forEach(id=>{
-    if(map.getLayer(id)) map.setLayoutProperty(id,"visibility", on?"visible":"none");
-  });
-  try{ localStorage.setItem("gp.editorShowTerrain", on?"1":"0"); }catch(e){}
-}
-try{ if(localStorage.getItem("gp.editorShowTerrain")==="0"){ const c=document.getElementById("showTerrainChk"); if(c) c.checked=false; } }catch(e){}
-document.getElementById("showTerrainChk")?.addEventListener("change",()=>{
-  applyTerrainVisibility();
-  if(document.getElementById("showTerrainChk").checked) renderTerrainPreview(afProjectId());
 });
 
 // afOpenStudioHref()/the Audio Palette's own "Open in Studio" link (with a
@@ -5549,9 +5424,6 @@ async function loadFromPlatform(id){
     if(window.CodeObjects) CodeObjects.refresh(true);
     doAudioRefresh();
     doAssetRefresh();
-    // Painted terrain (Map Paint / Generate Terrain) — show it automatically
-    // when a project opens so stops can be placed against the artistic map.
-    renderTerrainPreview(id);
   }catch(e){ ps().textContent="load failed: "+e.message; }
 }
 // Publish-time geometry sanity check. The map's own drag handles already
@@ -6758,44 +6630,6 @@ function refreshSimAmbientMarker(nowMs){
   });
 }
 
-// Artistic Fog-of-War Tiles Phase D — same extraction/init pair as
-// geofence-engine.html/geofence-sim.html's own copies (mirrored verbatim by
-// design, same as this file's other Test Mode engine-mirror code per
-// CLAUDE.md's documented convention — the real fog/rendering logic itself
-// lives once in the shared tile-fog.js).
-function extractTileCorridorsFromBundle(b){
-  const out=[];
-  (b.zones||[]).forEach(z=>{
-    if(Array.isArray(z.path)&&z.path.length>=2){
-      out.push({coords:z.path.map(p=>[p[1],p[0]]),activityType:z.activityType||"hike"});
-      return;
-    }
-    const tgt=(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
-    if(tgt) out.push({coords:tgt.geometry.path.map(p=>[p[1],p[0]]),activityType:z.activityType||"hike"});
-  });
-  return out;
-}
-// Lighter-weight than extractTileCorridorsFromBundle() -- reads directly
-// off the live `zones` array (already [lon,lat], the raw editor shape
-// convention, so no bundle-style lat/lon swap needed) instead of rebuilding
-// a full sim bundle just to get corridor coordinates. Called from render()
-// itself (see its own comment) so ANY zone mutation while Test Mode is
-// active -- delete, copy, drag, shape edit, activityType change -- keeps
-// the tile-corridor ribbon in sync, rather than requiring every individual
-// mutation function to remember to refresh it (the exact class of bug
-// CLAUDE.md's editorToSimBundle()/autoSave() sections warn about).
-function liveTileCorridors(){
-  return zones.filter(z=>z.shape.type==="corridor")
-    .map(z=>({coords:z.shape.coords,activityType:z.activityType||"hike"}));
-}
-async function initTileArt(b){
-  if(!b.tileArtEnabled||!b.project||typeof TileFog==='undefined') return;
-  try{
-    await TileFog.load({projectId:b.project,deviceId:null,season:b.season});
-    await TileFog.attachToMap(map);
-    TileFog.renderCorridors(extractTileCorridorsFromBundle(b));
-  }catch(e){ console.warn('TileFog init failed:', e); } // was a bare silent catch -- cost real time to root-cause a real bug (2026-08-25) with zero visible signal
-}
 function editorToSimBundle(){
   const farM=+(document.getElementById("audioRange").value)||64;
   const clearM=+(document.getElementById("audioClear").value)||8;
@@ -6854,8 +6688,8 @@ function editorToSimBundle(){
       // stay in sync from day one instead of drifting like ttsVoice did.
       difficulty:s.type==="corridor"?(z.difficulty||null):null,
       runType:s.type==="corridor"?(z.runType||"run"):null,
-      // Artistic map tile corridor — same "3 mirrors stay in sync" reasoning
-      // as difficulty/runType above.
+      // Corridor line style (dash/colour by activity) — same "3 mirrors stay in sync"
+      // reasoning as difficulty/runType above.
       activityType:s.type==="corridor"?(z.activityType||"hike"):null,
       // Ridge Quest R4 — same "not consumed by Test Mode, exported anyway
       // so the 3 mirrors stay in sync" reasoning as difficulty/runType above.
@@ -6878,15 +6712,9 @@ function editorToSimBundle(){
   });
   const cs=simZones.filter(z=>z.center);
   const ref=cs.length?[cs.reduce((s,z)=>s+z.center[0],0)/cs.length,cs.reduce((s,z)=>s+z.center[1],0)/cs.length]:[0,0];
-  const _tileArtApp=_appsCache.find(a=>a.id===document.getElementById("appSel").value);
   return{name:slug(projName())||"project",ref,zones:simZones,
     spatialRangeM:farM,spatialClearM:clearM,spatialTuning:AudioLab.getTuning(),
     globalCodeObjects:globalCodeObjects.slice(),
-    // Artistic Fog-of-War Tiles Phase D — Test Mode needs a real persisted
-    // project id (classify-terrain/terrain-cells are D1-backed, not
-    // in-memory) and the owning app's flag, neither of which is otherwise
-    // part of this in-memory snapshot.
-    project:afProjectId(),tileArtEnabled:!!(_tileArtApp&&_tileArtApp.tileArtEnabled),
     season:document.getElementById("tileSeason")?.value||null};
 }
 
@@ -7322,7 +7150,6 @@ function feedSim(lat,lon,acc,t,bleFix){
   if(effAlt!=null){ fix.alt=effAlt; fix.altAcc=(bleFix&&bleFix.altAcc!=null)?bleFix.altAcc:5; fix.altSource="baro"; }
   const sm=GPSFilter.push(fix);
   SimTravelHeading.update(sm.speed, sm.headingTravel);
-  if(simBundle&&simBundle.tileArtEnabled&&typeof TileFog!=='undefined') TileFog.reveal(sm.lat,sm.lon,sm.acc,60);
   const p={lat:sm.lat,lon:sm.lon,acc:sm.acc,alt:sm.alt};
   simLastSmoothed=sm;
   // use raw (unsmoothed) position for zone detection so small zones aren't
@@ -7670,7 +7497,6 @@ function enterTestMode(){
   if(tool){draft=[];tool=null;resetShapePickerBtn();updateDrawUiVisibility(null);render();}
   selectZone(-1);
   simBundle=editorToSimBundle();
-  initTileArt(simBundle);
   _cgGuardedIds = new Set(); // always start unarmed — see its own comment
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   chuteGuardStartSync();
@@ -8181,7 +8007,6 @@ document.getElementById("advToggle").onclick=()=>{
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
-  initTileArt(simBundle);
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
@@ -8218,7 +8043,6 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();
-  initTileArt(simBundle);
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   _arNearState={};
@@ -8365,7 +8189,7 @@ if(window.TopNav){
       pop.style.display="";
       popoverEl.appendChild(pop);
     },
-    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); loadQuestPublic(); loadTerrainBiome(); },
+    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); loadQuestPublic(); loadProjectSeason(); },
     // Real gap found via live testing, 2026-08-12: creating a project via
     // the picker while already sitting on a bare /editor correctly unlocked
     // the nav buttons but left THIS page's own "no project selected" hint

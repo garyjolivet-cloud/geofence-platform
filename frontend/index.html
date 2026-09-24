@@ -198,8 +198,8 @@
 </div>
 
 <!-- Workspace settings modal — the one admin UI for a workspace's (`app`
-     row's) seven feature flags: 3D Mode, Terrain altitude, Flying visitors,
-     Hazard warnings, Fog of war, Ridge Quest, Tile Art. Each toggle is a
+     row's) feature flags: 3D Mode, Terrain altitude, Flying visitors,
+     Hazard warnings, Ridge Quest, Corridor Guard. Each toggle is a
      PUT /api/apps/:id (master token). These flags are denormalized into a
      project's published bundle at publish time, so a change here does NOT
      reach a live tour until that tour is republished — hence the amber
@@ -628,9 +628,7 @@ const WS_FLAGS=[
   {key:"terrainAltitudeEnabled", label:"Terrain altitude", hint:"live terrain-height fusion for stops"},
   {key:"visitorsFly",            label:"Flying visitors",  hint:"skip ground-elevation sampling"},
   {key:"hazardAwareEnabled",     label:"Hazard warnings",  hint:"proximity alerts near hazard zones"},
-  {key:"fogEnabled",             label:"Fog of war",       hint:"visual reveal layer"},
   {key:"questEnabled",           label:"Ridge Quest",      hint:"exploration game mode"},
-  {key:"tileArtEnabled",         label:"Tile Art",         hint:"artistic fog-of-war basemap"},
   {key:"chuteGuardEnabled",      label:"Corridor Guard",   hint:"warn anyone who drifts outside a corridor's width"},
 ];
 // Workspaces changed this modal session — the republish notice accumulates

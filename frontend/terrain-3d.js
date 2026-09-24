@@ -170,7 +170,7 @@
     // 2. where the flat winter layers slot: above the satellite, below the
     //    surface's own content. Callers pass beforeId; Ridge Quest's layers
     //    are the fallback. A stale/missing anchor -> append.
-    var anchor = opts.beforeId || ["shroud-fill", "runLines-halo", "fog-fill"].filter(function (id) {
+    var anchor = opts.beforeId || ["runLines-halo"].filter(function (id) {
       return map.getLayer(id);
     })[0];
     if (anchor && !map.getLayer(anchor)) anchor = undefined;
@@ -224,7 +224,7 @@
     // 7. winter sky (pitched contexts only).
     if (opts.dem && map.setSky) { try { map.setSky(WINTER_SKY); } catch (e) {} }
 
-    // 8. The `anchor` computed above only finds an existing corridor/shroud
+    // 8. The `anchor` computed above only finds an existing corridor
     // layer to slot winter BELOW if one already exists at the moment
     // applyWinter() runs. Confirmed live (2026-09): when winter is applied
     // before a corridor's async data has loaded (or re-applied later, e.g.

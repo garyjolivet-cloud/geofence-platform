@@ -145,7 +145,6 @@
 <script src="/kalman-filter.js"></script>
 <script src="/chute-guard.js"></script>
 <script src="/ble-gps.js"></script>
-<script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
 <script src="/here-marker.js"></script>
 <script src="/device-heading.js"></script>
@@ -359,39 +358,6 @@ const WALKING_PATH_SNAP_M = 20; // map-match only within this distance of a path
 // path that anchor belongs to, so switching to a different active path
 // resets pace/ETA instead of carrying over a stale anchor from another path.
 let _pathWalkStartT = null, _pathWalkStartDistM = null, _pathWalkStartPathId = null;
-// Artistic Fog-of-War Tiles Phase D — pulls corridor/path geometry straight
-// out of the published bundle's own zone shapes (same LL()-reversed
-// [lat,lon]->[lon,lat] convention loadWalkingPaths()/MapView already use for
-// bundle-stored coordinates) rather than re-deriving it, so this stays in
-// sync with whatever the Fence Editor actually published.
-function extractTileCorridorsFromBundle(b){
-  const out=[];
-  (b.zones||[]).forEach(z=>{
-    if(Array.isArray(z.path)&&z.path.length>=2){
-      out.push({coords:z.path.map(p=>[p[1],p[0]]),activityType:z.activityType||"hike"});
-      return;
-    }
-    const tgt=(z.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
-    if(tgt) out.push({coords:tgt.geometry.path.map(p=>[p[1],p[0]]),
-      activityType:(tgt.geometry.activityType||z.activityType||"hike"),
-      widthM:(tgt.geometry.widthM>0?tgt.geometry.widthM:undefined)});
-  });
-  return out;
-}
-async function initTileArt(b,pid){
-  // pid comes from the caller's own URL-resolved project id -- confirmed
-  // live (2026-08-25) that BUNDLE.project is always undefined, since the
-  // published bundle JSON itself never embeds a project id (it's known
-  // from the URL/route, not the bundle) the way orgId/tileArtEnabled/season
-  // are injected at GET time. Passing b.project here silently no-opped
-  // every call.
-  if(!b.tileArtEnabled||!pid||typeof TileFog==='undefined') return;
-  let devId=null; try{ devId=deviceId(); }catch(e){}
-  try{
-    await TileFog.load({projectId:pid,deviceId:devId,season:b.season});
-    if(MapView.map){ await TileFog.attachToMap(MapView.map); TileFog.renderCorridors(extractTileCorridorsFromBundle(b)); }
-  }catch(e){ console.warn('TileFog init failed:', e); } // was a bare silent catch -- cost real time to root-cause a real bug (2026-08-25) with zero visible signal
-}
 
 async function loadWalkingPaths(b){
   WALKING_PATHS = [];
@@ -1856,7 +1822,6 @@ const HUD = {
       this.pos=p;
       return;
     }
-    if(BUNDLE.tileArtEnabled&&typeof TileFog!=='undefined') TileFog.reveal(sm.lat,sm.lon,sm.acc,60);
     checkHazardAhead(p, TravelHeading.heading, sm.speed, fix.t);
     if(BUNDLE.chuteGuardEnabled && typeof ChuteGuard!=='undefined'){
       ChuteGuard.tick({lat:sm.lat,lon:sm.lon,acc:sm.acc,speed:sm.speed,t:fix.t}, TravelHeading.heading);
@@ -2863,7 +2828,6 @@ EngineKokoro.tryLoad();
     if(typeof ChuteGuard!=='undefined') ChuteGuard.load(b.zones, chuteGuardCallbacks());
     loadWalkingPaths(b);
     MapView.setCorridorRuns(b);
-    initTileArt(b,pid);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
     if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
@@ -2888,7 +2852,6 @@ EngineKokoro.tryLoad();
       if(typeof ChuteGuard!=='undefined') ChuteGuard.load(b.zones, chuteGuardCallbacks());
       loadWalkingPaths(b);
       MapView.setCorridorRuns(b);
-      initTileArt(b,pid);
       if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(b.zones);
     if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(b.globalCodeObjects||[], pipelineCallbacks());
       if(typeof TourState!=='undefined') TourState.init(pid, b.zones.length, {bundleVersion:b.bundleVersion||0});
