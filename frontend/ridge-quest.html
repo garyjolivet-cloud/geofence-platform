@@ -911,6 +911,7 @@ const QUEST_TUNING = {
   CHUTE_SPEED_MIN_MPS: 0.7, // careful chute skiing is slow (side-slipping), but standing still isn't skiing it
   XCSKI_SPEED_MIN_MPS: 0.6,
   DRIVE_SPEED_MIN_MPS: 2.5, // walking a road with "drive" selected shouldn't score driving points
+  LIFT_BAND_EXTRA_M: 5,     // the lift-ride test counts a fix as "on the lift" up to this far OUTSIDE the lift corridor's own half-width. Kicking Horse's gondola is authored 10 m wide, and phone GPS on a mountain is 5-10 m off, so with the bare band a real gondola ride put only ~40% of fixes inside at 6 m noise and ~0% at 8 m (need LIFT_OVERLAP_FRAC). +5 m catches every simulated ride up to 10 m noise (tests/quest-corridor-detection.test.js pins it); its one cost is a run that sits right beside a chairlift (Ridemption Ridge Speedway beside Stairway Chair, ~15% at 4 m noise), and only when the phone has no usable altitude.
   LIFT_OVERLAP_FRAC: 0.6,   // an "up" pass of a run that is >= this share inside a lift corridor's band was a lift ride, not a hike
   // Run recorder (per corridor, independent of the narration band above):
   // starts when a fix is within halfWidth+REC_HOLD_M, ends REC_GRACE_S after
@@ -1924,7 +1925,7 @@ const Quest = {
       const lifts = ((this && this.corridors) || []).filter(c=>c.runType==="lift" && c.zoneId!==corridor.zoneId);
       if(lifts.length){
         let onLift = 0;
-        trip.fixes.forEach(f=>{ if(lifts.some(l=>QGeo.corridorDist([f.lat,f.lon], l, l.ref) < 0)) onLift++; });
+        trip.fixes.forEach(f=>{ if(lifts.some(l=>QGeo.corridorDist([f.lat,f.lon], l, l.ref) < S.LIFT_BAND_EXTRA_M)) onLift++; });
         if(onLift/trip.fixes.length >= S.LIFT_OVERLAP_FRAC){
           return reject(activity==="hike" ? "that was a lift ride, not a hike" : "that was a lift ride, not a run");
         }

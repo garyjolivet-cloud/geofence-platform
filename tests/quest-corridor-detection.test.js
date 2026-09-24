@@ -531,6 +531,23 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run === undefined, "a 'down' pass at gondola speed inside a lift band is a lift ride, not a skied run, got " + JSON.stringify(run && run.activity));
 })();
 
+(function testGondolaRideWithRealisticGpsDriftIsStillALiftRide() {
+  // Live Kicking Horse data (2026-09-24): the gondola is authored 10 m wide, but a phone on a
+  // mountain sits 5-10 m off the cable, so with the bare band a real ride put too few fixes
+  // "inside" and slipped past the guard. A rider drifting 8 m off a 10 m-wide lift line must
+  // still be recognised as riding it (LIFT_BAND_EXTRA_M).
+  const gondola = Object.assign({}, liftLine, { widthM: 10 });
+  const self = { corridors: [gondola, straightRun] };
+  const drift = classify.call(self, straightRun, mkTrack(straightRun, { from: 0, to: 1, speed: 5, dt: 2, lateralM: 8 }), "ski", QGeo, QUEST_TUNING);
+  assert(drift === undefined, "a ride 8 m off a 10 m gondola line is still a lift ride, got " + JSON.stringify(drift && drift.activity));
+  // ...but a skier on a run whose centreline is 25 m from the gondola is not mistaken for a lift
+  // rider (the widened band reaches only halfwidth + LIFT_BAND_EXTRA_M = 10 m).
+  const dLon = 25 / QGeo.mPerDegLon(51.305);
+  const farGondola = Object.assign({}, gondola, { path: gondola.path.map(([la, lo]) => [la, lo + dLon]), ref: [gondola.ref[0], gondola.ref[1] + dLon] });
+  const clear = classify.call({ corridors: [farGondola, straightRun] }, straightRun, mkTrack(straightRun, { from: 0, to: 1, speed: 5, dt: 2 }), "ski", QGeo, QUEST_TUNING);
+  assert(clear && clear.activity === "ski", "a run 25 m from the gondola still scores, got " + JSON.stringify(clear && clear.activity));
+})();
+
 (function testRunUnderALiftStillScoresWhenAltitudeConfirmsIt() {
   // The flip side of the guard above: a run genuinely skied directly under a
   // gondola must STILL score when the device has usable altitude -- a
