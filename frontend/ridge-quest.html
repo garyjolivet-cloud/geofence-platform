@@ -836,6 +836,10 @@ function isCorridorGuarded(workspaceOn, masterOn, mutedSet, armedSet, id){
 // walking past a lift's base station without boarding), short enough to
 // engage well within a normal multi-minute lift ride.
 const LIFT_MODE_DEBOUNCE_MS = 8000;
+// Leaving lift mode waits longer than entering it: a run that passes under or
+// beside a lift line flickered the mode on/off, and each flip rebuilt 3D terrain.
+const LIFT_MODE_EXIT_DEBOUNCE_MS = 20000;
+function liftModeDebounceMs(currentlyActive){ return currentlyActive ? LIFT_MODE_EXIT_DEBOUNCE_MS : LIFT_MODE_DEBOUNCE_MS; }
 
 // Elevation-checkpoint running total — persisted so an app reload mid-day
 // doesn't lose it. Shape: {day, total, lastElevM, lastAt, lastZoneId}, where
@@ -1526,7 +1530,7 @@ const Quest = {
       if(onLift !== this._liftRaw){ this._liftRaw = onLift; this._liftRawSinceT = fix.t; }
       if(this.liftModeOverride==="on") this._setLiftModeActive(true, "on");
       else if(this.liftModeOverride==="off") this._setLiftModeActive(false, "off");
-      else if(fix.t - this._liftRawSinceT >= LIFT_MODE_DEBOUNCE_MS) this._setLiftModeActive(this._liftRaw, "auto");
+      else if(this._liftRaw !== this.liftModeActive && fix.t - this._liftRawSinceT >= liftModeDebounceMs(this.liftModeActive)) this._setLiftModeActive(this._liftRaw, "auto");
       // Sync eagerly on every real fix, not just the 200ms poll timer — see
       // fence-editor.html's identical call site for the bug this fixes (a
       // real back-inside tick landed but the tone didn't stop for ~1.7s,
@@ -3615,7 +3619,7 @@ function renderFogMap(){
     let terrainOn = false;
     let userWantsTerrain = false; // the rider's own #fogTilt choice, separate from terrainOn's "what the map is actually showing right now" — Battery Saver pauses/resumes terrainOn without touching this, so leaving a lift restores whatever the rider actually chose
     const tiltBtn = document.getElementById("fogTilt");
-    function setTerrainOn(on){
+    function setTerrainOn(on, opts){
       // setTerrain()/addSource() throw if the style isn't loaded yet — the
       // splash-camera path below can call this before "load" has fired
       // (right after the map's own construction), so defer rather than
@@ -3625,7 +3629,7 @@ function renderFogMap(){
         terrainOn = on;
         Terrain3D.setEnabled(map, on, { sky:true });
         if(on){
-          map.easeTo({ pitch:60, duration: reducedMotionQ ? 0 : 700 });
+          map.easeTo({ pitch:(opts && opts.pitch!=null) ? opts.pitch : 60, duration: reducedMotionQ ? 0 : 700 });
           // The winter DEM hillshade/snowline layers (applyWinter's opts.dem
           // branch) silently no-op until the DEM source actually exists —
           // harmless when terrain was never turned on, but means a re-call
@@ -3686,12 +3690,44 @@ function renderFogMap(){
     // manually pitched the map some other way — neither of those has
     // anything to do with Battery Saver and shouldn't be touched by it.
     let terrainPausedByBattery = false;
+    let pitchBeforeBatteryPause = null;
+    // Rebuilding 3D terrain (DEM re-fetch + re-drape) and its forced easeTo
+    // fight the rider's fingers: the map felt locked for a few seconds after
+    // a lift mode change (field report 2026-09-23). Both directions now wait
+    // until no finger is down, the camera isn't moving, and 1.5 s have passed
+    // since the last touch/wheel. The newest request wins.
+    const CALM_MS = 1500;
+    let mapPointersDown = 0, lastMapTouchAt = 0, calmToken = 0;
+    const calmEl = map.getCanvasContainer();
+    calmEl.addEventListener("pointerdown", ()=>{ mapPointersDown++; lastMapTouchAt = Date.now(); }, { passive:true });
+    const calmPointerUp = ()=>{ mapPointersDown = Math.max(0, mapPointersDown-1); lastMapTouchAt = Date.now(); };
+    calmEl.addEventListener("pointerup", calmPointerUp, { passive:true });
+    calmEl.addEventListener("pointercancel", calmPointerUp, { passive:true });
+    calmEl.addEventListener("wheel", ()=>{ lastMapTouchAt = Date.now(); }, { passive:true });
+    function whenMapCalm(fn){
+      const mine = ++calmToken;
+      const check = ()=>{
+        if(mine !== calmToken || !map.getContainer().isConnected) return;
+        if(mapPointersDown > 0 || map.isMoving() || Date.now() - lastMapTouchAt < CALM_MS){ setTimeout(check, 500); return; }
+        fn();
+      };
+      check();
+    }
     Quest.onLiftModeChange = (active)=>{
       if(active){
-        if(terrainOn){ terrainPausedByBattery = true; setTerrainOn(false); }
+        whenMapCalm(()=>{
+          if(!Quest.liftModeActive || !terrainOn) return;
+          pitchBeforeBatteryPause = map.getPitch();
+          terrainPausedByBattery = true;
+          setTerrainOn(false);
+        });
         if(window.DeviceHeading) DeviceHeading.stop();
       }else{
-        if(terrainPausedByBattery){ terrainPausedByBattery = false; setTerrainOn(userWantsTerrain); }
+        whenMapCalm(()=>{
+          if(Quest.liftModeActive || !terrainPausedByBattery) return;
+          terrainPausedByBattery = false;
+          setTerrainOn(userWantsTerrain, { pitch: pitchBeforeBatteryPause });
+        });
         if(window.DeviceHeading) DeviceHeading.start();
       }
       renderBatteryBtn();
