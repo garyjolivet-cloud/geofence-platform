@@ -40,6 +40,7 @@
      callbacks (WHAT happens), never touches its WHEN logic. -->
 <script src="/chute-guard.js"></script>
 <script src="/guard-edge.js"></script>
+<script src="/ridge-visuals.js"></script>
 <!-- Press-and-hold gesture (arm/disarm one corridor's Corridor Guard from
      the map) — shared with fence-editor.html's Test Mode. See its own
      header comment. -->
@@ -99,7 +100,8 @@
   .steps span.active{background:var(--coral)}
   .now{display:flex;gap:10px;margin-bottom:16px}
   .now .stat{flex:1;min-width:0;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:12px 8px;text-align:center}
-  .now .stat b{display:block;font-family:"Barlow Condensed";font-size:22px;color:var(--snow)}
+  .now .stat b{display:block;font-family:"Black Han Sans","Barlow Condensed",sans-serif;font-weight:400;font-size:20px;line-height:1.25;color:var(--snow);white-space:nowrap}
+  .now .stat.vtoday b{color:var(--ice)}
   .now .stat span{font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px}
   .welcome{text-align:center;padding:20px 6px}
   .welcome .go{font-family:"Black Han Sans";font-size:26px;color:var(--go);margin:0 0 6px}
@@ -151,6 +153,10 @@
     background:rgba(10,16,24,.94);border:1px solid rgba(238,244,251,.55);color:var(--snow);
     font-weight:700;box-shadow:0 2px 10px rgba(0,0,0,.55)}
   button.fogMapGuard{box-shadow:0 2px 10px rgba(0,0,0,.55)}
+  /* Track / Skied toggles under the 3D button; solid like the other map buttons. */
+  button.fogMapLayer{position:absolute;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;border-radius:10px;font-size:13px;font-weight:700;
+    background:rgba(10,16,24,.94);border:1px solid rgba(238,244,251,.55);color:var(--snow);box-shadow:0 2px 10px rgba(0,0,0,.55)}
+  button.fogMapLayer[aria-pressed="false"]{color:var(--fog)}
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
@@ -1239,6 +1245,8 @@ const Quest = {
   _cpCooldownUntil: {},  // zoneId -> ts; session-only per-checkpoint cooldown so one lingering pass can't re-credit a lap
   watchId: null,
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
+  skiedToday: new Set(), // zoneIds of chutes completed today (server list + this session); drives the map's "skied" stripe and the toast's "Chute N of M"
+  onSkiedChanged: null, // callback(zoneId|null, justCompleted) — set by drawAllRuns() while "My map" is open; nulled on #fogBack
   onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
   onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
   onShare: null,        // callback(p) — same p as onPosition; set by renderHome to POST /api/presence (throttled) while sharing-with-friends is on. Independent of onPosition so it survives Home<->Map navigation.
@@ -1528,6 +1536,9 @@ const Quest = {
       // equality check once already in that state).
       const onLift = ChuteGuard.isOnLift();
       if(onLift !== this._liftRaw){ this._liftRaw = onLift; this._liftRawSinceT = fix.t; }
+      // Today's ski track (breadcrumb for the map). Lift rides are left out. Isolated in a
+      // try/catch so a track problem can never break the tracking pipeline.
+      try{ if(RQTrack) RQTrack.add({ lat:fix.lat, lon:fix.lon, acc:fix.acc, t:fix.t }, onLift || this.liftModeActive); }catch(e){}
       if(this.liftModeOverride==="on") this._setLiftModeActive(true, "on");
       else if(this.liftModeOverride==="off") this._setLiftModeActive(false, "off");
       else if(this._liftRaw !== this.liftModeActive && fix.t - this._liftRawSinceT >= liftModeDebounceMs(this.liftModeActive)) this._setLiftModeActive(this._liftRaw, "auto");
@@ -1810,6 +1821,20 @@ const Quest = {
   // false when it isn't a completed pass (yet). `isFinal` is true only when
   // the player has left the corridor: that's the one time a failure is
   // explained to them via onCoverage; mid-recording probes stay silent.
+  // Completion moment: a short toast ("Chute 7 of 64"), a soft haptic tap, and the chute's
+  // stripe flashing on the map. No speed, no turn count. Isolated: it must never be able to
+  // break run logging (see the 2026-09-23 noteFix regression).
+  _celebrate(run){
+    try{
+      if(typeof RidgeVisuals==="undefined") return;
+      const c = RidgeVisuals.completion(run, this.skiedToday, this.corridors);
+      if(!c) return;
+      if(run.runType==="chute") this.skiedToday.add(run.zoneId);
+      RidgeVisuals.celebrate(document, c);
+      if(navigator.vibrate) navigator.vibrate(40);
+      if(this.onSkiedChanged) this.onSkiedChanged(run.runType==="chute" ? run.zoneId : null, true);
+    }catch(e){ console.warn("celebrate:", e && e.message); }
+  },
   _classifyAndLog(corridor, buffer, selectedActivity, isFinal){
     const S = QUEST_TUNING;
     const trip = QGeo.evaluateTraversal(corridor, buffer, S);
@@ -1937,7 +1962,7 @@ const Quest = {
     // correct that with a visible message instead of a run just disappearing
     // with no explanation.
     api("/api/quest-runs", { method:"POST", body: JSON.stringify(run) })
-      .then(()=>{ if(this.onRunLogged) this.onRunLogged(run); })
+      .then(()=>{ this._celebrate(run); if(this.onRunLogged) this.onRunLogged(run); })
       .catch(()=>{ if(this.onSaveError) this.onSaveError(corridor.name); });
     return true;
   }
@@ -1955,6 +1980,9 @@ function fmtDuration(s){
 function questDateBucketClient(date){
   return new Date(date.getTime()-7*3600000).toISOString().slice(0,10);
 }
+// Today's ski track store (frontend/ridge-visuals.js) — persisted per ski day in localStorage.
+const RQTrack = (typeof RidgeVisuals!=="undefined") ? RidgeVisuals.createTrack(localStorage, ()=>questDateBucketClient(new Date())) : null;
+if(RQTrack) RQTrack.load();
 // Mirrors worker.js's questSeasonId() exactly (same fixed -7h shift, Sept
 // rollover): used client-side only to sum "this season" from the /stats
 // day rows, not for anything sent to the server.
@@ -2057,6 +2085,7 @@ async function refreshStats(playerId){
                            .reduce((sum,d)=>sum+(d.checkpoint_vertical_m||0), 0);
     tilesEl.innerHTML =
       '<div class="now">'
+      +'<div class="stat"><b id="chutesTodayNum">'+Quest.skiedToday.size+'</b><span>Chutes today</span></div>'
       +'<div class="stat"><b>'+Math.round(today.points||0)+'</b><span>Points today</span></div>'
       +'<div class="stat vtoday"><b>'+Math.round(Math.abs(today.checkpoint_vertical_m||0))+'m</b><span>Vertical today</span></div>'
       +'<div class="stat"><b>'+Math.round(seasonVert)+'m</b><span>This season</span></div>'
@@ -2065,6 +2094,17 @@ async function refreshStats(playerId){
   }catch(e){
     tilesEl.innerHTML='';
   }
+}
+// Which chutes are done today — feeds the Home "Chutes today" tile and the map's skied stripe.
+// Best-effort: a failed fetch just leaves the set as it is.
+async function loadSkiedToday(playerId){
+  try{
+    const j = await api("/api/players/"+playerId+"/chutes/daily");
+    (j.chutes||[]).forEach(c=>Quest.skiedToday.add(c.zoneId));
+    const el = document.getElementById("chutesTodayNum");
+    if(el) el.textContent = Quest.skiedToday.size;
+    if(Quest.onSkiedChanged) Quest.onSkiedChanged(null, false);
+  }catch(e){}
 }
 // Chute Guard, wired into Ridge Quest's own live tracking (2026-09-17) —
 // previously only ever ran inside the separate narrated Tour Player
@@ -2545,6 +2585,7 @@ function renderHome(){
     +'</div>';
   refreshRuns(s.player.id);
   refreshStats(s.player.id);
+  loadSkiedToday(s.player.id);
   // R11 — completion % needs BOTH corridors (the denominator) and fog
   // cells (the numerator) actually loaded, not just fired off — awaited
   // here instead of the old fire-and-forget pair so the stat has real data
@@ -3362,6 +3403,95 @@ function drawNamedPeaks(map){
   _rebuildPeakLabels(map);
   map.on("moveend", ()=>{ clearTimeout(_peakLabelMoveTimer); _peakLabelMoveTimer=setTimeout(()=>_rebuildPeakLabels(map),150); });
 }
+// Today's ski track + the "skied today" stripe on My map (frontend/ridge-visuals.js). Each has its
+// own on/off button (remembered), both default ON. The stripe is feature-state on the existing
+// runLines source (no setData, one extra layer); the track is one small source refreshed at most
+// every 15 s, and never while a finger is down or the camera is moving.
+function getRideToggle(key){ try{ return localStorage.getItem(key)!=="0"; }catch(e){ return true; } }
+function setRideToggle(key,on){ try{ localStorage.setItem(key, on?"1":"0"); }catch(e){} }
+// Keep the rider layers above the winter DEM layers, which applyWinter() slots in below the corridor stack.
+function orderRideLayers(map){
+  try{
+    const first = ["runLines-width","runLines-halo","runLines-casing"].find(id=>map.getLayer(id));
+    if(map.getLayer("myTrack-line") && first) map.moveLayer("myTrack-line", first);
+    if(map.getLayer("runLines-skied")) map.moveLayer("runLines-skied");
+  }catch(e){}
+}
+// Sun-angle lighting for the winter hillshade: light from the real sun, warm and long when low.
+function applyTimeOfDayLight(map){
+  try{
+    if(typeof RidgeVisuals==="undefined" || !map.getLayer("winter-hillshade")) return;
+    const L = RidgeVisuals.hillshadeLight(new Date(), Quest.ref[0], Quest.ref[1]);
+    map.setPaintProperty("winter-hillshade", "hillshade-illumination-anchor", "map");
+    map.setPaintProperty("winter-hillshade", "hillshade-illumination-direction", L.direction);
+    map.setPaintProperty("winter-hillshade", "hillshade-exaggeration", L.exaggeration);
+    map.setPaintProperty("winter-hillshade", "hillshade-highlight-color", L.highlight);
+  }catch(e){ console.warn("time-of-day light:", e && e.message); }
+}
+function setupRideVisuals(map, cors){
+  if(typeof RidgeVisuals==="undefined") return;
+  const TRACK_KEY="rq.showTrack", SKIED_KEY="rq.showSkied";
+  let showTrack=getRideToggle(TRACK_KEY), showSkied=getRideToggle(SKIED_KEY);
+  try{
+    map.addSource("myTrack", { type:"geojson", data: RidgeVisuals.trackFeatureCollection(RQTrack ? RQTrack.segments() : []) });
+    const firstRunLayer = ["runLines-width","runLines-halo","runLines-casing"].find(id=>map.getLayer(id));
+    map.addLayer(RidgeVisuals.trackLayer("myTrack-line","myTrack"), firstRunLayer);
+    map.addLayer(RidgeVisuals.skiedLayer("runLines-skied","runLines"));
+    map.setLayoutProperty("myTrack-line","visibility", showTrack?"visible":"none");
+    map.setLayoutProperty("runLines-skied","visibility", showSkied?"visible":"none");
+    orderRideLayers(map);
+  }catch(e){ console.warn("ride visuals:", e && e.message); return; }
+
+  const chuteIds = new Set(cors.filter(c=>c.runType==="chute").map(c=>c.zoneId));
+  function applySkied(){
+    try{ chuteIds.forEach(id=>map.setFeatureState({ source:"runLines", id }, { skied: Quest.skiedToday.has(id) })); }
+    catch(e){ console.warn("applySkied:", e && e.message); }
+  }
+  Quest.onSkiedChanged = (zoneId, justCompleted)=>{
+    applySkied();
+    if(zoneId && justCompleted && showSkied){
+      try{
+        map.setFeatureState({ source:"runLines", id:zoneId }, { flash:true });
+        setTimeout(()=>{ try{ map.setFeatureState({ source:"runLines", id:zoneId }, { flash:false }); }catch(e){} }, 2000);
+      }catch(e){}
+    }
+  };
+  applySkied();
+
+  // Track refresh: only when the count changed, no finger down, camera still.
+  let down=0, lastN=RQTrack ? RQTrack.segments().reduce((n,s)=>n+s.length,0) : 0;
+  const el = map.getCanvasContainer();
+  el.addEventListener("pointerdown", ()=>{ down++; }, { passive:true });
+  const up = ()=>{ down=Math.max(0,down-1); };
+  el.addEventListener("pointerup", up, { passive:true });
+  el.addEventListener("pointercancel", up, { passive:true });
+  const timer = setInterval(()=>{
+    if(!map.getContainer().isConnected){ clearInterval(timer); return; }
+    if(!RQTrack || down>0 || map.isMoving()) return;
+    const n = RQTrack.segments().reduce((a,s)=>a+s.length,0);
+    if(n===lastN) return;
+    lastN = n;
+    try{ map.getSource("myTrack").setData(RidgeVisuals.trackFeatureCollection(RQTrack.segments())); }catch(e){}
+  }, 15000);
+
+  // The two toggles, stacked under the 3D button on the left.
+  const host = map.getContainer().parentNode;
+  function mkBtn(id, top, label, on, onClick){
+    const b = document.createElement("button");
+    b.className = "ghost fogMapLayer"; b.id = id; b.style.top = top+"px";
+    const paint = ()=>{ b.textContent = label+(on()?" on":" off"); b.setAttribute("aria-pressed", on()?"true":"false"); };
+    b.onclick = ()=>{ onClick(); paint(); };
+    paint(); host.appendChild(b); return b;
+  }
+  mkBtn("fogTrackBtn", 102, "Track", ()=>showTrack, ()=>{
+    showTrack=!showTrack; setRideToggle(TRACK_KEY, showTrack);
+    try{ map.setLayoutProperty("myTrack-line","visibility", showTrack?"visible":"none"); }catch(e){}
+  });
+  mkBtn("fogSkiedBtn", 146, "Skied", ()=>showSkied, ()=>{
+    showSkied=!showSkied; setRideToggle(SKIED_KEY, showSkied);
+    try{ map.setLayoutProperty("runLines-skied","visibility", showSkied?"visible":"none"); }catch(e){}
+  });
+}
 function drawAllRuns(map){
   const cors = Quest.corridors || [];
   if(!cors.length) return;
@@ -3472,6 +3602,7 @@ function drawAllRuns(map){
     }catch(e){ console.warn("applyGuardState:", e && e.message); }
   }
   Quest.onGuardChanged = applyGuardState;
+  setupRideVisuals(map, cors);
   applyGuardState();   // initial look — feature-state can be set before the tiles have loaded
   // Press-and-hold a run to mute/unmute Corridor Guard for just that one
   // (see Quest.mutedCorridors's own comment) — a normal quick tap keeps
@@ -3573,7 +3704,7 @@ function renderFogMap(){
   // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{
     Quest.onFogUpdated=null; Quest.onPosition=null;
-    Quest.onLiftModeChange=null; Quest.onGuardChanged=null;
+    Quest.onLiftModeChange=null; Quest.onGuardChanged=null; Quest.onSkiedChanged=null;
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
     // ever actually shown (the arrow wedge / compass-mode bearing); nothing
@@ -3636,7 +3767,7 @@ function renderFogMap(){
           // is needed now that it just was, or winter mode never gets its
           // relief shading for a visitor who opts into 3D after the map's
           // already open.
-          if(winter) Terrain3D.applyWinter(map, { dem:true });
+          if(winter){ Terrain3D.applyWinter(map, { dem:true }); orderRideLayers(map); applyTimeOfDayLight(map); }
         }
         if(tiltBtn) tiltBtn.textContent = on ? "2D" : "3D";
       };
@@ -3786,7 +3917,16 @@ function renderFogMap(){
     // hillshade / elevation snowline + a cool wash + faint grain, all static.
     // Registered LAST so shroud-fill / runLines-* already exist for the helper
     // to anchor beneath (it's defensive about ordering regardless).
-    if(winter) map.on("load", ()=>{ Terrain3D.applyWinter(map, { dem: use3D }); });
+    if(winter) map.on("load", ()=>{
+      Terrain3D.applyWinter(map, { dem: use3D });
+      orderRideLayers(map);
+      applyTimeOfDayLight(map);
+      // the sun moves: refresh the light every 10 minutes while this map is open
+      const lightTimer = setInterval(()=>{
+        if(!map.getContainer().isConnected){ clearInterval(lightTimer); return; }
+        applyTimeOfDayLight(map);
+      }, 600000);
+    });
     // Live redraw as new cells get revealed WHILE this screen is open
     // (tracking may already be running from Home) — cleared on back-out so
     // a later fix, after navigating away, doesn't try to touch a torn-down

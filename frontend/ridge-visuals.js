@@ -1,0 +1,213 @@
+/* Ridge Quest visuals (2026-09-24): today's ski track, "skied" stripe, completion moment,
+   time-of-day light. Everything here is deliberately light on the GPU and free of any
+   speed or turn metric — riders are shown WHERE they skied and HOW MANY chutes, never how fast.
+
+   window.RidgeVisuals = {
+     TRACK, createTrack(storage, dayKey),      today's breadcrumb (decimated, persisted per day)
+     trackFeatureCollection(segs),             one MultiLineString for a single tiny source
+     trackLayer(id, source), skiedLayer(id, source),
+     completion(run, skiedSet, corridors),     { text, sub, isNew, n, total } for the toast
+     sunPosition(date, lat, lon), hillshadeLight(date, lat, lon),
+     celebrate(doc, {text, sub})               fading overlay, pointer-events none
+   }
+*/
+(function (root) {
+  "use strict";
+
+  var TRACK = {
+    MIN_STEP_M: 8,          // fixes closer than this to the last kept point add nothing but map work
+    ACCURACY_CAP_M: 40,     // same cap Ridge Quest uses for fog reveal
+    MAX_POINTS: 4000,       // a long day; beyond this every second point is dropped
+    GAP_MS: 90000,          // no accepted fix for this long (phone asleep, tunnel) -> start a new segment
+    SAVE_EVERY_MS: 30000
+  };
+
+  function haversineM(a, b) {
+    var R = 6371000, toRad = Math.PI / 180;
+    var dLat = (b[1] - a[1]) * toRad, dLon = (b[0] - a[0]) * toRad;
+    var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(a[1] * toRad) * Math.cos(b[1] * toRad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+  }
+
+  function totalPoints(segs) { return segs.reduce(function (n, s) { return n + s.length; }, 0); }
+
+  function thin(segs) {
+    return segs.map(function (s) {
+      return s.filter(function (_, i) { return i % 2 === 0 || i === s.length - 1; });
+    });
+  }
+
+  // storage: {getItem,setItem} (localStorage-like, may throw); dayKey: () => "YYYY-MM-DD".
+  function createTrack(storage, dayKey) {
+    var KEY = "rq.track";
+    var state = { day: dayKey(), segs: [] };
+    var lastT = 0, lastSave = 0, open = false;
+
+    function load() {
+      try {
+        var raw = JSON.parse(storage.getItem(KEY) || "null");
+        if (raw && raw.day === dayKey() && Array.isArray(raw.segs)) state = { day: raw.day, segs: raw.segs };
+      } catch (e) {}
+      open = false;
+    }
+    function save(force) {
+      var now = Date.now();
+      if (!force && now - lastSave < TRACK.SAVE_EVERY_MS) return;
+      lastSave = now;
+      try { storage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    }
+    // fix: {lat, lon, acc, t}; onLift: true while riding a lift (those fixes are not "skiing").
+    function add(fix, onLift) {
+      if (!fix || fix.lat == null || fix.lon == null) return false;
+      if (state.day !== dayKey()) state = { day: dayKey(), segs: [] };
+      if (onLift) { open = false; return false; }
+      if (fix.acc != null && fix.acc > TRACK.ACCURACY_CAP_M) return false;
+      var pt = [fix.lon, fix.lat];
+      var seg = open ? state.segs[state.segs.length - 1] : null;
+      if (seg && fix.t - lastT > TRACK.GAP_MS) seg = null;
+      if (seg) {
+        if (haversineM(seg[seg.length - 1], pt) < TRACK.MIN_STEP_M) return false;
+        seg.push(pt);
+      } else {
+        state.segs.push([pt]);
+        open = true;
+      }
+      lastT = fix.t;
+      if (totalPoints(state.segs) > TRACK.MAX_POINTS) state.segs = thin(state.segs);
+      save(false);
+      return true;
+    }
+    return {
+      load: load, add: add, save: save,
+      segments: function () { return state.segs; },
+      clear: function () { state = { day: dayKey(), segs: [] }; open = false; save(true); }
+    };
+  }
+
+  function trackFeatureCollection(segs) {
+    var lines = (segs || []).filter(function (s) { return s.length >= 2; });
+    return { type: "FeatureCollection", features: lines.length ? [{
+      type: "Feature", properties: {}, geometry: { type: "MultiLineString", coordinates: lines }
+    }] : [] };
+  }
+
+  // One calm colour, thin, under the run lines — where you skied, nothing about how fast.
+  function trackLayer(id, source) {
+    return {
+      id: id, type: "line", source: source,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#8fe3ff", "line-opacity": 0.8,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.4, 16, 2.4, 18, 3.4]
+      }
+    };
+  }
+
+  // A light stripe down the middle of a chute you have skied today. Drawn from the same
+  // source as the run lines, keyed by feature-state (never setData), so it costs one layer.
+  // `flash` (set for ~2 s on completion) turns it gold and fat. ONE zoom curve only.
+  function skiedLayer(id, source) {
+    var skied = ["boolean", ["feature-state", "skied"], false];
+    var flash = ["boolean", ["feature-state", "flash"], false];
+    function w(base) { return ["case", flash, base * 2.6, base]; }
+    return {
+      id: id, type: "line", source: source,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": ["case", flash, "#ffd23c", "#f4fbff"],
+        "line-opacity": ["case", skied, 0.95, 0],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 12, w(1), 15, w(1.5), 18, w(2.2)]
+      }
+    };
+  }
+
+  function label(runType) {
+    return runType === "chute" ? "Chute" : runType === "hike" ? "Hike" : "Run";
+  }
+
+  // Toast content when a run has just been logged. skiedSet holds zone ids ALREADY skied
+  // today (before this run); corridors is Quest.corridors. Lifts return null.
+  function completion(run, skiedSet, corridors) {
+    if (!run || run.runType === "lift" || run.activity === "lift") return null;
+    var type = run.runType || "run";
+    var total = (corridors || []).filter(function (c) { return c.runType === type; }).length;
+    var isNew = !skiedSet.has(run.zoneId);
+    var n = skiedSet.size + (isNew ? 1 : 0);
+    if (type !== "chute") {
+      // Only chutes are tracked as a "N of M" day list; other runs just get their name.
+      return { text: label(type) + " complete", sub: run.runName || "", isNew: isNew, n: null, total: null };
+    }
+    return {
+      text: isNew ? label(type) + " " + n + " of " + total : label(type) + " again",
+      sub: run.runName || "", isNew: isNew, n: n, total: total
+    };
+  }
+
+  // NOAA-style low-precision solar position. azimuth: degrees clockwise from north.
+  function sunPosition(date, lat, lon) {
+    var rad = Math.PI / 180;
+    var d = date.getTime() / 86400000 + 2440587.5 - 2451545.0;
+    var g = (357.529 + 0.98560028 * d) % 360;
+    var q = (280.459 + 0.98564736 * d) % 360;
+    var L = q + 1.915 * Math.sin(g * rad) + 0.02 * Math.sin(2 * g * rad);
+    var e = 23.439 - 0.00000036 * d;
+    var RA = Math.atan2(Math.cos(e * rad) * Math.sin(L * rad), Math.cos(L * rad)) / rad;
+    var dec = Math.asin(Math.sin(e * rad) * Math.sin(L * rad)) / rad;
+    var gmstDeg = ((18.697374558 + 24.06570982441908 * d) % 24) * 15;
+    var H = ((gmstDeg + lon - RA) % 360 + 540) % 360 - 180;   // hour angle, -180..180
+    var latR = lat * rad, decR = dec * rad, HR = H * rad;
+    var alt = Math.asin(Math.sin(latR) * Math.sin(decR) + Math.cos(latR) * Math.cos(decR) * Math.cos(HR)) / rad;
+    var az = Math.atan2(Math.sin(HR), Math.cos(HR) * Math.sin(latR) - Math.tan(decR) * Math.cos(latR)) / rad + 180;
+    return { altitude: alt, azimuth: ((az % 360) + 360) % 360 };
+  }
+
+  // Hillshade paint that follows the real sun: light from the sun's azimuth (anchored to the
+  // MAP so it doesn't swing as the phone rotates the view), longer/deeper shading when the
+  // sun is low, a warm highlight near sunrise/sunset. Below the horizon: the default look.
+  function hillshadeLight(date, lat, lon) {
+    var s = sunPosition(date, lat, lon);
+    if (s.altitude <= 0) {
+      return { direction: 335, exaggeration: 0.45, highlight: "#ffffff", altitude: s.altitude };
+    }
+    var low = Math.max(0, Math.min(1, 1 - s.altitude / 40));      // 0 high sun .. 1 sun on the horizon
+    return {
+      direction: Math.round(s.azimuth),
+      exaggeration: Math.round((0.35 + 0.35 * low) * 100) / 100,
+      highlight: low > 0.7 ? "#ffe9c7" : "#ffffff",
+      altitude: s.altitude
+    };
+  }
+
+  // Brief overlay: text fades in, holds, fades out, removes itself. Never blocks touches.
+  function celebrate(doc, c) {
+    if (!doc || !c) return null;
+    var el = doc.createElement("div");
+    el.setAttribute("role", "status");
+    el.style.cssText = "position:fixed;left:50%;top:22%;transform:translateX(-50%) scale(.94);z-index:2000;" +
+      "pointer-events:none;text-align:center;padding:14px 22px;border-radius:14px;opacity:0;" +
+      "background:rgba(10,16,24,.92);border:1px solid rgba(255,210,60,.7);color:#f4fbff;" +
+      "transition:opacity .35s ease, transform .35s ease;max-width:86vw";
+    var t = doc.createElement("div");
+    t.style.cssText = "font:400 26px 'Black Han Sans',system-ui,sans-serif;color:#ffd23c;letter-spacing:.3px";
+    t.textContent = c.text;
+    el.appendChild(t);
+    if (c.sub) {
+      var s = doc.createElement("div");
+      s.style.cssText = "font:600 14px system-ui,sans-serif;margin-top:4px;color:#dbe7f4";
+      s.textContent = c.sub;
+      el.appendChild(s);
+    }
+    doc.body.appendChild(el);
+    root.setTimeout(function () { el.style.opacity = "1"; el.style.transform = "translateX(-50%) scale(1)"; }, 30);
+    root.setTimeout(function () { el.style.opacity = "0"; }, 2100);
+    root.setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 2600);
+    return el;
+  }
+
+  root.RidgeVisuals = {
+    TRACK: TRACK, createTrack: createTrack, trackFeatureCollection: trackFeatureCollection,
+    trackLayer: trackLayer, skiedLayer: skiedLayer, completion: completion,
+    sunPosition: sunPosition, hillshadeLight: hillshadeLight, celebrate: celebrate
+  };
+})(typeof window !== "undefined" ? window : globalThis);
