@@ -39,6 +39,7 @@
      comment for the engage/coverage/heading gating; this page only supplies
      callbacks (WHAT happens), never touches its WHEN logic. -->
 <script src="/chute-guard.js"></script>
+<script src="/guard-edge.js"></script>
 <!-- Press-and-hold gesture (arm/disarm one corridor's Corridor Guard from
      the map) — shared with fence-editor.html's Test Mode. See its own
      header comment. -->
@@ -3376,6 +3377,33 @@ function drawAllRuns(map){
   // guardByState: the Guard look (muted grey, yellow boundary lines) is read
   // from feature-state, so toggling it never reloads the source.
   TileFog.addCorridorLayers(map, { source:"runLines", id:"runLines", guardByState:true });
+  // Corridor Guard boundary lines (yellow): the TRUE trigger boundary drawn from real geometry
+  // (frontend/guard-edge.js — offset with round joins, trimmed, Bézier-smoothed), NOT the
+  // centreline pushed sideways with line-offset, which looped on the inside of a bend and
+  // spiked at every kink. Its own source so a Guard toggle only flips feature-state on it.
+  // ~40 ms for all ~90 corridors on a desktop, so it runs just after first paint rather
+  // than blocking it; applyGuardState() re-asserts the look once the layer exists.
+  function buildGuardEdges(){
+    // Sliced into small chunks with a yield between each, so the one-time geometry work
+    // (a few hundred ms on a phone, all at once) can never freeze pan/zoom/tilt.
+    const CHUNK = 10, feats2 = [];
+    let i = 0;
+    const buf = (typeof ChuteGuard!=="undefined" && ChuteGuard.TUNING && ChuteGuard.TUNING.OUTSIDE_BUFFER_M!=null) ? ChuteGuard.TUNING.OUTSIDE_BUFFER_M : 0.5;
+    const step = ()=>{
+      try{
+        if(map.getSource("runGuardEdges")) return;
+        const part = GuardEdge.featureCollection(cors.slice(i, i+CHUNK), buf);
+        part.features.forEach(f=>feats2.push(f));
+        i += CHUNK;
+        if(i < cors.length){ setTimeout(step, 0); return; }
+        map.addSource("runGuardEdges", { type:"geojson", promoteId:"id", data:{ type:"FeatureCollection", features:feats2 } });
+        map.addLayer(GuardEdge.layer("runGuardEdges-line", "runGuardEdges"), "runLines-hit");
+        applyGuardState();
+      }catch(e){ console.warn("guard edges:", e && e.message); }   // e.g. the map was closed mid-build
+    };
+    step();
+  }
+  setTimeout(buildGuardEdges, 60);
   // Invisible fat hit target for tap AND press-and-hold (covers every core
   // variant). Widened 14->30px (2026-09-20, field report: arming "still
   // takes 10+ seconds" even after the hold-timing fixes) — a 14px target is
@@ -3411,13 +3439,14 @@ function drawAllRuns(map){
     // Cosmetic only — must never be able to abort the rest of the map setup
     // (labels, press-and-hold) or a button handler if MapLibre objects.
     try{
+      const hasEdges = !!map.getSource("runGuardEdges");   // built just after first paint — see buildGuardEdges()
       cors.forEach(c=>{
         // Lifts are never alertable; only real corridors carry a Guard look.
         if(c.runType==="lift") return;
         map.setFeatureState({ source:"runLines", id:c.zoneId }, {
-          muted: !!(Quest.chuteGuardMaster && Quest.mutedCorridors.has(c.zoneId)),
-          guardEdges: Quest.isGuarded(c.zoneId)
+          muted: !!(Quest.chuteGuardMaster && Quest.mutedCorridors.has(c.zoneId))
         });
+        if(hasEdges) map.setFeatureState({ source:"runGuardEdges", id:c.zoneId }, { guardEdges: Quest.isGuarded(c.zoneId) });
       });
     }catch(e){ console.warn("applyGuardState:", e && e.message); }
   }

@@ -331,8 +331,9 @@ function addCorridorLayers(map, o){
   // up the whole map — instead only the ones a rider deliberately muted are
   // drawn differently (greyed). Same additive pattern as `guarded`: any caller
   // that never sets a `muted` property reads it as false and is unaffected.
-  // `o.guardByState` (2026-09-23, ridge-quest.html): read muted / guardEdges from
-  // per-feature STATE (map.setFeatureState) instead of feature properties. Changing
+  // `o.guardByState` (2026-09-23, ridge-quest.html): read `muted` from per-feature
+  // STATE (map.setFeatureState) instead of a feature property, and skip the
+  // line-offset boundary lines below (the host draws real-geometry ones). Changing
   // a GeoJSON property means source.setData(), which reloads and re-layouts every
   // tile of the source (and re-drapes it on 3D terrain) — a toggle then took
   // seconds on a phone. Feature-state is applied at paint time with no data reload.
@@ -452,19 +453,25 @@ function addCorridorLayers(map, o){
   // boundary lines are exactly what a rider wants to see on every guarded run.
   // `guarded` still draws them too, so every other host is unchanged.
   const edgesExpr = ["any", guardedExpr, ["==", ["get", "guardEdges"], true]];
-  // State mode: filters can't read feature-state, so every alertable corridor gets the
-  // two layers and each one's OPACITY (a paint property, which can) is 1 or 0.
-  const guardedAndAlertable = stateMode ? only : ["all", only, edgesExpr];
-  const edgeOpacity = stateMode ? ["case", ["boolean", ["feature-state", "guardEdges"], false], 1, 0] : 1;
-  // 0.5 mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M. Two SEPARATE
-  // interpolate expressions (sign baked in per-stop), not one expression
-  // negated afterward — see realOffsetExpr()'s own comment for why.
-  add({ id: pfx + "-edge-r", type: "line", source: src, filter: guardedAndAlertable,
-    layout: { "line-cap": "butt", "line-join": "round" },
-    paint: { "line-color": "#ffe600", "line-opacity": edgeOpacity, "line-width": runW(2, 2.6, 3.2), "line-offset": realOffsetExpr(0.5, 1) } });
-  add({ id: pfx + "-edge-l", type: "line", source: src, filter: guardedAndAlertable,
-    layout: { "line-cap": "butt", "line-join": "round" },
-    paint: { "line-color": "#ffe600", "line-opacity": edgeOpacity, "line-width": runW(2, 2.6, 3.2), "line-offset": realOffsetExpr(0.5, -1) } });
+  const guardedAndAlertable = ["all", only, edgesExpr];
+  // These two are the `line-offset` boundary lines: the centreline pushed sideways in
+  // pixels. That shifts every vertex along its own normal, so on a wide corridor that
+  // bends, the inside of each bend folds into loops and every kink grows a spike
+  // ("any change in direction causes a weird line"). Hosts that opt into `guardByState`
+  // (ridge-quest.html) draw the TRUE boundary from real geometry instead — see
+  // frontend/guard-edge.js — so this offset version is skipped for them; every other
+  // host (fence-editor Test Mode, the engine, the sim) keeps it unchanged.
+  if(!stateMode){
+    // 0.5 mirrors chute-guard.js's TUNING.OUTSIDE_BUFFER_M. Two SEPARATE
+    // interpolate expressions (sign baked in per-stop), not one expression
+    // negated afterward — see realOffsetExpr()'s own comment for why.
+    add({ id: pfx + "-edge-r", type: "line", source: src, filter: guardedAndAlertable,
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": realOffsetExpr(0.5, 1) } });
+    add({ id: pfx + "-edge-l", type: "line", source: src, filter: guardedAndAlertable,
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: { "line-color": "#ffe600", "line-opacity": 1, "line-width": runW(2, 2.6, 3.2), "line-offset": realOffsetExpr(0.5, -1) } });
+  }
   // Lift: a single thin plain black line, no halo/casing/width-band glow --
   // the previous graded stack (scaled 1.5x wider than a normal run) read as
   // too bold for a lift cable per direct feedback. Towers (added below)

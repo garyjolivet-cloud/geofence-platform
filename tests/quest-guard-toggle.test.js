@@ -153,13 +153,15 @@ function holdRig(masterOn) {
 const tileFog = fs.readFileSync(path.join(__dirname, "../frontend/tile-fog.js"), "utf8");
 (function testBoundaryLinesAreWiredEndToEnd() {
   assert(/guardEdges/.test(tileFog) && /-edge-r[\s\S]{0,80}filter:\s*guardedAndAlertable/.test(tileFog),
-    "tile-fog.js draws the -edge-r/-edge-l boundary lines for guardEdges corridors");
+    "tile-fog.js still draws the -edge-r/-edge-l line-offset boundary lines for the hosts that use them");
   assert(/const edgesExpr = \["any", guardedExpr, \["==", \["get", "guardEdges"\], true\]\]/.test(tileFog),
     "the property-based boundary-line filter still accepts guardEdges/guarded (every other host unchanged)");
+  assert(/if\(!stateMode\)\{[\s\S]{0,700}-edge-r/.test(tileFog),
+    "in guardByState mode tile-fog skips the line-offset boundary lines (Ridge Quest draws real-geometry ones)");
   assert(/guardByState:\s*true/.test(html) && /promoteId:\s*"id"/.test(html),
     "ridge-quest.html builds its runLines source with promoteId and opts into guardByState");
-  assert(/const edgeOpacity = stateMode \? \["case", \["boolean", \["feature-state", "guardEdges"\], false\], 1, 0\]/.test(tileFog),
-    "in state mode the boundary lines' opacity reads the guardEdges feature-state");
+  assert(/source:\s*"runGuardEdges"|"runGuardEdges"/.test(html) && /guardEdges: Quest\.isGuarded\(c\.zoneId\)/.test(html),
+    "the real-geometry boundary source gets its guardEdges feature-state from Quest.isGuarded()");
   assert(/if\(this\.onGuardChanged\) this\.onGuardChanged\(\)/.test(html) && /Quest\.onGuardChanged = applyGuardState/.test(html),
     "the lines redraw live when the master button or a hold changes");
   assert(!/guarded:Quest\./.test(html), "Ridge Quest must not set `guarded` (it would recolor every corridor cyan)");

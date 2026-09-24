@@ -41,11 +41,21 @@ const MODES = [
 MODES.forEach(([label, opts]) => {
   const { layers, warns } = build(opts);
   const ids = layers.map(l => l.id);
+  const stateMode = !!opts.guardByState;
 
   (function testEveryExpectedLayerIsBuilt() {
-    ["-width", "-halo", "-casing", "-core", "-edge-r", "-edge-l", "-liftline", "-tower"].forEach(sfx =>
+    ["-width", "-halo", "-casing", "-core", "-liftline", "-tower"].forEach(sfx =>
       assert(ids.includes("runLines" + sfx), label + ": layer runLines" + sfx + " is built (got " + ids.join(",") + ")"));
     assert(warns.length === 0, label + ": addCorridorLayers logged no warnings, got " + JSON.stringify(warns));
+  })();
+
+  (function testOffsetBoundaryLinesOnlyForHostsThatDoNotDrawRealOnes() {
+    // The line-offset boundary lines loop on the inside of a bend and spike at every kink.
+    // Ridge Quest (guardByState) draws the true boundary from real geometry instead
+    // (frontend/guard-edge.js), so it must NOT also get these; every other host keeps them.
+    const hasOffsetEdges = ids.includes("runLines-edge-r") && ids.includes("runLines-edge-l");
+    assert(stateMode ? !ids.some(i => /-edge-/.test(i)) : hasOffsetEdges,
+      label + ": " + (stateMode ? "no line-offset boundary layers (the host draws real geometry)" : "keeps its line-offset boundary layers") + " (got " + ids.join(",") + ")");
   })();
 
   (function testNoPropertyHasTwoZoomCurves() {
