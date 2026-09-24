@@ -241,3 +241,12 @@ test("source wiring: track feed is isolated in try/catch, back-out clears the ho
   const applySkiedBody = extract("function setupRideVisuals(");
   assert.ok(!/setData\(RidgeVisuals\.trackFeatureCollection[\s\S]*skied/.test(applySkiedBody.split("function applySkied")[1].split("Quest.onSkiedChanged")[0]), "skied state never reloads a source");
 });
+
+test("Track/Skied buttons sit in the right column, clear of Recenter (left column)", () => {
+  const rule = html.replace(/\/\*[\s\S]*?\*\//g, "").match(/button\.fogMapLayer\{[^}]*\}/)[0];
+  assert.ok(/right:14px/.test(rule) && !/left:14px/.test(rule), rule);
+  const tops = [...html.matchAll(/mkBtn\("fog\w+Btn", (\d+),/g)].map(m => +m[1]);
+  assert.deepStrictEqual(tops, [102, 146]);
+  // right column already holds Battery (top 14) and Guard (top 58); mine start below it
+  assert.ok(/\.fogMapGuard\{position:absolute;top:58px;right:14px/.test(html));
+});
