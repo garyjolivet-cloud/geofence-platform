@@ -803,10 +803,18 @@ function getChuteGuardMaster(){ try{ return localStorage.getItem("rq.chuteGuard"
 function setChuteGuardMaster(on){ try{ localStorage.setItem("rq.chuteGuard", on ? "on" : "off"); }catch(e){} }
 function getMutedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.mutedCorridors")||"[]"); }catch(e){ return []; } }
 function setMutedCorridors(ids){ try{ localStorage.setItem("rq.mutedCorridors", JSON.stringify(ids)); }catch(e){} }
-// Pure — a corridor alerts iff its workspace has the feature on, the rider's
-// master switch is on, and that one corridor isn't muted.
-function isCorridorGuarded(workspaceOn, masterOn, mutedSet, id){
-  return !!workspaceOn && !!masterOn && !mutedSet.has(id);
+// The other half of press-and-hold: with the master switch OFF, holding a run
+// ARMS just that one (guard + boundary lines for it alone) instead of muting.
+// Its own key — the legacy rq.guardedCorridors list is deliberately not revived.
+function getArmedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.armedCorridors")||"[]"); }catch(e){ return []; } }
+function setArmedCorridors(ids){ try{ localStorage.setItem("rq.armedCorridors", JSON.stringify(ids)); }catch(e){} }
+// Pure — a corridor alerts iff its workspace has the feature on AND either the
+// master switch is on and this corridor isn't muted, or the master switch is
+// off and the rider armed this corridor by hand. (armedSet is ignored while
+// the master is on, and mutedSet while it is off, so each survives a flip.)
+function isCorridorGuarded(workspaceOn, masterOn, mutedSet, armedSet, id){
+  if(!workspaceOn) return false;
+  return masterOn ? !mutedSet.has(id) : armedSet.has(id);
 }
 
 // Battery Saver ("lift mode") — how long the raw ChuteGuard.isOnLift()
@@ -1236,19 +1244,23 @@ const Quest = {
   // read from localStorage HERE (not only in start()) so Home and "My map" are
   // right before tracking has ever begun.
   chuteGuardMaster: getChuteGuardMaster(),          // the yellow button; default ON
-  mutedCorridors: new Set(getMutedCorridors()),     // zoneIds muted by press-and-hold
+  mutedCorridors: new Set(getMutedCorridors()),     // zoneIds muted by press-and-hold WHILE the master is on
+  armedCorridors: new Set(getArmedCorridors()),     // zoneIds armed by press-and-hold WHILE the master is off
   onGuardChanged: null,     // callback() — set by drawAllRuns() while "My map" is open so the boundary lines/mute look redraw live; nulled on #fogBack
   isGuarded(zoneId){
-    return isCorridorGuarded(this.chuteGuardEnabled, this.chuteGuardMaster, this.mutedCorridors, zoneId);
+    return isCorridorGuarded(this.chuteGuardEnabled, this.chuteGuardMaster, this.mutedCorridors, this.armedCorridors, zoneId);
   },
-  // Toggles one corridor's muted state, persists it, and returns the NEW
-  // muted state — the single choke point renderFogMap()'s press-and-hold
-  // handler calls, so the map redraw + persistence always stay in sync.
-  toggleMutedCorridor(zoneId){
-    if(this.mutedCorridors.has(zoneId)) this.mutedCorridors.delete(zoneId);
-    else this.mutedCorridors.add(zoneId);
-    setMutedCorridors(Array.from(this.mutedCorridors));
-    return this.mutedCorridors.has(zoneId);
+  // Press-and-hold on one corridor: with the master ON it toggles MUTE (guard
+  // everything except this), with the master OFF it toggles ARM (guard nothing
+  // except this). Persists, and returns whether the corridor is NOW guarded —
+  // the single choke point renderFogMap()'s press-and-hold handler calls, so
+  // the map redraw + persistence always stay in sync.
+  toggleGuardForCorridor(zoneId){
+    const master = this.chuteGuardMaster;
+    const set = master ? this.mutedCorridors : this.armedCorridors;
+    if(set.has(zoneId)) set.delete(zoneId); else set.add(zoneId);
+    (master ? setMutedCorridors : setArmedCorridors)(Array.from(set));
+    return master ? !set.has(zoneId) : set.has(zoneId);
   },
   // The yellow button. Re-evaluates the alarm at once so a tone that is
   // sounding when the rider turns Guard off stops on the spot, not on the next
@@ -1363,6 +1375,7 @@ const Quest = {
     this._liftRawSinceT = 0;
     this.chuteGuardMaster = getChuteGuardMaster();
     this.mutedCorridors = new Set(getMutedCorridors());
+    this.armedCorridors = new Set(getArmedCorridors());
     this.checkpointVert = getCheckpointVert();
     this._cpCooldownUntil = {};
     this._cpLastPostAt = 0;
@@ -2289,10 +2302,12 @@ function chuteGuardStopSync(){
 // workspace without Corridor Guard — there is nothing for it to switch.
 function paintGuardButtons(){
   const on = Quest.chuteGuardMaster;
+  // OFF still guards any runs the rider armed by hand (press-and-hold) — say so.
+  const armed = on ? 0 : Quest.armedCorridors.size;
   document.querySelectorAll(".guardBtn").forEach(b=>{
     b.classList.toggle("on", on);
     b.classList.toggle("off", !on);
-    b.textContent = on ? "🛡 Guard ON" : "🛡 Guard OFF";
+    b.textContent = on ? "🛡 Guard ON" : (armed ? "🛡 Guard OFF · "+armed+" armed" : "🛡 Guard OFF");
     b.setAttribute("aria-pressed", on ? "true" : "false");
     b.style.display = Quest.chuteGuardEnabled ? "" : "none";
   });
@@ -3340,7 +3355,7 @@ function drawAllRuns(map){
                    // guardEdges: draw the yellow trigger-boundary lines on every corridor Guard is
                    // actually watching. Deliberately NOT `guarded` — that also recolors the corridor
                    // cyan, which with everything guarded by default would erase the grade colors.
-                   muted:Quest.mutedCorridors.has(c.zoneId),
+                   muted:Quest.chuteGuardMaster && Quest.mutedCorridors.has(c.zoneId),
                    guardEdges:Quest.isGuarded(c.zoneId),
                    // shared corridor renderer (width band + piste-glow, no dashes)
                    corridor:true, widthM:(c.widthM>0?c.widthM:10), pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(latRef) },
@@ -3392,7 +3407,7 @@ function drawAllRuns(map){
     feats.forEach(f=>{
       const p = f.properties;
       if(!p || !p.corridor) return;
-      p.muted = Quest.mutedCorridors.has(p.id);
+      p.muted = Quest.chuteGuardMaster && Quest.mutedCorridors.has(p.id);
       p.guardEdges = Quest.isGuarded(p.id);
     });
     const src = map.getSource("runLines");
@@ -3429,10 +3444,13 @@ function drawAllRuns(map){
       onLongPress(feature){
         const zoneId = feature && feature.properties && feature.properties.id;
         if(zoneId==null) return;
-        const muted = Quest.toggleMutedCorridor(zoneId);
+        // Master ON: this toggles MUTE. Master OFF: this toggles ARM (guard +
+        // boundary lines for just this run). Returns whether it is now guarded.
+        const guarded = Quest.toggleGuardForCorridor(zoneId);
         const name = (feature.properties && feature.properties.name) || "run";
-        rqToast(muted ? ("Stopped guarding: "+name) : ("🛡 Guarding "+name+" again"));
+        rqToast(guarded ? ("🛡 Guarding: "+name) : ("Stopped guarding: "+name));
         refreshGuardProps();
+        paintGuardButtons();   // the OFF button shows how many runs are armed
       }
     });
   }else{
@@ -3486,7 +3504,7 @@ function renderFogMap(){
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
     +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass and dims the screen while riding a lift or sitting still (tap the screen to wake). Tap to cycle Auto/On/Off.">🔋 Auto</button>'
-    +'<button class="ghost guardBtn fogMapGuard on" id="fogGuard" style="display:none" title="Corridor Guard — tap to turn it on or off for every chute and run. Press and hold a run to mute just that one.">🛡 Guard ON</button>'
+    +'<button class="ghost guardBtn fogMapGuard on" id="fogGuard" style="display:none" title="Corridor Guard — tap to turn it on or off for every chute and run. Press and hold a run: with Guard ON it mutes that run, with Guard OFF it turns Guard on for just that run.">🛡 Guard ON</button>'
     +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
     +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
