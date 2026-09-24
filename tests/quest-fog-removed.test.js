@@ -53,3 +53,20 @@ test("map bounds come from the corridors and the project ref only", () => {
   const content = html.slice(html.indexOf("function questContentBounds(){"), html.indexOf("function questContentBounds(){") + 500);
   assert.ok(!content.includes("viewpoints"));
 });
+
+// ---- Fence Editor: viewpoint authoring removed too (nothing consumes it any more) ----
+const fe = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html"), "utf8").replace(/\r/g, "");
+test("Fence Editor has no viewpoint/viewshed authoring, no tile-art UI and no h3 script", () => {
+  for (const banned of ["isViewpoint", "viewshed", "Viewshed", "pViewpoint", "h3-js", "terrainBiome", "generateTerrain", "terrain-preview", "TileFog.load", "TileFog.reveal"]) {
+    assert.ok(!fe.includes(banned), "fence-editor.html still references " + banned);
+  }
+});
+
+test("Fence Editor keeps what sits next to it: elevation checkpoints, map season, corridor layers, balanced markup", () => {
+  assert.ok(fe.includes('id="pElevCheckpointSection"') && fe.includes('bindProp("pIsElevCheckpoint"'), "elevation checkpoint UI + binding");
+  assert.ok(fe.includes('id="tileSeason"') && fe.includes("async function loadProjectSeason()"), "map season select + loader");
+  assert.ok(fe.includes('TileFog.addCorridorLayers(map,{source:"fences"'), "corridor layers on the editing map");
+  assert.ok(fe.includes('beforeId:"walkpath-line"'), "winter layers anchored under the editing layers");
+  assert.strictEqual((fe.match(/<div\b/g) || []).length, (fe.match(/<\/div>/g) || []).length, "every <div> is closed");
+  assert.ok(fe.includes("function destPoint(center,distM,bearing)"), "destPoint is still there (used by the voice-range rings)");
+});

@@ -10,10 +10,6 @@
 <script>RoleGate.require(['admin']);</script>
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
-<!-- R4 (Ridge Quest — Viewpoint ghost-reveal): H3 geo-indexing, used only
-     by recomputeViewshed()'s cell-bucketing step below — the same version
-     ridge-quest.html already loads. -->
-<script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
 <script src="/tile-fog.js"></script>
 <script src="/guard-edge.js"></script>
 <!-- Live 3D AR-object preview (this repo's second ES module, after
@@ -837,26 +833,6 @@
       </div>
     </div>
 
-    <!-- ── Viewpoint (Ridge Quest R4, circle stops only) — "seen but not
-         skied" terrain ghosting. A precomputed viewshedCells list is static
-         data on the zone (computed once here, not per-player/per-tick) —
-         see the plan's R4 section for the horizon-angle-sweep algorithm and
-         why firing lives in ridge-quest.html, not a pipeline block. ── -->
-    <div class="va-section" id="pViewpointSection" style="display:none">
-      <div class="va-label">Viewpoint (Ridge Quest)</div>
-      <label style="display:flex;align-items:center;gap:8px;margin:6px 0;text-transform:none;font-family:inherit;font-size:13px;color:inherit">
-        <input id="pIsViewpoint" type="checkbox" style="width:auto;margin:0">
-        Reveals terrain in view (fog-of-war "seen" tier)
-      </label>
-      <div id="pViewpointBody" style="display:none">
-        <label class="k">max sight distance (m)</label>
-        <input id="pViewshedMaxDist" type="number" min="100" max="4000" step="100">
-        <div class="hint" id="pViewshedStatus" style="margin:6px 0">Not yet computed.</div>
-        <button class="ghost" id="pRecomputeViewshed" type="button" style="width:100%;margin-top:4px">Recompute viewshed</button>
-        <div class="hint" style="margin:4px 0 0">Requires terrain (3D Mode) — this pans/zooms the map to load the sight radius, then samples elevation outward in a circle. Takes a few seconds.</div>
-      </div>
-    </div>
-
     <!-- ── Elevation checkpoint (Ridge Quest, circle stops only) — a
          known-elevation spot (lift top/bottom, ridge top) the skier passes
          through. Ridge Quest measures "vertical descended" by subtracting
@@ -1668,100 +1644,6 @@ function destPoint(center,distM,bearing){
 function bearingTo(a,b){
   const toR=Math.PI/180, la=a[1]*toR, lb=b[1]*toR, dl=(b[0]-a[0])*toR;
   return (Math.atan2(Math.sin(dl)*Math.cos(lb),Math.cos(la)*Math.sin(lb)-Math.sin(la)*Math.cos(lb)*Math.cos(dl))/toR+360)%360;
-}
-// R4 (Ridge Quest — Viewpoint ghost-reveal) — pure horizon-angle-sweep
-// viewshed. PURE GEOMETRY: terrain is read through an INJECTED
-// sampleElevFn(lonLat)=>elevM|null rather than calling
-// map.queryTerrainElevation directly, so this can be unit-tested against
-// synthetic terrain with no browser/DEM involved (there is no headless
-// MapLibre in `node --test`) — production wiring in recomputeViewshed()
-// below passes map.queryTerrainElevation.bind(map) straight through, same
-// [lon,lat] argument convention this file's own destPoint/haversineM
-// already use. Returns visible SAMPLE POINTS ([lon,lat]), not H3 cells —
-// bucketing to cells is a separate, trivial step in recomputeViewshed(),
-// keeping this function free of any h3-js dependency too.
-//
-// Algorithm: per ray (bearing), march outward in stepM increments to
-// maxDistM, tracking the running MAXIMUM angle-of-elevation seen from the
-// eye (originElev + eyeHeightM). A sample is visible iff its own angle is
-// >= that running max — this single pass (O(n) per ray, not O(n²) — never
-// re-checks earlier samples) naturally accumulates occlusion from any
-// nearer high point. A null sample (DEM tile gap) ABORTS that ray rather
-// than being treated as sea-level — a wrong assumption there would either
-// falsely occlude everything beyond the gap or falsely reveal straight
-// through a real ridge, silently.
-function computeViewshed(originLonLat, opts, sampleElevFn){
-  const maxDistM = (opts&&opts.maxDistM) || 2000;
-  const stepM = (opts&&opts.stepM) || 50;
-  const rayCount = (opts&&opts.rayCount) || 360;   // 1° spacing default — 2° leaves gaps between adjacent rays beyond ~1.9km (wider than one H3 res-10 cell, ~66m)
-  const eyeHeightM = (opts&&opts.eyeHeightM!=null) ? opts.eyeHeightM : 2;
-  const originElev = sampleElevFn(originLonLat);
-  if(originElev==null) return { visiblePoints:[], aborted:true, reason:"origin elevation unavailable", abortedRays:0, rayCount };
-  const eyeElev = originElev + eyeHeightM;
-  const visiblePoints=[];
-  let abortedRays=0;
-  for(let i=0;i<rayCount;i++){
-    const bearing=(360/rayCount)*i;
-    let maxAngle=-Infinity;
-    for(let d=stepM; d<=maxDistM; d+=stepM){
-      const pt=destPoint(originLonLat, d, bearing);
-      const elev=sampleElevFn(pt);
-      if(elev==null){ abortedRays++; break; }
-      const angle=Math.atan2(elev-eyeElev, d);
-      if(angle>=maxAngle){ visiblePoints.push(pt); maxAngle=angle; }
-    }
-  }
-  return { visiblePoints, aborted:false, abortedRays, rayCount };
-}
-// R4 — recomputes the SELECTED circle zone's viewshedCells, wiring
-// computeViewshed() above to a real map. Forces terrain ON for the
-// duration regardless of the visible 3D Mode toggle (queryTerrainElevation
-// needs a real terrain source SET to return anything but a flat default),
-// restoring whatever 3D Mode state was actually on afterward via
-// updateTerrain(). Pans/zooms to the FULL sight-circle's bounding box and
-// waits for the map's 'idle' event before sampling — a 2km sight radius
-// spans far more tile area than whatever the current viewport happens to
-// have loaded (confirmed elsewhere in this codebase: asset-preview-layer.js's
-// own deferred-placement handling exists for exactly this DEM-gap
-// reality). h3.latLngToCell bucketing happens HERE, not inside
-// computeViewshed — keeps that function's own unit tests free of any
-// h3-js dependency.
-async function recomputeViewshed(){
-  if(sel<0 || !zones[sel]) return;
-  const z=zones[sel];
-  if(z.shape.type!=="circle") return;
-  const statusEl=document.getElementById("pViewshedStatus");
-  const btn=document.getElementById("pRecomputeViewshed");
-  if(!map.getSource(TERRAIN_SOURCE_ID)){
-    statusEl.textContent="Terrain source not ready yet — try again in a moment.";
-    return;
-  }
-  btn.disabled=true; statusEl.textContent="Loading terrain…";
-  const maxDistM=z.viewshedMaxDistM||2000;
-  const centerLonLat=z.shape.center;
-  try{
-    map.setTerrain({source:TERRAIN_SOURCE_ID,exaggeration:1});
-    const nDeg=maxDistM/111320, eDeg=maxDistM/(111320*Math.cos(centerLonLat[1]*Math.PI/180));
-    const bounds=[[centerLonLat[0]-eDeg,centerLonLat[1]-nDeg],[centerLonLat[0]+eDeg,centerLonLat[1]+nDeg]];
-    await new Promise(res=>{ map.once("idle",res); map.fitBounds(bounds,{padding:20,animate:false}); });
-    statusEl.textContent="Sampling terrain…";
-    const result=computeViewshed(centerLonLat,{maxDistM,eyeHeightM:2,rayCount:360,stepM:50},
-      (lonLat)=>map.queryTerrainElevation(lonLat));
-    if(result.aborted){
-      statusEl.textContent="Couldn't compute — "+(result.reason||"terrain data unavailable at the viewpoint")+".";
-      return;
-    }
-    // h3.latLngToCell takes (lat,lng) — visiblePoints are [lon,lat].
-    const cellSet=new Set();
-    result.visiblePoints.forEach(pt=>cellSet.add(h3.latLngToCell(pt[1],pt[0],10)));
-    z.viewshedCells=[...cellSet];
-    statusEl.textContent=z.viewshedCells.length+" cells revealed on entry"
-      +(result.abortedRays?" ("+result.abortedRays+" of "+result.rayCount+" rays hit a DEM gap and were skipped)":"")+".";
-    autoSave();
-  } finally {
-    updateTerrain();   // restore whatever 3D Mode state was actually on before this ran
-    btn.disabled=false;
-  }
 }
 // The point half-way ALONG a polyline by arc length. centroidLonLat() below
 // is a closed-polygon (shoelace) centroid — correct for a polygon outline,
@@ -2886,15 +2768,7 @@ function refreshProps(){
     }
   }
   const isCircle=z.shape.type==="circle";
-  document.getElementById("pViewpointSection").style.display=isCircle?"block":"none";
-  if(isCircle){
-    document.getElementById("pIsViewpoint").checked=!!z.isViewpoint;
-    document.getElementById("pViewpointBody").style.display=z.isViewpoint?"block":"none";
-    document.getElementById("pViewshedMaxDist").value=z.viewshedMaxDistM||2000;
-    const n=(z.viewshedCells||[]).length;
-    document.getElementById("pViewshedStatus").textContent=n?n+" cells revealed on entry":"Not yet computed.";
-  }
-  // Elevation checkpoint (Ridge Quest) — circle stops only, same as viewpoint.
+  // Elevation checkpoint (Ridge Quest) — circle stops only.
   document.getElementById("pElevCheckpointSection").style.display=isCircle?"block":"none";
   if(isCircle){
     document.getElementById("pIsElevCheckpoint").checked=!!z.isElevCheckpoint;
@@ -3422,12 +3296,6 @@ document.getElementById("pCorridorEditInGpx").onclick=()=>{
 };
 document.getElementById("pCorridorRefreshShape").onclick=()=>{ if(sel>=0) refreshCorridorShapeFromLibrary(zones[sel]); };
 document.getElementById("pCorridorSaveToLib").onclick=()=>{ if(sel>=0) saveCorridorStopToLibrary(zones[sel]); };
-bindProp("pIsViewpoint",z=>{
-  z.isViewpoint=document.getElementById("pIsViewpoint").checked;
-  document.getElementById("pViewpointBody").style.display=z.isViewpoint?"block":"none";
-});
-bindProp("pViewshedMaxDist",z=>{ z.viewshedMaxDistM=Math.max(100,Math.min(4000,+document.getElementById("pViewshedMaxDist").value||2000)); });
-document.getElementById("pRecomputeViewshed").onclick=recomputeViewshed;
 bindProp("pIsElevCheckpoint",z=>{
   z.isElevCheckpoint=document.getElementById("pIsElevCheckpoint").checked;
   document.getElementById("pElevCheckpointBody").style.display=z.isElevCheckpoint?"block":"none";
@@ -4998,14 +4866,6 @@ function zoneToEngine(z){
     if(z.runType) zo.runType=z.runType;
     if(z.activityType) zo.activityType=z.activityType;
   }
-  // Viewpoint (Ridge Quest R4, circle stops only) — precomputed
-  // viewshedCells is static data, exported as-is (recomputed by staff via
-  // the "Recompute viewshed" button, never at runtime).
-  if(s.type==="circle" && z.isViewpoint){
-    zo.isViewpoint=true;
-    zo.viewshedMaxDistM=z.viewshedMaxDistM||2000;
-    zo.viewshedCells=z.viewshedCells||[];
-  }
   // Elevation checkpoint (Ridge Quest, circle stops only) — a known-elevation
   // spot Ridge Quest subtracts between to measure vertical descended.
   if(s.type==="circle" && z.isElevCheckpoint && typeof z.checkpointElevM==="number"){
@@ -5219,11 +5079,6 @@ function engineToZone(zo){
     z.activityType=zo.activityType||"hike";
     const tgtC=(zo.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
     z.descentM=(tgtC&&tgtC.geometry.descentM!=null)?tgtC.geometry.descentM:null;
-  }
-  if(shape.type==="circle" && zo.isViewpoint){
-    z.isViewpoint=true;
-    z.viewshedMaxDistM=zo.viewshedMaxDistM||2000;
-    z.viewshedCells=zo.viewshedCells||[];
   }
   if(shape.type==="circle" && zo.isElevCheckpoint && typeof zo.checkpointElevM==="number"){
     z.isElevCheckpoint=true;
@@ -6691,11 +6546,6 @@ function editorToSimBundle(){
       // Corridor line style (dash/colour by activity) — same "3 mirrors stay in sync"
       // reasoning as difficulty/runType above.
       activityType:s.type==="corridor"?(z.activityType||"hike"):null,
-      // Ridge Quest R4 — same "not consumed by Test Mode, exported anyway
-      // so the 3 mirrors stay in sync" reasoning as difficulty/runType above.
-      isViewpoint:s.type==="circle"?!!z.isViewpoint:false,
-      viewshedMaxDistM:(s.type==="circle"&&z.isViewpoint)?(z.viewshedMaxDistM||2000):null,
-      viewshedCells:(s.type==="circle"&&z.isViewpoint)?(z.viewshedCells||[]):[],
       // Ridge Quest elevation checkpoint — same "not consumed by Test Mode,
       // exported anyway so the mirrors stay in sync" reasoning as above.
       isElevCheckpoint:(s.type==="circle"&&z.isElevCheckpoint&&typeof z.checkpointElevM==="number")?true:false,
