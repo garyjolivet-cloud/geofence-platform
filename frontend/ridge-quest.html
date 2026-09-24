@@ -163,15 +163,12 @@
   .splashTitle h1{font-family:"Black Han Sans";font-weight:400;font-size:34px;color:var(--snow);margin:0}
   .splashTitle p{font-family:"Barlow Condensed";font-size:19.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--coral);margin:0}
   @media (prefers-reduced-motion:reduce){ .splashTitle{transition:none} }
-  /* "show all runs" overlay (fog + tile art both off) */
-  .runLabel{font:700 clamp(22px,5.4vw,30px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
-    letter-spacing:.02em;white-space:nowrap;pointer-events:none;
-    text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 4px #0c140f}
+  /* "show all runs" overlay (fog + tile art both off) — run names are tap-only, no on-map text */
   .runDiamond{display:flex;gap:3px;pointer-events:none}
   .runDiamond i{width:6px;height:6px;background:#111;border:1px solid #eef3f0;
     transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
-  /* Named peak reference labels — muted vs. .runLabel's color (these are
+  /* Named peak reference labels — muted vs. a run's own colour (these are
      secondary orientation info, not skiable terrain), but sized up (doubled
      2026-09-20 per field feedback — the original size read as unreadable at
      the distances these labels are actually seen from) to match. */
@@ -3226,30 +3223,28 @@ function runStyleFor(c){
   const s = RUN_STYLE_DIFF[c.difficulty || ""] || RUN_STYLE_DIFF[""];
   return { col:s.col, halo:s.halo, dash:"", tier:s.tier };
 }
-// Name label + ◆/◆◆ badge markers — viewport-scoped, and only revealed at
-// all once a limited number of corridors are actually in view (rebuilt on
-// moveend). This resort's real corridor set (38) never gets anywhere near
-// fence-editor.html's Test Mode cap of 60 (_rebuildSimCorridorMarkers()/
-// SIM_RUN_MARKER_CAP — a top-N-nearest cap that only helps once a network
-// is much bigger than its visible viewport), so a raised cap wouldn't fix
-// this: the whole resort-wide "My map" framing shows every corridor at
-// once regardless of count. Below RUN_LABEL_MAX_VISIBLE in view, show all
-// of them; above it, show none — zoom in to reveal names rather than
-// packing an arbitrary top-N of large text labels into a small area.
+// ◆ / ◆◆ difficulty badge markers at the top of each black / double-black run —
+// viewport-scoped, and only shown once a limited number of corridors are in
+// view (rebuilt on moveend).
+//
+// Run NAMES are deliberately NOT drawn on the map any more (removed 2026-09-23):
+// the zoomed-in text labels landed on top of neighbouring chutes' names and
+// were unreadable. A run's name comes from tapping it (showRunPopup) — that
+// works well and never collides. Don't add name text back onto the map.
 //
 // "In view" is screen-space (map.project() -> pixel coords checked against
 // the container), NOT map.getBounds() -- confirmed live that getBounds()'s
 // lat/lon box is computed from the four corners of the viewport, and on a
 // PITCHED camera (this screen opens tilted) the corners near the horizon
 // project to ground points arbitrarily far away, so that box swings
-// wildly with tiny pitch/bearing changes — the actual bug behind labels
+// wildly with tiny pitch/bearing changes — the actual bug behind markers
 // reappearing inconsistently on zoom-in. Screen-space projection is
 // perspective-correct regardless of pitch/bearing.
-const RUN_LABEL_MAX_VISIBLE = 10;
-let _runLabelMarkers = [];
-let _runLabelMoveTimer = null;
-function _rebuildRunLabels(map, cors){
-  _runLabelMarkers.forEach(m=>m.remove()); _runLabelMarkers=[];
+const RUN_BADGE_MAX_VISIBLE = 10;
+let _runBadgeMarkers = [];
+let _runBadgeMoveTimer = null;
+function _rebuildRunBadges(map, cors){
+  _runBadgeMarkers.forEach(m=>m.remove()); _runBadgeMarkers=[];
   if(!cors.length) return;
   const w = map.getContainer().clientWidth, h = map.getContainer().clientHeight;
   const onScreen=c=>{
@@ -3258,12 +3253,9 @@ function _rebuildRunLabels(map, cors){
     return pt.x>=0 && pt.x<=w && pt.y>=0 && pt.y<=h;
   };
   const vis=cors.filter(c=>(c.path||[]).length>=2 && onScreen(c));
-  if(vis.length>RUN_LABEL_MAX_VISIBLE) return; // too many on screen — zoom in to reveal names
+  if(vis.length>RUN_BADGE_MAX_VISIBLE) return; // too many on screen — zoom in to reveal badges
   vis.forEach(c=>{
     const path = c.path;
-    const mid = path[Math.floor(path.length/2)];
-    const lbl = document.createElement("div"); lbl.className = "runLabel"; lbl.textContent = c.name || "Run";
-    _runLabelMarkers.push(new maplibregl.Marker({ element:lbl, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map));
     // ◆ / ◆◆ badge keyed on the run's DIFFICULTY only — an activityType
     // (now NOT NULL DEFAULT 'hike' since migration 0059) used to make
     // runStyleFor() return tier:"" and silently drop the diamond.
@@ -3272,7 +3264,7 @@ function _rebuildRunLabels(map, cors){
       const bd = document.createElement("div");
       bd.className = "runDiamond" + (tier === "dblack" ? " dbl" : "");
       bd.innerHTML = tier === "dblack" ? "<i></i><i></i>" : "<i></i>";
-      _runLabelMarkers.push(new maplibregl.Marker({ element:bd, anchor:"bottom", offset:[0,-4] }).setLngLat([path[0][1], path[0][0]]).addTo(map));
+      _runBadgeMarkers.push(new maplibregl.Marker({ element:bd, anchor:"bottom", offset:[0,-4] }).setLngLat([path[0][1], path[0][0]]).addTo(map));
     }
   });
 }
@@ -3317,10 +3309,10 @@ const NAMED_PEAKS = [
 ];
 let _peakLabelMarkers = [];
 let _peakLabelMoveTimer = null;
-// Same screen-space onScreen() culling technique as _rebuildRunLabels()
+// Same screen-space onScreen() culling technique as _rebuildRunBadges()
 // above (reused, not reimplemented) — perspective-correct regardless of
 // pitch/bearing, unlike a getBounds() lat/lon box. No visible-count cap here
-// (unlike RUN_LABEL_MAX_VISIBLE): there are only ever 10 peaks total, so
+// (unlike RUN_BADGE_MAX_VISIBLE): there are only ever 10 peaks total, so
 // clutter isn't the same risk a whole run network is.
 function _rebuildPeakLabels(map){
   _peakLabelMarkers.forEach(m=>m.remove()); _peakLabelMarkers=[];
@@ -3414,11 +3406,11 @@ function drawAllRuns(map){
   map.addLayer({ id:"runLines-hit", type:"line", source:"runLines",
     paint:{ "line-color":"#000", "line-opacity":0, "line-width":30 } });
 
-  // Name label + ◆/◆◆ badges — see _rebuildRunLabels() above. Rebuilt on
-  // moveend (debounced) so panning/zooming keeps only nearby labels drawn.
-  clearTimeout(_runLabelMoveTimer);
-  _rebuildRunLabels(map, cors);
-  map.on("moveend", ()=>{ clearTimeout(_runLabelMoveTimer); _runLabelMoveTimer=setTimeout(()=>_rebuildRunLabels(map,cors),150); });
+  // ◆/◆◆ badges — see _rebuildRunBadges() above (run NAMES are tap-only now).
+  // Rebuilt on moveend (debounced) so panning/zooming keeps only nearby badges drawn.
+  clearTimeout(_runBadgeMoveTimer);
+  _rebuildRunBadges(map, cors);
+  map.on("moveend", ()=>{ clearTimeout(_runBadgeMoveTimer); _runBadgeMoveTimer=setTimeout(()=>_rebuildRunBadges(map,cors),150); });
 
   function showRunPopup(feature, lngLat){
     const p = feature && feature.properties; if(!p) return;
