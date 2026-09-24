@@ -2157,7 +2157,7 @@ async function api(request, env, url) {
     if (archivedFilter === null) { conditions.push("(archived IS NULL OR archived=0)"); }
     else if (archivedFilter === "1") { conditions.push("archived=1"); }
     const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
-    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days,quest_public AS questPublic,quest_activities AS questActivities,season FROM project" +
+    const sql = "SELECT id,name,slug,mode,status,bundleVersion,zoneCount,updatedAt,appId,scheduled_date,scheduled_time,guide_id,is_template,tour_type,archived,visitor_name,record_retention_days,quest_public AS questPublic,quest_activities AS questActivities,season,narrate_guarded_only AS narrateGuardedOnly FROM project" +
                 where + " ORDER BY COALESCE(scheduled_date,'9999') DESC, updatedAt DESC";
     const stmt = binds.length ? env.DB.prepare(sql).bind(...binds) : env.DB.prepare(sql);
     const { results } = await stmt.all();
@@ -2235,8 +2235,8 @@ async function api(request, env, url) {
     if (!proj) return json({ error: "project not found" }, 404, AC);
     if (!scopeOk(A, "publish", proj.appId)) return json({ error: "unauthorized" }, 401, AC);
     const b = await request.json().catch(() => ({}));
-    if (!("record_retention_days" in b) && !("questPublic" in b) && !("questActivities" in b) && !("season" in b) && !("splashKeyframes" in b))
-      return json({ error: "record_retention_days, questPublic, questActivities, season, or splashKeyframes required" }, 400, AC);
+    if (!("record_retention_days" in b) && !("questPublic" in b) && !("questActivities" in b) && !("season" in b) && !("splashKeyframes" in b) && !("narrateGuardedOnly" in b))
+      return json({ error: "record_retention_days, questPublic, questActivities, season, splashKeyframes, or narrateGuardedOnly required" }, 400, AC);
     const now = new Date().toISOString();
     const resp = { ok: true, id: pid };
     if ("record_retention_days" in b) {
@@ -2286,6 +2286,15 @@ async function api(request, env, url) {
       await env.DB.prepare("UPDATE project SET season=?, updatedAt=? WHERE id=?").bind(season, now, pid).run();
       await logAudit(env, request, A, "project.season.update", pid + " -> " + (season || "null"));
       resp.season = season;
+    }
+    // narrateGuardedOnly — Ridge Quest speaks a corridor's narration only when
+    // Corridor Guard is on for it (migrations/0067). Boolean only.
+    if ("narrateGuardedOnly" in b) {
+      if (typeof b.narrateGuardedOnly !== "boolean") return json({ error: "narrateGuardedOnly must be true or false" }, 400, AC);
+      const v = b.narrateGuardedOnly ? 1 : 0;
+      await env.DB.prepare("UPDATE project SET narrate_guarded_only=?, updatedAt=? WHERE id=?").bind(v, now, pid).run();
+      await logAudit(env, request, A, "project.narrateGuardedOnly.update", pid + " -> " + v);
+      resp.narrateGuardedOnly = !!v;
     }
     // Ridge Quest splash flyby — admin-authored camera keyframes captured
     // via the Fence Editor's "Splash Flyby" tool (see frontend/splash-
@@ -2660,7 +2669,7 @@ async function api(request, env, url) {
       // Reflect the live owner — a project may have moved clients since this
       // bundle was published, and the stored JSON would otherwise be stale.
       const ownerRow = await env.DB.prepare(
-        "SELECT p.orgId AS orgId, p.quest_activities AS questActivities, p.season AS season, p.splash_keyframes AS splashKeyframes, a.three_d_enabled AS threeDEnabled " +
+        "SELECT p.orgId AS orgId, p.quest_activities AS questActivities, p.season AS season, p.narrate_guarded_only AS narrateGuardedOnly, p.splash_keyframes AS splashKeyframes, a.three_d_enabled AS threeDEnabled " +
         "FROM project p LEFT JOIN app a ON a.id = p.appId WHERE p.id=?"
       ).bind(pid).first();
       if (ownerRow) bundle.orgId = ownerRow.orgId;
@@ -2670,6 +2679,8 @@ async function api(request, env, url) {
       // up without waiting for a republish.
       bundle.threeDEnabled = !!(ownerRow && ownerRow.threeDEnabled);
       bundle.season = (ownerRow && ownerRow.season) || null;
+      // Narration gate (migrations/0067) — default ON; only an explicit 0 turns it off.
+      bundle.narrateGuardedOnly = !(ownerRow && ownerRow.narrateGuardedOnly === 0);
       // R12 — the per-project activity-relevance filter isn't part of the
       // published bundle JSON (it's a project-row column, set via the
       // separate PATCH endpoint, not the Fence Editor's Publish button) —

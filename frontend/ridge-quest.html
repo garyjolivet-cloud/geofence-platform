@@ -1283,6 +1283,9 @@ const Quest = {
       // Tour Player already reads) — gates the off-course vibration/tone
       // warning wired into _onFix() below via chute-guard.js.
       this.chuteGuardEnabled = !!bundle.chuteGuardEnabled;
+      // Fence Editor ⚙ "narrate only guarded runs" (live-injected, default on;
+      // older servers without the field = false = narrate everything as before).
+      this.narrateGuardedOnly = bundle.narrateGuardedOnly === true;
       // Same live-owner injection — the workspace's 3D-terrain toggle. When
       // on, renderFogMap() drapes the fog/runs over DEM terrain and opens
       // the map pitched.
@@ -1644,7 +1647,11 @@ const Quest = {
     // carried the smoothed position in and out of that ~1 m entry band ~17 times
     // in 4 minutes, and each re-entry restarted the spoken narration.
     if((dist + halfW) > halfW + QUEST_TUNING.REC_HOLD_M) st.narrArmed = true;
-    if(corridor.say && this.onPrefetch && !st.sayPrefetched && (dist + halfW) <= halfW + QUEST_TUNING.SAY_PREFETCH_M){
+    // Project setting "narrate only guarded runs": speak only when Corridor Guard
+    // is on for this corridor for this rider. Lifts are never guarded, so they
+    // always narrate; a workspace without Corridor Guard narrates everything.
+    const narrOk = !this.narrateGuardedOnly || corridor.runType==="lift" || !this.chuteGuardEnabled || this.isGuarded(corridor.zoneId);
+    if(narrOk && corridor.say && this.onPrefetch && !st.sayPrefetched && (dist + halfW) <= halfW + QUEST_TUNING.SAY_PREFETCH_M){
       st.sayPrefetched = true;
       this.onPrefetch(corridor.say);
     }
@@ -1652,7 +1659,7 @@ const Quest = {
       if(Date.now() >= st.narrCooldownUntil){
         st.phase="inRun";
         // Spoken narration (2026-09-17) -- fires once per approach.
-        if(corridor.say && this.onNarrate && st.narrArmed!==false){
+        if(narrOk && corridor.say && this.onNarrate && st.narrArmed!==false){
           st.narrArmed = false;
           this.onNarrate(corridor.say, corridor.zoneId);
         }

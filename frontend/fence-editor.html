@@ -1175,6 +1175,10 @@
     <option value="summer">Summer</option>
     <option value="winter">Winter</option>
   </select>
+  <hr style="border:none;border-top:1px solid var(--rim);margin:4px 0">
+  <label style="margin-top:2px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ice);cursor:pointer" title="Ridge Quest: a run's spoken narration only plays when Corridor Guard is on for that run for the rider (Guard ON and the run not muted, or Guard OFF and the run armed). Lifts always narrate. Has no effect when the workspace has Corridor Guard turned off. Applies immediately, not part of Publish.">
+    <input type="checkbox" id="pNarrateGuarded" style="width:auto;flex:0 0 auto" checked> 🔊 narrate only guarded runs
+  </label>
 </div>
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
@@ -3601,6 +3605,35 @@ document.getElementById("tileSeason")?.addEventListener("change",async()=>{
   }catch(e){ alert("couldn't save season: "+e.message); }
   _season = sel.value || null;   // live-update the map (authoring + Test Mode)
   updateWinter();
+});
+
+// Ridge Quest narration gate (#pNarrateGuarded) — same load-fresh-on-open +
+// PATCH-on-change pattern as the season select above. Column default is ON.
+async function loadNarrateGuarded(){
+  const cb=document.getElementById("pNarrateGuarded"); if(!cb) return;
+  const pid=afProjectId();
+  if(!pid){ cb.checked=true; return; }
+  try{
+    const r=await fetch("/api/projects?org="+encodeURIComponent(afOrgId()||""),{headers:{authorization:"Bearer "+getToken()}});
+    if(r.ok){
+      const j=await r.json();
+      const proj=(j.projects||[]).find(p=>p.id===pid);
+      cb.checked=!(proj && proj.narrateGuardedOnly===0);
+    }
+  }catch(e){}
+}
+document.getElementById("pNarrateGuarded")?.addEventListener("change",async()=>{
+  const cb=document.getElementById("pNarrateGuarded");
+  const pid=afProjectId();
+  if(!pid){ alert("Save/publish this tour first."); cb.checked=!cb.checked; return; }
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(pid),{
+      method:"PATCH",
+      headers:{authorization:"Bearer "+getToken(),"content-type":"application/json"},
+      body:JSON.stringify({narrateGuardedOnly:cb.checked})
+    });
+    if(!r.ok){ const e=await r.json().catch(()=>({})); alert("couldn't save narration setting: "+(e.error||r.status)); cb.checked=!cb.checked; }
+  }catch(e){ alert("couldn't save narration setting: "+e.message); cb.checked=!cb.checked; }
 });
 
 // afOpenStudioHref()/the Audio Palette's own "Open in Studio" link (with a
@@ -8039,7 +8072,7 @@ if(window.TopNav){
       pop.style.display="";
       popoverEl.appendChild(pop);
     },
-    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); loadQuestPublic(); loadProjectSeason(); },
+    onSettingsOpen:()=>{ closeStopFolderMenus(); renderGlobalCodeObjectsChips(); loadRecordRetention(); loadQuestPublic(); loadProjectSeason(); loadNarrateGuarded(); },
     // Real gap found via live testing, 2026-08-12: creating a project via
     // the picker while already sitting on a bare /editor correctly unlocked
     // the nav buttons but left THIS page's own "no project selected" hint

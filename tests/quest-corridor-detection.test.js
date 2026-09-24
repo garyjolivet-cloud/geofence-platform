@@ -644,6 +644,33 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
   assert(narrateCount === 1, "a small excursion under the exit margin doesn't flip phase, so no spurious re-narration on return");
 })();
 
+// ---- "narrate only guarded runs" (Fence Editor ⚙ project setting) ----
+(function testNarrationOnlyForGuardedCorridors() {
+  const mk = (zoneId, runType) => ({ zoneId, name: "C", say: "say " + zoneId, runType, widthM: 4,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] });
+  const on = { lat: 51.305, lon: -117.05, t: BASE, acc: 8 };
+  function run(corridor, opts) {
+    const self = Object.assign(makeNarrationThis(), opts);
+    let said = 0, prefetched = 0;
+    self.onNarrate = () => { said++; };
+    self.onPrefetch = () => { prefetched++; };
+    tickFn.call(self, corridor, on, "ski", QGeo, QUEST_TUNING);
+    return { said, prefetched };
+  }
+  const guarded = new Set(["g1"]);
+  const base = { narrateGuardedOnly: true, chuteGuardEnabled: true, isGuarded: id => guarded.has(id) };
+  let r = run(mk("g1", "chute"), base);
+  assert(r.said === 1 && r.prefetched === 1, "a guarded chute narrates (and prefetches) with the setting on");
+  r = run(mk("u1", "chute"), base);
+  assert(r.said === 0 && r.prefetched === 0, "an unguarded (muted / not armed) chute stays silent with the setting on, got " + JSON.stringify(r));
+  r = run(mk("l1", "lift"), base);
+  assert(r.said === 1, "a lift corridor always narrates (it can never be guarded)");
+  r = run(mk("u2", "chute"), Object.assign({}, base, { chuteGuardEnabled: false }));
+  assert(r.said === 1, "a workspace without Corridor Guard narrates everything");
+  r = run(mk("u3", "chute"), Object.assign({}, base, { narrateGuardedOnly: false }));
+  assert(r.said === 1, "setting off = narrate every corridor (the old behaviour)");
+})();
+
 // ---- narration fires once per APPROACH (field log 2026-09-21: ~17 re-entries of a
 // 4 m chute's ~1 m entry band in 4 minutes each restarted the voice) ----
 (function testNarrationOncePerApproachDespiteGpsWander() {
