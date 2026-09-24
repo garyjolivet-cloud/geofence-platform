@@ -406,7 +406,16 @@ function addCorridorLayers(map, o){
     paint: { "line-color": halo,
       "line-opacity": ["case", guardedExpr, 0.8, 0.45],
       "line-blur": ["case", guardedExpr, 3, 5],
-      "line-width": ["case", guardedExpr, ["*", 1.4, runWByRunType(5.5, 9.5, 14)], runWByRunType(5.5, 9.5, 14)] } });
+      // ONE top-level zoom interpolate, with the guarded 1.4x multiplied into each
+      // stop's value. This used to be ["case", guarded, ["*",1.4,interpolate], interpolate]:
+      // two zoom curves in one expression, which MapLibre's validator rejects ("Only one
+      // zoom-based step or interpolate subexpression may be used"). addLayer() then
+      // threw, addCorridorLayers' try/catch swallowed it, and this halo layer silently
+      // never rendered on any map. Same fix as realWidthExpr() above.
+      "line-width": ["interpolate", ["linear"], ["zoom"],
+        12, ["*", ["case", guardedExpr, 1.4, 1], 5.5],
+        15, ["*", ["case", guardedExpr, 1.4, 1], 9.5],
+        18, ["*", ["case", guardedExpr, 1.4, 1], 14]] } });
   add({ id: pfx + "-casing", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": "#05070b", "line-opacity": 1, "line-width": runWByRunType(4, 7, 10.5) } });
