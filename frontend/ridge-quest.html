@@ -3351,12 +3351,11 @@ function drawAllRuns(map){
       properties:{ id:c.zoneId, name:c.name||"Run", difficulty:c.difficulty||"", activityType:c.activityType||"",
                    runType:c.runType||"run", lengthM:Math.round(c.lengthM||0),
                    col:st.col, halo:st.halo, dash:st.dash, tier:st.tier,
-                   // muted: press-and-hold mutes/unmutes Corridor Guard for one chute — see Quest.mutedCorridors.
-                   // guardEdges: draw the yellow trigger-boundary lines on every corridor Guard is
-                   // actually watching. Deliberately NOT `guarded` — that also recolors the corridor
-                   // cyan, which with everything guarded by default would erase the grade colors.
-                   muted:Quest.chuteGuardMaster && Quest.mutedCorridors.has(c.zoneId),
-                   guardEdges:Quest.isGuarded(c.zoneId),
+                   // Guard look (muted grey / yellow boundary lines) is NOT a property here: it is
+                   // per-feature STATE, set by applyGuardState() below. A property would mean
+                   // source.setData() on every toggle — a full reload + re-drape of every tile,
+                   // which took seconds on a phone. Deliberately also NOT `guarded`, which
+                   // would recolor every corridor cyan and erase the grade colors.
                    // shared corridor renderer (width band + piste-glow, no dashes)
                    corridor:true, widthM:(c.widthM>0?c.widthM:10), pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(latRef) },
       geometry:{ type:"LineString", coordinates:(c.path||[]).map(p=>[p[1],p[0]]) }  // [lat,lon] -> [lon,lat]
@@ -3368,11 +3367,15 @@ function drawAllRuns(map){
   cors.forEach(c=>{
     feats.push(...TileFog.towerFeatures({ runType:c.runType, points:(c.path||[]).map(p=>[p[1],p[0]]) }));
   });
-  map.addSource("runLines", { type:"geojson", data:{ type:"FeatureCollection", features:feats } });
+  // promoteId: features get ids from their `id` property so setFeatureState() can
+  // target one corridor (see applyGuardState()).
+  map.addSource("runLines", { type:"geojson", promoteId:"id", data:{ type:"FeatureCollection", features:feats } });
   // Width band + halo + casing + solid grade core + double-black hot line —
   // one shared implementation used on every surface (see tile-fog.js). NO
   // dashes: activity used to be shown by line-dasharray, now by colour only.
-  TileFog.addCorridorLayers(map, { source:"runLines", id:"runLines" });
+  // guardByState: the Guard look (muted grey, yellow boundary lines) is read
+  // from feature-state, so toggling it never reloads the source.
+  TileFog.addCorridorLayers(map, { source:"runLines", id:"runLines", guardByState:true });
   // Invisible fat hit target for tap AND press-and-hold (covers every core
   // variant). Widened 14->30px (2026-09-20, field report: arming "still
   // takes 10+ seconds" even after the hold-timing fixes) — a 14px target is
@@ -3399,27 +3402,33 @@ function drawAllRuns(map){
         [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
       .addTo(map);
   }
-  // Re-derive every corridor's muted/guardEdges from Quest state and re-push
-  // the source, so the yellow boundary lines and the muted grey track the
-  // master button and press-and-hold live (Quest.onGuardChanged, nulled on
-  // #fogBack) without rebuilding the layer stack.
-  function refreshGuardProps(){
-    feats.forEach(f=>{
-      const p = f.properties;
-      if(!p || !p.corridor) return;
-      p.muted = Quest.chuteGuardMaster && Quest.mutedCorridors.has(p.id);
-      p.guardEdges = Quest.isGuarded(p.id);
-    });
-    const src = map.getSource("runLines");
-    if(src) src.setData({ type:"FeatureCollection", features:feats });
+  // Set every corridor's muted/guardEdges FEATURE-STATE from Quest state, so the
+  // yellow boundary lines and the muted grey track the master button and
+  // press-and-hold live (Quest.onGuardChanged, nulled on #fogBack). No data is
+  // re-sent: an earlier version did source.setData() here, which reloaded and
+  // re-draped every tile and took seconds to turn the lines off on a phone.
+  function applyGuardState(){
+    // Cosmetic only — must never be able to abort the rest of the map setup
+    // (labels, press-and-hold) or a button handler if MapLibre objects.
+    try{
+      cors.forEach(c=>{
+        // Lifts are never alertable; only real corridors carry a Guard look.
+        if(c.runType==="lift") return;
+        map.setFeatureState({ source:"runLines", id:c.zoneId }, {
+          muted: !!(Quest.chuteGuardMaster && Quest.mutedCorridors.has(c.zoneId)),
+          guardEdges: Quest.isGuarded(c.zoneId)
+        });
+      });
+    }catch(e){ console.warn("applyGuardState:", e && e.message); }
   }
-  Quest.onGuardChanged = refreshGuardProps;
+  Quest.onGuardChanged = applyGuardState;
+  applyGuardState();   // initial look — feature-state can be set before the tiles have loaded
   // Press-and-hold a run to mute/unmute Corridor Guard for just that one
   // (see Quest.mutedCorridors's own comment) — a normal quick tap keeps
-  // showing the popup above instead. `feats` is mutated in place and
-  // re-pushed via setData() so the dimmed "muted" look updates
-  // immediately, without rebuilding the whole runLines source/layer stack
-  // (which drawAllRuns() only ever expects to build once per map instance).
+  // showing the popup above instead. applyGuardState() updates the muted /
+  // boundary-line look immediately, without rebuilding the runLines
+  // source/layer stack (which drawAllRuns() only ever expects to build once
+  // per map instance) and without reloading any data.
   if(typeof LongPress!=="undefined"){
     LongPress.bind(map,"runLines-hit",{
       // 2000ms per explicit request (revised down from an initial 3000ms —
@@ -3449,7 +3458,7 @@ function drawAllRuns(map){
         const guarded = Quest.toggleGuardForCorridor(zoneId);
         const name = (feature.properties && feature.properties.name) || "run";
         rqToast(guarded ? ("🛡 Guarding: "+name) : ("Stopped guarding: "+name));
-        refreshGuardProps();
+        applyGuardState();
         paintGuardButtons();   // the OFF button shows how many runs are armed
       }
     });

@@ -155,12 +155,26 @@ const tileFog = fs.readFileSync(path.join(__dirname, "../frontend/tile-fog.js"),
   assert(/guardEdges/.test(tileFog) && /-edge-r[\s\S]{0,80}filter:\s*guardedAndAlertable/.test(tileFog),
     "tile-fog.js draws the -edge-r/-edge-l boundary lines for guardEdges corridors");
   assert(/const edgesExpr = \["any", guardedExpr, \["==", \["get", "guardEdges"\], true\]\]/.test(tileFog),
-    "the boundary-line filter accepts guardEdges as well as the old guarded flag (other hosts unchanged)");
-  assert(/guardEdges:Quest\.isGuarded\(c\.zoneId\)/.test(html),
-    "ridge-quest.html sets guardEdges from Quest.isGuarded() on every corridor");
-  assert(/p\.guardEdges = Quest\.isGuarded\(p\.id\)/.test(html) && /if\(this\.onGuardChanged\) this\.onGuardChanged\(\)/.test(html),
-    "the lines redraw live when the master button or a mute changes");
+    "the property-based boundary-line filter still accepts guardEdges/guarded (every other host unchanged)");
+  assert(/guardByState:\s*true/.test(html) && /promoteId:\s*"id"/.test(html),
+    "ridge-quest.html builds its runLines source with promoteId and opts into guardByState");
+  assert(/const edgeOpacity = stateMode \? \["case", \["boolean", \["feature-state", "guardEdges"\], false\], 1, 0\]/.test(tileFog),
+    "in state mode the boundary lines' opacity reads the guardEdges feature-state");
+  assert(/if\(this\.onGuardChanged\) this\.onGuardChanged\(\)/.test(html) && /Quest\.onGuardChanged = applyGuardState/.test(html),
+    "the lines redraw live when the master button or a hold changes");
   assert(!/guarded:Quest\./.test(html), "Ridge Quest must not set `guarded` (it would recolor every corridor cyan)");
+})();
+
+// ---- toggling Guard must not reload the map data (regression, 2026-09-23) ----
+// Turning Guard OFF used to take seconds to clear the yellow lines: the look was a
+// feature PROPERTY, so every toggle called source.setData(), which reloads and
+// re-drapes every tile. It is per-feature STATE now (no data reload). Fail loudly
+// if anyone puts a setData() back into that path.
+(function testGuardToggleNeverReloadsTheSource() {
+  const body = extractBody("function applyGuardState(){");
+  assert(body.length > 0, "found applyGuardState in ridge-quest.html");
+  assert(/setFeatureState/.test(body), "applyGuardState uses setFeatureState");
+  assert(!/setData/.test(body), "applyGuardState must NOT call setData (that reloads every tile; it took seconds on a phone)");
 })();
 
 console.log(pass + " passed, " + fail + " failed");
