@@ -257,7 +257,8 @@ test("source wiring: track feed is isolated in try/catch, back-out clears the ho
   assert.ok(/try\{ if\(RQTrack\) RQTrack\.add\(\{ lat:fix\.lat, lon:fix\.lon, acc:fix\.acc, t:fix\.t \}, onLift \|\| this\.liftModeActive\); \}catch\(e\)\{\}/.test(html));
   assert.ok(html.includes("Quest.onSkiedChanged=null;"));
   assert.ok(html.includes('<script src="/ridge-visuals.js"></script>'));
-  assert.ok(html.includes("this._celebrate(run); this._saveChuteLine(corridor, run, trip.fixes); if(this.onRunLogged) this.onRunLogged(run);"));
+  assert.ok(html.includes("this._postRun(corridor, run, trip.fixes);"));
+  assert.ok(extract("_postRun(corridor, run, fixes){").includes("this._celebrate(run);"));
   const applySkiedBody = extract("function setupRideVisuals(");
   assert.ok(!/setData\(RidgeVisuals\.trackFeatureCollection[\s\S]*skied/.test(applySkiedBody.split("function applySkied")[1].split("Quest.onSkiedChanged")[0]), "skied state never reloads a source");
 });

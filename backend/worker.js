@@ -603,6 +603,16 @@ function cleanChuteLinePoints(points) {
   }
   return out;
 }
+// Ridge Quest offline outbox (frontend/rq-outbox.js): runs and chute lines carry a phone-made
+// clientId that becomes the row id. Returns null (new), "mine" (already stored for this player =
+// done) or "taken" (another player's row has that id -- never expected with UUIDs).
+function validClientId(v) { return typeof v === "string" && /^[A-Za-z0-9-]{8,64}$/.test(v); }
+async function clientIdCheck(env, table, clientId, playerId) {
+  if (!validClientId(clientId)) return null;
+  const row = await env.DB.prepare("SELECT player_id FROM " + table + " WHERE id=?").bind(clientId).first();
+  if (!row) return null;
+  return row.player_id === playerId ? "mine" : "taken";
+}
 async function playerAuth(request, env) {
   const tok = bearer(request);
   if (!tok || !env.DB) return null;
@@ -1219,7 +1229,10 @@ async function api(request, env, url) {
       return json({ error: "zoneId, startedAt and endedAt are required" }, 400, AC);
     const pts = cleanChuteLinePoints(b.points);
     if (!pts) return json({ error: "points must be 2-" + CHUTE_LINE_MAX_POINTS + " [lon,lat] pairs" }, 400, AC);
-    const id = crypto.randomUUID();
+    // Phone-made id (rq-outbox.js): a retry of a line the server already has is a no-op.
+    const dup = await clientIdCheck(env, "chute_line", b.clientId, P.playerId);
+    if (dup) return dup === "taken" ? json({ error: "clientId already used" }, 409, AC) : json({ ok: true, id: b.clientId, duplicate: true }, 200, AC);
+    const id = validClientId(b.clientId) ? b.clientId : crypto.randomUUID();
     const zoneId = String(b.zoneId);
     await env.DB.batch([
       env.DB.prepare(
@@ -1283,7 +1296,11 @@ async function api(request, env, url) {
       return json({ error: "zoneId, activity, startedAt and endedAt are required" }, 400, AC);
     if (!["ski", "lift", "hike", "bike", "drive", "xcski"].includes(b.activity))
       return json({ error: "activity must be ski, lift, hike, bike, drive, or xcski" }, 400, AC);
-    const id = crypto.randomUUID();
+    // Phone-made id (rq-outbox.js): a run sent again after lost signal must never count twice,
+    // including when the first attempt DID land and only the reply was lost.
+    const dup = await clientIdCheck(env, "quest_run", b.clientId, P.playerId);
+    if (dup) return dup === "taken" ? json({ error: "clientId already used" }, 409, AC) : json({ ok: true, id: b.clientId, duplicate: true }, 200, AC);
+    const id = validClientId(b.clientId) ? b.clientId : crypto.randomUUID();
     const verticalM = b.verticalM != null ? b.verticalM : null;
     const distanceM = b.distanceM != null ? b.distanceM : null;
     // R3-core rollup, folded into the SAME batch as the quest_run insert —

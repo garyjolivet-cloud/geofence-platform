@@ -138,15 +138,15 @@ test("feature collection draws only lines with a colour and >= 2 points", () => 
 });
 
 // ---- the REAL Quest._saveChuteLine ----
-function loadSaveChuteLine(apiStub) {
+function loadSaveChuteLine(deliverStub) {
   const method = extractFrom(html, "_saveChuteLine(corridor, run, fixes){");
   // eslint-disable-next-line no-new-func
-  return new Function("api", "return function " + method)(apiStub);
+  return new Function("rqDeliver", "rqNewClientId", "return function " + method)(deliverStub, () => "cid-0001");
 }
 function makeHost(opts) {
   const calls = [];
-  const api = (p, o) => { calls.push({ p, body: JSON.parse(o.body) }); return opts.fail ? Promise.reject(new Error("offline")) : Promise.resolve({ ok: true }); };
-  const fn = loadSaveChuteLine(api);
+  const deliver = item => { calls.push({ p: item.path, kind: item.kind, body: item.body }); return opts.fail ? Promise.reject(new Error("offline")) : Promise.resolve("sent"); };
+  const fn = loadSaveChuteLine(deliver);
   const host = { chuteGuardEnabled: opts.enabled !== false, isGuarded: id => (opts.guarded || []).includes(id), onChuteLineSaved: null };
   return { save: (...a) => fn.apply(host, a), calls, host };
 }
@@ -163,6 +163,8 @@ test("a guarded chute descent saves exactly the verified start->finish fixes", (
   assert.deepStrictEqual(h.calls[0].body.points, [[-117.05, 51.31], [-117.0501, 51.309], [-117.05, 51.308]]);
   assert.strictEqual(h.calls[0].body.zoneId, "c1");
   assert.strictEqual(h.calls[0].body.runName, "Big Dumper");
+  assert.strictEqual(h.calls[0].kind, "line", "sent through the offline outbox as a line");
+  assert.strictEqual(h.calls[0].body.clientId, "cid-0001", "carries a phone-made id so a resend is never a duplicate");
   assert.ok(!("speed" in h.calls[0].body) && !JSON.stringify(h.calls[0].body).includes("speed"), "no speed is sent or stored");
 });
 
@@ -192,10 +194,60 @@ test("a failed save is swallowed and never throws into run logging", async () =>
   assert.strictEqual(bad.save(chute, skiRun, passFixes), null, "an exception inside the gate returns null");
 });
 
-test("_classifyAndLog saves the line only after the run itself is logged", () => {
+test("_classifyAndLog hands the run and the verified pass's own fixes to _postRun", () => {
   const src = extractFrom(html, "_classifyAndLog(corridor, buffer, selectedActivity, isFinal){");
-  assert.match(src, /api\("\/api\/quest-runs"[\s\S]*?\.then\(\(\)=>\{[^}]*this\._saveChuteLine\(corridor, run, trip\.fixes\)/,
-    "the save is chained after the quest-runs POST succeeds, using the verified pass's own fixes");
+  assert.ok(src.includes("this._postRun(corridor, run, trip.fixes);"));
+});
+
+// ---- the REAL Quest._postRun: run + line go through the offline outbox ----
+function runPostRun(result) {
+  const method = extractFrom(html, "_postRun(corridor, run, fixes){");
+  const delivered = [], ev = [];
+  const deliver = item => { delivered.push(item); return Promise.resolve(result); };
+  // eslint-disable-next-line no-new-func
+  const fn = new Function("rqDeliver", "rqNewClientId", "return function " + method)(deliver, () => "run-cid-1");
+  const host = {
+    _saveChuteLine: (c, r, f) => ev.push(["line", r.clientId, f.length]),
+    _celebrate: () => ev.push(["celebrate"]),
+    onSaveError: n => ev.push(["saveError", n]),
+    onRunQueued: n => ev.push(["queued", n])
+  };
+  const run = { zoneId: "c1", activity: "ski" };
+  fn.call(host, { name: "Big Dumper" }, run, passFixes);
+  return new Promise(r => setImmediate(r)).then(() => ({ delivered, ev, run }));
+}
+test("_postRun: sent now -> celebrate; the line is saved with the same run", async () => {
+  const r = await runPostRun("sent");
+  assert.strictEqual(r.run.clientId, "run-cid-1", "the run gets a phone-made id before sending");
+  assert.deepStrictEqual(r.delivered.map(d => [d.kind, d.path]), [["run", "/api/quest-runs"]]);
+  assert.deepStrictEqual(r.ev, [["line", "run-cid-1", 3], ["celebrate"]]);
+});
+test("_postRun: no signal -> kept on the phone, rider still gets the toast and a 'waiting' note", async () => {
+  const r = await runPostRun("queued");
+  assert.deepStrictEqual(r.ev, [["line", "run-cid-1", 3], ["celebrate"], ["queued", "Big Dumper"]]);
+});
+test("_postRun: server refused -> save error, no celebration", async () => {
+  const r = await runPostRun("dropped");
+  assert.deepStrictEqual(r.ev, [["line", "run-cid-1", 3], ["saveError", "Big Dumper"]]);
+});
+
+// ---- worker: a resent run/line with the same clientId is never stored twice ----
+test("worker clientId check: new, already mine (done), or someone else's", async () => {
+  const src = extractFrom(worker, "function validClientId(v) {") + "\n" + extractFrom(worker, "async function clientIdCheck(env, table, clientId, playerId) {");
+  // eslint-disable-next-line no-new-func
+  const { validClientId, clientIdCheck } = new Function(src + "\nreturn { validClientId, clientIdCheck };")();
+  const rows = { "11111111-aaaa": "p1" };
+  const env = { DB: { prepare: sql => ({ bind: id => ({ first: async () => (rows[id] ? { player_id: rows[id] } : null) }) }) } };
+  assert.strictEqual(await clientIdCheck(env, "quest_run", "22222222-bbbb", "p1"), null, "unknown id = new");
+  assert.strictEqual(await clientIdCheck(env, "quest_run", "11111111-aaaa", "p1"), "mine", "already stored for this player = done");
+  assert.strictEqual(await clientIdCheck(env, "quest_run", "11111111-aaaa", "p2"), "taken");
+  assert.strictEqual(await clientIdCheck(env, "quest_run", undefined, "p1"), null, "old clients without an id still work");
+  assert.ok(!validClientId("x;DROP TABLE") && !validClientId("short") && validClientId("3f2c1a9e-7b1d-4c2e-9a55-0d6f1e2b3c4d"));
+  for (const route of ['path === "/api/quest-runs" && method === "POST"', 'path === "/api/chute-lines" && method === "POST"']) {
+    const i = worker.indexOf(route), body = worker.slice(i, i + 2500);
+    assert.match(body, /clientIdCheck\(env, "(quest_run|chute_line)", b\.clientId, P\.playerId\)/, route + " checks the clientId");
+    assert.match(body, /duplicate: true/, route + " answers a repeat as done");
+  }
 });
 
 // ---- worker: validation + deletion paths ----

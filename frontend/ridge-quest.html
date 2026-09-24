@@ -38,6 +38,8 @@
 <script src="/chute-guard.js"></script>
 <script src="/guard-edge.js"></script>
 <script src="/ridge-visuals.js"></script>
+<!-- Offline outbox: runs/chute lines logged without signal are sent later (see its header). -->
+<script src="/rq-outbox.js"></script>
 <!-- Press-and-hold gesture (arm/disarm one corridor's Corridor Guard from
      the map) — shared with fence-editor.html's Test Mode. See its own
      header comment. -->
@@ -422,6 +424,61 @@ async function api(path, opts){
   if(!r.ok) throw new Error(j.error || ("request failed ("+r.status+")"));
   return j;
 }
+
+// Home's "N waiting to send" line; a no-op on any other screen.
+function paintOutboxNote(){
+  const el = document.getElementById("outboxNote"); if(!el) return;
+  const items = RQOut ? RQOut.pending() : [];
+  const runs = items.filter(x=>x.kind==="run").length, lines = items.length - runs;
+  if(!items.length){ el.style.display="none"; el.textContent=""; return; }
+  const parts = [];
+  if(runs) parts.push(runs+" run"+(runs===1?"":"s"));
+  if(lines) parts.push(lines+" chute line"+(lines===1?"":"s"));
+  el.textContent = "📶 "+parts.join(" and ")+" saved on your phone — will send when you have signal.";
+  el.style.display = "";
+}
+/* ===================== OFFLINE OUTBOX (2026-09-24) =====================
+   Runs and chute lines logged with no phone signal are kept on the phone
+   (localStorage rq.outbox, frontend/rq-outbox.js) and sent when the
+   connection returns: on the "online" event, when the app comes back to the
+   foreground, when tracking starts, and every 60 s while anything is waiting.
+   Each carries a phone-made clientId, so the server never counts one twice. */
+function rqNewClientId(){ return (typeof RQOutbox!=="undefined") ? RQOutbox.newClientId() : ("c"+Date.now().toString(36)+Math.random().toString(36).slice(2,12)); }
+async function rqSend(path, body){
+  const s = getSession();
+  const headers = {"Content-Type":"application/json"};
+  if(s && s.token) headers.authorization = "Bearer "+s.token;
+  try{ const r = await fetch(API+path, { method:"POST", headers, body: JSON.stringify(body) }); return { status:r.status }; }
+  catch(e){ return { status:0 }; }   // no signal / DNS / timeout
+}
+const RQOut = (typeof RQOutbox!=="undefined") ? RQOutbox.createOutbox({
+  storage: (()=>{ try{ return localStorage; }catch(e){ return null; } })(),
+  send: rqSend,
+  playerId: ()=>{ const s=getSession(); return s && s.player ? s.player.id : null; },
+  onSent: item=>{
+    if(item.kind==="run" && Quest.onRunLogged) Quest.onRunLogged(item.body);
+    if(item.kind==="run" && Quest.onRunDelivered) Quest.onRunDelivered(item.body.runName);
+    if(item.kind==="line" && Quest.onChuteLineSaved) Quest.onChuteLineSaved(item.body.zoneId);
+  },
+  onChange: ()=>{ try{ if(typeof paintOutboxNote==="function") paintOutboxNote(); }catch(e){} }
+}) : null;
+// Resolves "sent" | "queued" | "dropped". Without the module (it failed to load) falls back
+// to a plain one-shot POST, as before the outbox existed.
+function rqDeliver(item){
+  if(RQOut) return RQOut.deliver(item);
+  return rqSend(item.path, item.body).then(r=>{
+    if(r.status>=200 && r.status<300){ if(item.kind==="run" && Quest.onRunLogged) Quest.onRunLogged(item.body); return "sent"; }
+    return "dropped";
+  });
+}
+async function rqFlushOutbox(){
+  if(!RQOut || !RQOut.pending().length) return;
+  const n = await RQOut.flush();
+  if(n>0 && typeof rqToast==="function") rqToast("✓ Sent "+n+" saved item"+(n===1?"":"s")+" from when you had no signal");
+}
+window.addEventListener("online", ()=>{ rqFlushOutbox(); });
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") rqFlushOutbox(); });
+setInterval(()=>{ rqFlushOutbox(); }, 60000);
 
 /* ===================== WORKSPACE/PROJECT PICKER (R7) =====================
    Shown when boot() can't resolve both RQ_APP_ID and RQ_PROJECT_ID from the
@@ -1222,7 +1279,9 @@ const Quest = {
   checkpointVert: null,  // {day,total,lastElevM,lastAt,lastZoneId} mirror of localStorage["rq.checkpointVert"]; loaded in start()
   _cpCooldownUntil: {},  // zoneId -> ts; session-only per-checkpoint cooldown so one lingering pass can't re-credit a lap
   watchId: null,
-  onRunLogged: null,    // callback(run) — fired after a run is successfully posted
+  onRunLogged: null,    // callback(run) — fired after a run is successfully posted (now or later, from the offline outbox)
+  onRunQueued: null,    // callback(runName) — the run was kept on the phone because there is no signal; sent later
+  onRunDelivered: null, // callback(runName) — a run reached the server (now or from the offline outbox)
   skiedToday: new Set(), // zoneIds of chutes completed today (server list + this session); drives the map's "skied" stripe and the toast's "Chute N of M"
   onSkiedChanged: null, // callback(zoneId|null, justCompleted) — set by drawAllRuns() while "My map" is open; nulled on #fogBack
   onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
@@ -1747,18 +1806,16 @@ const Quest = {
   // Chute lines (2026-09-24): after a logged chute DESCENT, save the verified pass's own
   // start->finish fixes (trip.fixes -- nothing before the start zone or after the finish)
   // as the rider's line for that chute, but only while Corridor Guard is on for it right
-  // now. Fire-and-forget and isolated: a failed save never touches the logged run.
-  // Returns the POST body when it saves (tests read it), else null.
+  // now. Sent through the offline outbox (kept on the phone with no signal) and isolated: a
+  // failed save never touches the logged run. Returns the POST body when it saves, else null.
   _saveChuteLine(corridor, run, fixes){
     try{
       if(!corridor || corridor.runType!=="chute" || !run || run.activity!=="ski") return null;
       if(!this.chuteGuardEnabled || typeof this.isGuarded!=="function" || !this.isGuarded(corridor.zoneId)) return null;
       const points = (fixes||[]).filter(f=>f && f.lat!=null && f.lon!=null).map(f=>[f.lon, f.lat]);
       if(points.length < 2) return null;
-      const body = { zoneId:corridor.zoneId, runName:corridor.name, startedAt:run.startedAt, endedAt:run.endedAt, points };
-      api("/api/chute-lines", { method:"POST", body: JSON.stringify(body) })
-        .then(()=>{ try{ if(this.onChuteLineSaved) this.onChuteLineSaved(corridor.zoneId); }catch(e){} })
-        .catch(()=>{});
+      const body = { clientId:rqNewClientId(), zoneId:corridor.zoneId, runName:corridor.name, startedAt:run.startedAt, endedAt:run.endedAt, points };
+      rqDeliver({ kind:"line", path:"/api/chute-lines", body }).catch(()=>{});
       return body;
     }catch(e){ console.warn("chute line:", e && e.message); return null; }
   },
@@ -1882,16 +1939,23 @@ const Quest = {
       durationS, verticalM, distanceM: Math.round(distanceM), avgSpeedMps, maxSpeedMps
     };
     if(this.onCoverage) this.onCoverage(corridor.name, coverage, true);
-    // A failed save here used to vanish silently (bare .catch(()=>{})) — the
-    // ONLY feedback a player got about this crossing was onCoverage firing
-    // moments ago with passed:true, which is now misleading if the save
-    // itself then fails (network blip, server error). onSaveError lets Home
-    // correct that with a visible message instead of a run just disappearing
-    // with no explanation.
-    api("/api/quest-runs", { method:"POST", body: JSON.stringify(run) })
-      .then(()=>{ this._celebrate(run); this._saveChuteLine(corridor, run, trip.fixes); if(this.onRunLogged) this.onRunLogged(run); })
-      .catch(()=>{ if(this.onSaveError) this.onSaveError(corridor.name); });
+    this._postRun(corridor, run, trip.fixes);
     return true;
+  },
+  // Sends a logged run (and its chute line) through the offline outbox (frontend/rq-outbox.js):
+  // with no signal both are kept on the phone and sent when the connection returns, and the
+  // phone-made clientId means a resend can never count the run twice. The completion toast
+  // shows either way -- the run is safe. onSaveError now only fires when the server REFUSES
+  // the run (it will never be accepted); onRunQueued tells Home it is waiting for signal.
+  // onRunLogged fires from the outbox's onSent, both for an immediate send and a later one.
+  _postRun(corridor, run, fixes){
+    run.clientId = rqNewClientId();
+    this._saveChuteLine(corridor, run, fixes);   // Guard state is judged NOW, not when signal returns
+    rqDeliver({ kind:"run", path:"/api/quest-runs", body:run }).then(res=>{
+      if(res==="dropped"){ if(this.onSaveError) this.onSaveError(corridor.name); return; }
+      this._celebrate(run);
+      if(res==="queued" && this.onRunQueued) this.onRunQueued(corridor.name);
+    });
   }
 };
 
@@ -2497,6 +2561,7 @@ function renderHome(){
     +'<p class="scrollhint" id="cgDebug" style="margin:0 0 6px;font-size:11px;opacity:.7"></p>'
     +'<button class="ghost" id="btnExportCgLog" style="font-size:11px;padding:4px 8px;margin:0 0 10px" title="Download this session\'s Corridor Guard log as a text file">⬇ Export guard log</button>'
     +'<p class="scrollhint" id="coverageStatus" style="margin:0 0 14px"></p>'
+    +'<p class="scrollhint" id="outboxNote" style="margin:-8px 0 14px;display:none"></p>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
     +'<button class="ghost" id="btnMap">My map</button>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
@@ -2596,8 +2661,19 @@ function renderHome(){
   // moments earlier. Corrects that message rather than leaving it wrong.
   Quest.onSaveError = (name)=>{
     if(!coverageEl) return;
-    coverageEl.textContent = name+" — couldn't save to the server (check your connection); this run may not count.";
+    coverageEl.textContent = name+" — the server didn't accept this run, so it won't count.";
   };
+  // No signal: the run is kept on the phone and sent automatically later (offline outbox).
+  Quest.onRunQueued = (name)=>{
+    if(coverageEl) coverageEl.textContent = name+" — saved on your phone; it will be sent when you have signal.";
+    paintOutboxNote();
+  };
+  // ...and once it has gone, say so instead of leaving the "saved on your phone" line up.
+  Quest.onRunDelivered = (name)=>{
+    if(coverageEl && coverageEl.textContent.indexOf(name+" — saved on your phone")===0) coverageEl.textContent = name+" — sent ✓";
+  };
+  paintOutboxNote();
+  rqFlushOutbox();
   // Live-tick the "Vertical today" tile as checkpoints credit descent, so it
   // moves during a session instead of only on the next refreshStats().
   Quest.onCheckpointVertical = (totalM)=>{
@@ -2662,6 +2738,7 @@ function renderHome(){
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); releaseWakeLock(); return; }
       chuteGuardStartSync();
       ScreenSleep.start();
+      rqFlushOutbox();          // anything left from an earlier no-signal session goes now if it can
       trackBtn.textContent="Stop tracking"; trackBtn.classList.add("tracking");
       activityBtns.forEach(b=>b.style.opacity="0.4");
     }

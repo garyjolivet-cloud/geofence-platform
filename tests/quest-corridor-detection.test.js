@@ -37,11 +37,11 @@ const tuningM = html.match(/const QUEST_TUNING = \{[\s\S]*?\n\};/);
 if (!tuningM) { console.log("FAIL: could not extract QUEST_TUNING from ridge-quest.html"); process.exit(1); }
 const QUEST_TUNING = eval("(" + tuningM[0].replace(/^const QUEST_TUNING = /, "").replace(/;$/, "") + ")");
 
-// ---- extract Quest._classifyAndLog's body, stopping before the api() POST ----
+// ---- extract Quest._classifyAndLog's body, stopping before the run is sent (_postRun) ----
 const startTag = "_classifyAndLog(corridor, buffer, selectedActivity, isFinal){";
 const startIdx = html.indexOf(startTag);
 if (startIdx < 0) { console.log("FAIL: could not find _classifyAndLog in ridge-quest.html"); process.exit(1); }
-const endTag = "\n    api(\"/api/quest-runs\"";
+const endTag = "\n    this._postRun(";
 const endIdx = html.indexOf(endTag, startIdx);
 if (endIdx < 0) { console.log("FAIL: could not find end of _classifyAndLog body in ridge-quest.html"); process.exit(1); }
 // eslint-disable-next-line no-new-func
