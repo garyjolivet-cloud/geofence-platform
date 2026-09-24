@@ -24,10 +24,7 @@
 <!-- R1: shared GPS smoothing module, same EKF every other GPS-consuming
      page in this codebase already loads. Reused as-is, not modified. -->
 <script src="/kalman-filter.js"></script>
-<!-- R2: H3 geo-indexing (disk-reveal math) and MapLibre (personal fog-map
-     rendering) — same MapLibre version geofence-engine.html/fence-editor.html
-     already use elsewhere in this codebase. -->
-<script src="https://unpkg.com/h3-js@4/dist/h3-js.umd.js"></script>
+<!-- MapLibre for "My map" — same version geofence-engine.html/fence-editor.html use. -->
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script src="/here-marker.js"></script>
@@ -788,10 +785,6 @@ let RQ_PROJECT_ID = new URLSearchParams(location.search).get("project") || null;
 // ?sim=1 reveals the dev-only "Simulate walk" button on Home (Quest.simulateWalk) —
 // never shown to a real player by default, opt-in via URL only.
 const IS_SIM_MODE = new URLSearchParams(location.search).get("sim") === "1";
-// R5 — per-app admin toggle (GET /api/players/me's fogEnabled), set once at
-// boot(). Gates ONLY renderFogMap()'s visual layers; Quest._revealFog()'s H3
-// tracking and POST /api/fog-cells persistence are never gated by this.
-let RQ_FOG_ENABLED = true;
 // "Share my location with friends today" state — player_account.share_until
 // (epoch ms) mirrored client-side: set by boot() from /api/players/me and by
 // Home's toggle (POST /api/share). While it's in the future AND tracking is
@@ -863,10 +856,6 @@ const QUEST_TUNING = {
   COOLDOWN_MS: 4000,       // avoid double-counting a lingering crossing at the band edge
   NARRATE_HYSTERESIS_M: 3, // in-band test used a hard dist<0 boundary with zero tolerance, so GPS jitter right at a corridor's edge (e.g. lingering near the far end before actually leaving) could flip idle<->inRun rapidly and re-speak the corridor's narration on what was really just noise, not a genuine re-entry. Schmitt-trigger margin: entering needs dist< -this (clearly inside), staying entered only exits once dist>=this (clearly outside) — see _tick() below.
   ACCURACY_CAP_M: 40,      // R2: fixes worse than this don't drive fog reveal — same value/reasoning as geofence-engine.html's TUNING.ACCURACY_CAP_M
-  FOG_RESOLUTION: 10,      // R2: H3 resolution for fog cells (~66m edge) — see the plan's GPS-accuracy-vs-grid-size reasoning
-  VIEWPOINT_RADIUS_M: 15,  // R4: a viewpoint is a spot to stand at, not a zone to cross — small trigger radius
-  FOG_CELLS_POST_CHUNK: 500, // R4: /api/fog-cells caps at 500 cells/call; a full viewshed grant is chunked to this size
-  CORRIDOR_SAMPLE_STEP_M: 25, // spacing for QGeo.resamplePath() -- used by corridorPreviewCells() (My-map footprint), NOT by run verification (that uses COVER_BIN_M)
   // --- Full-run verification (2026-09-21). Field report: skiing ACROSS a
   // corridor (a traverse) logged it as skied. Root causes, all in the old
   // detector: (1) coverage was "is the track within halfWidth+15m of >=50% of
@@ -964,23 +953,6 @@ const QGeo = {
     let best=Infinity;
     for(let i=1;i<pts.length;i++) best=Math.min(best, this.segDist(P,pts[i-1],pts[i]));
     return best - (corridor.widthM||10)/2;
-  },
-  // Resamples a [lat,lon] polyline into ~stepM-spaced points -- same
-  // technique Quest.simulateWalk() uses for synthetic-fix pacing. Used by
-  // corridorPreviewCells() to lay the My-map footprint along a corridor.
-  resamplePath(path, stepM){
-    const pts=[];
-    for(let i=1;i<path.length;i++){
-      const a=path[i-1], b=path[i];
-      const segM=this.haversineM(a,b);
-      const steps=Math.max(1, Math.round(segM/stepM));
-      for(let s=0;s<steps;s++){
-        const f=s/steps;
-        pts.push([ a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f ]);
-      }
-    }
-    pts.push(path[path.length-1]);
-    return pts;
   },
   // ---- Full-run verification (QUEST_TUNING "Full-run verification") ----
   // Corridor geometry in local metres, computed once per corridor: XY points,
@@ -1231,15 +1203,12 @@ const QGeo = {
 
 const Quest = {
   corridors: [],       // [{zoneId,name,difficulty,runType,widthM,path,lengthM,ref}]
-  _offsite: false,     // set by the "My map" HereMarker site gate — true => device is >10 km outside the run network; _onFix pauses ticks/fog/sharing
+  _offsite: false,     // set by the "My map" HereMarker site gate — true => device is >10 km outside the run network; _onFix pauses ticks/sharing
   ref: null,            // [lat,lon] project reference point (R2 map center) — set by loadCorridors() regardless of whether any corridor exists
   allowedActivities: null, // R12: this project's activity-relevance filter — null=all, else array of activity strings — set by loadCorridors()
   threeDEnabled: false, // workspace 3D-terrain flag (bundle.threeDEnabled, injected server-side) — gates 3D terrain on "My map"
   season: null,         // project.season (bundle.season, injected server-side) — My map applies the winter treatment only when this is 'winter' (same rule as every other map view)
   states: {},           // zoneId -> {phase:"idle"|"inRun" (narration band only), narrCooldownUntil, cooldownUntil (post-log), rec:{buf,lastNearT,lastS,sawTop,sawBottom}|null (run recorder)}
-  fogCells: new Map(),  // R2/R4: h3Cell -> state (2="Visible"/skied; 1="Fog"/seen-from-a-viewpoint) — the player's own local mirror of player_fog_cell
-  viewpoints: [],        // R4: [{zoneId,name,center:[lat,lon],cells:[h3cell,...]}]
-  enteredViewpoints: new Set(), // zoneId set — a viewpoint grants once per session; the server's upgrade-only upsert makes a duplicate POST harmless but wasteful, so this avoids re-sending every fix while lingering at a viewpoint
   checkpoints: [],       // [{zoneId,name,center:[lat,lon],elevM}] — authored known-elevation spots; _tickCheckpoints subtracts between them for the headline daily vertical
   resortFullVerticalM: 0, // max(checkpointElevM) - min(checkpointElevM); 0 when <2 checkpoints => Layer 2 inert. Also the single-delta cap (a bigger drop between two hits = a missed checkpoint)
   checkpointVert: null,  // {day,total,lastElevM,lastAt,lastZoneId} mirror of localStorage["rq.checkpointVert"]; loaded in start()
@@ -1248,7 +1217,6 @@ const Quest = {
   onRunLogged: null,    // callback(run) — fired after a run is successfully posted
   skiedToday: new Set(), // zoneIds of chutes completed today (server list + this session); drives the map's "skied" stripe and the toast's "Chute N of M"
   onSkiedChanged: null, // callback(zoneId|null, justCompleted) — set by drawAllRuns() while "My map" is open; nulled on #fogBack
-  onFogUpdated: null,   // callback() — fired whenever fogCells grows, so an open map screen can redraw live
   onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
   onShare: null,        // callback(p) — same p as onPosition; set by renderHome to POST /api/presence (throttled) while sharing-with-friends is on. Independent of onPosition so it survives Home<->Map navigation.
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
@@ -1302,7 +1270,7 @@ const Quest = {
   async loadCorridors(){
     try{
       const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
-      if(bundle.error){ this.corridors=[]; this.viewpoints=[]; this.checkpoints=[]; this.resortFullVerticalM=0; return; }
+      if(bundle.error){ this.corridors=[]; this.checkpoints=[]; this.resortFullVerticalM=0; return; }
       const ref = bundle.ref || [0,0];
       this.ref = ref;
       // R12 — the per-project "relevant activities" filter, injected
@@ -1315,10 +1283,6 @@ const Quest = {
       // Tour Player already reads) — gates the off-course vibration/tone
       // warning wired into _onFix() below via chute-guard.js.
       this.chuteGuardEnabled = !!bundle.chuteGuardEnabled;
-      // Injected server-side into the bundle at read time (worker.js's
-      // GET /bundle handler) — "My map" draws the all-runs overlay only when
-      // fog AND tile art are both off for the project.
-      this.tileArtEnabled = !!bundle.tileArtEnabled;
       // Same live-owner injection — the workspace's 3D-terrain toggle. When
       // on, renderFogMap() drapes the fog/runs over DEM terrain and opens
       // the map pitched.
@@ -1351,12 +1315,6 @@ const Quest = {
                  say: (z.triggers && z.triggers[0] && z.triggers[0].say) || null,
                  widthM:target.geometry.widthM||10, path, lengthM, ref };
       }).filter(Boolean);
-      // R4 — Viewpoint zones: a plain circle stop flagged isViewpoint, with
-      // a precomputed viewshedCells list (staff-computed in Fence Editor,
-      // never per-player/per-tick). center comes straight from zo.center
-      // ([lat,lon], same convention every other zone here already uses).
-      this.viewpoints = (bundle.zones||[]).filter(z=>z.isViewpoint && z.center && (z.viewshedCells||[]).length)
-        .map(z=>({ zoneId:z.id, name:z.name||"Viewpoint", center:z.center, cells:z.viewshedCells }));
       // Elevation checkpoints — circle stops flagged isElevCheckpoint with a
       // numeric checkpointElevM. _tickCheckpoints subtracts a skier's
       // successive checkpoint elevations for the headline daily vertical.
@@ -1366,22 +1324,11 @@ const Quest = {
         .map(z=>({ zoneId:z.id, name:z.name||"Checkpoint", center:z.center, elevM:z.checkpointElevM }));
       const _ce = this.checkpoints.map(c=>c.elevM);
       this.resortFullVerticalM = _ce.length>=2 ? (Math.max.apply(null,_ce) - Math.min.apply(null,_ce)) : 0;
-    }catch(e){ this.corridors=[]; this.viewpoints=[]; this.checkpoints=[]; this.resortFullVerticalM=0; }
+    }catch(e){ this.corridors=[]; this.checkpoints=[]; this.resortFullVerticalM=0; }
   },
 
-  // R2 — loads the player's already-revealed cells once (session start /
-  // map open) so _revealFog() only ever POSTs genuinely NEW cells, not the
-  // same disk every tick a player lingers in one spot.
-  async loadFogCells(playerId){
-    try{
-      const j = await api("/api/players/"+playerId+"/fog");
-      this.fogCells = new Map((j.cells||[]).map(c=>[c.h3_cell, c.state]));
-    }catch(e){ /* keep whatever was already loaded (or empty) — a failed fetch here shouldn't block tracking */ }
-  },
-
-  start(onRunLogged, onFogUpdated, onStatus, selectedActivity, onCoverage){
+  start(onRunLogged, onStatus, selectedActivity, onCoverage){
     this.onRunLogged = onRunLogged;
-    this.onFogUpdated = onFogUpdated || null;
     this.onStatus = onStatus || null;
     this.onCoverage = onCoverage || null;
     // R8 — defaults to "ski" so anyone who never touches the activity
@@ -1550,8 +1497,6 @@ const Quest = {
       // staleness backstop for when fixes STOP arriving.
       syncCgAlarm();
     }
-    this._revealFog(p, fix.acc);
-    this._tickViewpoints(p);
     this._tickCheckpoints(p);
     if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t});
     if(this.onShare) this.onShare(p);         // share own position with friends (throttled inside)
@@ -1611,40 +1556,6 @@ const Quest = {
   },
   cancelSim(){ this._simCancelled = true; },
 
-  // R4 — Viewpoint entry: a plain distance-to-center check (a viewpoint is
-  // a spot to stand at, not a zone to cross — no corridor-style band
-  // needed). Fires the grant once per session per viewpoint via
-  // enteredViewpoints; the server's own upgrade-only upsert would make a
-  // repeat POST harmless, this just avoids sending one on every fix while
-  // lingering there.
-  _tickViewpoints(p){
-    this.viewpoints.forEach(vp=>{
-      if(this.enteredViewpoints.has(vp.zoneId)) return;
-      if(QGeo.haversineM([p.lat,p.lon], vp.center) > QUEST_TUNING.VIEWPOINT_RADIUS_M) return;
-      this.enteredViewpoints.add(vp.zoneId);
-      this._grantViewshed(vp);
-    });
-  },
-
-  // R4 — grants a viewpoint's precomputed cell-set at state=1 ("Fog"/seen).
-  // Local dedupe must be STATE-AWARE and must never downgrade: a cell
-  // already locally at state 2 (actually skied) stays 2 — Math.max, not an
-  // overwrite. The server's own MAX() upsert protects the DB regardless,
-  // but the local fogCells Map is what the map renderer trusts, so it needs
-  // the same invariant. Chunked to FOG_CELLS_POST_CHUNK per call —
-  // /api/fog-cells caps at 500 cells/request and a full viewshed can be
-  // 1000-2000 cells.
-  _grantViewshed(vp){
-    const newCells = vp.cells.filter(cell => (this.fogCells.get(cell)||0) < 1);
-    if(!newCells.length) return;
-    newCells.forEach(cell => this.fogCells.set(cell, Math.max(this.fogCells.get(cell)||0, 1)));
-    if(this.onFogUpdated) this.onFogUpdated();
-    for(let i=0; i<newCells.length; i+=QUEST_TUNING.FOG_CELLS_POST_CHUNK){
-      const chunk = newCells.slice(i, i+QUEST_TUNING.FOG_CELLS_POST_CHUNK);
-      api("/api/fog-cells", { method:"POST", body: JSON.stringify({ cells:chunk, state:1 }) }).catch(()=>{});
-    }
-  },
-
   // Headline daily vertical, measured by SUBTRACTION between authored
   // known-elevation checkpoints the skier passes — GPS altitude is never
   // consulted. Keeps a guarded "last known elevation": each new checkpoint
@@ -1691,25 +1602,6 @@ const Quest = {
     if(!force && (now - (this._cpLastPostAt || 0) < 10000)) return;
     this._cpLastPostAt = now;
     api("/api/quest-day-vertical", { method:"POST", body: JSON.stringify({ verticalM: Math.round(totalM) }) }).catch(()=>{});
-  },
-
-  // R2 — H3 disk-reveal: mark the fix's own cell plus its k=1 ring (7 cells,
-  // ~200m across — the "torch radius" absorbing normal GPS jitter, per the
-  // plan's Fog-of-World precedent) as state=2 ("Visible"). Confidence-gated
-  // on fix.acc, same "no data = pass, don't act on garbage" convention
-  // TUNING.ACCURACY_CAP_M already uses in geofence-engine.html. Only NEW
-  // cells (not already in this.fogCells) get POSTed — revisiting already-
-  // revealed terrain is a local no-op, not a wasted network call.
-  _revealFog(p, acc){
-    if(acc > QUEST_TUNING.ACCURACY_CAP_M) return;
-    if(typeof h3 === "undefined") return; // CDN script blocked/offline — fail safe, no reveal rather than throw
-    const origin = h3.latLngToCell(p.lat, p.lon, QUEST_TUNING.FOG_RESOLUTION);
-    const disk = h3.gridDisk(origin, 1);
-    const newCells = disk.filter(cell => (this.fogCells.get(cell)||0) < 2);
-    if(!newCells.length) return;
-    newCells.forEach(cell => this.fogCells.set(cell, 2));
-    if(this.onFogUpdated) this.onFogUpdated();
-    api("/api/fog-cells", { method:"POST", body: JSON.stringify({ cells:newCells, state:2 }) }).catch(()=>{});
   },
 
   _tick(corridor, p, selectedActivity){
@@ -2573,7 +2465,6 @@ function renderHome(){
     +'<p class="scrollhint" id="coverageStatus" style="margin:0 0 14px"></p>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
     +'<button class="ghost" id="btnMap">My map</button>'
-    +'<p class="scrollhint" id="exploredPct" style="margin:6px 0 10px"></p>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
     +'<button class="ghost" id="btnChutes">Your chutes</button>'
     +'<button class="ghost" id="btnFriends">Friends</button>'
@@ -2587,12 +2478,8 @@ function renderHome(){
   refreshRuns(s.player.id);
   refreshStats(s.player.id);
   loadSkiedToday(s.player.id);
-  // R11 — completion % needs BOTH corridors (the denominator) and fog
-  // cells (the numerator) actually loaded, not just fired off — awaited
-  // here instead of the old fire-and-forget pair so the stat has real data
-  // by the time it paints, without fetching either one twice.
   (async ()=>{
-    await Promise.all([Quest.loadCorridors(), Quest.loadFogCells(s.player.id)]);
+    await Quest.loadCorridors();
     // Re-load on every Home render, same as applyActivityFilter() below —
     // corridors may have just changed (a different resort/project).
     // ChuteGuard.load() is cheap/idempotent AND preserves any live
@@ -2617,16 +2504,13 @@ function renderHome(){
     paintGuardButtons();
     Quest.onNarrate = narrateCorridor;
     Quest.onPrefetch = (text)=>{ sayViaTts(text).then(()=>cgLog("SAY prefetched: \""+text.slice(0,40)+"\"")).catch(()=>{}); };
-    const el = document.getElementById("exploredPct");
-    if(!el) return; // navigated away before this resolved
+    if(!document.getElementById("todayRuns")) return; // navigated away before this resolved
     // One-time notice: guarding used to be opt-in per chute, so a returning
     // rider would otherwise be surprised by alarms on every run.
     if(Quest.chuteGuardEnabled && !localStorage.getItem("rq.guardDefaultOnNoticeShown")){
       try{ localStorage.setItem("rq.guardDefaultOnNoticeShown","1"); }catch(e){}
       rqToast("Corridor Guard is now on for every run. Use the yellow button to turn it off.");
     }
-    const pct = questCompletionPct(corridorPreviewCells(), Quest.fogCells);
-    el.textContent = pct==null ? "" : Math.round(pct*100)+"% of this map explored (lifetime)";
     // R12 — corridors just (re)loaded, so Quest.allowedActivities now
     // reflects THIS project. Re-apply the filter now that it's fresh (the
     // earlier synchronous call below used whatever was cached from a
@@ -2740,7 +2624,7 @@ function renderHome(){
       chuteGuardPrimeAudio();  // this tap is also the iOS AudioContext-unlock gesture for the chute-guard fallback tone
       unlockSayAudio();        // and the iOS <audio>-element-unlock gesture for spoken corridor narration
       acquireWakeLock();       // and the user-gesture context Wake Lock needs on some browsers — see its own comment
-      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, null, onStatus, selectedActivity, onCoverage);
+      const ok=Quest.start(()=>{ refreshRuns(s.player.id); refreshStats(s.player.id); }, onStatus, selectedActivity, onCoverage);
       if(!ok){ alert("This device/browser doesn’t support GPS tracking."); releaseWakeLock(); return; }
       chuteGuardStartSync();
       ScreenSleep.start();
@@ -3081,14 +2965,15 @@ async function renderFriends(){
   loadFriends();
 }
 
-/* =========================== FOG MAP (R2) ===========================
-   Personal fog-of-war map — renders Quest.fogCells (already loaded/kept
-   live by the Quest module, tracking or not) as a MapLibre fill layer over
-   the same Esri World_Imagery raster basemap geofence-engine.html already
-   uses (plain OSM raster tiles have no CORS headers and silently fail —
-   see the discovery-osm-tile-cors-block memory, already worked around
-   elsewhere in this codebase). A fixed full-viewport overlay, deliberately
-   outside .wrap's 520px card width — a map needs the whole screen. */
+/* ============================= MY MAP =============================
+   The rider's map: every run as a coloured line over the same Esri
+   World_Imagery raster basemap geofence-engine.html uses (plain OSM raster
+   tiles have no CORS headers and silently fail — see the
+   discovery-osm-tile-cors-block memory, already worked around elsewhere in
+   this codebase). A fixed full-viewport overlay, deliberately outside .wrap's
+   520px card width — a map needs the whole screen. (Fog of war and tile art
+   were removed 2026-09-24; function/CSS names like renderFogMap/.fogMap* are
+   historical.) */
 // Phone tilt -> map pitch (2026-09-23). DeviceHeading.tilt is the phone's front-back
 // tilt in degrees: 0 = lying flat face-up, 90 = held upright. The map's pitch is the
 // same idea (0 = straight down, up to MapLibre's default maxPitch of 60), so the map
@@ -3101,104 +2986,13 @@ function pitchForPhoneTilt(tiltDeg){
   if(typeof tiltDeg !== "number" || !isFinite(tiltDeg)) return null;
   return Math.max(0, Math.min(TILT_PITCH_MAX_DEG, tiltDeg));
 }
-function fogFeatureCollection(){
-  const features=[];
-  Quest.fogCells.forEach((state, cell)=>{
-    const ring = h3.cellToBoundary(cell, true); // geoJson:true -> [lon,lat] pairs, already closed
-    features.push({ type:"Feature", properties:{ state }, geometry:{ type:"Polygon", coordinates:[ring] } });
-  });
-  return { type:"FeatureCollection", features };
-}
-// The actual "fog of war" look: fogFeatureCollection() above only ever
-// emits a shape for cells you've ALREADY revealed — unrevealed terrain has
-// no feature at all, so it just showed the plain satellite basemap,
-// indistinguishable from "nothing is fogged." This draws the inverse: one
-// world-covering polygon with a hole punched out for every revealed cell,
-// so unexplored terrain reads as genuinely dark and revealed terrain shows
-// the basemap through (plus the colored fog-fill/fog-line layers on top
-// for the skied/seen tint). One hole per cell is fine as disjoint H3 hexes
-// never overlap, so nothing here needs union/dissolve logic.
-function shroudFeatureCollection(){
-  const world = [[-180,-85],[180,-85],[180,85],[-180,85],[-180,-85]];
-  const holes=[];
-  Quest.fogCells.forEach((state, cell)=>{ holes.push(h3.cellToBoundary(cell, true)); });
-  return { type:"FeatureCollection", features:[
-    { type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[world, ...holes] } }
-  ]};
-}
-// R10 — "normalize the project so the tiles are over the entire project":
-// a player who's only ever walked ONE of a project's several corridors used
-// to see one bright hex strip floating alone in an otherwise featureless
-// black void — no sense of the project's actual size/shape. Precomputes
-// every corridor's own H3 footprint (same k=1 "torch radius" disk
-// _revealFog() would eventually paint if you walked it, so the shape never
-// jumps when a preview cell later gets genuinely revealed) and renders it as
-// a dim, always-on outline UNDER the real fog-fill/fog-line layers. Purely
-// client-side/visual — never touches Quest.fogCells, never written to
-// player_fog_cell, so R4's viewpoint semantics (state=1 = "seen from a
-// viewpoint") stay exactly what they were; this is a third, visually
-// distinct layer, not a new fog state.
-function corridorPreviewCells(){
-  const cells = new Set();
-  if(typeof h3 === "undefined") return cells;
-  Quest.corridors.forEach(corridor=>{
-    QGeo.resamplePath(corridor.path, QUEST_TUNING.CORRIDOR_SAMPLE_STEP_M).forEach(([lat,lon])=>{
-      const origin = h3.latLngToCell(lat, lon, QUEST_TUNING.FOG_RESOLUTION);
-      h3.gridDisk(origin, 1).forEach(c=>cells.add(c));
-    });
-  });
-  return cells;
-}
-// cells is optional — pass the already-computed Set when a caller (like
-// renderFogMap()) needs both this and questCompletionPct() in the same
-// pass, so a project's whole corridor network (every corridor resampled +
-// h3'd) isn't walked twice per map open. Falls back to computing it fresh
-// so this still works as a standalone call.
-function corridorPreviewFeatureCollection(cells){
-  const features=[];
-  (cells || corridorPreviewCells()).forEach(cell=>{
-    const ring = h3.cellToBoundary(cell, true);
-    features.push({ type:"Feature", properties:{}, geometry:{ type:"Polygon", coordinates:[ring] } });
-  });
-  return { type:"FeatureCollection", features };
-}
-// R11 — "complete %": what fraction of THIS project's own corridor network
-// (previewCells — same set corridorPreviewCells() above already computes)
-// has this player actually skied/walked (state===2), not just seen from a
-// viewpoint (state===1, R4) — a viewpoint grant must never let someone
-// "complete" a swath they never set foot on. previewCells IS the
-// denominator deliberately (not a looser/tighter buffer): it's the exact
-// same k=1-disk shape _revealFog() paints when you actually walk a
-// corridor, so 100% is genuinely reachable (a real GPS track is denser
-// than the 25m sampling that builds previewCells) without being trivially
-// overshootable. Returns null (not 0) for an empty set — a project with no
-// corridors, or a bundle that hasn't loaded yet, has no meaningful
-// percentage, and null lets the caller hide the stat instead of showing a
-// misleading "0%". Pure/no h3 dependency — takes the already-built sets as
-// plain arguments so this needs no stubbing to unit-test.
-function questCompletionPct(previewCells, fogCells){
-  if(!previewCells.size) return null;
-  let revealed=0;
-  previewCells.forEach(cell=>{ if((fogCells.get(cell)||0)===2) revealed++; });
-  return revealed/previewCells.size;
-}
-// A revealed patch can be a handful of ~66m hexes — easy to miss entirely
-// against a fixed zoom:13 view of the whole resort. Fits the initial view to
-// the UNION of the corridor network's full extent (so the whole project is
-// always in frame, per the same "normalize... entire project" request
-// corridorPreviewCells() above addresses) and any actually-revealed cells
-// (so real progress reachable outside a corridor — plain GPS wandering,
-// _revealFog() has no proximity check — is never cropped out even though it
-// isn't part of that union on its own). Falls back to null (caller keeps
-// the old fixed ref/zoom view) only when the project has neither.
 // bbox of just the authored project content ([[minLon,minLat],[maxLon,maxLat]]) —
-// corridor paths + viewpoints + ref, NO revealed fog. Used for HereMarker's
+// corridor paths + ref. Used for HereMarker's
 // site gate (a fix / friend outside this + buffer isn't shown) and as the
 // base for questMapBounds().
 function questContentBounds(){
   const ll=[];
   Quest.corridors.forEach(c=>(c.path||[]).forEach(([lat,lon])=>ll.push([lon,lat])));
-  (Quest.viewpoints||[]).forEach(v=>{ if(Array.isArray(v.center)) ll.push([v.center[1], v.center[0]]); });
   if(Array.isArray(Quest.ref)) ll.push([Quest.ref[1], Quest.ref[0]]);
   if(!ll.length) return null;
   let minLon=Infinity,maxLon=-Infinity,minLat=Infinity,maxLat=-Infinity;
@@ -3212,7 +3006,6 @@ function questContentBounds(){
 function questMapBounds(){
   const lonlats=[];
   Quest.corridors.forEach(c=>(c.path||[]).forEach(([lat,lon])=>lonlats.push([lon,lat])));
-  Quest.fogCells.forEach((state, cell)=>{ h3.cellToBoundary(cell, true).forEach(pt=>lonlats.push(pt)); });
   if(!lonlats.length) return null;
   let minLon=Infinity,maxLon=-Infinity,minLat=Infinity,maxLat=-Infinity;
   lonlats.forEach(([lon,lat])=>{
@@ -3222,9 +3015,7 @@ function questMapBounds(){
   return [[minLon,minLat],[maxLon,maxLat]];
 }
 // Pan/zoom-out boundary for "My map" — the resort's own authored footprint
-// (questContentBounds(): corridors + viewpoints + ref, not the
-// fog-cell-inflated questMapBounds() above, which grows as a player
-// wanders) padded generously past the edges. Passed as MapLibre's
+// (questContentBounds(): corridors + ref) padded generously past the edges. Passed as MapLibre's
 // maxBounds, which does double duty: it stops panning past the box AND
 // (per MapLibre's own behavior) keeps the camera from zooming out far
 // enough to show area outside it — the "set a boundary you can pan or
@@ -3343,7 +3134,7 @@ function _rebuildRunBadges(map, cors){
 // mountains around Kicking Horse, most on-resort (T1/T2) or visible from it
 // at distance (up to ~48mi, e.g. Mount Temple). This is the first hardcoded
 // static geo-data array in this file (everything else — corridors,
-// viewpoints, checkpoints — comes from the published bundle); nothing about
+// checkpoints — comes from the published bundle); nothing about
 // these peaks is per-project or author-editable, so there's no reason for
 // them to live in D1. Elevations given as authored (ft primary, m secondary).
 //
@@ -3689,14 +3480,6 @@ function renderFogMap(){
   let _unbindHeading = function(){};
   const use3D = !!Quest.threeDEnabled;
   const winter = Quest.season === "winter"; // uniform trigger across every map view
-  // R11 — completion % is a number derived from tracking (Quest.fogCells),
-  // not a fog VISUAL — deliberately NOT gated behind RQ_FOG_ENABLED the way
-  // the legend below is, matching R5's own contract that fog tracking never
-  // stops, only the shroud/hex drawing does. Both sets are already loaded
-  // by the time this screen can even be reached (Home awaits them before
-  // "My map" is clickable), so this is a plain sync call, no fetch needed.
-  const previewCells = corridorPreviewCells();
-  const completionPct = questCompletionPct(previewCells, Quest.fogCells);
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
@@ -3704,15 +3487,13 @@ function renderFogMap(){
     +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
     +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass and dims the screen while riding a lift or sitting still (tap the screen to wake). Tap to cycle Auto/On/Off.">🔋 Auto</button>'
     +'<button class="ghost guardBtn fogMapGuard on" id="fogGuard" style="display:none" title="Corridor Guard — tap to turn it on or off for every chute and run. Press and hold a run: with Guard ON it mutes that run, with Guard OFF it turns Guard on for just that run.">🛡 Guard ON</button>'
-    +(completionPct!=null ? '<div class="fogMapLegend" style="left:auto;right:14px">'+Math.round(completionPct*100)+'% explored</div>' : '')
-    +(RQ_FOG_ENABLED ? '<div class="fogMapLegend"><span><i style="background:var(--go)"></i>Skied</span><span><i style="background:var(--ice)"></i>Seen</span><span><i style="background:var(--ice);opacity:.3"></i>Trail map</span></div>' : '')
     +'</div>';
   // Bind Back FIRST, before anything that can throw (maplibregl failing to
   // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
   // exception here aborts the script before the button's handler is ever
   // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{
-    Quest.onFogUpdated=null; Quest.onPosition=null;
+    Quest.onPosition=null;
     Quest.onLiftModeChange=null; Quest.onGuardChanged=null; Quest.onSkiedChanged=null;
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
@@ -3877,55 +3658,15 @@ function renderFogMap(){
     // fire the same pause/resume logic once up front instead of waiting for
     // the next fix to happen to change it.
     if(Quest.liftModeActive) Quest.onLiftModeChange(true);
-    function syncSource(){
-      const shroudSrc = map.getSource("shroud");
-      if(shroudSrc) shroudSrc.setData(shroudFeatureCollection());
-      const src = map.getSource("fog");
-      if(src) src.setData(fogFeatureCollection());
-    }
     map.on("load", ()=>{
-      // Named peak reference labels — independent of fog/tile-art mode
-      // (unlike drawAllRuns()'s run-network overlay below, these are always
-      // useful orientation context regardless of how the resort's own runs
-      // are rendered).
+      // Named peak reference labels — orientation context on the satellite basemap.
       drawNamedPeaks(map);
-      // R5 — admin-gated: fogFeatureCollection()/shroudFeatureCollection()
-      // stay pure/untouched either way (Quest.fogCells itself is never
-      // gated — only whether it gets DRAWN here is).
-      if(!RQ_FOG_ENABLED){
-        // Fog off: if tile art is ALSO off for this project, draw every run
-        // as a labelled line + its activity ribbon graphic so the skier can
-        // see the whole network. If tile art is on, leave the bare
-        // satellite basemap (that path renders its own thing elsewhere).
-        if(!Quest.tileArtEnabled) drawAllRuns(map);
-        return;
-      }
-      // Shroud goes in FIRST (and its layer added first) so it paints
-      // underneath the colored fog-fill/fog-line layers below.
-      map.addSource("shroud", { type:"geojson", data: shroudFeatureCollection() });
-      map.addLayer({ id:"shroud-fill", type:"fill", source:"shroud",
-        paint:{ "fill-color":"#050810", "fill-opacity":0.72 } });
-      // R10 — dim, always-on corridor-network outline, drawn ON TOP of the
-      // shroud (so it's visible through the dark) but UNDER the real
-      // fog-fill/fog-line below (so actually-earned progress stays the most
-      // prominent thing on screen). Static for the life of this map screen —
-      // Quest.corridors doesn't change mid-session, so unlike shroud/fog
-      // this never needs a place in syncSource()'s live-redraw.
-      map.addSource("corridorPreview", { type:"geojson", data: corridorPreviewFeatureCollection(previewCells) });
-      map.addLayer({ id:"corridorPreview-fill", type:"fill", source:"corridorPreview",
-        paint:{ "fill-color":"#8fb6d4", "fill-opacity":0.14 } });
-      map.addLayer({ id:"corridorPreview-line", type:"line", source:"corridorPreview",
-        paint:{ "line-color":"#8fb6d4", "line-width":1, "line-opacity":0.3 } });
-      map.addSource("fog", { type:"geojson", data: fogFeatureCollection() });
-      map.addLayer({ id:"fog-fill", type:"fill", source:"fog",
-        paint:{ "fill-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "fill-opacity":0.5 } });
-      map.addLayer({ id:"fog-line", type:"line", source:"fog",
-        paint:{ "line-color":["match",["get","state"],2,"#38e0a6",1,"#8fb6d4","transparent"], "line-width":1.5, "line-opacity":0.8 } });
+      drawAllRuns(map);   // every run as a coloured line (the plain-lines map; fog of war and tile art were removed)
     });
     // Winter look for the ski map — GPU-cheap raster recolor + (in 3D) a DEM
     // hillshade / elevation snowline + a cool wash + faint grain, all static.
-    // Registered LAST so shroud-fill / runLines-* already exist for the helper
-    // to anchor beneath (it's defensive about ordering regardless).
+    // Registered LAST so runLines-* already exist for the helper to anchor beneath
+    // (it's defensive about ordering regardless).
     if(winter) map.on("load", ()=>{
       Terrain3D.applyWinter(map, { dem: use3D });
       orderRideLayers(map);
@@ -3936,20 +3677,13 @@ function renderFogMap(){
         applyTimeOfDayLight(map);
       }, 600000);
     });
-    // Live redraw as new cells get revealed WHILE this screen is open
-    // (tracking may already be running from Home) — cleared on back-out so
-    // a later fix, after navigating away, doesn't try to touch a torn-down
-    // map instance. Left null when fog is admin-disabled: there's no source
-    // to sync into (map.on("load") returned early above), and Quest itself
-    // keeps tracking regardless — this only controls the redraw callback.
-    if(RQ_FOG_ENABLED) Quest.onFogUpdated = syncSource;
     // Live "you are here" directional avatar. follow:'edge' keeps the
     // fitBounds() run-network framing above and only re-centres if the player
     // walks off screen. Driven from _onFix -> Quest.onPosition (real fixes
     // and ?sim=1 "Simulate walk" both). Torn down by the #fogBack handler
-    // nulling Quest.onPosition, same lifecycle as onFogUpdated.
+    // nulling Quest.onPosition.
     // Site gate: a fix >10 km outside the run network hides the avatar,
-    // stops the map chasing it, and pauses fog reveal / corridor ticks /
+    // stops the map chasing it, and pauses corridor ticks /
     // position sharing (Quest._offsite, set in the onSite callback).
     const QBOUNDS = questContentBounds();
     const fogRecenterBtn = document.getElementById("fogRecenter");
@@ -4385,7 +4119,6 @@ async function boot(){
   }catch(e){
     clearSession(); renderAuth("login"); return;
   }
-  RQ_FOG_ENABLED = me.fogEnabled !== false;
   RQ_SHARE_UNTIL = me.shareUntil || null;
   // Session/reconciliation: player_account is unique per (app_id,email),
   // not globally — switching workspace means switching account. If the
