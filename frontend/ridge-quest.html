@@ -136,8 +136,21 @@
   /* Corridor Guard on/off — the yellow button (Home + "My map"). ON = solid
      amber, OFF = amber outline, so state reads at a glance without the label. */
   .guardBtn.on{background:var(--amber);border:1px solid var(--amber);color:#1a1400;font-weight:700}
-  .guardBtn.off{background:transparent;border:1.5px solid var(--amber);color:var(--amber);font-weight:600}
+  /* OFF keeps the amber outline + amber text but on a SOLID dark fill — it used to be
+     transparent, which over bright satellite imagery left just thin yellow text on
+     whatever was underneath. */
+  .guardBtn.off{background:#0a1018;border:1.5px solid var(--amber);color:var(--amber);font-weight:700}
   .fogMapGuard{position:absolute;top:58px;right:14px;z-index:2;width:auto;margin:0;padding:9px 16px;border-radius:10px;font-size:13px}
+  /* The map's overlay buttons sit on top of bright satellite imagery, so they must be SOLID and
+     high-contrast. They also carry the generic class "ghost" (transparent, pale-blue text), and
+     `button.ghost` out-ranks the single-class .fogMapBack/.fogMapTilt/... rules above, so those
+     rules' solid background and white text were silently overridden: the buttons rendered
+     transparent with faint text and were hard to read. Re-assert with enough specificity to win.
+     Text is 15:1 even over pure-white imagery, up from ~2:1 (tests/quest-button-contrast.test.js pins this). */
+  button.fogMapBack, button.fogMapTilt, button.fogMapRecenter, button.fogMapBattery{
+    background:rgba(10,16,24,.94);border:1px solid rgba(238,244,251,.55);color:var(--snow);
+    font-weight:700;box-shadow:0 2px 10px rgba(0,0,0,.55)}
+  button.fogMapGuard{box-shadow:0 2px 10px rgba(0,0,0,.55)}
   .fogMapLegend{position:absolute;bottom:14px;left:14px;z-index:2;background:var(--slate);border:1px solid var(--rim);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ice);display:flex;gap:14px}
   .fogMapLegend span{display:flex;align-items:center;gap:6px}
   .fogMapLegend i{width:11px;height:11px;border-radius:3px;display:inline-block}
