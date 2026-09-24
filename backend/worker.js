@@ -587,6 +587,22 @@ async function createPlayerSession(env, playerId, ip) {
 // Resolves a bearer token to a logged-in player, or null. Deliberately not
 // folded into auth() — see the "Ridge Quest: player auth" route block's own
 // comment for why staff and player auth are kept as separate resolvers.
+// Chute lines (migrations/0068) — limits + point validation for POST /api/chute-lines.
+const CHUTE_LINE_MAX_POINTS = 2000;
+const CHUTE_LINE_MAX_BYTES = 200 * 1024;
+const CHUTE_LINE_DEFAULT_VISIBLE = 3;
+// Returns [[lon,lat],...] rounded to 6 dp, or null if the input isn't 2..MAX valid pairs.
+function cleanChuteLinePoints(points) {
+  if (!Array.isArray(points) || points.length < 2 || points.length > CHUTE_LINE_MAX_POINTS) return null;
+  const out = [];
+  for (const p of points) {
+    if (!Array.isArray(p) || p.length < 2) return null;
+    const lon = Number(p[0]), lat = Number(p[1]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) return null;
+    out.push([Math.round(lon * 1e6) / 1e6, Math.round(lat * 1e6) / 1e6]);
+  }
+  return out;
+}
 async function playerAuth(request, env) {
   const tok = bearer(request);
   if (!tok || !env.DB) return null;
@@ -1062,6 +1078,8 @@ async function api(request, env, url) {
       // live, D1_ERROR: FOREIGN KEY constraint failed), not just leaves
       // orphaned data behind like the others technically could.
       env.DB.prepare("DELETE FROM player_day_activity_stats WHERE player_id=?").bind(P.playerId),
+      // Chute lines (0068) — player_id FK, so this must go before player_account.
+      env.DB.prepare("DELETE FROM chute_line WHERE player_id=?").bind(P.playerId),
       // Friends list + live-location share (2026-09) — plain columns, no FK,
       // so these wouldn't block the delete, but leaving them behind would
       // keep a removed player in other people's friend lists.
@@ -1187,6 +1205,75 @@ async function api(request, env, url) {
   // not a new concession. appId is taken from the authenticated player's own
   // account, never from the request body, so a player can't attribute a run
   // to a different app's leaderboard.
+  // --- Chute lines (migrations/0068): a rider's saved GPS line per verified
+  // chute descent, saved by ridge-quest.html only while Corridor Guard is on
+  // for that chute. Own rows only; app_id from the player's account.
+  if (path === "/api/chute-lines" && method === "POST") {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const raw = await request.text();
+    if (raw.length > CHUTE_LINE_MAX_BYTES) return json({ error: "line too large" }, 413, AC);
+    let b; try { b = JSON.parse(raw); } catch (e) { return json({ error: "invalid JSON" }, 400, AC); }
+    if (!b || !b.zoneId || !b.startedAt || !b.endedAt)
+      return json({ error: "zoneId, startedAt and endedAt are required" }, 400, AC);
+    const pts = cleanChuteLinePoints(b.points);
+    if (!pts) return json({ error: "points must be 2-" + CHUTE_LINE_MAX_POINTS + " [lon,lat] pairs" }, 400, AC);
+    const id = crypto.randomUUID();
+    const zoneId = String(b.zoneId);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO chute_line (id,player_id,app_id,zone_id,run_name,started_at,ended_at,points_json,visible,created_at) VALUES (?,?,?,?,?,?,?,?,1,?)"
+      ).bind(id, P.playerId, P.appId, zoneId, b.runName ? String(b.runName).slice(0, 200) : null,
+        String(b.startedAt), String(b.endedAt), JSON.stringify(pts), new Date().toISOString()),
+      // Newest-3 rule: only the 3 most recent lines of a chute stay switched on.
+      env.DB.prepare(
+        "UPDATE chute_line SET visible=0 WHERE player_id=? AND zone_id=? AND visible=1 AND id NOT IN " +
+        "(SELECT id FROM chute_line WHERE player_id=? AND zone_id=? ORDER BY started_at DESC LIMIT " + CHUTE_LINE_DEFAULT_VISIBLE + ")"
+      ).bind(P.playerId, zoneId, P.playerId, zoneId)
+    ]);
+    return json({ ok: true, id }, 200, AC);
+  }
+  const mpcl = path.match(/^\/api\/players\/([^/]+)\/chute-lines$/);
+  if (mpcl && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mpcl[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const zone = url.searchParams.get("zone");
+    const visibleOnly = url.searchParams.get("visibleOnly") === "1";
+    const withPoints = url.searchParams.get("withPoints") === "1";
+    let sql = "SELECT id,zone_id,run_name,started_at,ended_at,visible" + (withPoints ? ",points_json" : "") +
+      " FROM chute_line WHERE player_id=?";
+    const binds = [P.playerId];
+    if (zone) { sql += " AND zone_id=?"; binds.push(zone); }
+    if (visibleOnly) sql += " AND visible=1";
+    sql += " ORDER BY started_at DESC LIMIT 500";
+    const { results } = await env.DB.prepare(sql).bind(...binds).all();
+    const lines = (results || []).map(r => {
+      const o = { id: r.id, zoneId: r.zone_id, runName: r.run_name, startedAt: r.started_at, endedAt: r.ended_at, visible: !!r.visible };
+      if (withPoints) { try { o.points = JSON.parse(r.points_json); } catch (e) { o.points = []; } }
+      return o;
+    });
+    return json({ lines }, 200, AC);
+  }
+  const mchl = path.match(/^\/api\/chute-lines\/([^/]+)$/);
+  if (mchl && (method === "PATCH" || method === "DELETE")) {
+    const P = await playerAuth(request, env);
+    if (!P) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const lid = decodeURIComponent(mchl[1]);
+    const row = await env.DB.prepare("SELECT id FROM chute_line WHERE id=? AND player_id=?").bind(lid, P.playerId).first();
+    if (!row) return json({ error: "not found" }, 404, AC);
+    if (method === "DELETE") {
+      await env.DB.prepare("DELETE FROM chute_line WHERE id=? AND player_id=?").bind(lid, P.playerId).run();
+      return json({ ok: true, deleted: lid }, 200, AC);
+    }
+    const b = await request.json().catch(() => ({}));
+    if (typeof b.visible !== "boolean") return json({ error: "visible must be true or false" }, 400, AC);
+    await env.DB.prepare("UPDATE chute_line SET visible=? WHERE id=? AND player_id=?").bind(b.visible ? 1 : 0, lid, P.playerId).run();
+    return json({ ok: true, id: lid, visible: b.visible }, 200, AC);
+  }
+
   if (path === "/api/quest-runs" && method === "POST") {
     const P = await playerAuth(request, env);
     if (!P) return json({ error: "not authenticated" }, 401, AC);
@@ -2061,7 +2148,7 @@ async function api(request, env, url) {
     // same set as POST /api/players/:id/forget) or a deleted workspace
     // leaves orphan player_account rows, and a stale google_sub then blocks
     // that person signing up anywhere else.
-    for (const t of ["player_session", "quest_run", "player_fog_cell", "player_day_stats", "player_day_activity_stats", "player_presence"]) {
+    for (const t of ["player_session", "quest_run", "player_fog_cell", "player_day_stats", "player_day_activity_stats", "player_presence", "chute_line"]) {
       await env.DB.prepare(`DELETE FROM ${t} WHERE player_id IN (SELECT id FROM player_account WHERE app_id=?)`).bind(aid).run().catch(() => {});
     }
     await env.DB.prepare("DELETE FROM player_friend WHERE app_id=?").bind(aid).run().catch(() => {});

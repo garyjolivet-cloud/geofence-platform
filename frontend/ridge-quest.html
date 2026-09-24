@@ -123,6 +123,14 @@
   .chuteTop .count{flex:0 0 auto;font-weight:700;color:var(--coral)}
   .chuteBar{height:4px;border-radius:2px;background:var(--rim);overflow:hidden;margin-top:7px}
   .chuteBar i{display:block;height:100%;background:var(--coral);border-radius:2px}
+  .chuteRow .chuteTop{cursor:pointer}
+  .chuteTop .fold{flex:0 0 auto;color:var(--ice);font-size:12px;width:12px}
+  .chuteLines{margin-top:9px;border-top:1px solid var(--rim);padding-top:6px}
+  .chuteLines .empty{padding:6px 0;font-size:12.5px}
+  .lineRow{display:flex;align-items:center;gap:8px;padding:6px 0}
+  .lineRow .sw{flex:0 0 auto;width:14px;height:14px;border-radius:50%;border:1px solid var(--rim)}
+  .lineRow .lbl{flex:1;min-width:0;color:var(--snow);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lineRow button{width:auto;margin:0;padding:7px 10px;font-size:12px;white-space:nowrap}
   .empty{color:var(--fog);font-size:13px;text-align:center;padding:10px 0}
   /* R2 — fog map screen: a full-viewport overlay, deliberately OUTSIDE
      .wrap's 520px max-width (a map needs the whole screen, not a card). */
@@ -1239,6 +1247,7 @@ const Quest = {
   mutedCorridors: new Set(getMutedCorridors()),     // zoneIds muted by press-and-hold WHILE the master is on
   armedCorridors: new Set(getArmedCorridors()),     // zoneIds armed by press-and-hold WHILE the master is off
   onGuardChanged: null,     // callback() — set by drawAllRuns() while "My map" is open so the boundary lines/mute look redraw live; nulled on #fogBack
+  onChuteLineSaved: null,   // callback(zoneId) — set by setupChuteLines() so an open map shows a just-saved line; nulled on #fogBack
   isGuarded(zoneId){
     return isCorridorGuarded(this.chuteGuardEnabled, this.chuteGuardMaster, this.mutedCorridors, this.armedCorridors, zoneId);
   },
@@ -1735,6 +1744,24 @@ const Quest = {
       if(this.onSkiedChanged) this.onSkiedChanged(run.runType==="chute" ? run.zoneId : null, true);
     }catch(e){ console.warn("celebrate:", e && e.message); }
   },
+  // Chute lines (2026-09-24): after a logged chute DESCENT, save the verified pass's own
+  // start->finish fixes (trip.fixes -- nothing before the start zone or after the finish)
+  // as the rider's line for that chute, but only while Corridor Guard is on for it right
+  // now. Fire-and-forget and isolated: a failed save never touches the logged run.
+  // Returns the POST body when it saves (tests read it), else null.
+  _saveChuteLine(corridor, run, fixes){
+    try{
+      if(!corridor || corridor.runType!=="chute" || !run || run.activity!=="ski") return null;
+      if(!this.chuteGuardEnabled || typeof this.isGuarded!=="function" || !this.isGuarded(corridor.zoneId)) return null;
+      const points = (fixes||[]).filter(f=>f && f.lat!=null && f.lon!=null).map(f=>[f.lon, f.lat]);
+      if(points.length < 2) return null;
+      const body = { zoneId:corridor.zoneId, runName:corridor.name, startedAt:run.startedAt, endedAt:run.endedAt, points };
+      api("/api/chute-lines", { method:"POST", body: JSON.stringify(body) })
+        .then(()=>{ try{ if(this.onChuteLineSaved) this.onChuteLineSaved(corridor.zoneId); }catch(e){} })
+        .catch(()=>{});
+      return body;
+    }catch(e){ console.warn("chute line:", e && e.message); return null; }
+  },
   _classifyAndLog(corridor, buffer, selectedActivity, isFinal){
     const S = QUEST_TUNING;
     const trip = QGeo.evaluateTraversal(corridor, buffer, S);
@@ -1862,7 +1889,7 @@ const Quest = {
     // correct that with a visible message instead of a run just disappearing
     // with no explanation.
     api("/api/quest-runs", { method:"POST", body: JSON.stringify(run) })
-      .then(()=>{ this._celebrate(run); if(this.onRunLogged) this.onRunLogged(run); })
+      .then(()=>{ this._celebrate(run); this._saveChuteLine(corridor, run, trip.fixes); if(this.onRunLogged) this.onRunLogged(run); })
       .catch(()=>{ if(this.onSaveError) this.onSaveError(corridor.name); });
     return true;
   }
@@ -2800,14 +2827,71 @@ function difficultyMarkHtml(diff){
 }
 function chuteRowHtml(c, maxCount){
   const pct = maxCount>0 ? Math.round((c.count/maxCount)*100) : 0;
-  return '<div class="chuteRow">'
-    +'<div class="chuteTop">'
+  return '<div class="chuteRow" data-zone="'+esc(c.zoneId)+'">'
+    +'<div class="chuteTop" role="button" tabindex="0" aria-expanded="false">'
+      +'<span class="fold">▸</span>'
       +difficultyMarkHtml(c.difficulty)
       +'<span class="name">'+esc(c.name)+'</span>'
       +'<span class="count">×'+c.count+'</span>'
     +'</div>'
     +'<div class="chuteBar"><i style="width:'+pct+'%"></i></div>'
+    +'<div class="chuteLines" hidden></div>'
   +'</div>';
+}
+// Saved chute lines inside a "Your chutes" row (2026-09-24): tapping a chute opens its folder of
+// saved lines, newest first, each "name — date time" with its map colour, an on/off toggle and a
+// two-tap delete (no blocking confirm dialog). Date/time only: never a duration or speed.
+function fmtLineWhen(iso){
+  try{ return new Date(iso).toLocaleString(undefined, { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }); }
+  catch(e){ return iso || ""; }
+}
+async function openChuteLines(row, playerId){
+  const zoneId = row.getAttribute("data-zone"), box = row.querySelector(".chuteLines");
+  const name = (row.querySelector(".chuteTop .name")||{}).textContent || "Chute";
+  box.innerHTML = '<div class="empty">Loading…</div>';
+  let lines;
+  try{
+    lines = (await api("/api/players/"+encodeURIComponent(playerId)+"/chute-lines?zone="+encodeURIComponent(zoneId))).lines || [];
+  }catch(e){ box.innerHTML = '<div class="empty">Couldn’t load saved lines.</div>'; return; }
+  const render = ()=>{
+    if(!lines.length){ box.innerHTML = '<div class="empty">No saved lines — lines save while Corridor Guard is on for this chute.</div>'; return; }
+    const colors = (typeof RidgeVisuals!=="undefined") ? RidgeVisuals.chuteLineColors(lines) : {};
+    box.innerHTML = lines.map(l=>
+      '<div class="lineRow" data-id="'+esc(l.id)+'">'
+        +'<span class="sw" style="background:'+(colors[l.id]||"transparent")+'"></span>'
+        +'<span class="lbl">'+esc(l.runName||name)+' — '+esc(fmtLineWhen(l.startedAt))+'</span>'
+        +'<button class="ghost lnToggle" aria-pressed="'+(l.visible?"true":"false")+'">'+(l.visible?"On":"Off")+'</button>'
+        +'<button class="ghost lnDel" aria-label="Delete this line">🗑</button>'
+      +'</div>').join("");
+    box.querySelectorAll(".lineRow").forEach(r=>{
+      const id = r.getAttribute("data-id"), l = lines.find(x=>x.id===id);
+      r.querySelector(".lnToggle").onclick = async()=>{
+        try{ await api("/api/chute-lines/"+encodeURIComponent(id), { method:"PATCH", body: JSON.stringify({ visible: !l.visible }) }); l.visible = !l.visible; render(); }
+        catch(e){ rqToast("Couldn’t change that line"); }
+      };
+      const del = r.querySelector(".lnDel");
+      let armed = null;
+      del.onclick = async()=>{
+        if(!armed){ del.textContent = "Tap again to delete"; armed = setTimeout(()=>{ armed=null; del.textContent="🗑"; }, 3000); return; }
+        clearTimeout(armed); armed = null;
+        try{ await api("/api/chute-lines/"+encodeURIComponent(id), { method:"DELETE" }); lines = lines.filter(x=>x.id!==id); render(); }
+        catch(e){ rqToast("Couldn’t delete that line"); del.textContent="🗑"; }
+      };
+    });
+  };
+  render();
+}
+function bindChuteFolders(listEl, playerId){
+  listEl.querySelectorAll(".chuteRow").forEach(row=>{
+    const top = row.querySelector(".chuteTop"), box = row.querySelector(".chuteLines"), fold = row.querySelector(".fold");
+    const toggle = ()=>{
+      const open = box.hidden;
+      box.hidden = !open; fold.textContent = open ? "▾" : "▸"; top.setAttribute("aria-expanded", open?"true":"false");
+      if(open) openChuteLines(row, playerId);
+    };
+    top.onclick = toggle;
+    top.onkeydown = e=>{ if(e.key==="Enter" || e.key===" "){ e.preventDefault(); toggle(); } };
+  });
 }
 async function renderYourChutes(mode){
   mode = mode || "daily";
@@ -2833,6 +2917,7 @@ async function renderYourChutes(mode){
     listEl.innerHTML = chutes.length
       ? chutes.map(c=>chuteRowHtml(c, maxCount)).join("")
       : '<div class="empty">No chutes skied yet '+(mode==="daily"?"today":"this season")+'.</div>';
+    bindChuteFolders(listEl, s.player.id);
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load your chutes.</div>';
   }
@@ -3214,6 +3299,7 @@ function orderRideLayers(map){
     const first = ["runLines-width","runLines-halo","runLines-casing"].find(id=>map.getLayer(id));
     if(map.getLayer("myTrack-line") && first) map.moveLayer("myTrack-line", first);
     if(map.getLayer("runLines-skied")) map.moveLayer("runLines-skied");
+    if(map.getLayer("chuteLines-line")) map.moveLayer("chuteLines-line");   // saved lines sit on top of the chute they were skied in
   }catch(e){}
 }
 // Sun-angle lighting for the winter hillshade: light from the real sun, warm and long when low.
@@ -3298,6 +3384,58 @@ function setupRideVisuals(map, cors){
   };
   paint(); place(); host.appendChild(b);
   try{ if(guardBtn && typeof ResizeObserver!=="undefined") new ResizeObserver(place).observe(guardBtn); }catch(e){}
+  setupChuteLines(map, host, b, ()=>down>0);
+}
+// Saved chute lines (2026-09-24): the rider's own smoothed lines for chutes that Corridor
+// Guard is on for right now, one colour per line (newest first, same colours as the swatches
+// in "Your chutes"). A "Lines" switch under Skied shows/hides them (default on). The source is
+// only rewritten when the set changes (a line saved, Guard toggled), never per GPS fix, and
+// never under a finger or a moving camera.
+function setupChuteLines(map, host, skiedBtn, fingerDown){
+  if(typeof RidgeVisuals==="undefined" || !Quest.chuteGuardEnabled) return;
+  const LINES_KEY="rq.showChuteLines";
+  let showLines=getRideToggle(LINES_KEY), lines=[], pending=false;
+  const smoothed = new Map();
+  const smooth = l=>{ if(!smoothed.has(l.id)) smoothed.set(l.id, RidgeVisuals.smoothLine(l.points||[])); return smoothed.get(l.id); };
+  try{
+    map.addSource("chuteLines", { type:"geojson", data:{ type:"FeatureCollection", features:[] } });
+    map.addLayer(RidgeVisuals.chuteLinesLayer("chuteLines-line","chuteLines"));
+    map.setLayoutProperty("chuteLines-line","visibility", showLines?"visible":"none");
+    orderRideLayers(map);
+  }catch(e){ console.warn("chute lines:", e && e.message); return; }
+  function paintData(){
+    if(!map.getContainer().isConnected) return;
+    if(fingerDown() || map.isMoving()){ if(!pending){ pending=true; setTimeout(()=>{ pending=false; paintData(); }, 1500); } return; }
+    try{
+      const colors = RidgeVisuals.chuteLineColors(lines);
+      const shown = lines.filter(l=>l.visible && Quest.isGuarded(l.zoneId));
+      map.getSource("chuteLines").setData(RidgeVisuals.chuteLinesFeatureCollection(shown, colors, smooth));
+    }catch(e){ console.warn("chute lines draw:", e && e.message); }
+  }
+  async function refetch(){
+    try{
+      const s=getSession(); if(!s || !s.player) return;
+      const j = await api("/api/players/"+encodeURIComponent(s.player.id)+"/chute-lines?visibleOnly=1&withPoints=1");
+      lines = j.lines || [];
+      paintData();
+    }catch(e){ console.warn("chute lines load:", e && e.message); }
+  }
+  const prevGuard = Quest.onGuardChanged;
+  Quest.onGuardChanged = ()=>{ if(prevGuard) prevGuard(); paintData(); };
+  Quest.onChuteLineSaved = ()=>{ refetch(); };
+  refetch();
+
+  const b = document.createElement("button");
+  b.className = "ghost fogMapLayer"; b.id = "fogLinesBtn";
+  const paint = ()=>{ b.textContent = "Lines "+(showLines?"on":"off"); b.setAttribute("aria-pressed", showLines?"true":"false"); };
+  const place = ()=>{ b.style.top = (skiedBtn.offsetHeight ? skiedBtn.offsetTop + skiedBtn.offsetHeight + 8 : 104)+"px"; };
+  b.onclick = ()=>{
+    showLines = !showLines; setRideToggle(LINES_KEY, showLines);
+    try{ map.setLayoutProperty("chuteLines-line","visibility", showLines?"visible":"none"); }catch(e){}
+    paint();
+  };
+  paint(); host.appendChild(b); place();
+  try{ if(typeof ResizeObserver!=="undefined") new ResizeObserver(place).observe(skiedBtn); }catch(e){}
 }
 function drawAllRuns(map){
   const cors = Quest.corridors || [];
@@ -3501,7 +3639,7 @@ function renderFogMap(){
   // attached, leaving a dead "← Back" button with no way out of the map.
   document.getElementById("fogBack").onclick=()=>{
     Quest.onPosition=null;
-    Quest.onLiftModeChange=null; Quest.onGuardChanged=null; Quest.onSkiedChanged=null;
+    Quest.onLiftModeChange=null; Quest.onGuardChanged=null; Quest.onSkiedChanged=null; Quest.onChuteLineSaved=null;
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
     // ever actually shown (the arrow wedge / compass-mode bearing); nothing

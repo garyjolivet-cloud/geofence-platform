@@ -9,6 +9,8 @@
      completion(run, skiedSet, corridors),     { text, sub, isNew, n, total } for the toast
      sunPosition(date, lat, lon), hillshadeLight(date, lat, lon),
      celebrate(doc, {text, sub})               fading overlay, pointer-events none
+     CHUTE_LINE, smoothLine(lonlats),          saved chute lines: jitter-smoothed S-curves
+     chuteLineColors(lines), chuteLinesFeatureCollection(lines, colors, smoothed), chuteLinesLayer(id, source)
    }
 */
 (function (root) {
@@ -205,9 +207,146 @@
     return el;
   }
 
+  // ---- Saved chute lines (2026-09-24) ----
+  // A rider's stored line for a chute is the raw verified pass (~1 fix/s, kept every >= 3 m,
+  // 5-10 m GPS error), which draws as a zig-zag. smoothLine turns it into the S-curve a
+  // skier actually makes: (1) Gaussian smoothing along the path removes GPS jitter,
+  // (2) a centripetal Catmull-Rom spline through the result rounds each turn without loops,
+  // (3) Douglas-Peucker drops points that add nothing. It is a plausible shape of the line
+  // taken, not an exact trace of every turn -- 1 Hz GPS cannot resolve that.
+  var CHUTE_LINE = {
+    // Gaussian width along the path; bigger = smoother but flattens real turns. Measured on a
+    // synthetic 1 Hz S-turn line (8 m/s, 12 m wide turns): 6 m cut the sharpest corner with
+    // 4 m GPS noise from 121 to 52 deg per 1.5 m and kept ~85% of a clean turn's width;
+    // 3 m reached no neighbours at ski speed (fixes ~8 m apart), 9 m kept only ~70%.
+    SIGMA_M: 6,
+    SAMPLE_M: 1.5,       // spline sampling step
+    SIMPLIFY_M: 0.3,     // Douglas-Peucker tolerance on the final line
+    DEFAULT_VISIBLE: 3,  // newest N per chute start switched on (the server applies the same rule)
+    // Cycled newest-first per chute. Avoids the difficulty colours, guard yellow, armed cyan
+    // and the day-track aqua so a saved line is never mistaken for any of them.
+    COLORS: ["#ff5fa2", "#ff9f1c", "#c77dff", "#ffffff", "#c6ff00", "#ff4d4d"]
+  };
+
+  function toLocal(lonlats) {
+    var lat0 = 0, lon0 = 0, n = lonlats.length;
+    lonlats.forEach(function (p) { lon0 += p[0] / n; lat0 += p[1] / n; });
+    var ky = 111320, kx = 111320 * Math.cos(lat0 * Math.PI / 180);
+    return {
+      pts: lonlats.map(function (p) { return { x: (p[0] - lon0) * kx, y: (p[1] - lat0) * ky }; }),
+      back: function (q) { return [lon0 + q.x / kx, lat0 + q.y / ky]; }
+    };
+  }
+  function d2(a, b) { var dx = a.x - b.x, dy = a.y - b.y; return Math.sqrt(dx * dx + dy * dy); }
+
+  // Weighted average of neighbours by distance ALONG the path; the two endpoints are pinned.
+  function gaussianAlong(P, sigma) {
+    var s = [0];
+    for (var i = 1; i < P.length; i++) s.push(s[i - 1] + d2(P[i - 1], P[i]));
+    var reach = 3 * sigma, out = [P[0]];
+    function w(ds) { return Math.exp(-ds * ds / (2 * sigma * sigma)); }
+    for (var k = 1; k < P.length - 1; k++) {
+      var sx = 0, sy = 0, sw = 0, j, wt;
+      for (j = k; j >= 0 && s[k] - s[j] <= reach; j--) { wt = w(s[k] - s[j]); sx += wt * P[j].x; sy += wt * P[j].y; sw += wt; }
+      for (j = k + 1; j < P.length && s[j] - s[k] <= reach; j++) { wt = w(s[j] - s[k]); sx += wt * P[j].x; sy += wt * P[j].y; sw += wt; }
+      out.push({ x: sx / sw, y: sy / sw });
+    }
+    out.push(P[P.length - 1]);
+    return out;
+  }
+
+  // Centripetal (alpha 0.5) Catmull-Rom, Barry-Goldman form: no cusps or self-loops on
+  // unevenly spaced points, and the curve passes through every control point.
+  function catmullRom(P, step) {
+    if (P.length < 3) return P.slice();
+    function lerp(a, b, ta, tb, t) {
+      var d = tb - ta; if (d < 1e-9) return { x: a.x, y: a.y };
+      var u = (t - ta) / d; return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+    }
+    function knot(a, b) { return Math.max(Math.sqrt(d2(a, b)), 1e-4); }
+    var out = [];
+    for (var i = 0; i < P.length - 1; i++) {
+      var p0 = P[Math.max(0, i - 1)], p1 = P[i], p2 = P[i + 1], p3 = P[Math.min(P.length - 1, i + 2)];
+      var t0 = 0, t1 = t0 + knot(p0, p1), t2 = t1 + knot(p1, p2), t3 = t2 + knot(p2, p3);
+      var n = Math.max(1, Math.ceil(d2(p1, p2) / step));
+      for (var k = 0; k < n; k++) {
+        var t = t1 + (t2 - t1) * k / n;
+        var a1 = lerp(p0, p1, t0, t1, t), a2 = lerp(p1, p2, t1, t2, t), a3 = lerp(p2, p3, t2, t3, t);
+        var b1 = lerp(a1, a2, t0, t2, t), b2 = lerp(a2, a3, t1, t3, t);
+        out.push(lerp(b1, b2, t1, t2, t));
+      }
+    }
+    out.push(P[P.length - 1]);
+    return out;
+  }
+
+  function segDist(p, a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y, L = dx * dx + dy * dy;
+    var t = L ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L)) : 0;
+    return d2(p, { x: a.x + t * dx, y: a.y + t * dy });
+  }
+  function douglasPeucker(P, tol) {
+    if (P.length < 3) return P;
+    var keep = new Uint8Array(P.length); keep[0] = keep[P.length - 1] = 1;
+    var stack = [[0, P.length - 1]];
+    while (stack.length) {
+      var se = stack.pop(), maxD = 0, idx = -1;
+      for (var i = se[0] + 1; i < se[1]; i++) { var d = segDist(P[i], P[se[0]], P[se[1]]); if (d > maxD) { maxD = d; idx = i; } }
+      if (idx > -1 && maxD > tol) { keep[idx] = 1; stack.push([se[0], idx], [idx, se[1]]); }
+    }
+    return P.filter(function (_, i) { return keep[i]; });
+  }
+
+  // lonlats: [[lon,lat],...] -> smoothed [[lon,lat],...]; endpoints are kept exactly.
+  function smoothLine(lonlats) {
+    var pts = (lonlats || []).filter(function (p) { return p && isFinite(p[0]) && isFinite(p[1]); });
+    if (pts.length < 3) return pts.map(function (p) { return [p[0], p[1]]; });
+    var L = toLocal(pts);
+    var P = [L.pts[0]];
+    for (var i = 1; i < L.pts.length; i++) if (d2(P[P.length - 1], L.pts[i]) > 0.01) P.push(L.pts[i]);   // drop repeats
+    if (P.length < 3) return P.map(L.back);
+    var out = douglasPeucker(catmullRom(gaussianAlong(P, CHUTE_LINE.SIGMA_M), CHUTE_LINE.SAMPLE_M), CHUTE_LINE.SIMPLIFY_M);
+    return out.map(L.back);
+  }
+
+  // lines: [{id, zoneId, startedAt, visible}] -> {id: colour} for the visible ones, cycled
+  // newest-first within each chute. Hidden entries get no colour (the list shows them grey),
+  // so the swatch in "Your chutes" always matches the line on the map.
+  function chuteLineColors(lines) {
+    var byZone = {}, out = {};
+    (lines || []).forEach(function (l) { if (l.visible) (byZone[l.zoneId] = byZone[l.zoneId] || []).push(l); });
+    Object.keys(byZone).forEach(function (z) {
+      byZone[z].sort(function (a, b) { return a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0; })
+        .forEach(function (l, i) { out[l.id] = CHUTE_LINE.COLORS[i % CHUTE_LINE.COLORS.length]; });
+    });
+    return out;
+  }
+
+  // lines: already filtered to what should be drawn; smoothed(line) -> [[lon,lat],...].
+  function chuteLinesFeatureCollection(lines, colors, smoothed) {
+    return { type: "FeatureCollection", features: (lines || []).map(function (l) {
+      var c = colors[l.id] ? smoothed(l) : null;
+      if (!c || c.length < 2) return null;
+      return { type: "Feature", properties: { id: l.id, color: colors[l.id] }, geometry: { type: "LineString", coordinates: c } };
+    }).filter(Boolean) };
+  }
+
+  function chuteLinesLayer(id, source) {
+    return {
+      id: id, type: "line", source: source,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": ["get", "color"], "line-opacity": 0.95,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.8, 16, 3, 18, 4.5]
+      }
+    };
+  }
+
   root.RidgeVisuals = {
     TRACK: TRACK, createTrack: createTrack, trackFeatureCollection: trackFeatureCollection,
     trackLayer: trackLayer, skiedLayer: skiedLayer, completion: completion,
-    sunPosition: sunPosition, hillshadeLight: hillshadeLight, celebrate: celebrate
+    sunPosition: sunPosition, hillshadeLight: hillshadeLight, celebrate: celebrate,
+    CHUTE_LINE: CHUTE_LINE, smoothLine: smoothLine, chuteLineColors: chuteLineColors,
+    chuteLinesFeatureCollection: chuteLinesFeatureCollection, chuteLinesLayer: chuteLinesLayer
   };
 })(typeof window !== "undefined" ? window : globalThis);

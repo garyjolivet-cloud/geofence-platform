@@ -129,6 +129,7 @@ test("layers use one zoom curve each (MapLibre swallows more) and feature-state,
   assert.strictEqual(zoomCurves(sk.paint["line-width"]), 1);
   assert.ok(JSON.stringify(sk.paint).includes('"feature-state","skied"') && JSON.stringify(sk.paint).includes('"feature-state","flash"'));
   assert.strictEqual(zoomCurves(V.trackLayer("t", "myTrack").paint["line-width"]), 1);
+  assert.strictEqual(zoomCurves(V.chuteLinesLayer("c", "chuteLines").paint["line-width"]), 1);
 });
 
 /* ---------- wiring in ridge-quest.html ---------- */
@@ -151,11 +152,15 @@ function makeMap() {
 }
 function runSetup(overrides = {}) {
   const { map, layers, sources, states, calls, host } = makeMap();
+  const dataLog = [];
+  map.getSource = id => sources[id] && { setData: d => { calls.setData++; dataLog.push({ id, d }); } };
   const store = mkStore();
   const timers = [];
   const scope = {
     RidgeVisuals: V, RQTrack: V.createTrack(store, () => "d"),
-    Quest: { skiedToday: new Set(["c1"]), onSkiedChanged: null },
+    Quest: overrides.Quest || { skiedToday: new Set(["c1"]), onSkiedChanged: null },
+    api: overrides.api || (() => Promise.resolve({ lines: [] })),
+    getSession: () => ({ player: { id: "p1" } }),
     localStorage: overrides.localStorage || store,
     setTimeout: (f, ms) => { timers.push({ f, ms }); return timers.length; },
     setInterval: () => 1, clearInterval() {},
@@ -168,12 +173,12 @@ function runSetup(overrides = {}) {
   };
   var guard = overrides.guard || { offsetTop: 58, offsetHeight: 40 }; // eslint-disable-line no-var
   var ro = {}; // eslint-disable-line no-var
-  const src = ["function getRideToggle(", "function setRideToggle(", "function orderRideLayers(", "function setupRideVisuals("].map(extract).join("\n");
+  const src = ["function getRideToggle(", "function setRideToggle(", "function orderRideLayers(", "function setupRideVisuals(", "function setupChuteLines("].map(extract).join("\n");
   const fn = new Function(...Object.keys(scope), src + "; return { setupRideVisuals };");
   const api = fn(...Object.values(scope));
   const cors = [{ zoneId: "c1", runType: "chute" }, { zoneId: "c2", runType: "chute" }, { zoneId: "r1", runType: "run" }, { zoneId: "l1", runType: "lift" }];
   api.setupRideVisuals(map, cors);
-  return { scope, layers, sources, states, calls, host, timers, cors, guard, ro };
+  return { scope, layers, sources, states, calls, host, timers, cors, guard, ro, dataLog };
 }
 
 test("setupRideVisuals adds the track under the runs, the stripe on the runLines source, and ONE Skied toggle", () => {
@@ -252,7 +257,7 @@ test("source wiring: track feed is isolated in try/catch, back-out clears the ho
   assert.ok(/try\{ if\(RQTrack\) RQTrack\.add\(\{ lat:fix\.lat, lon:fix\.lon, acc:fix\.acc, t:fix\.t \}, onLift \|\| this\.liftModeActive\); \}catch\(e\)\{\}/.test(html));
   assert.ok(html.includes("Quest.onSkiedChanged=null;"));
   assert.ok(html.includes('<script src="/ridge-visuals.js"></script>'));
-  assert.ok(html.includes("this._celebrate(run); if(this.onRunLogged) this.onRunLogged(run);"));
+  assert.ok(html.includes("this._celebrate(run); this._saveChuteLine(corridor, run, trip.fixes); if(this.onRunLogged) this.onRunLogged(run);"));
   const applySkiedBody = extract("function setupRideVisuals(");
   assert.ok(!/setData\(RidgeVisuals\.trackFeatureCollection[\s\S]*skied/.test(applySkiedBody.split("function applySkied")[1].split("Quest.onSkiedChanged")[0]), "skied state never reloads a source");
 });
@@ -273,4 +278,64 @@ test("Skied button sits in the right column directly under Guard, wherever Guard
   r.ro.cb();
   assert.strictEqual(btn.style.top, "58px");
   assert.ok(!html.includes("mkBtn("), "no fixed-offset Track/Skied buttons left");
+});
+
+/* ---------- saved chute lines on "My map" (2026-09-24) ---------- */
+function linesQuest(guarded) {
+  return { skiedToday: new Set(), onSkiedChanged: null, chuteGuardEnabled: true, onGuardChanged: null, onChuteLineSaved: null,
+    isGuarded: id => guarded.has(id) };
+}
+const savedLines = [
+  { id: "n1", zoneId: "c1", startedAt: "2026-09-24T18:00:00Z", visible: true, points: [[-117.05, 51.31], [-117.0502, 51.3095], [-117.05, 51.309]] },
+  { id: "n2", zoneId: "c2", startedAt: "2026-09-24T17:00:00Z", visible: true, points: [[-117.06, 51.31], [-117.0602, 51.3095], [-117.06, 51.309]] }
+];
+const flush = () => new Promise(r => setImmediate(r));
+const lastLinesData = r => (r.dataLog.filter(x => x.id === "chuteLines").pop() || {}).d;
+
+test("chute lines: one layer, a Lines button under Skied (default on), only guarded chutes drawn", async () => {
+  const guarded = new Set(["c1"]);
+  const reqs = [];
+  const r = runSetup({ Quest: linesQuest(guarded), api: p => { reqs.push(p); return Promise.resolve({ lines: savedLines }); } });
+  await flush();
+  assert.ok(r.layers.some(l => l.def.id === "chuteLines-line"), "layer added");
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogLinesBtn"]);
+  assert.strictEqual(r.host.kids[1].textContent, "Lines on", "default ON");
+  assert.deepStrictEqual(reqs, ["/api/players/p1/chute-lines?visibleOnly=1&withPoints=1"]);
+  const d = lastLinesData(r);
+  assert.deepStrictEqual(d.features.map(f => f.properties.id), ["n1"], "a chute Guard is off for is not drawn");
+  assert.strictEqual(d.features[0].properties.color, V.CHUTE_LINE.COLORS[0]);
+  assert.ok(d.features[0].geometry.coordinates.length >= 3, "drawn from the smoothed line");
+  // Guard switched on for c2 -> repainted from memory, no new request
+  guarded.add("c2"); r.scope.Quest.onGuardChanged();
+  assert.deepStrictEqual(lastLinesData(r).features.map(f => f.properties.id).sort(), ["n1", "n2"]);
+  assert.strictEqual(reqs.length, 1);
+  // a newly saved line refetches
+  r.scope.Quest.onChuteLineSaved("c1"); await flush();
+  assert.strictEqual(reqs.length, 2);
+});
+
+test("chute lines: the Lines button hides/shows the layer and remembers the choice", async () => {
+  const r = runSetup({ Quest: linesQuest(new Set(["c1"])), api: () => Promise.resolve({ lines: savedLines }) });
+  await flush();
+  const btn = r.host.kids[1];
+  btn.onclick();
+  assert.strictEqual(r.calls.vis["chuteLines-line"], "none");
+  assert.strictEqual(btn.textContent, "Lines off");
+  assert.strictEqual(r.scope.localStorage.getItem("rq.showChuteLines"), "0");
+  btn.onclick();
+  assert.strictEqual(r.calls.vis["chuteLines-line"], "visible");
+});
+
+test("chute lines: no layer or button when the workspace has Corridor Guard off", () => {
+  const q = linesQuest(new Set()); q.chuteGuardEnabled = false;
+  const r = runSetup({ Quest: q });
+  assert.ok(!r.layers.some(l => l.def.id === "chuteLines-line"));
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn"]);
+});
+
+test("chute lines: a failed load leaves the map working", async () => {
+  const r = runSetup({ Quest: linesQuest(new Set(["c1"])), api: () => Promise.reject(new Error("offline")) });
+  await flush();
+  assert.strictEqual(lastLinesData(r), undefined, "nothing drawn, nothing thrown");
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogLinesBtn"]);
 });
