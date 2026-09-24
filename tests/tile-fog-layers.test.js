@@ -65,6 +65,24 @@ MODES.forEach(([label, opts]) => {
       label + ": the glow's line-width is ONE top-level zoom interpolate, got " + JSON.stringify(w));
     assert(zoomCurves(w) === 1, label + ": the glow's line-width has exactly one zoom curve");
   })();
+
+  (function testGlowActuallyShowsPastTheOutline() {
+    // "Valid but invisible" is a failure too: after the expression was fixed the glow
+    // rendered but stuck out only 0.75-1.75 px past the black casing (blurred, 45%
+    // opacity) — nobody could see it. Compare the real stops: at every zoom the halo
+    // must be wide enough that at least MIN_GLOW_PX of it shows on each side.
+    const MIN_GLOW_PX = 3;
+    const stops = expr => { const o = {}; for (let i = 3; i + 1 < expr.length; i += 2) o[expr[i]] = expr[i + 1]; return o; };
+    const num = v => Array.isArray(v) ? v[v.length - 1] : v;        // ["*", <scale>, N] -> N
+    const halo = stops(layers.find(l => l.id === "runLines-halo").paint["line-width"]);
+    const casing = stops(layers.find(l => l.id === "runLines-casing").paint["line-width"]);
+    Object.keys(casing).forEach(z => {
+      const glow = (num(halo[z]) - num(casing[z])) / 2;
+      assert(glow >= MIN_GLOW_PX, label + ": at zoom " + z + " the glow shows only " + glow + " px past the outline (need >= " + MIN_GLOW_PX + ")");
+    });
+    const op = layers.find(l => l.id === "runLines-halo").paint["line-opacity"];
+    assert(op[op.length - 1] >= 0.5, label + ": the glow's normal opacity is not so low it disappears, got " + JSON.stringify(op));
+  })();
 });
 
 console.log(pass + " passed, " + fail + " failed");

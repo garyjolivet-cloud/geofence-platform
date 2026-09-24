@@ -404,8 +404,13 @@ function addCorridorLayers(map, o){
   add({ id: pfx + "-halo", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": halo,
-      "line-opacity": ["case", guardedExpr, 0.8, 0.45],
-      "line-blur": ["case", guardedExpr, 3, 5],
+      // 2026-09-23: the glow must actually be SEEN. Once the width expression below
+      // stopped being rejected the layer rendered, but at 5.5/9.5/14 px against a
+      // 4/7/10.5 px casing it stuck out only 0.75-1.75 px per side, blurred, at 45%
+      // opacity — invisible. Those numbers were tuned while the layer wasn't drawing
+      // at all. Now ~4-6 px of soft colour beyond the black outline.
+      "line-opacity": ["case", guardedExpr, 0.85, 0.6],
+      "line-blur": ["case", guardedExpr, 4, 6],
       // ONE top-level zoom interpolate, with the guarded 1.4x multiplied into each
       // stop's value. This used to be ["case", guarded, ["*",1.4,interpolate], interpolate]:
       // two zoom curves in one expression, which MapLibre's validator rejects ("Only one
@@ -413,9 +418,9 @@ function addCorridorLayers(map, o){
       // threw, addCorridorLayers' try/catch swallowed it, and this halo layer silently
       // never rendered on any map. Same fix as realWidthExpr() above.
       "line-width": ["interpolate", ["linear"], ["zoom"],
-        12, ["*", ["case", guardedExpr, 1.4, 1], 5.5],
-        15, ["*", ["case", guardedExpr, 1.4, 1], 9.5],
-        18, ["*", ["case", guardedExpr, 1.4, 1], 14]] } });
+        12, ["*", ["case", guardedExpr, 1.4, 1], 12],
+        15, ["*", ["case", guardedExpr, 1.4, 1], 17],
+        18, ["*", ["case", guardedExpr, 1.4, 1], 22]] } });
   add({ id: pfx + "-casing", type: "line", source: src, filter: only,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": "#05070b", "line-opacity": 1, "line-width": runWByRunType(4, 7, 10.5) } });
