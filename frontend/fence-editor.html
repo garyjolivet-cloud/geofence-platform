@@ -4387,6 +4387,9 @@ function _strideCorridor(points){
 // runType + activityType all come from the row and are refreshed from it —
 // never edited here.
 async function importCorridorFromLibrary(corridorId){
+  // Already in this project? Select it -- a second stop on the same corridor logs every pass twice in Ridge Quest.
+  const have=zones.findIndex(z=>z.corridorId===corridorId);
+  if(have>=0){ sel=have; render(); refreshProps(); toast("“"+(zones[have].name||"Corridor")+"” is already in this project — selected it.","warn"); return; }
   try{
     const r=await fetch("/api/corridor/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
@@ -4452,6 +4455,9 @@ async function reconcileLinkedCorridors(){
       }
       const row=byId.get(z.corridorId);
       if(!row || !Array.isArray(row.points) || row.points.length<2) continue;
+      // Names are authored in the GPX Editor too (library wins). The stop's id is kept, so a
+      // rider's run/chute-line history stays attached to it after a rename.
+      if(row.name && row.name!==z.name){ z.name=row.name; changed=true; }
       const newCoords=_c6(_strideCorridor(row.points));
       if(JSON.stringify(newCoords)!==JSON.stringify(_c6(z.shape.coords))){ z.shape.coords=newCoords; changed=true; }
       const nw=row.widthM||10; if(nw!==z.shape.widthM){ z.shape.widthM=nw; changed=true; }
@@ -4462,6 +4468,11 @@ async function reconcileLinkedCorridors(){
       z.corridorRev=row.updatedAt||z.corridorRev;
     }
     if(changed){ render(); refreshProps(); }
+    // Two stops linked to one library corridor = every pass logged twice in Ridge Quest.
+    const byCorr=new Map();
+    zones.forEach(z=>{ if(z.corridorId) byCorr.set(z.corridorId, (byCorr.get(z.corridorId)||[]).concat((z.name||"Corridor")+" (id "+z.id+")")); });
+    const dups=[...byCorr.values()].filter(n=>n.length>1);
+    if(dups.length) toast("Same library corridor added more than once: "+dups.map(n=>n.join(" + ")).join("; ")+" — delete the extra stop and Publish, or each pass counts twice.","warn");
   } finally { _corrReconcileBusy=false; }
 }
 // Per-stop "Refresh shape from library" button.
@@ -4475,6 +4486,7 @@ async function refreshCorridorShapeFromLibrary(z){
     const j=await r.json();
     const coords=_c6(_strideCorridor(j.points||[]));
     if(coords.length>=2) z.shape.coords=coords;
+    if(j.name) z.name=j.name;   // library name wins; the stop id is kept
     z.shape.widthM=j.widthM||10;
     z.difficulty=j.difficulty||null; z.runType=j.runType||"run"; z.activityType=j.activityType||"hike";
     z.descentM=j.elevLossM!=null?Math.round(j.elevLossM):null;
