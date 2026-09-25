@@ -191,6 +191,10 @@
   @media (prefers-reduced-motion:reduce){ .splashTitle{transition:none} }
   /* "show all runs" overlay (fog + tile art both off) — run names are tap-only, no on-map text */
   .runDiamond{display:flex;gap:3px;pointer-events:none}
+  /* Armed run name label — same look and text as the Fence Editor Test Mode .runLabel */
+  .runLabel{font:700 clamp(15px,1.5vw,20px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3f0;
+            letter-spacing:.02em;white-space:nowrap;pointer-events:none;
+            text-shadow:0 0 3px #0c140f,0 0 3px #0c140f,0 1px 4px #0c140f}
   .runDiamond i{width:6px;height:6px;background:#111;border:1px solid #eef3f0;
     transform:rotate(45deg);display:block}
   .runDiamond.dbl i{border-color:#eef3f0}  /* all diamonds black; ◆◆ count = double-black */
@@ -974,6 +978,10 @@ const QUEST_TUNING = {
   // fragments on a narrow chute whenever GPS drifted a few metres.
   SAY_PREFETCH_M: 200,      // start fetching a corridor's narration audio when the player is this close (walking ~2 min out, skiing ~25 s), so speech starts instantly on entry. Field log 2026-09-21: the first /api/tts fetch took 1762 ms from entry to sound
   REC_HOLD_M: 40,
+  // Armed isolation (Guard OFF + armed chutes only): an unarmed chute/run/hike whose band
+  // comes within this many metres of an armed corridor's band ignores GPS while that one is
+  // armed -- no narration, no recording, no run logged. About phone GPS error.
+  ARMED_ADJ_PAD_M: 10,
   REC_GRACE_S: 15,
   REC_MIN_STEP_M: 3,        // recorded fixes are decimated: kept when they moved this far...
   REC_MAX_STEP_S: 10,       // ...or this long has passed, so a long hike's buffer stays small
@@ -1018,6 +1026,34 @@ const QGeo = {
     let best=Infinity;
     for(let i=1;i<pts.length;i++) best=Math.min(best, this.segDist(P,pts[i-1],pts[i]));
     return best - (corridor.widthM||10)/2;
+  },
+  // True when two corridors' bands touch or come within padM of each other: the shortest
+  // distance between the two centrelines (0 where they cross) is at most
+  // halfWidthA + halfWidthB + padM. Missing width counts as 10 m, like corridorDist.
+  corridorsTouch(a, b, padM){
+    const pa=a.path||[], pb=b.path||[];
+    if(pa.length<2 || pb.length<2) return false;
+    const ref = a.ref || pa[0];
+    const lim = (a.widthM||10)/2 + (b.widthM||10)/2 + (padM||0);
+    const A = pa.map(c=>this.toXY(c,ref)), B = pb.map(c=>this.toXY(c,ref));
+    const box = P=>{ let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+      for(const q of P){ if(q.x<x0)x0=q.x; if(q.x>x1)x1=q.x; if(q.y<y0)y0=q.y; if(q.y>y1)y1=q.y; }
+      return {x0,y0,x1,y1}; };
+    const ba=box(A), bb=box(B);
+    if(ba.x0-lim>bb.x1 || bb.x0-lim>ba.x1 || ba.y0-lim>bb.y1 || bb.y0-lim>ba.y1) return false;
+    const cross=(p,q,r)=>(q.x-p.x)*(r.y-p.y)-(q.y-p.y)*(r.x-p.x);
+    for(let i=1;i<A.length;i++){
+      const a0=A[i-1], a1=A[i];
+      const sx0=Math.min(a0.x,a1.x)-lim, sx1=Math.max(a0.x,a1.x)+lim, sy0=Math.min(a0.y,a1.y)-lim, sy1=Math.max(a0.y,a1.y)+lim;
+      for(let j=1;j<B.length;j++){
+        const b0=B[j-1], b1=B[j];
+        if(Math.max(b0.x,b1.x)<sx0 || Math.min(b0.x,b1.x)>sx1 || Math.max(b0.y,b1.y)<sy0 || Math.min(b0.y,b1.y)>sy1) continue;
+        const d1=cross(a0,a1,b0), d2=cross(a0,a1,b1), d3=cross(b0,b1,a0), d4=cross(b0,b1,a1);
+        if(((d1>0&&d2<0)||(d1<0&&d2>0)) && ((d3>0&&d4<0)||(d3<0&&d4>0))) return true;
+        if(Math.min(this.segDist(a0,b0,b1), this.segDist(a1,b0,b1), this.segDist(b0,a0,a1), this.segDist(b1,a0,a1)) <= lim) return true;
+      }
+    }
+    return false;
   },
   // ---- Full-run verification (QUEST_TUNING "Full-run verification") ----
   // Corridor geometry in local metres, computed once per corridor: XY points,
@@ -1305,6 +1341,7 @@ const Quest = {
   chuteGuardMaster: getChuteGuardMaster(),          // the yellow button; default ON
   mutedCorridors: new Set(getMutedCorridors()),     // zoneIds muted by press-and-hold WHILE the master is on
   armedCorridors: new Set(getArmedCorridors()),     // zoneIds armed by press-and-hold WHILE the master is off
+  ignoredCorridors: new Set(), // zoneIds next to an armed corridor (Guard OFF + armed only) -- _onFix skips them; see refreshIgnoredCorridors()
   onGuardChanged: null,     // callback() — set by drawAllRuns() while "My map" is open so the boundary lines/mute look redraw live; nulled on #fogBack
   onChuteLineSaved: null,   // callback(zoneId) — set by setupChuteLines() so an open map shows a just-saved line; nulled on #fogBack
   isGuarded(zoneId){
@@ -1315,11 +1352,32 @@ const Quest = {
   // except this). Persists, and returns whether the corridor is NOW guarded —
   // the single choke point renderFogMap()'s press-and-hold handler calls, so
   // the map redraw + persistence always stay in sync.
+  // Armed isolation: with Guard OFF and chutes armed, every unarmed non-lift corridor whose
+  // band touches or runs within ARMED_ADJ_PAD_M of an armed one ignores GPS for as long as
+  // that one stays armed (no narration, no recording, no run logged). Guard ON, nothing armed
+  // or a workspace without Corridor Guard = nothing ignored. A run just switched off drops
+  // any half-recorded buffer so it can't be logged later.
+  refreshIgnoredCorridors(){
+    const next = new Set();
+    const cors = this.corridors || [];
+    if(this.chuteGuardEnabled && !this.chuteGuardMaster && this.armedCorridors.size){
+      const armed = cors.filter(c=>this.armedCorridors.has(c.zoneId));
+      const pad = QUEST_TUNING.ARMED_ADJ_PAD_M;
+      cors.forEach(c=>{
+        if(c.runType==="lift" || this.armedCorridors.has(c.zoneId)) return;
+        if(armed.some(a=>QGeo.corridorsTouch(a, c, pad))) next.add(c.zoneId);
+      });
+    }
+    next.forEach(id=>{ const st = this.states && this.states[id]; if(st && !this.ignoredCorridors.has(id)) st.rec = null; });
+    this.ignoredCorridors = next;
+    return next;
+  },
   toggleGuardForCorridor(zoneId){
     const master = this.chuteGuardMaster;
     const set = master ? this.mutedCorridors : this.armedCorridors;
     if(set.has(zoneId)) set.delete(zoneId); else set.add(zoneId);
     (master ? setMutedCorridors : setArmedCorridors)(Array.from(set));
+    this.refreshIgnoredCorridors();
     return master ? !set.has(zoneId) : set.has(zoneId);
   },
   // The yellow button. Re-evaluates the alarm at once so a tone that is
@@ -1328,6 +1386,7 @@ const Quest = {
   setChuteGuardMaster(on){
     this.chuteGuardMaster = !!on;
     setChuteGuardMaster(this.chuteGuardMaster);
+    this.refreshIgnoredCorridors();
     if(typeof syncCgAlarm==="function") syncCgAlarm();
     if(typeof paintGuardButtons==="function") paintGuardButtons();
     if(this.onGuardChanged) this.onGuardChanged();   // an open map redraws its boundary lines
@@ -1395,6 +1454,7 @@ const Quest = {
         .map(z=>({ zoneId:z.id, name:z.name||"Checkpoint", center:z.center, elevM:z.checkpointElevM }));
       const _ce = this.checkpoints.map(c=>c.elevM);
       this.resortFullVerticalM = _ce.length>=2 ? (Math.max.apply(null,_ce) - Math.min.apply(null,_ce)) : 0;
+      this.refreshIgnoredCorridors();
     }catch(e){ this.corridors=[]; this.checkpoints=[]; this.resortFullVerticalM=0; }
   },
 
@@ -1418,6 +1478,7 @@ const Quest = {
     this.chuteGuardMaster = getChuteGuardMaster();
     this.mutedCorridors = new Set(getMutedCorridors());
     this.armedCorridors = new Set(getArmedCorridors());
+    this.refreshIgnoredCorridors();
     this.checkpointVert = getCheckpointVert();
     this._cpCooldownUntil = {};
     this._cpLastPostAt = 0;
@@ -1525,7 +1586,8 @@ const Quest = {
       if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t, offsite:true});
       return;   // off the run network: no corridor ticks, no fog reveal, no sharing
     }
-    this.corridors.forEach(corridor=>this._tick(corridor, p, this.selectedActivity));
+    // Armed isolation: a run next to an armed chute ignores GPS (refreshIgnoredCorridors).
+    this.corridors.forEach(corridor=>{ if(!this.ignoredCorridors.has(corridor.zoneId)) this._tick(corridor, p, this.selectedActivity); });
     // Off-course chute warning — travel heading, not device compass, same
     // "phone in a pocket" reasoning Guidance Bot already uses elsewhere in
     // this codebase (a stationary/paused compass reading would falsely gate
@@ -3261,7 +3323,10 @@ function runStyleFor(c){
 // Run NAMES are deliberately NOT drawn on the map any more (removed 2026-09-23):
 // the zoomed-in text labels landed on top of neighbouring chutes' names and
 // were unreadable. A run's name comes from tapping it (showRunPopup) — that
-// works well and never collides. Don't add name text back onto the map.
+// works well and never collides. Don't add name text back onto the map for
+// every run. The one exception (2026-09-25, requested): with Guard OFF, each
+// ARMED run shows its name (_rebuildArmedLabels) — only a handful, so they
+// don't collide.
 //
 // "In view" is screen-space (map.project() -> pixel coords checked against
 // the container), NOT map.getBounds() -- confirmed live that getBounds()'s
@@ -3273,6 +3338,20 @@ function runStyleFor(c){
 // perspective-correct regardless of pitch/bearing.
 const RUN_BADGE_MAX_VISIBLE = 10;
 let _runBadgeMarkers = [];
+// Name labels for armed runs — Guard OFF + armed mode only (Guard ON guards every run, and
+// labelling them all is what collided before). Same text and look as the Fence Editor Test
+// Mode label: the run's name at the middle of its path. Rebuilt by applyGuardState().
+let _armedLabelMarkers = [];
+function _rebuildArmedLabels(map, cors){
+  _armedLabelMarkers.forEach(m=>m.remove()); _armedLabelMarkers=[];
+  if(!Quest.chuteGuardEnabled || Quest.chuteGuardMaster || !Quest.armedCorridors.size) return;
+  cors.forEach(c=>{
+    if(!Quest.armedCorridors.has(c.zoneId) || !c.path || c.path.length<2) return;
+    const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
+    const el=document.createElement("div"); el.className="runLabel"; el.textContent=c.name;
+    _armedLabelMarkers.push(new maplibregl.Marker({ element:el, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map));
+  });
+}
 let _runBadgeMoveTimer = null;
 function _rebuildRunBadges(map, cors){
   _runBadgeMarkers.forEach(m=>m.remove()); _runBadgeMarkers=[];
@@ -3621,6 +3700,7 @@ function drawAllRuns(map){
         });
         if(hasEdges) map.setFeatureState({ source:"runGuardEdges", id:c.zoneId }, { guardEdges: Quest.isGuarded(c.zoneId) });
       });
+      _rebuildArmedLabels(map, cors);
     }catch(e){ console.warn("applyGuardState:", e && e.message); }
   }
   Quest.onGuardChanged = applyGuardState;
@@ -3717,6 +3797,7 @@ function renderFogMap(){
   document.getElementById("fogBack").onclick=()=>{
     Quest.onPosition=null;
     Quest.onLiftModeChange=null; Quest.onGuardChanged=null; Quest.onSkiedChanged=null; Quest.onChuteLineSaved=null;
+    try{ _armedLabelMarkers.forEach(m=>m.remove()); _armedLabelMarkers=[]; }catch(e){}
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
     // ever actually shown (the arrow wedge / compass-mode bearing); nothing

@@ -29,8 +29,12 @@ function extractBody(startTag) {
 }
 
 (function testNoRunNameTextOnTheMap() {
-  assert(!/className\s*=\s*"runLabel"/.test(html), "no run-name text marker is created (class runLabel)");
-  assert(!/\.runLabel\s*\{/.test(html), "the .runLabel style is gone");
+  // Exception (2026-09-25): ARMED runs (Guard OFF) show their name -- only there. The one
+  // runLabel marker lives in _rebuildArmedLabels, which draws armed corridors only.
+  assert((html.match(/className\s*=\s*"runLabel"/g) || []).length === 1, "run-name markers are created in one place only");
+  const armed = extractBody("function _rebuildArmedLabels(map, cors){");
+  assert(/className\s*=\s*"runLabel"/.test(armed) && /Quest\.armedCorridors\.has\(c\.zoneId\)/.test(armed) && /Quest\.chuteGuardMaster/.test(armed),
+    "the only run-name labels are for armed runs with Guard OFF");
   assert(!/_rebuildRunLabels|RUN_LABEL_MAX_VISIBLE|_runLabelMarkers/.test(html), "the old run-label function/constants are gone");
   const body = extractBody("function _rebuildRunBadges(map, cors){");
   assert(body.length > 0, "found _rebuildRunBadges");

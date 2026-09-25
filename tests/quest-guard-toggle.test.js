@@ -112,7 +112,7 @@ const store = v => ({ getItem: () => v });
 function holdRig(masterOn) {
   const savedMuted = [], savedArmed = [];
   const fn = toggleGuard(ids => savedMuted.push(ids), ids => savedArmed.push(ids));
-  const self = { chuteGuardMaster: masterOn, mutedCorridors: new Set(), armedCorridors: new Set() };
+  const self = { chuteGuardMaster: masterOn, mutedCorridors: new Set(), armedCorridors: new Set(), refreshIgnoredCorridors(){} };
   return { self, hold: id => fn.call(self, id), savedMuted, savedArmed };
 }
 
