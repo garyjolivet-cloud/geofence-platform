@@ -21,6 +21,8 @@
     ACCURACY_CAP_M: 40,     // same cap Ridge Quest uses for fog reveal
     MAX_POINTS: 4000,       // a long day; beyond this every second point is dropped
     GAP_MS: 90000,          // no accepted fix for this long (phone asleep, tunnel) -> start a new segment
+    LIFT_CONFIRM_MS: 60000, // near a lift line this long = really riding it. Shorter stays (walking past a lift
+                            // base, GPS drift near the line) are kept; field log 2026-09-25 lost walking stretches
     SAVE_EVERY_MS: 30000
   };
 
@@ -45,6 +47,9 @@
     var KEY = "rq.track";
     var state = { day: dayKey(), segs: [] };
     var lastT = 0, lastSave = 0, open = false;
+    // Fixes taken near a lift line wait here until we know whether it is a real ride.
+    var pending = [], pendingSince = null, riding = false;
+    var stats = { kept: 0, droppedLift: 0, droppedAcc: 0 };
 
     function load() {
       try {
@@ -59,12 +64,28 @@
       lastSave = now;
       try { storage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
     }
-    // fix: {lat, lon, acc, t}; onLift: true while riding a lift (those fixes are not "skiing").
-    function add(fix, onLift) {
+    // fix: {lat, lon, acc, t}; nearLift: the fix is near a lift line. Those fixes are held back:
+    // once near a lift for LIFT_CONFIRM_MS it is a real ride and they are dropped (not skiing);
+    // leaving sooner puts them back into the track, so walking past a lift base keeps the route.
+    function add(fix, nearLift) {
       if (!fix || fix.lat == null || fix.lon == null) return false;
       if (state.day !== dayKey()) state = { day: dayKey(), segs: [] };
-      if (onLift) { open = false; return false; }
-      if (fix.acc != null && fix.acc > TRACK.ACCURACY_CAP_M) return false;
+      if (fix.acc != null && fix.acc > TRACK.ACCURACY_CAP_M) { stats.droppedAcc++; return false; }
+      if (nearLift) {
+        if (pendingSince == null) pendingSince = fix.t;
+        if (!riding && fix.t - pendingSince >= TRACK.LIFT_CONFIRM_MS) {
+          riding = true; stats.droppedLift += pending.length; pending = []; open = false;
+        }
+        if (riding) { stats.droppedLift++; return false; }
+        pending.push(fix);
+        return false;
+      }
+      var held = pending;
+      pending = []; pendingSince = null; riding = false;
+      for (var i = 0; i < held.length; i++) put(held[i]);
+      return put(fix);
+    }
+    function put(fix) {
       var pt = [fix.lon, fix.lat];
       var seg = open ? state.segs[state.segs.length - 1] : null;
       if (seg && fix.t - lastT > TRACK.GAP_MS) seg = null;
@@ -76,6 +97,7 @@
         open = true;
       }
       lastT = fix.t;
+      stats.kept++;
       if (totalPoints(state.segs) > TRACK.MAX_POINTS) state.segs = thin(state.segs);
       save(false);
       return true;
@@ -83,6 +105,9 @@
     return {
       load: load, add: add, save: save,
       segments: function () { return state.segs; },
+      // For the Corridor Guard log: points kept / dropped this session, and whether fixes are held near a lift.
+      stats: function () { return { kept: stats.kept, droppedLift: stats.droppedLift, droppedAcc: stats.droppedAcc,
+        held: pending.length, riding: riding, points: totalPoints(state.segs) }; },
       clear: function () { state = { day: dayKey(), segs: [] }; open = false; save(true); }
     };
   }

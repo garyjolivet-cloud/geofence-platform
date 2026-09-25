@@ -43,15 +43,34 @@ test("track keeps points at least MIN_STEP_M apart and ignores poor GPS", () => 
   assert.strictEqual(tr.segments()[0].length, 2);
 });
 
-test("lift rides and long gaps start a new segment; lift fixes are never drawn", () => {
+test("a real lift ride (near a lift for LIFT_CONFIRM_MS) is dropped and splits the line; long gaps split too", () => {
   const tr = V.createTrack(mkStore(), () => "2026-09-24");
   tr.add(P(0)); tr.add(P(1)); tr.add(P(2));
-  assert.ok(!tr.add(P(3), true), "on a lift: not recorded");
-  tr.add(P(4)); tr.add(P(5));
+  // 90 s near the lift line, one fix every 10 s
+  const ride = [];
+  for (let k = 1; k <= 10; k++) ride.push({ lat: 51.3 + (2 + k) * 0.0001, lon: -117.15, acc: 5, t: P(2).t + k * 10000 });
+  ride.forEach(f => assert.ok(!tr.add(f, true), "near a lift: not drawn"));
+  assert.strictEqual(tr.stats().riding, true, "a minute near the lift = riding");
+  const after = t => ({ lat: 51.31, lon: -117.15 + t * 0.0001, acc: 5, t: ride[9].t + t * 1000 });
+  tr.add(after(1)); tr.add(after(2));
   assert.strictEqual(tr.segments().length, 2, "lift split the line in two");
-  const late = { ...P(6), t: P(5).t + V.TRACK.GAP_MS + 1 };
+  assert.strictEqual(tr.segments()[0].length, 3, "no lift fix was drawn");
+  assert.strictEqual(tr.stats().droppedLift, 10);
+  const late = { ...after(3), t: after(2).t + V.TRACK.GAP_MS + 1 };
   tr.add(late);
   assert.strictEqual(tr.segments().length, 3, "a 90 s+ gap splits too");
+});
+
+test("walking past a lift base (near it less than LIFT_CONFIRM_MS) keeps the route", () => {
+  const tr = V.createTrack(mkStore(), () => "2026-09-24");
+  tr.add(P(0)); tr.add(P(1));
+  assert.ok(!tr.add(P(2), true) && !tr.add(P(3), true), "held while near the lift");
+  assert.strictEqual(tr.stats().held, 2);
+  assert.ok(tr.add(P(4)), "leaving the lift keeps going");
+  assert.strictEqual(tr.segments().length, 1, "one unbroken line");
+  assert.strictEqual(tr.segments()[0].length, 5, "the near-lift fixes were put back");
+  assert.strictEqual(tr.stats().held, 0);
+  assert.strictEqual(tr.stats().droppedLift, 0);
 });
 
 test("track persists per ski day and resets on a new day", () => {
@@ -254,7 +273,10 @@ test("Quest._celebrate marks a chute skied, shows the toast and never throws", (
 });
 
 test("source wiring: track feed is isolated in try/catch, back-out clears the hook, script is loaded", () => {
-  assert.ok(/try\{ if\(RQTrack\) RQTrack\.add\(\{ lat:fix\.lat, lon:fix\.lon, acc:fix\.acc, t:fix\.t \}, onLift \|\| this\.liftModeActive\); \}catch\(e\)\{\}/.test(html));
+  // Raw near-lift reading only -- never liftModeActive (Battery Saver "Always On" dropped a whole route, 2026-09-25).
+  assert.ok(/try\{ if\(RQTrack\) RQTrack\.add\(\{ lat:fix\.lat, lon:fix\.lon, acc:fix\.acc, t:fix\.t \}, onLift\); \}catch\(e\)\{\}/.test(html));
+  assert.ok(!/RQTrack\.add\([^;]*liftModeActive/.test(html), "Battery Saver never stops the track");
+  assert.ok(/cgLog\("LIFT MODE "/.test(html) && /cgLog\("TRACK points="/.test(html) && /cgLog\("BATTERY SAVER set to "/.test(html), "lift mode, track stats and Battery Saver changes are logged");
   assert.ok(html.includes("Quest.onSkiedChanged=null;"));
   assert.ok(html.includes('<script src="/ridge-visuals.js"></script>'));
   assert.ok(html.includes("this._postRun(corridor, run, trip.fixes);"));

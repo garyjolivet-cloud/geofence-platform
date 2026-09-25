@@ -1472,6 +1472,8 @@ const Quest = {
     // stored day-bucket no longer matches. Per-checkpoint cooldowns are
     // session-only — a fresh session may legitimately re-hit a checkpoint.
     this.liftModeOverride = localStorage.getItem("rq.liftMode") || "auto";
+    this._trackLogAt = 0;
+    if(typeof cgLog==="function") cgLog("TRACKING start (Battery Saver "+this.liftModeOverride+")");
     this.liftModeActive = false;
     this._liftRaw = false;
     this._liftRawSinceT = 0;
@@ -1534,6 +1536,7 @@ const Quest = {
     if(mode!=="auto" && mode!=="on" && mode!=="off") return;
     this.liftModeOverride = mode;
     localStorage.setItem("rq.liftMode", mode);
+    if(typeof cgLog==="function") cgLog("BATTERY SAVER set to "+mode);
     if(typeof rqToast==="function") rqToast(
       mode==="on" ? "🔋 Battery Saver: Always On" :
       mode==="off" ? "Battery Saver: Always Off" :
@@ -1554,6 +1557,7 @@ const Quest = {
   _setLiftModeActive(active, reason){
     if(this.liftModeActive === active) return;
     this.liftModeActive = active;
+    if(typeof cgLog==="function") cgLog("LIFT MODE "+(active?"on":"off")+" ("+reason+", Battery Saver "+this.liftModeOverride+")");
     // Chute Guard's own 200ms sync poll (chuteGuardStartSync/Stop) is pure
     // waste while on a lift — ChuteGuard itself already refuses to sound an
     // alarm in that state (see chute-guard.js's lift gate), this just stops
@@ -1570,6 +1574,18 @@ const Quest = {
     if(this.onLiftModeChange) this.onLiftModeChange(active, reason);
   },
 
+  // One line in the Corridor Guard log about once a minute while tracking: how many track
+  // points were kept or dropped and why, so a "route not tracked" report can be read from the log.
+  _trackLogAt: 0,
+  _logTrackStats(t){
+    if(typeof cgLog!=="function" || !RQTrack || !RQTrack.stats) return;
+    if(this._trackLogAt && t - this._trackLogAt < 60000) return;
+    this._trackLogAt = t;
+    const s = RQTrack.stats();
+    cgLog("TRACK points="+s.points+" kept="+s.kept+" droppedLift="+s.droppedLift+" droppedAcc="+s.droppedAcc
+      +" heldNearLift="+s.held+(s.riding?" riding-lift":"")+" liftMode="+(this.liftModeActive?"on":"off")
+      +" battery="+this.liftModeOverride+" nearLift="+(this._liftRaw?"y":"n"));
+  },
   _onFix(pos){
     const c=pos.coords;
     const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy||30, t:pos.timestamp||Date.now(),
@@ -1617,9 +1633,13 @@ const Quest = {
       // equality check once already in that state).
       const onLift = ChuteGuard.isOnLift();
       if(onLift !== this._liftRaw){ this._liftRaw = onLift; this._liftRawSinceT = fix.t; }
-      // Today's ski track (breadcrumb for the map). Lift rides are left out. Isolated in a
-      // try/catch so a track problem can never break the tracking pipeline.
-      try{ if(RQTrack) RQTrack.add({ lat:fix.lat, lon:fix.lon, acc:fix.acc, t:fix.t }, onLift || this.liftModeActive); }catch(e){}
+      // Today's ski track (breadcrumb for the map). Isolated in a try/catch so a track problem
+      // can never break the tracking pipeline. Only the RAW near-lift reading goes in: the track
+      // itself waits TRACK.LIFT_CONFIRM_MS before treating it as a ride (walking past a lift base
+      // keeps the route), and Battery Saver's "Always On" is a battery setting, not a lift ride
+      // -- passing liftModeActive here once dropped a whole day's route (field log 2026-09-25).
+      try{ if(RQTrack) RQTrack.add({ lat:fix.lat, lon:fix.lon, acc:fix.acc, t:fix.t }, onLift); }catch(e){}
+      try{ this._logTrackStats(fix.t); }catch(e){}
       if(this.liftModeOverride==="on") this._setLiftModeActive(true, "on");
       else if(this.liftModeOverride==="off") this._setLiftModeActive(false, "off");
       else if(this._liftRaw !== this.liftModeActive && fix.t - this._liftRawSinceT >= liftModeDebounceMs(this.liftModeActive)) this._setLiftModeActive(this._liftRaw, "auto");
