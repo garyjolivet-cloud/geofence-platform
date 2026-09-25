@@ -618,11 +618,15 @@ map.on("load",async ()=>{
   map.setPitch(0); map.setBearing(0);
   // Click any dim overlay line to load that corridor (guarding unsaved edits).
   // Delegated listeners are fine to register before the layer exists.
+  // While adding points (drawing a new corridor or extending one), a click on another
+  // corridor's line is just a point: drawing a chute along/under a lift (same line) used to
+  // open the lift instead (field report 2026-09-25, Pioneer lift).
   map.on("click","allCorridors-hit",e=>{
+    if(addMode) return;
     const f=e.features && e.features[0];
     if(f && f.properties) pickCorridorById(f.properties.id);
   });
-  map.on("mouseenter","allCorridors-hit",()=>{ map.getCanvas().style.cursor="pointer"; });
+  map.on("mouseenter","allCorridors-hit",()=>{ map.getCanvas().style.cursor = addMode ? "crosshair" : "pointer"; });
   map.on("mouseleave","allCorridors-hit",()=>{ map.getCanvas().style.cursor = addMode ? "crosshair" : ""; });
   // If a project was entered before the map finished loading, its overlay
   // fetch already ran — (re)draw it now that layers can be added.

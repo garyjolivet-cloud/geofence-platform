@@ -84,6 +84,9 @@ const list = [
 (function testClickCallsGuardedPicker() {
   const clickHandler = extractFn('map.on("click","allCorridors-hit",');
   assert(/pickCorridorById\(/.test(clickHandler), "the overlay click loads a corridor via pickCorridorById");
+  // 2026-09-25: drawing a chute along a lift line opened the lift instead of adding a point.
+  assert(/if\(addMode\) return;/.test(clickHandler) && clickHandler.indexOf("if(addMode) return;") < clickHandler.indexOf("pickCorridorById("),
+    "while adding points, a click on another corridor is only a point (never opens it)");
   const picker = extractFn("function pickCorridorById(");
   assert(/confirmDiscardIfDirty\(\)/.test(picker), "pickCorridorById checks for unsaved changes before switching");
   const confirmFn = extractFn("function confirmDiscardIfDirty(");
