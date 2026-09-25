@@ -222,7 +222,8 @@ const corridorLayer = {
     html.indexOf("corridor width handle (green)") === -1,
     "corridor vertex + width drag handles removed from refreshHandles");
   // importCorridorFromLibrary now links instead of copying.
-  assert(/importCorridorFromLibrary[\s\S]{0,600}z\.corridorId\s*=\s*corridorId/.test(html),
+  // (window sized to the whole function: it now starts with an "already in this project?" check)
+  assert(/async function importCorridorFromLibrary[\s\S]{0,1400}z\.corridorId\s*=\s*corridorId/.test(html),
     "importCorridorFromLibrary sets z.corridorId (linked add, not an unlinked copy)");
 })();
 
