@@ -1938,9 +1938,20 @@ const Quest = {
     // skied or side-slipped chute) and as a boot pack when climbed (2026-09-21). Any other run
     // is ski when descended at ski pace, otherwise a boot pack (skinning or walking it).
     // `selectedActivity` is always "ski" now; the parameter stays so callers keep their shape.
+    // Elevation gained in the direction travelled ("down" = along the drawn path): the path's
+    // climb going along it, its descent going against it. null when the corridor's elevation
+    // isn't known. Feeds a lift ride's or boot pack's vertical (2026-09-30).
+    const gainM = descending ? corridor.climbM : corridor.descentM;
     let activity;
     if(corridor.runType==="lift"){
-      if(!ascending) return "rejected"; // downhill lift-line foot traffic isn't a lift ride (silent, as before)
+      // A lift ride is a pass in the lift's UPHILL direction. Which way that is comes from the
+      // corridor's elevation, not from how it was drawn: the Kicking Horse lifts are drawn
+      // bottom-to-top, and the old "only against the drawn direction" rule rejected every real
+      // ride up them (2026-09-30). No elevation at all -> the old rule (drawn top-to-bottom).
+      const uphillAlong = corridor.climbM!=null && corridor.descentM!=null ? corridor.climbM > corridor.descentM
+        : corridor.descentM!=null ? corridor.descentM < 10
+        : false;
+      if(uphillAlong ? !descending : !ascending) return "rejected"; // downhill lift-line foot traffic isn't a lift ride (silent, as before)
       activity="lift";
     } else if(corridor.runType==="hike"){
       activity="hike";
@@ -2001,9 +2012,13 @@ const Quest = {
     // A boot pack's vertical is what it CLIMBED: the elevation gained in its direction of
     // travel -- the path's climb going along it ("down" = the drawn direction), its descent
     // going against it. Only used when that is known and > 0; otherwise the old rule below.
-    const bootPackClimbM = activity==="hike" ? (descending ? corridor.climbM : corridor.descentM) : null;
+    const bootPackClimbM = activity==="hike" ? gainM : null;
     if(activity==="lift"){
-      verticalM = null;
+      // A lift ride's vertical is the elevation it carried you up (the day's total vertical is
+      // lifts + boot packs). Unknown elevation -> the phone's own altitude change, else null.
+      // Lifts still score 0 points.
+      verticalM = (gainM != null && gainM > 0) ? -Math.round(gainM * coverage)
+        : (first.alt!=null && last.alt!=null && last.alt > first.alt) ? -Math.round(last.alt-first.alt) : null;
     } else if(bootPackClimbM != null && bootPackClimbM > 0){
       verticalM = -Math.round(bootPackClimbM * coverage);
     } else if(corridor.descentM != null){
@@ -2124,69 +2139,65 @@ async function refreshRuns(playerId){
     listEl.innerHTML = '<div class="empty">Couldn’t load runs.</div>';
   }
 }
-// R3-core — today's points/vertical tiles + current streak, both derived
-// client-side from GET /api/players/:id/stats's day rows (not stored/
-// computed server-side — see the plan's streak-derivation note).
+// Home tiles (reworked 2026-09-30). Row 1: chutes today, points today, and the day's / season's
+// TOTAL VERTICAL = lift rides + boot packs (the vertical you went up, from the lift and route
+// elevations), not chute descents. Row 2: boot packs today, climbed today and this season, lift
+// rides today. Points + streak come from GET /api/players/:id/stats; the vertical and the
+// boot-pack / lift numbers from /bootpacks and /lifts. The tiles are drawn first with dashes,
+// so a failing request blanks only its own numbers, never the whole row.
 async function refreshStats(playerId){
   const tilesEl=document.getElementById("statsTiles");
   const streakEl=document.getElementById("statsStreak");
   if(!tilesEl) return;
+  tilesEl.innerHTML =
+    '<div class="now">'
+    +'<div class="stat"><b id="chutesTodayNum">'+Quest.skiedToday.size+'</b><span>Chutes today</span></div>'
+    +'<div class="stat"><b id="ptsToday">—</b><span>Points today</span></div>'
+    +'<div class="stat vtoday"><b id="vertToday">—</b><span>Vertical today</span></div>'
+    +'<div class="stat"><b id="vertSeason">—</b><span>This season</span></div>'
+    +'</div>'
+    +'<div class="now bootTiles" id="bootTiles">'
+    +'<div class="stat"><b id="bpTodayN">—</b><span>Boot packs today</span></div>'
+    +'<div class="stat"><b id="bpTodayM">—</b><span>Climbed today</span></div>'
+    +'<div class="stat"><b id="bpSeasonM">—</b><span>Climbed this season</span></div>'
+    +'<div class="stat"><b id="liftTodayN">—</b><span>Lift rides today</span></div>'
+    +'</div>';
+  refreshClimbTiles(playerId);
   try{
     const j = await api("/api/players/"+playerId+"/stats");
     const days = j.days||[];
     const byDate = {}; days.forEach(d=>{ byDate[d.date]=d; });
-    const todayKey = questDateBucketClient(new Date());
-    const today = byDate[todayKey] || { points:0, checkpoint_vertical_m:0 };
+    const today = byDate[questDateBucketClient(new Date())] || { points:0 };
     let streak=0, cursor=new Date();
     for(;;){
-      const key = questDateBucketClient(cursor);
-      const row = byDate[key];
+      const row = byDate[questDateBucketClient(cursor)];
       if(!row || (row.runs_count<=0 && row.lift_rides<=0 && row.hikes<=0)) break;
       streak++;
       cursor = new Date(cursor.getTime()-24*3600000);
     }
-    // Headline vertical is checkpoint-measured (see Quest._tickCheckpoints),
-    // not the run-summed vertical_m — the latter still feeds points and the
-    // per-activity leaderboard "m vert". "This season" sums the same
-    // checkpoint column across the current season's day rows (the /stats
-    // response already carries a whole season, ~200 rows max).
-    const seasonId = questSeasonIdClient(new Date());
-    const seasonVert = days.filter(d=>d.season_id===seasonId)
-                           .reduce((sum,d)=>sum+(d.checkpoint_vertical_m||0), 0);
-    tilesEl.innerHTML =
-      '<div class="now">'
-      +'<div class="stat"><b id="chutesTodayNum">'+Quest.skiedToday.size+'</b><span>Chutes today</span></div>'
-      +'<div class="stat"><b>'+Math.round(today.points||0)+'</b><span>Points today</span></div>'
-      +'<div class="stat vtoday"><b>'+Math.round(Math.abs(today.checkpoint_vertical_m||0))+'m</b><span>Vertical today</span></div>'
-      +'<div class="stat"><b>'+Math.round(seasonVert)+'m</b><span>This season</span></div>'
-      +'</div>'
-      // Boot packs are stats of their own (2026-09-30), filled by refreshBootPackTiles().
-      +'<div class="now bootTiles" id="bootTiles">'
-      +'<div class="stat"><b id="bpTodayN">—</b><span>Boot packs today</span></div>'
-      +'<div class="stat"><b id="bpTodayM">—</b><span>Climbed today</span></div>'
-      +'<div class="stat"><b id="bpSeasonM">—</b><span>Climbed this season</span></div>'
-      +'<div class="stat"><b id="liftTodayN">—</b><span>Lift rides today</span></div>'
-      +'</div>';
+    const el=document.getElementById("ptsToday"); if(el) el.textContent=Math.round(today.points||0);
     if(streakEl) streakEl.textContent = streak>0 ? streak+"-day streak" : "";
-    refreshBootPackTiles(playerId);
-  }catch(e){
-    tilesEl.innerHTML='';
-  }
+  }catch(e){}
 }
-// Home's second tile row: boot packs today, vertical climbed today and this season, lift rides today.
-// Best-effort: a failed fetch leaves the dashes.
-async function refreshBootPackTiles(playerId){
-  try{
-    const j = await api("/api/players/"+playerId+"/bootpacks/daily");
-    const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
-    set("bpTodayN", (j.today&&j.today.count)||0);
-    set("bpTodayM", Math.round((j.today&&j.today.verticalM)||0)+"m");
-    set("bpSeasonM", Math.round((j.season&&j.season.verticalM)||0)+"m");
-  }catch(e){}
-  try{
-    const l = await api("/api/players/"+playerId+"/lifts/daily");
-    const el=document.getElementById("liftTodayN"); if(el) el.textContent=(l.today&&l.today.count)||0;
-  }catch(e){}
+// Total vertical (lifts + boot packs) for today and the season, plus the boot-pack and lift tiles.
+// Best-effort: a failed fetch leaves that request's dashes.
+async function refreshClimbTiles(playerId){
+  const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  const m = v=>Math.round(v||0)+"m";
+  const [bp, lf] = await Promise.all([
+    api("/api/players/"+playerId+"/bootpacks/daily").catch(()=>null),
+    api("/api/players/"+playerId+"/lifts/daily").catch(()=>null)
+  ]);
+  if(bp){
+    set("bpTodayN", (bp.today&&bp.today.count)||0);
+    set("bpTodayM", m(bp.today&&bp.today.verticalM));
+    set("bpSeasonM", m(bp.season&&bp.season.verticalM));
+  }
+  if(lf) set("liftTodayN", (lf.today&&lf.today.count)||0);
+  if(bp && lf){
+    set("vertToday", m(((bp.today&&bp.today.verticalM)||0) + ((lf.today&&lf.today.verticalM)||0)));
+    set("vertSeason", m(((bp.season&&bp.season.verticalM)||0) + ((lf.season&&lf.season.verticalM)||0)));
+  }
 }
 // Which chutes are done today — feeds the Home "Chutes today" tile and the map's skied stripe.
 // Best-effort: a failed fetch just leaves the set as it is.
@@ -2768,12 +2779,8 @@ function renderHome(){
   };
   paintOutboxNote();
   rqFlushOutbox();
-  // Live-tick the "Vertical today" tile as checkpoints credit descent, so it
-  // moves during a session instead of only on the next refreshStats().
-  Quest.onCheckpointVertical = (totalM)=>{
-    const el = document.querySelector('#statsTiles .vtoday b');
-    if(el) el.textContent = Math.round(totalM)+'m';
-  };
+  // "Vertical today" is lifts + boot packs now (refreshClimbTiles), refreshed after every logged
+  // run -- the checkpoint total no longer drives the tile.
   // Ridge Quest is ski-only (2026-09-30): no activity picker. Climbs are still recognised
   // automatically and shown as "Boot pack" (see _classifyAndLog). A stale rq.activity
   // ("bike", "drive", ...) from the old picker is ignored.
@@ -3060,16 +3067,16 @@ async function renderYourChutes(mode){
    times. Today or Season, with both totals on top.
    GET /api/players/:id/bootpacks|lifts/daily|season. */
 const TALLY = {
-  bootpacks: { title:"Boot packs", none:"No boot packs", climbs:true },
-  lifts:     { title:"Lift rides", none:"No lift rides", climbs:false }
+  bootpacks: { title:"Boot packs", none:"No boot packs", marks:true,  vertLabel:"Climbed" },
+  lifts:     { title:"Lift rides", none:"No lift rides", marks:false, vertLabel:"Lift vertical" }
 };
-function tallyRowHtml(r, maxCount, climbs){
+function tallyRowHtml(r, maxCount, marks){
   const pct = maxCount>0 ? Math.round((r.count/maxCount)*100) : 0;
   return '<div class="chuteRow">'
     +'<div class="chuteTop">'
-      +(climbs ? difficultyMarkHtml(r.difficulty) : '')
+      +(marks ? difficultyMarkHtml(r.difficulty) : '')
       +'<span class="name">'+esc(r.name)+'</span>'
-      +'<span class="count">×'+r.count+(climbs ? ' · '+Math.round(r.verticalM||0)+'m' : '')+'</span>'
+      +'<span class="count">×'+r.count+' · '+Math.round(r.verticalM||0)+'m</span>'
     +'</div>'
     +'<div class="chuteBar"><i style="width:'+pct+'%"></i></div>'
   +'</div>';
@@ -3098,13 +3105,13 @@ async function renderTally(kind, mode){
     const t=j.today||{count:0,verticalM:0}, se=j.season||{count:0,verticalM:0};
     totEl.innerHTML =
       '<div class="stat"><b>'+t.count+'</b><span>Today</span></div>'
-      +(cfg.climbs ? '<div class="stat"><b>'+Math.round(t.verticalM)+'m</b><span>Climbed today</span></div>' : '')
+      +'<div class="stat"><b>'+Math.round(t.verticalM)+'m</b><span>'+cfg.vertLabel+' today</span></div>'
       +'<div class="stat"><b>'+se.count+'</b><span>This season</span></div>'
-      +(cfg.climbs ? '<div class="stat"><b>'+Math.round(se.verticalM)+'m</b><span>Climbed this season</span></div>' : '');
+      +'<div class="stat"><b>'+Math.round(se.verticalM)+'m</b><span>'+cfg.vertLabel+' this season</span></div>';
     const routes = j.routes||[];
     const maxCount = routes.length ? routes[0].count : 0;
     listEl.innerHTML = routes.length
-      ? routes.map(r=>tallyRowHtml(r, maxCount, cfg.climbs)).join("")
+      ? routes.map(r=>tallyRowHtml(r, maxCount, cfg.marks)).join("")
       : '<div class="empty">'+cfg.none+' '+(mode==="daily"?"today":"this season")+' yet.</div>';
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load your '+cfg.title.toLowerCase()+'.</div>';

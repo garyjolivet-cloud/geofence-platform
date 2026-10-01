@@ -54,8 +54,8 @@ test("the endpoint answers routes plus both totals", () => {
 
 test("Home shows boot-pack tiles and a Boot packs screen", () => {
   assert.ok(/id="bpTodayN"/.test(html) && /id="bpTodayM"/.test(html) && /id="bpSeasonM"/.test(html), "three tiles");
-  assert.ok(/refreshBootPackTiles\(playerId\);/.test(extract(html, "async function refreshStats(playerId){")), "tiles refresh with the stats");
-  assert.ok(/"\/bootpacks\/daily"/.test(extract(html, "async function refreshBootPackTiles(playerId){")));
+  assert.ok(/refreshClimbTiles\(playerId\);/.test(extract(html, "async function refreshStats(playerId){")), "tiles refresh with the stats");
+  assert.ok(/"\/bootpacks\/daily"/.test(extract(html, "async function refreshClimbTiles(playerId){")));
   assert.ok(/id="btnBootPacks"/.test(html) && /btnBootPacks"\)\.onclick=\(\)=>renderBootPacks\(\)/.test(html), "Home button opens the screen");
   assert.ok(/"\/"\+kind\+"\/"\+mode/.test(extract(html, "async function renderTally(kind, mode){")), "the screen fetches /bootpacks|lifts/<mode>");
   assert.ok(/return renderTally\("bootpacks", mode\)/.test(html) && /return renderTally\("lifts", mode\)/.test(html));
@@ -67,7 +67,9 @@ test("lift rides are tallied per lift, with a Home tile and their own screen", (
   assert.ok(/activity='lift'/.test(lifts), lifts);
   assert.ok(worker.includes("(bootpacks|lifts)\\/(daily|season)"), "one endpoint serves both");
   assert.ok(/prepare\(mpbp\[2\] === "lifts" \? LIFTS_SQL : BOOTPACKS_SQL\)/.test(worker));
-  assert.ok(/id="liftTodayN"/.test(html) && /"\/lifts\/daily"/.test(extract(html, "async function refreshBootPackTiles(playerId){")), "Lift rides today tile");
+  assert.ok(/id="liftTodayN"/.test(html) && /"\/lifts\/daily"/.test(extract(html, "async function refreshClimbTiles(playerId){")), "Lift rides today tile");
+  assert.ok(/vertical_m/.test(worker.match(/const LIFTS_SQL = "([^"]+)"/)[1]), "lift rides carry their vertical");
+  assert.ok(/b\.activity === "lift" \? 0 : Math\.abs\(verticalM \|\| 0\)/.test(worker), "lift vertical stays out of the scored day vertical_m");
   assert.ok(/id="btnLifts"/.test(html) && /btnLifts"\)\.onclick=\(\)=>renderLifts\(\)/.test(html), "Home button opens Lift rides");
   const day = r => r.slice(0, 10);
   const rows = [
@@ -78,4 +80,15 @@ test("lift rides are tallied per lift, with a Home tile and their own screen", (
   const t = lib.aggregateChuteCounts(rows, day, "2026-09-30");
   assert.deepStrictEqual(t.map(r => [r.name, r.count]), [["Golden Eagle Express", 2], ["Stairway Chair", 1]]);
   assert.deepStrictEqual(lib.bootPackTotals(t), { count: 3, verticalM: 0 });
+});
+
+// 2026-09-30: "use lift and boot pack elevations to calculate total vertical for the day, not chute
+// elevations" -- and for the season ("for year also").
+test("Home's total vertical is lifts + boot packs, today and this season", () => {
+  const f = extract(html, "async function refreshClimbTiles(playerId){");
+  assert.ok(/set\("vertToday", m\(\(\(bp\.today&&bp\.today\.verticalM\)\|\|0\) \+ \(\(lf\.today&&lf\.today\.verticalM\)\|\|0\)\)\)/.test(f), "today = boot packs + lifts");
+  assert.ok(/set\("vertSeason", m\(\(\(bp\.season&&bp\.season\.verticalM\)\|\|0\) \+ \(\(lf\.season&&lf\.season\.verticalM\)\|\|0\)\)\)/.test(f), "season = boot packs + lifts");
+  const stats = extract(html, "async function refreshStats(playerId){");
+  assert.ok(!/checkpoint_vertical_m|vertical_m/.test(stats), "neither the checkpoint total nor the chute-descent vertical_m drives the tiles");
+  assert.ok(stats.indexOf("tilesEl.innerHTML") < stats.indexOf("await api("), "tiles are drawn before the stats request, so a failing request can't blank the row");
 });

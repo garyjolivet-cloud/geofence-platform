@@ -55,7 +55,9 @@ const tickCheckpointsBody = new Function(
 // Sanity: the persistence + season helpers this rework adds really exist.
 assert(/function setCheckpointVert\(o\)\{/.test(html), "setCheckpointVert() helper exists in ridge-quest.html");
 assert(/rq\.checkpointVert/.test(html), "the rq.checkpointVert localStorage key is used");
-assert(/checkpoint_vertical_m/.test(html), "refreshStats reads checkpoint_vertical_m");
+// 2026-09-30: the Home "Vertical today" / "This season" tiles are lifts + boot packs now
+// (refreshClimbTiles), not the checkpoint total; the checkpoint tracker still runs and posts.
+assert(/function refreshClimbTiles\(playerId\)\{/.test(html), "the vertical tiles come from refreshClimbTiles");
 
 // Golden-BC-ish coordinates. Two checkpoints ~1.1 km apart N-S, 300 m apart
 // in elevation (resortFullVerticalM = 300).

@@ -476,9 +476,28 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run && run.activity === "hike" && run.verticalM < 0, "a hike on a corridor with authored descent is never null verticalM, got " + JSON.stringify(run && { a: run.activity, v: run.verticalM }));
 })();
 
-(function testLiftHasNullVertical() {
-  const lift = classify(withDescent(liftLine, 250), mkTrack(liftLine, { from: 1, to: 0, speed: 4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
-  assert(lift && lift.activity === "lift" && lift.verticalM === null, "a lift ride carries null verticalM (0 pts)");
+// 2026-09-30: a lift ride carries the vertical it carried you up (lifts + boot packs = the day's
+// total vertical); lifts still score 0 points server-side.
+(function testLiftCarriesItsVertical() {
+  let cov = null;
+  const self = { onCoverage: (n, pct, ok) => { if (ok) cov = pct; } };
+  const lift = classify.call(self, withDescent(liftLine, 250), mkTrack(liftLine, { from: 1, to: 0, speed: 4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(lift && lift.activity === "lift" && lift.verticalM === -Math.round(250 * cov), "a lift drawn top-down, ridden up, carries its descent as vertical, got " + (lift && lift.verticalM));
+})();
+
+// 2026-09-30: the Kicking Horse lifts are drawn bottom-to-top (elev_gain > 0, elev_loss ~ 0). The
+// old rule only accepted a ride AGAINST the drawn direction, so every real ride up was rejected.
+(function testLiftDrawnBottomToTop() {
+  let cov = null;
+  const self = { onCoverage: (n, pct, ok) => { if (ok) cov = pct; } };
+  const upLift = Object.assign({}, liftLine, { descentM: 0, climbM: 1068 });
+  const ride = classify.call(self, upLift, mkTrack(upLift, { speed: 4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(ride && ride.activity === "lift" && ride.verticalM === -Math.round(1068 * cov), "riding along a bottom-to-top lift is a lift ride with its climb, got " + JSON.stringify(ride && [ride.activity, ride.verticalM]));
+  const down = classify(upLift, mkTrack(upLift, { from: 1, to: 0, speed: 4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(down === undefined, "going DOWN a bottom-to-top lift line is not a lift ride");
+  const oldBundle = Object.assign({}, liftLine, { descentM: 0 });          // no climbM yet
+  const ride2 = classify(oldBundle, mkTrack(oldBundle, { speed: 4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(ride2 && ride2.activity === "lift", "before republish (descent 0, no climb) the ride up is still recognised");
 })();
 
 // ---- ski-only (2026-09-30): no activity choice; climbs are "hike" (shown as Boot pack) ----

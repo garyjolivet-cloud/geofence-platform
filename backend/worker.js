@@ -1337,7 +1337,9 @@ async function api(request, env, url) {
            points=points+excluded.points, vertical_m=vertical_m+excluded.vertical_m,
            runs_count=runs_count+excluded.runs_count, lift_rides=lift_rides+excluded.lift_rides, hikes=hikes+excluded.hikes`
       ).bind(
-        P.playerId, P.appId, dateBucket, seasonId, points, Math.abs(verticalM || 0),
+        // A lift ride now carries its vertical (2026-09-30); keep it out of vertical_m, which
+        // stays the scored (ski / boot pack) vertical.
+        P.playerId, P.appId, dateBucket, seasonId, points, b.activity === "lift" ? 0 : Math.abs(verticalM || 0),
         b.activity === "ski" ? 1 : 0, b.activity === "lift" ? 1 : 0, b.activity === "hike" ? 1 : 0
       )
     ];
@@ -1416,8 +1418,9 @@ async function api(request, env, url) {
   // counts below only take ski descents, and boot packs have their own endpoints.
   const CHUTE_LAPS_SQL = "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND run_type='chute' AND activity='ski' ORDER BY started_at DESC LIMIT 2000";
   const BOOTPACKS_SQL = "SELECT zone_id,run_name,difficulty,started_at,vertical_m FROM quest_run WHERE player_id=? AND activity='hike' ORDER BY started_at DESC LIMIT 2000";
-  // Lift rides (2026-09-30): which lifts and how many times. Lift runs carry no vertical.
-  const LIFTS_SQL = "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND activity='lift' ORDER BY started_at DESC LIMIT 2000";
+  // Lift rides (2026-09-30): which lifts, how many times, and the vertical they carried you up.
+  // The day's total vertical is lifts + boot packs (what you went up), not chute descents.
+  const LIFTS_SQL = "SELECT zone_id,run_name,difficulty,started_at,vertical_m FROM quest_run WHERE player_id=? AND activity='lift' ORDER BY started_at DESC LIMIT 2000";
   function bootPackTotals(list) {
     return { count: list.reduce((n, r) => n + r.count, 0), verticalM: Math.round(list.reduce((n, r) => n + r.verticalM, 0)) };
   }
