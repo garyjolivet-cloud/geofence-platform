@@ -157,6 +157,11 @@
   // today (before this run); corridors is Quest.corridors. Lifts return null.
   function completion(run, skiedSet, corridors) {
     if (!run || run.runType === "lift" || run.activity === "lift") return null;
+    // A boot pack (stored activity "hike") is its own stat: never a chute skied.
+    if (run.activity === "hike") {
+      var climbed = run.verticalM != null ? Math.abs(Math.round(run.verticalM)) : 0;
+      return { text: "Boot pack complete", sub: (run.runName || "") + (climbed ? " · " + climbed + " m climbed" : ""), isNew: false, n: null, total: null };
+    }
     var type = run.runType || "run";
     var total = (corridors || []).filter(function (c) { return c.runType === type; }).length;
     var isNew = !skiedSet.has(run.zoneId);

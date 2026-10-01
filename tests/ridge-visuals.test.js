@@ -263,13 +263,26 @@ test("Quest._celebrate marks a chute skied, shows the toast and never throws", (
   const self = { skiedToday: new Set(["a"]), corridors, onSkiedChanged: (id, j) => { changed = [id, j]; } };
   const scope = { RidgeVisuals: { ...V, celebrate: (d, c) => shown.push(c.text) }, document: {}, navigator: { vibrate: () => { vib++; } }, console };
   const f = new Function(...Object.keys(scope), body + "; return _celebrate;")(...Object.values(scope));
-  f.call(self, { runType: "chute", zoneId: "b", runName: "X", activity: "ski_chute" });
+  f.call(self, { runType: "chute", zoneId: "b", runName: "X", activity: "ski" });
   assert.deepStrictEqual(shown, ["Chute 2 of 3"]);
   assert.ok(self.skiedToday.has("b")); assert.strictEqual(vib, 1); assert.deepStrictEqual(changed, ["b", true]);
   const bad = { skiedToday: null, corridors };
   assert.doesNotThrow(() => f.call(bad, { runType: "chute", zoneId: "z" }));
   f.call(self, { runType: "lift", zoneId: "l1" });
   assert.strictEqual(shown.length, 1, "lift rides get no toast");
+});
+
+// 2026-09-30: boot packs are stats of their own -- climbing a chute is never a chute skied.
+test("Quest._celebrate: a boot pack gets its own toast and never counts as a chute skied", () => {
+  const body = extract("_celebrate(run){").replace(/^_celebrate\(run\)/, "function _celebrate(run)");
+  const shown = []; let changed = null;
+  const self = { skiedToday: new Set(["a"]), corridors, onSkiedChanged: (id, j) => { changed = [id, j]; } };
+  const scope = { RidgeVisuals: { ...V, celebrate: (d, c) => shown.push(c.text + "|" + c.sub) }, document: {}, navigator: {}, console };
+  const f = new Function(...Object.keys(scope), body + "; return _celebrate;")(...Object.values(scope));
+  f.call(self, { runType: "chute", zoneId: "b", runName: "Gift Horse", activity: "hike", verticalM: -166 });
+  assert.deepStrictEqual(shown, ["Boot pack complete|Gift Horse · 166 m climbed"]);
+  assert.ok(!self.skiedToday.has("b"), "a climbed chute is not added to today's skied chutes");
+  assert.deepStrictEqual(changed, [null, true], "no skied stripe flash for a boot pack");
 });
 
 test("source wiring: track feed is isolated in try/catch, back-out clears the hook, script is loaded", () => {

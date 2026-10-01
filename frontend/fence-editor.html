@@ -1915,6 +1915,11 @@ function makeZone(name,shape){
     // GPX Editor. See zoneToEngine/engineToZone/editorToSimBundle for the
     // other 3 mirror locations this field must stay in sync with.
     base.descentM=null;
+    // Authored climb (m): the row's elev_gain_m, i.e. the elevation gained going along the
+    // path in its drawn direction. Mirrors descentM in all 3 places (2026-09-30) so Ridge
+    // Quest can count a boot pack's vertical climbed on a route drawn bottom-to-top, where
+    // elev_loss_m is 0.
+    base.climbM=null;
     // "Moving audio" mode — when true, this corridor serializes to the
     // engine's moving-ambient-bed form (an audio source travels the line at
     // speedKmh) instead of a static trigger band. movementMode/speedKmh/
@@ -4416,6 +4421,8 @@ async function importCorridorFromLibrary(corridorId){
     z.difficulty=j.difficulty||null;
     z.runType=j.runType||"run";
     z.activityType=j.activityType||"hike";
+    z.descentM=j.elevLossM!=null?Math.round(j.elevLossM):null;
+    z.climbM=j.elevGainM!=null?Math.round(j.elevGainM):null;
     z.folderId=focusedStopFolderId||null;
     zones.push(z);
     _corrCenterCache.delete(corridorId);
@@ -4462,7 +4469,7 @@ async function reconcileLinkedCorridors(){
     _corrCenterCache.clear();
     let changed=false;
     for(const z of corr){
-      if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; z.corridorRev=null; if(z.descentM!=null){ z.descentM=null; } changed=true; } // deleted from library — keep the stop + its baked shape
+      if(z.corridorId && !byId.has(z.corridorId)){ z.corridorId=null; z.corridorRev=null; if(z.descentM!=null){ z.descentM=null; } if(z.climbM!=null){ z.climbM=null; } changed=true; } // deleted from library — keep the stop + its baked shape
       if(!z.corridorId){
         const hit=_matchCorridorRow(rows, z);
         if(hit){ z.corridorId=hit.id; z.corridorRev=hit.updatedAt||null; changed=true; }
@@ -4480,6 +4487,8 @@ async function reconcileLinkedCorridors(){
       if(nd!==z.difficulty||nr!==z.runType||na!==z.activityType){ z.difficulty=nd; z.runType=nr; z.activityType=na; changed=true; }
       const ndesc=row.elevLossM!=null?Math.round(row.elevLossM):null;
       if(ndesc!==z.descentM){ z.descentM=ndesc; changed=true; }
+      const nclimb=row.elevGainM!=null?Math.round(row.elevGainM):null;
+      if(nclimb!==(z.climbM==null?null:z.climbM)){ z.climbM=nclimb; changed=true; }
       z.corridorRev=row.updatedAt||z.corridorRev;
     }
     if(changed){ render(); refreshProps(); }
@@ -4502,6 +4511,7 @@ async function refreshCorridorShapeFromLibrary(z){
     z.shape.widthM=j.widthM||10;
     z.difficulty=j.difficulty||null; z.runType=j.runType||"run"; z.activityType=j.activityType||"hike";
     z.descentM=j.elevLossM!=null?Math.round(j.elevLossM):null;
+    z.climbM=j.elevGainM!=null?Math.round(j.elevGainM):null;
     z.corridorRev=j.updatedAt||z.corridorRev;
     _corrCenterCache.delete(z.corridorId);
     render(); refreshProps();
@@ -4880,7 +4890,7 @@ function zoneToEngine(z){
   else if(s.type==="tripline") zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"tripline",from:LL(s.from),to:LL(s.to)}}];
   // Corridor — the geometry shape Geofencer/SimFencer's corridor primitive
   // reads (nearest-segment distance to the polyline, minus half of widthM).
-  else if(s.type==="corridor" && !movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"corridor",path:s.coords.map(LL),widthM:s.widthM||10,descentM:z.descentM!=null?Math.round(z.descentM):null}}];
+  else if(s.type==="corridor" && !movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",geometry:{type:"corridor",path:s.coords.map(LL),widthM:s.widthM||10,descentM:z.descentM!=null?Math.round(z.descentM):null,climbM:z.climbM!=null?Math.round(z.climbM):null}}];
   // Moving-audio corridor — no drawn shape of its own; both layers reuse
   // the approach radius as a plain circle at the current moving point.
   else if(s.type==="corridor" && movingAudio) zo.layers=[{kind:"general",radiusM:genR},{kind:"target",radiusM:genR}];
@@ -5139,6 +5149,7 @@ function engineToZone(zo){
     z.activityType=zo.activityType||"hike";
     const tgtC=(zo.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
     z.descentM=(tgtC&&tgtC.geometry.descentM!=null)?tgtC.geometry.descentM:null;
+    z.climbM=(tgtC&&tgtC.geometry.climbM!=null)?tgtC.geometry.climbM:null;
   }
   if(shape.type==="circle" && zo.isElevCheckpoint && typeof zo.checkpointElevM==="number"){
     z.isElevCheckpoint=true;
@@ -6574,7 +6585,7 @@ function editorToSimBundle(){
     else if(s.type==="polygon") targetLayer={kind:"target",geometry:{type:"polygon",coords:s.coords.map(c=>[c[1],c[0]])}};
     else if(s.type==="tripline") targetLayer={kind:"target",geometry:{type:"tripline",from:[s.from[1],s.from[0]],to:[s.to[1],s.to[0]]}};
     else if(movingAudio) targetLayer={kind:"target",radiusM:z.approachM||30};
-    else if(s.type==="corridor") targetLayer={kind:"target",geometry:{type:"corridor",path:s.coords.map(c=>[c[1],c[0]]),widthM:s.widthM||10,descentM:z.descentM!=null?Math.round(z.descentM):null}};
+    else if(s.type==="corridor") targetLayer={kind:"target",geometry:{type:"corridor",path:s.coords.map(c=>[c[1],c[0]]),widthM:s.widthM||10,descentM:z.descentM!=null?Math.round(z.descentM):null,climbM:z.climbM!=null?Math.round(z.climbM):null}};
     const triggers=[];
     if(z.say){if(z.fires==="dwell") triggers.push({fires_on:"dwell",layer:"target",say:z.say,delayS:z.dwellS||20,oncePerVisit:true});
       else triggers.push({fires_on:"enter",layer:"target",say:z.say,oncePerVisit:true});}

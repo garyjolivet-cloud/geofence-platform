@@ -209,6 +209,14 @@ const corridorLayer = {
     "editorToSimBundle carries geometry.descentM into the Test Mode snapshot");
 })();
 
+// climbM (2026-09-30, the library's elev_gain_m) follows the same 3-mirror rule as descentM.
+(function testClimbMMirroredInAllThree() {
+  const flat = f => extractMethodBody(f).replace(/\s+/g, " ");
+  assert(/climbM:\s*z\.climbM\s*!=\s*null/.test(flat("function zoneToEngine(z){")), "zoneToEngine bakes geometry.climbM");
+  assert(/geometry\.climbM/.test(flat("function engineToZone(zo){")), "engineToZone restores z.climbM");
+  assert(/climbM:\s*z\.climbM\s*!=\s*null/.test(flat("function editorToSimBundle(){")), "editorToSimBundle carries geometry.climbM");
+})();
+
 (function testCorridorEditingUiRemoved() {
   for (const gone of [
     'bindProp("pDifficulty"', 'bindProp("pRunType"', 'bindProp("pCorridorWidth"',

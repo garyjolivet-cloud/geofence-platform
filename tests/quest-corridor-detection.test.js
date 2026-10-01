@@ -442,6 +442,24 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run && run.verticalM === -Math.round(300 * cov), "verticalM = -round(descentM x coverage), got " + (run && run.verticalM) + " cov=" + cov);
 })();
 
+// 2026-09-30: a boot pack's vertical is what it CLIMBED -- the path's climb going along it, its
+// descent going against it. A route drawn bottom-to-top has descentM 0, so climbM is needed.
+(function testBootPackVerticalIsTheClimb() {
+  let cov = null;
+  const self = { onCoverage: (n, pct, ok) => { if (ok) cov = pct; } };
+  const upRoute = Object.assign({}, hikeRoute, { descentM: 0, climbM: 95 });   // drawn bottom-to-top
+  const along = classify.call(self, upRoute, mkTrack(upRoute, { speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(along && along.activity === "hike" && along.verticalM === -Math.round(95 * cov),
+    "climbing a route along its drawn direction counts its climb, got " + (along && along.verticalM) + " cov=" + cov);
+  const climbedChute = Object.assign({}, chute, { descentM: 166, climbM: 0 });
+  const up = classify.call(self, climbedChute, mkTrack(climbedChute, { from: 1, to: 0, speed: 1.0, dt: 4 }), "ski", QGeo, QUEST_TUNING);
+  assert(up && up.activity === "hike" && up.verticalM === -Math.round(166 * cov),
+    "climbing a chute (against its drawn direction) counts its descent as the climb, got " + (up && up.verticalM));
+  const noClimb = Object.assign({}, hikeRoute, { descentM: 50 });              // older bundle: no climbM
+  const old = classify.call(self, noClimb, mkTrack(noClimb, { speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(old && old.verticalM === -Math.round(50 * cov), "without climbM the old descent rule still applies");
+})();
+
 (function testVerticalDeltaFromAltitudeWhenNoAuthoredDescent() {
   const run = classify(straightRun, mkTrack(straightRun, { speed: 8, alt0: 2400, alt1: 2100 }), "ski", QGeo, QUEST_TUNING);
   assert(run && run.verticalM != null && run.verticalM < -200, "legacy fallback: verticalM from the altitude delta, got " + (run && run.verticalM));

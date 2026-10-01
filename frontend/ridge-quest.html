@@ -101,6 +101,8 @@
   .now .stat{flex:1;min-width:0;background:var(--night);border:1px solid var(--rim);border-radius:12px;padding:12px 8px;text-align:center}
   .now .stat b{display:block;font-family:"Black Han Sans","Barlow Condensed",sans-serif;font-weight:400;font-size:20px;line-height:1.25;color:var(--snow);white-space:nowrap}
   .now .stat.vtoday b{color:var(--ice)}
+  .now.bootTiles{margin-top:-6px}
+  .now.bootTiles .stat b{color:var(--go)}
   .now .stat span{font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px}
   .welcome{text-align:center;padding:20px 6px}
   .welcome .go{font-family:"Black Han Sans";font-size:26px;color:var(--go);margin:0 0 6px}
@@ -1436,6 +1438,11 @@ const Quest = {
                  // fraction, not a noisy GPS-altitude delta. null until
                  // Backfill Elevation has been run on the row.
                  descentM: target.geometry.descentM!=null ? target.geometry.descentM : null,
+                 // Authored climb (m): the library's elev_gain_m, the elevation gained going along
+                 // the path in its drawn direction (geometry.climbM, baked by the Fence Editor since
+                 // 2026-09-30; null in older bundles). Gives a boot pack its vertical climbed on a
+                 // route drawn bottom-to-top, where descentM is 0.
+                 climbM: target.geometry.climbM!=null ? target.geometry.climbM : null,
                  // Spoken narration (2026-09-17) — authored the same way as
                  // any other stop's say text (zoneToEngine bakes it onto the
                  // zone's own trigger, not corridor-specific), null if none
@@ -1873,15 +1880,18 @@ const Quest = {
   // Completion moment: a short toast ("Chute 7 of 64"), a soft haptic tap, and the chute's
   // stripe flashing on the map. No speed, no turn count. Isolated: it must never be able to
   // break run logging (see the 2026-09-23 noteFix regression).
+  // A boot pack (activity "hike") has stats of its own (2026-09-30): it never counts as a
+  // chute skied -- no "Chute N of M", no skied stripe -- and gets its own toast.
   _celebrate(run){
     try{
       if(typeof RidgeVisuals==="undefined") return;
       const c = RidgeVisuals.completion(run, this.skiedToday, this.corridors);
       if(!c) return;
-      if(run.runType==="chute") this.skiedToday.add(run.zoneId);
+      const skiedChute = run.runType==="chute" && run.activity==="ski";
+      if(skiedChute) this.skiedToday.add(run.zoneId);
       RidgeVisuals.celebrate(document, c);
       if(navigator.vibrate) navigator.vibrate(40);
-      if(this.onSkiedChanged) this.onSkiedChanged(run.runType==="chute" ? run.zoneId : null, true);
+      if(this.onSkiedChanged) this.onSkiedChanged(skiedChute ? run.zoneId : null, true);
     }catch(e){ console.warn("celebrate:", e && e.message); }
   },
   // Chute lines (2026-09-24): after a logged chute DESCENT, save the verified pass's own
@@ -1988,8 +1998,14 @@ const Quest = {
     // to the legacy smoothed-GPS-altitude delta only for corridors with no
     // authored descent yet. lift = transport (0 pts regardless).
     let verticalM;
+    // A boot pack's vertical is what it CLIMBED: the elevation gained in its direction of
+    // travel -- the path's climb going along it ("down" = the drawn direction), its descent
+    // going against it. Only used when that is known and > 0; otherwise the old rule below.
+    const bootPackClimbM = activity==="hike" ? (descending ? corridor.climbM : corridor.descentM) : null;
     if(activity==="lift"){
       verticalM = null;
+    } else if(bootPackClimbM != null && bootPackClimbM > 0){
+      verticalM = -Math.round(bootPackClimbM * coverage);
     } else if(corridor.descentM != null){
       verticalM = -Math.round(corridor.descentM * coverage);
     } else {
@@ -2143,11 +2159,29 @@ async function refreshStats(playerId){
       +'<div class="stat"><b>'+Math.round(today.points||0)+'</b><span>Points today</span></div>'
       +'<div class="stat vtoday"><b>'+Math.round(Math.abs(today.checkpoint_vertical_m||0))+'m</b><span>Vertical today</span></div>'
       +'<div class="stat"><b>'+Math.round(seasonVert)+'m</b><span>This season</span></div>'
+      +'</div>'
+      // Boot packs are stats of their own (2026-09-30), filled by refreshBootPackTiles().
+      +'<div class="now bootTiles" id="bootTiles">'
+      +'<div class="stat"><b id="bpTodayN">—</b><span>Boot packs today</span></div>'
+      +'<div class="stat"><b id="bpTodayM">—</b><span>Climbed today</span></div>'
+      +'<div class="stat"><b id="bpSeasonM">—</b><span>Climbed this season</span></div>'
       +'</div>';
     if(streakEl) streakEl.textContent = streak>0 ? streak+"-day streak" : "";
+    refreshBootPackTiles(playerId);
   }catch(e){
     tilesEl.innerHTML='';
   }
+}
+// Home's boot-pack tiles: today's count and vertical climbed, and the season's vertical climbed.
+// Best-effort: a failed fetch leaves the dashes.
+async function refreshBootPackTiles(playerId){
+  try{
+    const j = await api("/api/players/"+playerId+"/bootpacks/daily");
+    const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+    set("bpTodayN", (j.today&&j.today.count)||0);
+    set("bpTodayM", Math.round((j.today&&j.today.verticalM)||0)+"m");
+    set("bpSeasonM", Math.round((j.season&&j.season.verticalM)||0)+"m");
+  }catch(e){}
 }
 // Which chutes are done today — feeds the Home "Chutes today" tile and the map's skied stripe.
 // Best-effort: a failed fetch just leaves the set as it is.
@@ -2626,6 +2660,7 @@ function renderHome(){
     +'<button class="ghost" id="btnMap">My map</button>'
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
     +'<button class="ghost" id="btnChutes">Your chutes</button>'
+    +'<button class="ghost" id="btnBootPacks">Boot packs</button>'
     +'<button class="ghost" id="btnFriends">Friends</button>'
     +'<button class="ghost" id="btnShare"></button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
@@ -2797,6 +2832,7 @@ function renderHome(){
   document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
   document.getElementById("btnChutes").onclick=()=>renderYourChutes();
+  document.getElementById("btnBootPacks").onclick=()=>renderBootPacks();
   document.getElementById("btnFriends").onclick=()=>renderFriends();
   // "Share my location with friends today" — POST /api/share sets/clears
   // share_until server-side; RQ_SHARE_UNTIL mirrors it so the label + the
@@ -3008,6 +3044,57 @@ async function renderYourChutes(mode){
     bindChuteFolders(listEl, s.player.id);
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load your chutes.</div>';
+  }
+}
+
+/* ============================ BOOT PACKS ============================
+   A climb is stored as activity "hike" and shown as a "Boot pack" (2026-09-30). Boot packs
+   are stats of their own: each route climbed, how many times and the vertical climbed, Today
+   or Season, with the totals for both on top. GET /api/players/:id/bootpacks/daily|season. */
+function bootPackRowHtml(r, maxCount){
+  const pct = maxCount>0 ? Math.round((r.count/maxCount)*100) : 0;
+  return '<div class="chuteRow">'
+    +'<div class="chuteTop">'
+      +difficultyMarkHtml(r.difficulty)
+      +'<span class="name">'+esc(r.name)+'</span>'
+      +'<span class="count">×'+r.count+' · '+Math.round(r.verticalM||0)+'m</span>'
+    +'</div>'
+    +'<div class="chuteBar"><i style="width:'+pct+'%"></i></div>'
+  +'</div>';
+}
+async function renderBootPacks(mode){
+  mode = mode || "daily";
+  const s=getSession();
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Boot packs</h2>'
+    +'<div style="display:flex;gap:10px;margin-bottom:14px">'
+      +'<button class="ghost" id="bpDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
+      +'<button class="ghost" id="bpSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
+    +'</div>'
+    +'<div class="now" id="bpTotals"></div>'
+    +'<div id="bpList"><div class="empty">Loading…</div></div>'
+    +'<button class="ghost" id="bpBack">← Back</button>'
+    +'</div>';
+  document.getElementById("bpBack").onclick=renderHome;
+  document.getElementById("bpDailyBtn").onclick=()=>renderBootPacks("daily");
+  document.getElementById("bpSeasonBtn").onclick=()=>renderBootPacks("season");
+  const listEl=document.getElementById("bpList"), totEl=document.getElementById("bpTotals");
+  try{
+    const j = await api("/api/players/"+s.player.id+"/bootpacks/"+mode);
+    const t=j.today||{count:0,verticalM:0}, se=j.season||{count:0,verticalM:0};
+    totEl.innerHTML =
+      '<div class="stat"><b>'+t.count+'</b><span>Today</span></div>'
+      +'<div class="stat"><b>'+Math.round(t.verticalM)+'m</b><span>Climbed today</span></div>'
+      +'<div class="stat"><b>'+se.count+'</b><span>This season</span></div>'
+      +'<div class="stat"><b>'+Math.round(se.verticalM)+'m</b><span>Climbed this season</span></div>';
+    const routes = j.routes||[];
+    const maxCount = routes.length ? routes[0].count : 0;
+    listEl.innerHTML = routes.length
+      ? routes.map(r=>bootPackRowHtml(r, maxCount)).join("")
+      : '<div class="empty">No boot packs '+(mode==="daily"?"today":"this season")+' yet.</div>';
+  }catch(e){
+    listEl.innerHTML = '<div class="empty">Couldn’t load your boot packs.</div>';
   }
 }
 
