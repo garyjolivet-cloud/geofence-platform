@@ -306,7 +306,9 @@
     if (!b) return Promise.resolve(null);
     return new Promise(function (resolve) {
       var done = false, map = null, box = root.document.createElement("div");
-      box.style.cssText = "position:fixed;left:-30000px;top:0;width:" + w + "px;height:" + h + "px;pointer-events:none;";
+      // On screen but invisible (opacity 0, behind everything): iPhone Safari may skip drawing a
+      // WebGL canvas parked far off-screen.
+      box.style.cssText = "position:fixed;left:0;top:0;width:" + w + "px;height:" + h + "px;pointer-events:none;opacity:0;z-index:-1;";
       root.document.body.appendChild(box);
       function finish(out) {
         if (done) return; done = true;
@@ -317,7 +319,10 @@
       try {
         map = new ml.Map({
           container: box, interactive: false, attributionControl: false, pixelRatio: 1,
-          preserveDrawingBuffer: true, fadeDuration: 0,
+          // MapLibre 5 reads this ONLY inside canvasContextAttributes -- the old top-level
+          // preserveDrawingBuffer is ignored, so iPhone Safari cleared the picture before it was
+          // copied and the map came out BLACK (field report 2026-10-01). Desktop Chrome hid it.
+          canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true }, fadeDuration: 0,
           style: { version: 8,
             sources: { base: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256 } },
             layers: [{ id: "base", type: "raster", source: "base" }] },
@@ -348,21 +353,38 @@
           var cam = map.cameraForBounds([[b[0], b[1]], [b[2], b[3]]], { padding: Math.round(Math.min(w, h) * 0.08) }) || {};
           map.jumpTo({ center: cam.center || map.getCenter(), zoom: Math.min(15, (cam.zoom || 13) + 0.15), pitch: 62, bearing: heroBearing(geo) });
         } catch (e) { clearTimeout(timer); finish(null); return; }
+        // Copy the picture INSIDE a "render" event (the frame is still in the buffer then), after
+        // the map has gone idle with all tiles loaded -- belt and braces with preserveDrawingBuffer.
         map.once("idle", function () {
-          setTimeout(function () {
+          map.once("render", function () {
             try {
               var out = root.document.createElement("canvas"); out.width = w; out.height = h;
-              out.getContext("2d").drawImage(map.getCanvas(), 0, 0, w, h);
+              var octx = out.getContext("2d");
+              octx.drawImage(map.getCanvas(), 0, 0, w, h);
+              if (isBlank(octx, w, h)) { clearTimeout(timer); finish(null); return; }   // never ship a black map: use the mountain art
               var labels = (geo.lifts || []).map(function (l) {
                 var p = map.project(l.path[l.path.length - 1]);
                 return { name: l.name, x: p.x, y: p.y };
               }).filter(function (q) { return q.x > 90 && q.x < w - 90 && q.y > h * 0.3 && q.y < h * 0.8; });
               clearTimeout(timer); finish({ canvas: out, labels: labels });
             } catch (e) { clearTimeout(timer); finish(null); }
-          }, 250);
+          });
+          map.triggerRepaint();
         });
       });
     });
+  }
+
+  // True when a copied map frame is (almost) all black -- a capture that failed.
+  function isBlank(ctx, w, h) {
+    try {
+      var sum = 0, n = 0;
+      for (var gy = 1; gy < 8; gy++) for (var gx = 1; gx < 8; gx++) {
+        var px = ctx.getImageData(Math.floor(w * gx / 8), Math.floor(h * gy / 8), 1, 1).data;
+        sum += px[0] + px[1] + px[2]; n++;
+      }
+      return sum / (n * 3) < 10;
+    } catch (e) { return false; }
   }
 
   // A drawn mountain when the real map isn't available (no signal, no WebGL, tests).

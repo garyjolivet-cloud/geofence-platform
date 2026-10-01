@@ -204,3 +204,21 @@ test("the Story fits 20 chute names (two columns), says how many more, and stays
   // hardest first on a day card
   assert.ok(/Chute Number (1|5|9|13|17|21|25)\b/.test(names[0].t), "a double-black first: " + names[0].t);
 });
+
+// 2026-10-01 iPhone screenshot: the map area was BLACK. MapLibre 5 only reads preserveDrawingBuffer
+// inside canvasContextAttributes (the top-level option is ignored), so Safari cleared the frame
+// before it was copied. Desktop Chrome hid the bug.
+test("the hero map keeps its frame for copying on iPhone, copies inside a render, never ships black", () => {
+  const hero = src.slice(src.indexOf("function renderHeroMap("), src.indexOf("function drawFallbackHero("));
+  assert.ok(/canvasContextAttributes: \{ preserveDrawingBuffer: true/.test(hero), "MapLibre 5 option name");
+  assert.ok(!/^\s*preserveDrawingBuffer: true,/m.test(hero), "no ignored top-level option left");
+  assert.ok(/map\.once\("idle", function \(\) \{\s*map\.once\("render", function \(\) \{/.test(hero) && /map\.triggerRepaint\(\);/.test(hero), "copied inside a render event after idle");
+  assert.ok(/if \(isBlank\(octx, w, h\)\) \{ clearTimeout\(timer\); finish\(null\); return; \}/.test(hero), "a black frame falls back to the mountain art");
+  assert.ok(!/left:-30000px/.test(hero) && /opacity:0;z-index:-1/.test(hero), "rendered on-screen but invisible");
+  // isBlank itself
+  // eslint-disable-next-line no-new-func
+  const isBlank = new Function("return " + src.slice(src.indexOf("function isBlank("), src.indexOf("// A drawn mountain when")))();
+  const ctxOf = v => ({ getImageData: () => ({ data: [v, v, v, 255] }) });
+  assert.strictEqual(isBlank(ctxOf(0), 100, 100), true);
+  assert.strictEqual(isBlank(ctxOf(140), 100, 100), false);
+});
