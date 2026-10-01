@@ -5369,13 +5369,8 @@ async function publishToPlatform(){
   if(geomProblems.length){ ps().textContent="publish blocked — fix stop geometry first";
     toast("Can't publish — fix these stops first: "+geomProblems.join("; "),"err"); return; }
   const dupStops=duplicateCorridorStops();
-  if(dupStops.length && !confirm("These corridors are in this project more than once, so every pass would count twice in Ridge Quest:
-
-"
-      +dupStops.map(n=>"• "+n.join(" + ")).join("
-")+"
-
-Cancel to delete the extra stops first, or OK to publish anyway.")){
+  if(dupStops.length && !confirm("These corridors are in this project more than once, so every pass would count twice in Ridge Quest:\n\n"
+      +dupStops.map(n=>"• "+n.join(" + ")).join("\n")+"\n\nCancel to delete the extra stops first, or OK to publish anyway.")){
     ps().textContent="publish cancelled — duplicate corridors"; return; }
   const token=getToken();
   if(!token){ ps().textContent="publish cancelled"; toast("Publish cancelled — no login/token available.","err"); return; }
