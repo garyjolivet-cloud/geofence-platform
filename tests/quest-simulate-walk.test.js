@@ -121,13 +121,5 @@ function immediateSetTimeout(fn) { fn(); }
   assert(q.selectedActivity === "ski", "simulateWalk defaults selectedActivity to ski when not passed, got " + q.selectedActivity);
 })();
 
-(function testSelectedActivityRespectsArgument() {
-  const fixes = [];
-  const path = [[51.30000, -117.05000], [51.30030, -117.05000]];
-  const q = mkQuest([{ path }], fixes);
-  q.simulateWalk(1.5, null, () => {}, immediateSetTimeout, "bike");
-  assert(q.selectedActivity === "bike", "simulateWalk respects an explicit selectedActivity argument, got " + q.selectedActivity);
-})();
-
 console.log(pass + " passed, " + fail + " failed");
 if (fail > 0) process.exit(1);

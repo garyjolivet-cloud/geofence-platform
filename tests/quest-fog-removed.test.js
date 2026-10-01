@@ -33,13 +33,12 @@ test("Quest.start has no dead fog-callback slot, and its only caller matches", (
   assert.ok(callers[0].includes("}, onStatus, selectedActivity, onCoverage);"), callers[0]);
 });
 
-test("Home's async block keeps its navigated-away guard ahead of the Guard notice and activity filter", () => {
+test("Home's async block keeps its navigated-away guard ahead of the Guard notice", () => {
   const i = html.indexOf("await Quest.loadCorridors();");
   assert.ok(i > 0, "loads corridors only (no fog cells)");
   const guard = html.indexOf('if(!document.getElementById("todayRuns")) return;', i);
   const notice = html.indexOf("rq.guardDefaultOnNoticeShown", i);
-  const filter = html.indexOf('if(typeof applyActivityFilter==="function") applyActivityFilter();', i);
-  assert.ok(guard > i && notice > guard && filter > notice, "guard -> notice -> activity filter, in that order");
+  assert.ok(guard > i && notice > guard, "guard -> notice, in that order (the activity filter is gone: ski-only, 2026-09-30)");
   assert.ok(html.includes('id="todayRuns"'), "the guard element exists on Home");
 });
 

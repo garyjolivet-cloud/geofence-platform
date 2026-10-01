@@ -150,7 +150,7 @@
   }
 
   function label(runType) {
-    return runType === "chute" ? "Chute" : runType === "hike" ? "Hike" : "Run";
+    return runType === "chute" ? "Chute" : runType === "hike" ? "Boot pack" : "Run";   // hike = boot pack (Ridge Quest is ski-only, 2026-09-30)
   }
 
   // Toast content when a run has just been logged. skiedSet holds zone ids ALREADY skied

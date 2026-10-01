@@ -458,56 +458,44 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run && run.activity === "hike" && run.verticalM < 0, "a hike on a corridor with authored descent is never null verticalM, got " + JSON.stringify(run && { a: run.activity, v: run.verticalM }));
 })();
 
-(function testLiftAndDistanceActivitiesHaveNullVertical() {
+(function testLiftHasNullVertical() {
   const lift = classify(withDescent(liftLine, 250), mkTrack(liftLine, { from: 1, to: 0, speed: 4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
   assert(lift && lift.activity === "lift" && lift.verticalM === null, "a lift ride carries null verticalM (0 pts)");
-  const bike = classify(withDescent(straightRun, 250), mkTrack(straightRun, { speed: 5 }), "bike", QGeo, QUEST_TUNING);
-  assert(bike && bike.activity === "bike" && bike.verticalM === null, "bike scores on distance, so verticalM is null");
 })();
 
-// ---- selectedActivity (R8/R12) ----
+// ---- ski-only (2026-09-30): no activity choice; climbs are "hike" (shown as Boot pack) ----
 
-(function testBikeDescendingFastEnough() {
-  const run = classify(straightRun, mkTrack(straightRun, { speed: 5 }), "bike", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "bike", "descending at riding pace with bike selected is bike, got " + (run && run.activity));
-  assert(run && run.distanceM > 1000 && run.distanceM <= 1113 * 1.25, "bike distance ~ the corridor's length, capped, got " + (run && run.distanceM));
+(function testRunDescendedAtSkiPaceIsSki() {
+  const run = classify(straightRun, mkTrack(straightRun, { speed: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "ski", "descending a run at ski pace is ski, got " + (run && run.activity));
 })();
 
-(function testBikeDescendingTooSlowFallsBackToHike() {
-  const run = classify(straightRun, mkTrack(straightRun, { speed: 1.2, dt: 5 }), "bike", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "pushing the bike (too slow) falls back to hike, got " + (run && run.activity));
+(function testRunWalkedDownSlowlyIsBootPack() {
+  const run = classify(straightRun, mkTrack(straightRun, { speed: 1.4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "walking a run down slowly is a boot pack (hike), got " + (run && run.activity));
 })();
 
-(function testHikeSelectedAtWalkingPace() {
-  const run = classify(straightRun, mkTrack(straightRun, { speed: 1.4, dt: 5 }), "hike", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "hike selected, walking pace, is hike, got " + (run && run.activity));
+(function testRunClimbedIsBootPack() {
+  const run = classify(straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "climbing a run is a boot pack (hike), got " + (run && run.activity));
 })();
 
-(function testDriveSelectedAtDrivingPace() {
-  const down = classify(straightRun, mkTrack(straightRun, { speed: 15, dt: 2 }), "drive", QGeo, QUEST_TUNING);
-  const up = classify(straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 15, dt: 2 }), "drive", QGeo, QUEST_TUNING);
-  assert(down && down.activity === "drive" && up && up.activity === "drive", "drive is either direction at driving pace");
-})();
-
-(function testDriveSelectedWhileWalkingIsRejected() {
-  const run = classify(straightRun, mkTrack(straightRun, { speed: 1.4, dt: 5 }), "drive", QGeo, QUEST_TUNING);
-  assert(run === undefined, "walking with 'drive' selected doesn't score driving points, got " + JSON.stringify(run));
-})();
-
-(function testXcskiEitherDirection() {
-  const down = classify(straightRun, mkTrack(straightRun, { speed: 2, dt: 4 }), "xcski", QGeo, QUEST_TUNING);
-  const up = classify(straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 2, dt: 4 }), "xcski", QGeo, QUEST_TUNING);
-  assert(down && down.activity === "xcski" && up && up.activity === "xcski", "xcski is either direction (Nordic trails are out-and-back)");
+(function testOldActivitiesAreGone() {
+  // Whatever a stale caller passes, the classifier never produces bike / drive / xcski.
+  for (const sel of ["bike", "drive", "xcski", "hike"]) {
+    const run = classify(straightRun, mkTrack(straightRun, { speed: 5 }), sel, QGeo, QUEST_TUNING);
+    assert(run && run.activity === "ski", "selection '" + sel + "' is ignored -- a fast descent is ski, got " + (run && run.activity));
+  }
 })();
 
 (function testLiftOutranksSelection() {
-  const run = classify(liftLine, mkTrack(liftLine, { from: 1, to: 0, speed: 4, dt: 5 }), "bike", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "lift", "riding up a lift corridor is a lift regardless of selection, got " + (run && run.activity));
+  const run = classify(liftLine, mkTrack(liftLine, { from: 1, to: 0, speed: 4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "lift", "riding up a lift corridor is a lift, got " + (run && run.activity));
 })();
 
 (function testHikeRouteOutranksSelection() {
-  const run = classify(hikeRoute, mkTrack(hikeRoute, { from: 1, to: 0, speed: 1.5, dt: 5 }), "bike", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "a runType:hike corridor stays hike regardless of selection, got " + (run && run.activity));
+  const run = classify(hikeRoute, mkTrack(hikeRoute, { from: 1, to: 0, speed: 1.5, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(run && run.activity === "hike", "a runType:hike corridor is always a boot pack (hike), got " + (run && run.activity));
 })();
 
 (function testGondolaOverARunIsNotAHike() {
