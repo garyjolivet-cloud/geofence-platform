@@ -136,3 +136,23 @@ test("Fence Editor: 📸 Social test screen renders all 4 images from test data"
   assert.ok(/SocialCard\.testDay\(cors/.test(fe) && /SocialCard\.testSeason\(cors/.test(fe));
   assert.ok(/\[\[day,"story"\],\[day,"wide"\],\[season,"story"\],\[season,"wide"\]\]/.test(fe));
 });
+
+// 2026-10-01 field report: sharing to WhatsApp delivered no image. A share carrying title/text
+// with the file lets WhatsApp take only the text, so the file goes on its own.
+test("share sends the image on its own (no title / text), and downloads when sharing isn't possible", async () => {
+  const calls = [];
+  const env = {
+    navigator: { canShare: () => true, share: async o => { calls.push(o); } },
+    document: { createElement: () => ({ click() {}, remove() {} }), body: { appendChild() {} } }
+  };
+  const box = {};
+  // eslint-disable-next-line no-new-func
+  new Function("window", "globalThis", src)(Object.assign(box, env), box);
+  global.File = global.File || class { constructor(parts, name, o) { this.name = name; this.type = o.type; } };
+  const r = await box.SocialCard.shareOrSave(new Blob([new Uint8Array([1, 2])], { type: "image/png" }), "x.png");
+  assert.strictEqual(r, "shared");
+  assert.strictEqual(calls.length, 1);
+  assert.deepStrictEqual(Object.keys(calls[0]), ["files"], "only the file -- no title or text");
+  assert.strictEqual(calls[0].files[0].name, "x.png");
+  assert.ok(!/shareOrSave\(made\.blob, made\.filename, /.test(rq), "Ridge Quest passes no share text");
+});

@@ -17,7 +17,7 @@
      SocialCard.make(data, format, opts)      -> Promise<{canvas, blob, filename}>
      SocialCard.draw(ctx, data, format, hero) -> draws one card (pure 2D canvas, testable)
      SocialCard.pngWithText(bytes, meta)      -> PNG bytes with iTXt metadata chunks
-     SocialCard.shareOrSave(blob, filename, text)
+     SocialCard.shareOrSave(blob, filename)    (image only -- see the function)
 
    House rules (Ridge Quest): never show or reward SPEED, no turn counts. The day's total
    vertical is lifts + boot packs (what you went up), never chute descents.
@@ -632,13 +632,16 @@
     return { canvas: canvas, blob: blob, filename: filename, hero: !!hero };
   }
 
-  // Phone: the share sheet (Save Image -> Photos, or post straight to Instagram / Facebook).
-  // Elsewhere: a download. Must be called from a tap (share needs a fresh user gesture).
-  async function shareOrSave(blob, filename, textMsg) {
+  // Phone: the share sheet (Save Image -> Photos, or post straight to Instagram / Facebook /
+  // WhatsApp). Elsewhere: a download. Must be called from a tap (share needs a fresh gesture).
+  // The image is shared ON ITS OWN -- no title or text. WhatsApp (and some other apps) take only
+  // the text when a share carries text + files, and the image never arrived (field report
+  // 2026-10-01). Everything the text said is already in the picture.
+  async function shareOrSave(blob, filename) {
     try {
       var file = new File([blob], filename, { type: "image/png" });
       if (root.navigator && root.navigator.canShare && root.navigator.canShare({ files: [file] })) {
-        await root.navigator.share({ files: [file], title: "Ridge Quest", text: textMsg || "" });
+        await root.navigator.share({ files: [file] });
         return "shared";
       }
     } catch (e) { if (e && e.name === "AbortError") return "cancelled"; }

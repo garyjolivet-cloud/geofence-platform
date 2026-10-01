@@ -3102,7 +3102,7 @@ async function renderSocialExport(){
   };
   $("seShare").onclick=async()=>{
     if(!made) return;
-    const r = await SocialCard.shareOrSave(made.blob, made.filename, "My "+(kind==="day"?"day":"season")+" on Ridge Quest");
+    const r = await SocialCard.shareOrSave(made.blob, made.filename);
     $("seStatus").textContent = r==="downloaded" ? "Saved to your downloads: "+made.filename : r==="shared" ? "Shared." : "";
   };
 }
