@@ -16,7 +16,7 @@
      SocialCard.testSeason(corridors)         -> data
      SocialCard.make(data, format, opts)      -> Promise<{canvas, blob, filename}>
      SocialCard.draw(ctx, data, format, hero) -> draws one card (pure 2D canvas, testable)
-     SocialCard.pngWithText(bytes, meta)      -> PNG bytes with iTXt metadata chunks
+     SocialCard.jpegWithExif(bytes, fields)   -> JPEG bytes with EXIF (description, artist, GPS...)
      SocialCard.shareOrSave(blob, filename)    (image only -- see the function)
 
    House rules (Ridge Quest): never show or reward SPEED, no turn counts. The day's total
@@ -26,7 +26,7 @@
   "use strict";
 
   var FORMATS = {
-    story: { w: 1080, h: 1920, heroW: 1080, heroH: 980, label: "Story (Instagram / Facebook)" },
+    story: { w: 1080, h: 1920, heroW: 1080, heroH: 860, label: "Story (Instagram / Facebook)" },
     wide:  { w: 1200, h: 630,  heroW: 660,  heroH: 630,  label: "Facebook post" }
   };
   var COL = {
@@ -478,46 +478,53 @@
     ctx.restore();
   }
 
+  // Story 1080x1920. Room for up to 20 chute names (2 columns x 10, 2026-10-01): the map is a
+  // little shorter and the four stat tiles sit in one row to make the space.
+  var STORY_CHUTES_MAX = 20;
   function drawStory(ctx, d, hero) {
-    var F = FORMATS.story, W = F.w, H = F.h, P = 72;
+    var F = FORMATS.story, W = F.w, H = F.h, P = 64;
     ctx.fillStyle = COL.night; ctx.fillRect(0, 0, W, H);
     heroInto(ctx, hero, 0, 0, W, F.heroH, "bottom");
     // header over the sky: date, resort, and the powder brag, on a soft dark plate so it reads on any photo
     var plate = ctx.createLinearGradient(0, 0, 0, 290);
     plate.addColorStop(0, "rgba(6,10,18,0.72)"); plate.addColorStop(1, "rgba(6,10,18,0)");
     ctx.fillStyle = plate; ctx.fillRect(0, 0, W, 290);
-    text(ctx, (d.kind === "season" ? "MY SEASON" : d.dateLabel.toUpperCase()), P, 112, { size: 44, weight: "700", color: "#ffffff", shadow: 10, maxW: W - 2 * P });
-    text(ctx, d.resort.toUpperCase() + (d.kind === "season" ? "  ·  " + d.dateLabel.toUpperCase() : ""), P, 166, { size: 34, weight: "600", color: "rgba(255,255,255,0.85)", shadow: 8, maxW: W - 2 * P });
+    text(ctx, (d.kind === "season" ? "MY SEASON" : d.dateLabel.toUpperCase()), P, 104, { size: 44, weight: "700", color: "#ffffff", shadow: 10, maxW: W - 2 * P });
+    text(ctx, d.resort.toUpperCase() + (d.kind === "season" ? "  ·  " + d.dateLabel.toUpperCase() : ""), P, 156, { size: 34, weight: "600", color: "rgba(255,255,255,0.85)", shadow: 8, maxW: W - 2 * P });
     var wl = d.kind === "day" ? weatherLine(d.weather) : "";
-    if (wl) text(ctx, wl, P, 216, { size: 32, weight: "700", color: COL.ice, shadow: 8, maxW: W - 2 * P, min: 22 });
+    if (wl) text(ctx, wl, P, 204, { size: 32, weight: "700", color: COL.ice, shadow: 8, maxW: W - 2 * P, min: 22 });
     // the big number, sitting on the faded bottom of the map
-    var y = 940;
-    var size = fitText(ctx, fmtInt(d.verticalM), W - 2 * P - 120, "400", 210, BIG, 110);
+    var y = 828;
+    var size = fitText(ctx, fmtInt(d.verticalM), W - 2 * P - 110, "400", 190, BIG, 100);
     text(ctx, fmtInt(d.verticalM), P, y, { family: BIG, weight: "400", size: size, color: COL.snow, shadow: 18 });
     setFont(ctx, "400", size, BIG);
-    text(ctx, "m", P + ctx.measureText(fmtInt(d.verticalM)).width + 14, y, { family: BIG, weight: "400", size: Math.round(size * 0.43), color: COL.coral });
-    text(ctx, d.kind === "season" ? "VERTICAL THIS SEASON" : "VERTICAL TODAY", P, y + 64, { size: 46, weight: "700", color: COL.coral, maxW: W - 2 * P });
-    text(ctx, "lifts + boot packs  ·  " + fmtInt(d.points) + " points", P, y + 108, { size: 34, weight: "500", color: COL.fog, maxW: W - 2 * P });
-    // chips 2 x 2
-    var cy = 1088, cw = (W - 2 * P - 24) / 2, ch = 140;
-    chipsFor(d).forEach(function (c, i) {
-      chip(ctx, P + (i % 2) * (cw + 24), cy + Math.floor(i / 2) * (ch + 20), cw, ch, c.v, c.l, c.c, c.m);
-    });
+    text(ctx, "m", P + ctx.measureText(fmtInt(d.verticalM)).width + 12, y, { family: BIG, weight: "400", size: Math.round(size * 0.43), color: COL.coral });
+    text(ctx, d.kind === "season" ? "VERTICAL THIS SEASON" : "VERTICAL TODAY", P, y + 58, { size: 42, weight: "700", color: COL.coral, maxW: W - 2 * P });
+    text(ctx, "lifts + boot packs  ·  " + fmtInt(d.points) + " points", P, y + 100, { size: 32, weight: "500", color: COL.fog, maxW: W - 2 * P });
+    // four stat tiles in one row
+    var cy = 956, gap = 14, cw = (W - 2 * P - 3 * gap) / 4, ch = 132;
+    chipsFor(d).forEach(function (c, i) { chip(ctx, P + i * (cw + gap), cy, cw, ch, c.v, c.l, c.c, c.m); });
     // lifts
+    var ly = cy + ch + 52;
     if (d.lifts && d.lifts.length) {
-      text(ctx, "LIFTS", P, 1440, { size: 30, weight: "700", color: COL.ice });
-      text(ctx, liftLine(d), P, 1486, { size: 38, weight: "600", color: COL.snow, maxW: W - 2 * P, min: 24 });
+      text(ctx, "LIFTS", P, ly, { size: 28, weight: "700", color: COL.ice });
+      text(ctx, liftLine(d), P, ly + 44, { size: 36, weight: "600", color: COL.snow, maxW: W - 2 * P, min: 22 });
+      ly += 100;
     }
-    // chutes (3)
-    var list = (d.chutes || []).slice().sort(function (a, b) {
+    // chutes: up to 20 names, two columns of 10, hardest first (season: most skied first)
+    var all = (d.chutes || []).slice().sort(function (a, b) {
       return d.kind === "season" ? b.count - a.count : (DIFF_RANK[b.difficulty] || 0) - (DIFF_RANK[a.difficulty] || 0) || b.count - a.count;
-    }).slice(0, 3);
+    });
+    var list = all.slice(0, STORY_CHUTES_MAX);
     if (list.length) {
-      text(ctx, d.kind === "season" ? "MOST SKIED CHUTES" : "CHUTES", P, 1546, { size: 30, weight: "700", color: COL.gold });
+      var more = all.length - list.length;
+      text(ctx, (d.kind === "season" ? "MOST SKIED CHUTES" : "CHUTES") + (more > 0 ? "  ·  +" + more + " MORE" : ""), P, ly, { size: 28, weight: "700", color: COL.gold });
+      var colW = (W - 2 * P - 28) / 2, rowH = 40, perCol = 10, top = ly + 44;
       list.forEach(function (c, i) {
-        var ry = 1592 + i * 48;
-        var mw = diamonds(ctx, c.difficulty, P, ry - 6, 28);
-        text(ctx, c.name + (c.count > 1 ? "  ×" + c.count : ""), P + (mw ? mw + 16 : 0), ry, { size: 36, weight: "600", color: COL.snow, maxW: W - 2 * P - 60, min: 22 });
+        var col = Math.floor(i / perCol), row = i % perCol;
+        var x = P + col * (colW + 28), ry = top + row * rowH;
+        var mw = diamonds(ctx, c.difficulty, x, ry - 4, 22);
+        text(ctx, c.name + (c.count > 1 ? "  ×" + c.count : ""), x + (mw ? mw + 12 : 0), ry, { size: 30, weight: "600", color: COL.snow, maxW: colW - (mw ? mw + 12 : 0), min: 18 });
       });
     }
     if (d.kind === "day" && d.season) {
@@ -559,54 +566,118 @@
 
   function draw(ctx, d, format, hero) { (format === "wide" ? drawWide : drawStory)(ctx, d, hero); }
 
-  // -------------------------------------------------------------- PNG + share
-  var CRC_TABLE = (function () {
-    var t = new Uint32Array(256);
-    for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
-    return t;
-  })();
-  function crc32(bytes) {
-    var c = 0xffffffff;
-    for (var i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
+  // ------------------------------------------------------------- JPEG + EXIF
+  // The image is a JPEG photo (2026-10-01): WhatsApp did not take the PNG from the share sheet,
+  // and JPEG is what every messenger and social app sends as a normal photo (~5x smaller too).
+  // The stats ride along as standard EXIF fields -- description, artist, copyright, date,
+  // software, and GPS at the top of the mountain -- which Photos, Lightroom and exiftool show.
+  var GPS = { lat: 51.2760, lon: -117.0790 };     // Kicking Horse summit (Eagle's Eye)
+  function ascii(t) {
+    return String(t == null ? "" : t)
+      .replace(/×/g, "x").replace(/[·•]/g, "-").replace(/[—–−]/g, "-").replace(/°/g, " deg").replace(/©/g, "(c)")
+      .replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
   }
-  function utf8(s) { return new TextEncoder().encode(s); }
-  // iTXt chunk (UTF-8 text, uncompressed): keyword\0 0 0 \0 \0 text
-  function itxt(key, value) {
-    var k = utf8(key), v = utf8(value);
-    var data = new Uint8Array(k.length + 5 + v.length);
-    data.set(k, 0); data.set([0, 0, 0, 0, 0], k.length); data.set(v, k.length + 5);
-    var type = utf8("iTXt"), out = new Uint8Array(12 + data.length), dv = new DataView(out.buffer);
-    dv.setUint32(0, data.length); out.set(type, 4); out.set(data, 8);
-    var crcIn = new Uint8Array(4 + data.length); crcIn.set(type, 0); crcIn.set(data, 4);
-    dv.setUint32(8 + data.length, crc32(crcIn));
+  function exifDate(d) {
+    var z = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + ":" + z(d.getMonth() + 1) + ":" + z(d.getDate()) + " " + z(d.getHours()) + ":" + z(d.getMinutes()) + ":" + z(d.getSeconds());
+  }
+  var TYPE_SIZE = { 1: 1, 2: 1, 4: 4, 5: 8, 7: 1 };
+  function asciiBytes(t) { var a = ascii(t), out = new Uint8Array(a.length + 1); for (var i = 0; i < a.length; i++) out[i] = a.charCodeAt(i); return out; }
+  function rationals(nums) {                       // [[num, den], ...] -> bytes (big-endian)
+    var out = new Uint8Array(nums.length * 8), dv = new DataView(out.buffer);
+    nums.forEach(function (r, i) { dv.setUint32(i * 8, r[0]); dv.setUint32(i * 8 + 4, r[1]); });
     return out;
   }
-  // Inserts metadata right after IHDR (byte 33 of every PNG: 8 signature + 25 IHDR).
-  function pngWithText(bytes, meta) {
-    var src = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    var chunks = Object.keys(meta).filter(function (k) { return meta[k] != null && meta[k] !== ""; }).map(function (k) { return itxt(k, String(meta[k])); });
-    var extra = chunks.reduce(function (n, c) { return n + c.length; }, 0);
-    var out = new Uint8Array(src.length + extra);
-    out.set(src.subarray(0, 33), 0);
-    var o = 33;
-    chunks.forEach(function (c) { out.set(c, o); o += c.length; });
-    out.set(src.subarray(33), o);
-    return out;
+  function dms(deg) {
+    deg = Math.abs(deg);
+    var d = Math.floor(deg), mf = (deg - d) * 60, m = Math.floor(mf), sec = Math.round((mf - m) * 60 * 100);
+    return [[d, 1], [m, 1], [sec, 100]];
   }
-  function readText(bytes) {                         // for tests and debugging
-    var b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), dv = new DataView(b.buffer, b.byteOffset), o = 8, out = {};
-    while (o + 8 <= b.length) {
-      var len = dv.getUint32(o), type = String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]);
-      if (type === "iTXt") {
-        var data = b.subarray(o + 8, o + 8 + len), z = data.indexOf(0);
-        var key = new TextDecoder().decode(data.subarray(0, z)), rest = data.subarray(z + 3), z2 = rest.indexOf(0), rest2 = rest.subarray(z2 + 1), z3 = rest2.indexOf(0);
-        out[key] = new TextDecoder().decode(rest2.subarray(z3 + 1));
-        var crcIn = b.subarray(o + 4, o + 8 + len);
-        out["_crcOk_" + key] = crc32(crcIn) === dv.getUint32(o + 8 + len);
+  // entries: [{tag, type, count, bytes}] -> {size, write(dv, u8, at)}; values over 4 bytes go after the IFD.
+  function ifd(entries) {
+    entries.sort(function (x, y) { return x.tag - y.tag; });
+    var head = 2 + entries.length * 12 + 4, extra = 0;
+    entries.forEach(function (e) { var n = TYPE_SIZE[e.type] * e.count; if (n > 4) extra += n + (n % 2); });
+    return {
+      size: head + extra,
+      write: function (dv, u8, at) {
+        dv.setUint16(at, entries.length);
+        var dataAt = at + head;
+        entries.forEach(function (e, i) {
+          var o = at + 2 + i * 12, n = TYPE_SIZE[e.type] * e.count;
+          dv.setUint16(o, e.tag); dv.setUint16(o + 2, e.type); dv.setUint32(o + 4, e.count);
+          if (n <= 4) { u8.set(e.bytes, o + 8); }
+          else { dv.setUint32(o + 8, dataAt - 6); u8.set(e.bytes, dataAt); dataAt += n + (n % 2); }   // offsets are from the TIFF header (6 bytes into the payload)
+        });
+        dv.setUint32(at + head - 4, 0);
       }
-      if (type === "IEND") break;
-      o += 12 + len;
+    };
+  }
+  function long(n) { var b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n); return b; }
+  function asc(tag, t) { var b = asciiBytes(t); return { tag: tag, type: 2, count: b.length, bytes: b }; }
+  // fields: {description, artist, copyright, software, title, date}
+  function exifSegment(fields) {
+    var date = exifDate(fields.date || new Date());
+    var comment = asciiBytes(fields.title || ""), uc = new Uint8Array(8 + comment.length - 1);
+    uc.set([65, 83, 67, 73, 73, 0, 0, 0], 0); uc.set(comment.subarray(0, comment.length - 1), 8);   // "ASCII\0\0\0" + text
+    var exif = ifd([asc(0x9003, date), { tag: 0x9286, type: 7, count: uc.length, bytes: uc }]);
+    var gps = ifd([
+      { tag: 0x0000, type: 1, count: 4, bytes: new Uint8Array([2, 3, 0, 0]) },
+      asc(0x0001, GPS.lat >= 0 ? "N" : "S"), { tag: 0x0002, type: 5, count: 3, bytes: rationals(dms(GPS.lat)) },
+      asc(0x0003, GPS.lon >= 0 ? "E" : "W"), { tag: 0x0004, type: 5, count: 3, bytes: rationals(dms(GPS.lon)) }
+    ]);
+    var ifd0Entries = [
+      asc(0x010E, fields.description), asc(0x010F, "Ridge Quest"), asc(0x0110, "Ridge Quest"),
+      asc(0x0131, fields.software || "Ridge Quest"), asc(0x0132, date), asc(0x013B, fields.artist || ""),
+      asc(0x8298, fields.copyright || ""),
+      { tag: 0x8769, type: 4, count: 1, bytes: long(0) }, { tag: 0x8825, type: 4, count: 1, bytes: long(0) }
+    ];
+    var ifd0 = ifd(ifd0Entries);
+    var tiffLen = 8 + ifd0.size + exif.size + gps.size;
+    var exifAt = 8 + ifd0.size, gpsAt = exifAt + exif.size;
+    ifd0Entries.forEach(function (e) { if (e.tag === 0x8769) e.bytes = long(exifAt); if (e.tag === 0x8825) e.bytes = long(gpsAt); });
+    var payload = new Uint8Array(6 + tiffLen), dv = new DataView(payload.buffer);
+    payload.set([0x45, 0x78, 0x69, 0x66, 0, 0], 0);               // "Exif\0\0"
+    payload.set([0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 8], 6);         // big-endian TIFF, IFD0 at 8
+    ifd0.write(dv, payload, 6 + 8); exif.write(dv, payload, 6 + exifAt); gps.write(dv, payload, 6 + gpsAt);
+    var seg = new Uint8Array(4 + payload.length), sdv = new DataView(seg.buffer);
+    seg[0] = 0xff; seg[1] = 0xe1; sdv.setUint16(2, payload.length + 2); seg.set(payload, 4);
+    return seg;
+  }
+  // Inserts the EXIF APP1 segment after SOI (and after a JFIF APP0 if the browser wrote one).
+  function jpegWithExif(bytes, fields) {
+    var src = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (src[0] !== 0xff || src[1] !== 0xd8) return src;
+    var at = 2;
+    if (src[2] === 0xff && src[3] === 0xe0) at = 4 + ((src[4] << 8) | src[5]);
+    var seg = exifSegment(fields), out = new Uint8Array(src.length + seg.length);
+    out.set(src.subarray(0, at), 0); out.set(seg, at); out.set(src.subarray(at), at + seg.length);
+    return out;
+  }
+  // For tests / debugging: the EXIF ASCII fields and GPS back out of a JPEG.
+  function readExif(bytes) {
+    var b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), o = 2, out = {};
+    while (o + 4 < b.length && b[o] === 0xff) {
+      var marker = b[o + 1], len = (b[o + 2] << 8) | b[o + 3];
+      if (marker === 0xe1 && b[o + 4] === 0x45 && b[o + 5] === 0x78) {
+        var t = o + 10, dv = new DataView(b.buffer, b.byteOffset);
+        var str = function (at, n) { var s2 = ""; for (var i = 0; i < n - 1; i++) s2 += String.fromCharCode(b[at + i]); return s2; };
+        var walk = function (ifdAt, names) {
+          var n = dv.getUint16(t + ifdAt);
+          for (var i = 0; i < n; i++) {
+            var e = t + ifdAt + 2 + i * 12, tag = dv.getUint16(e), type = dv.getUint16(e + 2), count = dv.getUint32(e + 4);
+            var size = TYPE_SIZE[type] * count, vAt = size <= 4 ? e + 8 : t + dv.getUint32(e + 8);
+            if (type === 2 && names[tag]) out[names[tag]] = str(vAt, count);
+            if (type === 4 && tag === 0x8769) walk(dv.getUint32(e + 8), { 0x9003: "DateTimeOriginal" });
+            if (type === 4 && tag === 0x8825) walk(dv.getUint32(e + 8), { 0x0001: "GPSLatitudeRef", 0x0003: "GPSLongitudeRef" });
+            if (type === 5) { var r = []; for (var k = 0; k < count; k++) r.push(dv.getUint32(vAt + k * 8) / dv.getUint32(vAt + k * 8 + 4)); out[tag === 2 ? "GPSLatitude" : "GPSLongitude"] = r[0] + r[1] / 60 + r[2] / 3600; }
+          }
+        };
+        walk(8, { 0x010E: "ImageDescription", 0x010F: "Make", 0x0131: "Software", 0x0132: "DateTime", 0x013B: "Artist", 0x8298: "Copyright" });
+        out._segmentStart = o;
+        break;
+      }
+      o += 2 + len;
     }
     return out;
   }
@@ -623,14 +694,12 @@
   }
   function meta(d) {
     return {
-      Title: "Ridge Quest — " + (d.kind === "season" ? d.dateLabel : d.dateLabel) + " at " + d.resort,
-      Description: summary(d),
-      Author: d.rider || "",
-      "Creation Time": new Date().toISOString(),
-      Software: "Ridge Quest",
-      Location: LOCATION,
-      Copyright: "© " + new Date().getFullYear() + " " + (d.rider || "Ridge Quest rider"),
-      Comment: TAGLINE
+      title: "Ridge Quest - " + d.dateLabel + " at " + d.resort + ". " + TAGLINE,
+      description: summary(d),
+      artist: d.rider || "",
+      copyright: "(c) " + new Date().getFullYear() + " " + (d.rider || "Ridge Quest rider"),
+      software: "Ridge Quest",
+      date: new Date()
     };
   }
 
@@ -649,11 +718,11 @@
     if (opts.onProgress) opts.onProgress(hero ? "Adding your numbers…" : "Adding your numbers… (map unavailable, using the mountain art)");
     var canvas = root.document.createElement("canvas"); canvas.width = F.w; canvas.height = F.h;
     draw(canvas.getContext("2d"), d, format, hero);
-    var raw = await new Promise(function (res) { canvas.toBlob(res, "image/png"); });
-    var bytes = pngWithText(new Uint8Array(await raw.arrayBuffer()), meta(d));
-    var blob = new Blob([bytes], { type: "image/png" });
+    var raw = await new Promise(function (res) { canvas.toBlob(res, "image/jpeg", 0.92); });
+    var bytes = jpegWithExif(new Uint8Array(await raw.arrayBuffer()), meta(d));
+    var blob = new Blob([bytes], { type: "image/jpeg" });
     var stamp = new Date().toISOString().slice(0, 10);
-    var filename = "ridge-quest-" + (d.kind === "season" ? "season" : stamp) + "-" + (format === "wide" ? "facebook" : "story") + ".png";
+    var filename = "ridge-quest-" + (d.kind === "season" ? "season" : stamp) + "-" + (format === "wide" ? "facebook" : "story") + ".jpg";
     return { canvas: canvas, blob: blob, filename: filename, hero: !!hero };
   }
 
@@ -664,7 +733,7 @@
   // 2026-10-01). Everything the text said is already in the picture.
   async function shareOrSave(blob, filename) {
     try {
-      var file = new File([blob], filename, { type: "image/png" });
+      var file = new File([blob], filename, { type: "image/jpeg" });
       if (root.navigator && root.navigator.canShare && root.navigator.canShare({ files: [file] })) {
         await root.navigator.share({ files: [file] });
         return "shared";
@@ -682,7 +751,7 @@
     testDay: testDay, testSeason: testSeason,
     renderHeroMap: renderHeroMap, draw: draw, drawStory: drawStory, drawWide: drawWide,
     make: make, shareOrSave: shareOrSave,
-    pngWithText: pngWithText, readText: readText, crc32: crc32, meta: meta, summary: summary,
+    jpegWithExif: jpegWithExif, readExif: readExif, meta: meta, summary: summary,
     _shortLift: shortLift
   };
 })(typeof window !== "undefined" ? window : globalThis);

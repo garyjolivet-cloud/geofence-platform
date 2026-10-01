@@ -1,5 +1,5 @@
 // Ridge Quest "Social media export" (frontend/social-card.js, 2026-09-30): the test day, the card
-// layouts (against a recording fake 2D canvas), the PNG metadata, and the page wiring.
+// layouts (against a recording fake 2D canvas), the JPEG/EXIF metadata, and the page wiring.
 //
 // Run: `node --test tests/social-card.test.js`
 "use strict";
@@ -103,20 +103,27 @@ test("difficulty marks are drawn on the chutes chip and list", () => {
   assert.ok(paths > 10, "diamond shapes drawn");
 });
 
-test("PNG metadata: valid iTXt chunks after IHDR, readable back, CRC correct", () => {
-  // minimal 1x1 PNG
-  const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4a00000000049454e44ae426082", "hex");
+// 2026-10-01: WhatsApp didn't take the PNG; the export is now a JPEG photo with EXIF metadata.
+test("JPEG + EXIF: stats, artist, date, software and GPS are written and read back", () => {
+  // a tiny JFIF-style JPEG: SOI, APP0 (JFIF), then a stand-in for the rest, EOI
+  const app0 = [0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00];
+  const jpg = new Uint8Array([0xff, 0xd8, ...app0, 0xff, 0xdb, 0x00, 0x03, 0x00, 0xff, 0xd9]);
   const meta = SC.meta(SC.testDay(cors));
-  const out = SC.pngWithText(new Uint8Array(png), meta);
-  assert.deepStrictEqual(Array.from(out.subarray(0, 33)), Array.from(png.subarray(0, 33)), "signature + IHDR untouched");
-  const back = SC.readText(out);
-  for (const k of ["Title", "Description", "Author", "Creation Time", "Software", "Location", "Copyright"]) {
-    assert.ok(back[k], "has " + k);
-    assert.strictEqual(back["_crcOk_" + k], true, k + " CRC");
-  }
-  assert.ok(/14,479 m vertical/.test(back.Description) && /Golden Eagle Express Gondola x10/.test(back.Description) && /3 boot packs, 229 m climbed/.test(back.Description), back.Description);
-  assert.strictEqual(back.Software, "Ridge Quest");
-  assert.strictEqual(SC.crc32(new TextEncoder().encode("IEND")), 0xae426082, "crc32 matches PNG's own IEND CRC");
+  const out = SC.jpegWithExif(jpg, meta);
+  assert.deepStrictEqual(Array.from(out.subarray(0, 20)), Array.from(jpg.subarray(0, 20)), "SOI + JFIF kept first");
+  assert.deepStrictEqual(Array.from(out.subarray(out.length - 7)), Array.from(jpg.subarray(jpg.length - 7)), "the image data after it is untouched");
+  const x = SC.readExif(out);
+  assert.strictEqual(x._segmentStart, 20, "EXIF right after the JFIF header");
+  assert.ok(/14,479 m vertical/.test(x.ImageDescription) && /Golden Eagle Express Gondola x10/.test(x.ImageDescription) && /3 boot packs, 229 m climbed/.test(x.ImageDescription), x.ImageDescription);
+  assert.ok(/^[\x20-\x7e]*$/.test(x.ImageDescription), "EXIF ASCII only");
+  assert.strictEqual(x.Make, "Ridge Quest");
+  assert.strictEqual(x.Software, "Ridge Quest");
+  assert.strictEqual(x.Artist, "Gary J.");
+  assert.ok(/^\(c\) \d{4} Gary J\.$/.test(x.Copyright), x.Copyright);
+  assert.ok(/^\d{4}:\d\d:\d\d \d\d:\d\d:\d\d$/.test(x.DateTime) && x.DateTimeOriginal === x.DateTime);
+  assert.strictEqual(x.GPSLatitudeRef, "N"); assert.strictEqual(x.GPSLongitudeRef, "W");
+  assert.ok(Math.abs(x.GPSLatitude - 51.276) < 0.001 && Math.abs(x.GPSLongitude - 117.079) < 0.001, "Kicking Horse summit");
+  assert.ok(/"image\/jpeg", 0\.92/.test(src) && /\.jpg";/.test(src) && /type: "image\/jpeg"/.test(src), "made, named and shared as a JPEG");
 });
 
 const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
@@ -149,11 +156,12 @@ test("share sends the image on its own (no title / text), and downloads when sha
   // eslint-disable-next-line no-new-func
   new Function("window", "globalThis", src)(Object.assign(box, env), box);
   global.File = global.File || class { constructor(parts, name, o) { this.name = name; this.type = o.type; } };
-  const r = await box.SocialCard.shareOrSave(new Blob([new Uint8Array([1, 2])], { type: "image/png" }), "x.png");
+  const r = await box.SocialCard.shareOrSave(new Blob([new Uint8Array([1, 2])], { type: "image/jpeg" }), "x.jpg");
   assert.strictEqual(r, "shared");
   assert.strictEqual(calls.length, 1);
   assert.deepStrictEqual(Object.keys(calls[0]), ["files"], "only the file -- no title or text");
-  assert.strictEqual(calls[0].files[0].name, "x.png");
+  assert.strictEqual(calls[0].files[0].name, "x.jpg");
+  assert.strictEqual(calls[0].files[0].type, "image/jpeg", "shared as a photo");
   assert.ok(!/shareOrSave\(made\.blob, made\.filename, /.test(rq), "Ridge Quest passes no share text");
 });
 
@@ -176,4 +184,23 @@ test("every card carries the resort network, and the hero is framed on it", () =
     const body = src.slice(src.indexOf(fn), src.indexOf(fn) + 4000);
     assert.ok(/network: networkOf\(ctx\.corridors\)/.test(body), fn + " attaches the network");
   }
+});
+
+// 2026-10-01: "make room for as many as 20 chute names" -- two columns of 10 on the Story.
+test("the Story fits 20 chute names (two columns), says how many more, and stays clear of the footer", () => {
+  const d = SC.testDay(cors);
+  const diffs = ["double-black", "black", "blue", "green"];
+  d.chutes = Array.from({ length: 25 }, (_, i) => ({ name: "Chute Number " + (i + 1), difficulty: diffs[i % 4], count: 1 + (i % 3), zoneId: "c" + i }));
+  d.chuteCount = 25;
+  const f = drawn(d, "story");
+  const names = f.texts.filter(x => /^Chute Number /.test(x.t));
+  assert.strictEqual(names.length, 20, "20 names drawn");
+  assert.ok(f.texts.some(x => /\+5 MORE/.test(x.t)), "says +5 more");
+  const xs = new Set(names.map(n => Math.round(n.x / 100)));
+  assert.ok(xs.size >= 2, "two columns");
+  const season = f.texts.find(x => /^Season so far/.test(x.t));
+  assert.ok(names.every(n => n.y < season.y - 30), "the list ends above the season line");
+  assert.ok(names.every(n => n.y > f.texts.find(x => x.t === "LIFTS").y), "below the lifts");
+  // hardest first on a day card
+  assert.ok(/Chute Number (1|5|9|13|17|21|25)\b/.test(names[0].t), "a double-black first: " + names[0].t);
 });
