@@ -47,7 +47,7 @@ test("boot packs are grouped per route with vertical climbed, plus today and sea
 
 test("the endpoint answers routes plus both totals", () => {
   const ep = worker.slice(worker.indexOf("const mpbp = path.match("), worker.indexOf("const mpbp = path.match(") + 1500);
-  assert.ok(ep.includes("bootpacks\\/(daily|season)"), "daily and season routes");
+  assert.ok(ep.includes("(bootpacks|lifts)\\/(daily|season)"), "daily and season routes");
   assert.ok(/today: bootPackTotals\(daily\), season: bootPackTotals\(season\)/.test(ep));
   assert.ok(/playerAuth\(request, env\)/.test(ep) && /P\.playerId !== decodeURIComponent\(mpbp\[1\]\)/.test(ep), "own stats only");
 });
@@ -57,5 +57,25 @@ test("Home shows boot-pack tiles and a Boot packs screen", () => {
   assert.ok(/refreshBootPackTiles\(playerId\);/.test(extract(html, "async function refreshStats(playerId){")), "tiles refresh with the stats");
   assert.ok(/"\/bootpacks\/daily"/.test(extract(html, "async function refreshBootPackTiles(playerId){")));
   assert.ok(/id="btnBootPacks"/.test(html) && /btnBootPacks"\)\.onclick=\(\)=>renderBootPacks\(\)/.test(html), "Home button opens the screen");
-  assert.ok(/"\/bootpacks\/"\+mode/.test(extract(html, "async function renderBootPacks(mode){")));
+  assert.ok(/"\/"\+kind\+"\/"\+mode/.test(extract(html, "async function renderTally(kind, mode){")), "the screen fetches /bootpacks|lifts/<mode>");
+  assert.ok(/return renderTally\("bootpacks", mode\)/.test(html) && /return renderTally\("lifts", mode\)/.test(html));
+});
+
+// 2026-09-30: "lifts and number of times needs to be recorded also".
+test("lift rides are tallied per lift, with a Home tile and their own screen", () => {
+  const lifts = worker.match(/const LIFTS_SQL = "([^"]+)"/)[1];
+  assert.ok(/activity='lift'/.test(lifts), lifts);
+  assert.ok(worker.includes("(bootpacks|lifts)\\/(daily|season)"), "one endpoint serves both");
+  assert.ok(/prepare\(mpbp\[2\] === "lifts" \? LIFTS_SQL : BOOTPACKS_SQL\)/.test(worker));
+  assert.ok(/id="liftTodayN"/.test(html) && /"\/lifts\/daily"/.test(extract(html, "async function refreshBootPackTiles(playerId){")), "Lift rides today tile");
+  assert.ok(/id="btnLifts"/.test(html) && /btnLifts"\)\.onclick=\(\)=>renderLifts\(\)/.test(html), "Home button opens Lift rides");
+  const day = r => r.slice(0, 10);
+  const rows = [
+    { zone_id: "gondola", run_name: "Golden Eagle Express", started_at: "2026-09-30T10:00:00Z" },
+    { zone_id: "gondola", run_name: "Golden Eagle Express", started_at: "2026-09-30T12:00:00Z" },
+    { zone_id: "stairway", run_name: "Stairway Chair", started_at: "2026-09-30T11:00:00Z" }
+  ];
+  const t = lib.aggregateChuteCounts(rows, day, "2026-09-30");
+  assert.deepStrictEqual(t.map(r => [r.name, r.count]), [["Golden Eagle Express", 2], ["Stairway Chair", 1]]);
+  assert.deepStrictEqual(lib.bootPackTotals(t), { count: 3, verticalM: 0 });
 });

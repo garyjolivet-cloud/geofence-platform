@@ -2165,6 +2165,7 @@ async function refreshStats(playerId){
       +'<div class="stat"><b id="bpTodayN">—</b><span>Boot packs today</span></div>'
       +'<div class="stat"><b id="bpTodayM">—</b><span>Climbed today</span></div>'
       +'<div class="stat"><b id="bpSeasonM">—</b><span>Climbed this season</span></div>'
+      +'<div class="stat"><b id="liftTodayN">—</b><span>Lift rides today</span></div>'
       +'</div>';
     if(streakEl) streakEl.textContent = streak>0 ? streak+"-day streak" : "";
     refreshBootPackTiles(playerId);
@@ -2172,7 +2173,7 @@ async function refreshStats(playerId){
     tilesEl.innerHTML='';
   }
 }
-// Home's boot-pack tiles: today's count and vertical climbed, and the season's vertical climbed.
+// Home's second tile row: boot packs today, vertical climbed today and this season, lift rides today.
 // Best-effort: a failed fetch leaves the dashes.
 async function refreshBootPackTiles(playerId){
   try{
@@ -2181,6 +2182,10 @@ async function refreshBootPackTiles(playerId){
     set("bpTodayN", (j.today&&j.today.count)||0);
     set("bpTodayM", Math.round((j.today&&j.today.verticalM)||0)+"m");
     set("bpSeasonM", Math.round((j.season&&j.season.verticalM)||0)+"m");
+  }catch(e){}
+  try{
+    const l = await api("/api/players/"+playerId+"/lifts/daily");
+    const el=document.getElementById("liftTodayN"); if(el) el.textContent=(l.today&&l.today.count)||0;
   }catch(e){}
 }
 // Which chutes are done today — feeds the Home "Chutes today" tile and the map's skied stripe.
@@ -2661,6 +2666,7 @@ function renderHome(){
     +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
     +'<button class="ghost" id="btnChutes">Your chutes</button>'
     +'<button class="ghost" id="btnBootPacks">Boot packs</button>'
+    +'<button class="ghost" id="btnLifts">Lift rides</button>'
     +'<button class="ghost" id="btnFriends">Friends</button>'
     +'<button class="ghost" id="btnShare"></button>'
     +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
@@ -2833,6 +2839,7 @@ function renderHome(){
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
   document.getElementById("btnChutes").onclick=()=>renderYourChutes();
   document.getElementById("btnBootPacks").onclick=()=>renderBootPacks();
+  document.getElementById("btnLifts").onclick=()=>renderLifts();
   document.getElementById("btnFriends").onclick=()=>renderFriends();
   // "Share my location with friends today" — POST /api/share sets/clears
   // share_until server-side; RQ_SHARE_UNTIL mirrors it so the label + the
@@ -3047,56 +3054,64 @@ async function renderYourChutes(mode){
   }
 }
 
-/* ============================ BOOT PACKS ============================
-   A climb is stored as activity "hike" and shown as a "Boot pack" (2026-09-30). Boot packs
-   are stats of their own: each route climbed, how many times and the vertical climbed, Today
-   or Season, with the totals for both on top. GET /api/players/:id/bootpacks/daily|season. */
-function bootPackRowHtml(r, maxCount){
+/* ====================== BOOT PACKS AND LIFTS ======================
+   Stats of their own (2026-09-30). A climb is stored as activity "hike" and shown as a "Boot
+   pack": each route climbed, times and vertical climbed. Lift rides: each lift and how many
+   times. Today or Season, with both totals on top.
+   GET /api/players/:id/bootpacks|lifts/daily|season. */
+const TALLY = {
+  bootpacks: { title:"Boot packs", none:"No boot packs", climbs:true },
+  lifts:     { title:"Lift rides", none:"No lift rides", climbs:false }
+};
+function tallyRowHtml(r, maxCount, climbs){
   const pct = maxCount>0 ? Math.round((r.count/maxCount)*100) : 0;
   return '<div class="chuteRow">'
     +'<div class="chuteTop">'
-      +difficultyMarkHtml(r.difficulty)
+      +(climbs ? difficultyMarkHtml(r.difficulty) : '')
       +'<span class="name">'+esc(r.name)+'</span>'
-      +'<span class="count">×'+r.count+' · '+Math.round(r.verticalM||0)+'m</span>'
+      +'<span class="count">×'+r.count+(climbs ? ' · '+Math.round(r.verticalM||0)+'m' : '')+'</span>'
     +'</div>'
     +'<div class="chuteBar"><i style="width:'+pct+'%"></i></div>'
   +'</div>';
 }
-async function renderBootPacks(mode){
+async function renderTally(kind, mode){
   mode = mode || "daily";
+  const cfg = TALLY[kind];
   const s=getSession();
   app.innerHTML =
     '<div class="card">'
-    +'<h2>Boot packs</h2>'
+    +'<h2>'+cfg.title+'</h2>'
     +'<div style="display:flex;gap:10px;margin-bottom:14px">'
-      +'<button class="ghost" id="bpDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
-      +'<button class="ghost" id="bpSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
+      +'<button class="ghost" id="tlDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
+      +'<button class="ghost" id="tlSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
     +'</div>'
-    +'<div class="now" id="bpTotals"></div>'
-    +'<div id="bpList"><div class="empty">Loading…</div></div>'
-    +'<button class="ghost" id="bpBack">← Back</button>'
+    +'<div class="now" id="tlTotals"></div>'
+    +'<div id="tlList"><div class="empty">Loading…</div></div>'
+    +'<button class="ghost" id="tlBack">← Back</button>'
     +'</div>';
-  document.getElementById("bpBack").onclick=renderHome;
-  document.getElementById("bpDailyBtn").onclick=()=>renderBootPacks("daily");
-  document.getElementById("bpSeasonBtn").onclick=()=>renderBootPacks("season");
-  const listEl=document.getElementById("bpList"), totEl=document.getElementById("bpTotals");
+  document.getElementById("tlBack").onclick=renderHome;
+  document.getElementById("tlDailyBtn").onclick=()=>renderTally(kind, "daily");
+  document.getElementById("tlSeasonBtn").onclick=()=>renderTally(kind, "season");
+  const listEl=document.getElementById("tlList"), totEl=document.getElementById("tlTotals");
   try{
-    const j = await api("/api/players/"+s.player.id+"/bootpacks/"+mode);
+    const j = await api("/api/players/"+s.player.id+"/"+kind+"/"+mode);
     const t=j.today||{count:0,verticalM:0}, se=j.season||{count:0,verticalM:0};
     totEl.innerHTML =
       '<div class="stat"><b>'+t.count+'</b><span>Today</span></div>'
-      +'<div class="stat"><b>'+Math.round(t.verticalM)+'m</b><span>Climbed today</span></div>'
+      +(cfg.climbs ? '<div class="stat"><b>'+Math.round(t.verticalM)+'m</b><span>Climbed today</span></div>' : '')
       +'<div class="stat"><b>'+se.count+'</b><span>This season</span></div>'
-      +'<div class="stat"><b>'+Math.round(se.verticalM)+'m</b><span>Climbed this season</span></div>';
+      +(cfg.climbs ? '<div class="stat"><b>'+Math.round(se.verticalM)+'m</b><span>Climbed this season</span></div>' : '');
     const routes = j.routes||[];
     const maxCount = routes.length ? routes[0].count : 0;
     listEl.innerHTML = routes.length
-      ? routes.map(r=>bootPackRowHtml(r, maxCount)).join("")
-      : '<div class="empty">No boot packs '+(mode==="daily"?"today":"this season")+' yet.</div>';
+      ? routes.map(r=>tallyRowHtml(r, maxCount, cfg.climbs)).join("")
+      : '<div class="empty">'+cfg.none+' '+(mode==="daily"?"today":"this season")+' yet.</div>';
   }catch(e){
-    listEl.innerHTML = '<div class="empty">Couldn’t load your boot packs.</div>';
+    listEl.innerHTML = '<div class="empty">Couldn’t load your '+cfg.title.toLowerCase()+'.</div>';
   }
 }
+function renderBootPacks(mode){ return renderTally("bootpacks", mode); }
+function renderLifts(mode){ return renderTally("lifts", mode); }
 
 /* ============================== FRIENDS ==============================
    Persistent per-resort friends list (add by email or personal invite

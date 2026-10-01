@@ -1416,6 +1416,8 @@ async function api(request, env, url) {
   // counts below only take ski descents, and boot packs have their own endpoints.
   const CHUTE_LAPS_SQL = "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND run_type='chute' AND activity='ski' ORDER BY started_at DESC LIMIT 2000";
   const BOOTPACKS_SQL = "SELECT zone_id,run_name,difficulty,started_at,vertical_m FROM quest_run WHERE player_id=? AND activity='hike' ORDER BY started_at DESC LIMIT 2000";
+  // Lift rides (2026-09-30): which lifts and how many times. Lift runs carry no vertical.
+  const LIFTS_SQL = "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND activity='lift' ORDER BY started_at DESC LIMIT 2000";
   function bootPackTotals(list) {
     return { count: list.reduce((n, r) => n + r.count, 0), verticalM: Math.round(list.reduce((n, r) => n + r.verticalM, 0)) };
   }
@@ -1439,10 +1441,10 @@ async function api(request, env, url) {
     const chutes = aggregateChuteCounts(results || [], questSeasonId, seasonId);
     return json({ seasonId, chutes }, 200, AC);
   }
-  // Boot packs, per route climbed: GET /api/players/:id/bootpacks/daily[?date=] and
-  // /bootpacks/season[?seasonId=]. Each answer carries the routes (name, times climbed,
-  // vertical climbed) plus today's AND this season's totals, so Home needs one call.
-  const mpbp = path.match(/^\/api\/players\/([^/]+)\/bootpacks\/(daily|season)$/);
+  // Boot packs and lift rides, per route/lift: GET /api/players/:id/bootpacks|lifts/daily[?date=]
+  // and .../season[?seasonId=]. Each answer carries the routes (name, times, vertical climbed
+  // -- 0 for lifts) plus today's AND this season's totals, so Home needs one call each.
+  const mpbp = path.match(/^\/api\/players\/([^/]+)\/(bootpacks|lifts)\/(daily|season)$/);
   if (mpbp && method === "GET") {
     const P = await playerAuth(request, env);
     if (!P || P.playerId !== decodeURIComponent(mpbp[1])) return json({ error: "not authenticated" }, 401, AC);
@@ -1450,12 +1452,12 @@ async function api(request, env, url) {
     const nowIso = new Date().toISOString();
     const date = url.searchParams.get("date") || questDateBucket(nowIso);
     const seasonId = url.searchParams.get("seasonId") || questSeasonId(nowIso);
-    const { results } = await env.DB.prepare(BOOTPACKS_SQL).bind(P.playerId).all();
+    const { results } = await env.DB.prepare(mpbp[2] === "lifts" ? LIFTS_SQL : BOOTPACKS_SQL).bind(P.playerId).all();
     const daily = aggregateChuteCounts(results || [], questDateBucket, date);
     const season = aggregateChuteCounts(results || [], questSeasonId, seasonId);
     return json({
-      mode: mpbp[2], date, seasonId,
-      routes: mpbp[2] === "daily" ? daily : season,
+      kind: mpbp[2], mode: mpbp[3], date, seasonId,
+      routes: mpbp[3] === "daily" ? daily : season,
       today: bootPackTotals(daily), season: bootPackTotals(season)
     }, 200, AC);
   }
