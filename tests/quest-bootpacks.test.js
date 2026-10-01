@@ -28,7 +28,7 @@ test("chute laps only count ski descents; boot packs only count climbs", () => {
   const laps = worker.match(/const CHUTE_LAPS_SQL = "([^"]+)"/)[1];
   assert.ok(/run_type='chute'/.test(laps) && /activity='ski'/.test(laps), laps);
   const bp = worker.match(/const BOOTPACKS_SQL = "([^"]+)"/)[1];
-  assert.ok(/activity='hike'/.test(bp) && /vertical_m/.test(bp), bp);
+  assert.ok(/activity='hike'/.test(bp) && /run_type='hike'/.test(bp) && /vertical_m/.test(bp), "only routes marked as boot packs (2026-10-01): " + bp);
   assert.strictEqual((worker.match(/prepare\(CHUTE_LAPS_SQL\)/g) || []).length, 2, "both chute endpoints use it");
   assert.ok(!/run_type='chute' ORDER BY/.test(worker), "no chute query left without the ski filter");
 });

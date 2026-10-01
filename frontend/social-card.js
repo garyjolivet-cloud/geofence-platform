@@ -451,7 +451,10 @@
     var vx = x + 30;
     text(ctx, value, vx, y + h * 0.56, { family: BIG, weight: "400", size: Math.round(h * 0.42), color: COL.snow, maxW: w - 50 });
     text(ctx, label.toUpperCase(), vx, y + h * 0.84, { size: Math.round(h * 0.18), weight: "600", color: COL.fog, maxW: w - 50 });
-    if (mark) diamonds(ctx, mark, x + w - 30 - h * 0.22 * 2, y + h * 0.36, Math.round(h * 0.2));
+    if (mark) {                                     // tucked into the top-right corner, clear of the number
+      var ms = Math.round(h * 0.15), mw = ms * 1.95;
+      diamonds(ctx, mark, x + w - 10 - mw, y + 10 + ms, ms);
+    }
   }
   function liftLine(d) {
     return (d.lifts || []).map(function (l) { return l.name + " ×" + l.count; }).join("   ·   ");
@@ -534,9 +537,7 @@
       ly += 100;
     }
     // chutes: up to 20 names, two columns of 10, hardest first (season: most skied first)
-    var all = (d.chutes || []).slice().sort(function (a, b) {
-      return d.kind === "season" ? b.count - a.count : (DIFF_RANK[b.difficulty] || 0) - (DIFF_RANK[a.difficulty] || 0) || b.count - a.count;
-    });
+    var all = sortedChutes(d);
     var list = all.slice(0, STORY_CHUTES_MAX);
     if (list.length) {
       var more = all.length - list.length;
@@ -560,30 +561,56 @@
     if (d.rider) text(ctx, d.rider, W - P, H - 82, { size: 34, weight: "600", color: COL.fog, align: "right", maxW: 300, min: 20 });
   }
 
+  // Facebook 1200x630 (reworked 2026-10-01: "needs chutes skied like the story"). Weather moves to
+  // the top-left over the map, the four tiles sit in one row, and the freed space holds a
+  // two-column chute list (up to 12 names, "+N MORE" beyond).
+  var WIDE_CHUTES_MAX = 12;
+  function sortedChutes(d) {
+    return (d.chutes || []).slice().sort(function (a, b) {
+      return d.kind === "season" ? b.count - a.count : (DIFF_RANK[b.difficulty] || 0) - (DIFF_RANK[a.difficulty] || 0) || b.count - a.count;
+    });
+  }
   function drawWide(ctx, d, hero) {
     var F = FORMATS.wide, W = F.w, H = F.h, X = F.heroW - 30, P = 40, RW = W - X - P;
     ctx.fillStyle = COL.night; ctx.fillRect(0, 0, W, H);
     heroInto(ctx, hero, 0, 0, F.heroW, H, "right");
-    text(ctx, d.kind === "season" ? "MY SEASON" : d.dateLabel.toUpperCase(), 32, 58, { size: 30, weight: "700", color: "#ffffff", shadow: 8, maxW: F.heroW - 64 });
-    text(ctx, d.resort.toUpperCase() + (d.kind === "season" ? "  ·  " + d.dateLabel.toUpperCase() : ""), 32, 94, { size: 24, weight: "600", color: "rgba(255,255,255,0.85)", shadow: 6, maxW: F.heroW - 64 });
-    var y = 128;
-    var size = fitText(ctx, fmtInt(d.verticalM), RW - 70, "400", 108, BIG, 60);
+    var plate = ctx.createLinearGradient(0, 0, 0, 170);
+    plate.addColorStop(0, "rgba(6,10,18,0.7)"); plate.addColorStop(1, "rgba(6,10,18,0)");
+    ctx.fillStyle = plate; ctx.fillRect(0, 0, F.heroW, 170);
+    text(ctx, d.kind === "season" ? "MY SEASON" : d.dateLabel.toUpperCase(), 32, 56, { size: 30, weight: "700", color: "#ffffff", shadow: 8, maxW: F.heroW - 100 });
+    text(ctx, d.resort.toUpperCase() + (d.kind === "season" ? "  ·  " + d.dateLabel.toUpperCase() : ""), 32, 90, { size: 24, weight: "600", color: "rgba(255,255,255,0.85)", shadow: 6, maxW: F.heroW - 100 });
+    var wl = d.kind === "day" ? weatherLine(d.weather) : "";
+    if (wl) text(ctx, wl, 32, 124, { size: 22, weight: "700", color: COL.ice, shadow: 6, maxW: F.heroW - 100, min: 14 });
+    // big number
+    var y = 112;
+    var size = fitText(ctx, fmtInt(d.verticalM), RW - 60, "400", 96, BIG, 56);
     text(ctx, fmtInt(d.verticalM), X, y, { family: BIG, weight: "400", size: size, color: COL.snow });
     setFont(ctx, "400", size, BIG);
-    text(ctx, "m", X + ctx.measureText(fmtInt(d.verticalM)).width + 8, y, { family: BIG, weight: "400", size: 48, color: COL.coral });
-    text(ctx, d.kind === "season" ? "VERTICAL THIS SEASON" : "VERTICAL TODAY", X, y + 40, { size: 28, weight: "700", color: COL.coral, maxW: RW });
-    text(ctx, "lifts + boot packs  ·  " + fmtInt(d.points) + " points", X, y + 74, { size: 22, weight: "500", color: COL.fog, maxW: RW });
-    var cy = y + 100, cw = (RW - 16) / 2, ch = 92;
-    chipsFor(d).forEach(function (c, i) {
-      chip(ctx, X + (i % 2) * (cw + 16), cy + Math.floor(i / 2) * (ch + 14), cw, ch, c.v, c.l, c.c, c.m);
-    });
-    var ly = cy + 2 * (ch + 14) + 30;
-    if (d.lifts && d.lifts.length) { text(ctx, liftLine(d), X, ly, { size: 24, weight: "600", color: COL.ice, maxW: RW, min: 16 }); ly += 34; }
-    var wl = d.kind === "day" ? weatherLine(d.weather) : "";
-    if (wl) text(ctx, wl, X, ly, { size: 22, weight: "600", color: COL.fog, maxW: RW, min: 14 });
-    logo(ctx, X, H - 74, 44);
-    text(ctx, "Ridge Quest", X + 58, H - 42, { family: BIG, weight: "400", size: 34, color: COL.snow });
-    text(ctx, TAGLINE.toUpperCase(), X + 59, H - 18, { size: 17, weight: "700", color: COL.coral, maxW: RW - 60 });
+    text(ctx, "m", X + ctx.measureText(fmtInt(d.verticalM)).width + 8, y, { family: BIG, weight: "400", size: Math.round(size * 0.45), color: COL.coral });
+    text(ctx, d.kind === "season" ? "VERTICAL THIS SEASON" : "VERTICAL TODAY", X, y + 36, { size: 26, weight: "700", color: COL.coral, maxW: RW });
+    text(ctx, "lifts + boot packs  ·  " + fmtInt(d.points) + " points", X, y + 66, { size: 20, weight: "500", color: COL.fog, maxW: RW });
+    // four tiles in one row
+    var cy = y + 84, gap = 10, cw = (RW - 3 * gap) / 4, ch = 78;
+    chipsFor(d).forEach(function (c, i) { chip(ctx, X + i * (cw + gap), cy, cw, ch, c.v, c.l, c.c, c.m); });
+    var ly = cy + ch + 32;
+    if (d.lifts && d.lifts.length) { text(ctx, liftLine(d), X, ly, { size: 21, weight: "600", color: COL.ice, maxW: RW, min: 13 }); ly += 30; }
+    // chutes: two columns of 6
+    var all = sortedChutes(d), list = all.slice(0, WIDE_CHUTES_MAX);
+    if (list.length) {
+      var more = all.length - list.length;
+      text(ctx, (d.kind === "season" ? "MOST SKIED CHUTES" : "CHUTES") + (more > 0 ? "  ·  +" + more + " MORE" : ""), X, ly + 4, { size: 18, weight: "700", color: COL.gold });
+      var colW = (RW - 16) / 2, rowH = 24, perCol = 6, top = ly + 30;
+      list.forEach(function (c, i) {
+        var col = Math.floor(i / perCol), row = i % perCol;
+        var x = X + col * (colW + 16), ry = top + row * rowH;
+        var mw = diamonds(ctx, c.difficulty, x, ry - 3, 14);
+        text(ctx, c.name + (c.count > 1 ? " ×" + c.count : ""), x + (mw ? mw + 8 : 0), ry, { size: 19, weight: "600", color: COL.snow, maxW: colW - (mw ? mw + 8 : 0), min: 12 });
+      });
+    }
+    logo(ctx, X, H - 62, 38);
+    text(ctx, "Ridge Quest", X + 50, H - 34, { family: BIG, weight: "400", size: 30, color: COL.snow });
+    text(ctx, TAGLINE.toUpperCase(), X + 51, H - 14, { size: 15, weight: "700", color: COL.coral, maxW: RW - 60 });
+    if (d.rider) text(ctx, d.rider, W - P, H - 34, { size: 20, weight: "600", color: COL.fog, align: "right", maxW: 200, min: 12 });
   }
 
   function draw(ctx, d, format, hero) { (format === "wide" ? drawWide : drawStory)(ctx, d, hero); }

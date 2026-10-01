@@ -1933,11 +1933,11 @@ const Quest = {
 
     // Ridge Quest is ski-only (2026-09-30): there is no activity choice, so the corridor and
     // the direction/pace decide. A lift is mechanized transport, detected by ascending a
-    // runType:"lift" corridor. A corridor the author marked runType:"hike" is always a boot
-    // pack (stored as "hike"). A chute (runType:"chute", expert ski terrain) counts as ski when
-    // DESCENDED at any pace (2026-09-17: the speed heuristic used to downgrade a cautiously
-    // skied or side-slipped chute) and as a boot pack when climbed (2026-09-21). Any other run
-    // is ski when descended at ski pace, otherwise a boot pack (skinning or walking it).
+    // runType:"lift" corridor. ONLY a corridor the author marked runType:"hike" is a boot pack
+    // (stored as "hike") -- 2026-10-01. A chute (runType:"chute", expert ski terrain) counts as
+    // ski when DESCENDED at any pace (2026-09-17: the speed heuristic used to downgrade a
+    // cautiously skied or side-slipped chute); going up it is ignored. Any other run is ski when
+    // descended at ski pace; going up it is ignored, too slow down it is not counted.
     // `selectedActivity` is always "ski" now; the parameter stays so callers keep their shape.
     // Elevation gained in the direction travelled ("down" = along the drawn path): the path's
     // climb going along it, its descent going against it. null when the corridor's elevation
@@ -1955,11 +1955,19 @@ const Quest = {
       if(uphillAlong ? !descending : !ascending) return "rejected"; // downhill lift-line foot traffic isn't a lift ride (silent, as before)
       activity="lift";
     } else if(corridor.runType==="hike"){
+      // Only a corridor the author marked as a boot pack counts as a boot pack (2026-10-01).
       activity="hike";
     } else if(corridor.runType==="chute"){
-      activity = descending ? "ski" : "hike";
+      // Going UP a chute is ignored -- not a boot pack, not a run (2026-10-01; it used to log
+      // as a boot pack). Silent, like downhill foot traffic on a lift line.
+      if(!descending) return "rejected";
+      activity = "ski";
     } else {
-      activity = (descending && avgSpeedMps >= S.SKI_SPEED_MIN_MPS) ? "ski" : "hike";
+      // Any other run: ski when descended at ski pace. Climbing it is ignored (silent); a
+      // descent too slow to be skiing it is not counted, and the rider is told why.
+      if(!descending) return "rejected";
+      if(avgSpeedMps < S.SKI_SPEED_MIN_MPS) return reject("too slow to count as skiing it");
+      activity = "ski";
     }
 
     // Speed plausibility, on the verified pass's own pace: riding a chair up a boot-pack

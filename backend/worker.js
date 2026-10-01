@@ -1417,7 +1417,9 @@ async function api(request, env, url) {
   // "Boot pack". Boot packs are stats of their own -- never a chute lap -- so the chute
   // counts below only take ski descents, and boot packs have their own endpoints.
   const CHUTE_LAPS_SQL = "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND run_type='chute' AND activity='ski' ORDER BY started_at DESC LIMIT 2000";
-  const BOOTPACKS_SQL = "SELECT zone_id,run_name,difficulty,started_at,vertical_m FROM quest_run WHERE player_id=? AND activity='hike' ORDER BY started_at DESC LIMIT 2000";
+  // Only routes marked as a boot pack (run_type 'hike') count (2026-10-01): older climbs UP a
+  // chute or run were logged as 'hike' too, and are left out of boot-pack stats.
+  const BOOTPACKS_SQL = "SELECT zone_id,run_name,difficulty,started_at,vertical_m FROM quest_run WHERE player_id=? AND activity='hike' AND run_type='hike' ORDER BY started_at DESC LIMIT 2000";
   // Lift rides (2026-09-30): which lifts, how many times, and the vertical they carried you up.
   // The day's total vertical is lifts + boot packs (what you went up), not chute descents.
   const LIFTS_SQL = "SELECT zone_id,run_name,difficulty,started_at,vertical_m FROM quest_run WHERE player_id=? AND activity='lift' ORDER BY started_at DESC LIMIT 2000";

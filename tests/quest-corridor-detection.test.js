@@ -206,14 +206,22 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run && run.avgSpeedMps > 6 && run.avgSpeedMps < 10, "avg speed reflects the real pace, got " + (run && run.avgSpeedMps));
 })();
 
-(function testHikeDescendingTooSlow() {
-  const run = classify(straightRun, mkTrack(straightRun, { speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "a full descent at walking pace classifies as hike (skinning/walking down), got " + (run && run.activity));
+// 2026-10-01: only a corridor marked as a boot pack is a boot pack. A run walked down too slowly
+// to be skiing it is not counted (and the rider is told why); going up a run or chute is ignored.
+(function testRunDescendedTooSlowIsNotCounted() {
+  const fb = [];
+  const run = classify.call({ onCoverage: (n, p, ok, why) => fb.push({ ok, why }) },
+    straightRun, mkTrack(straightRun, { speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(run === undefined, "a run walked down slowly is not counted, got " + JSON.stringify(run && run.activity));
+  assert(fb.length === 1 && /too slow to count as skiing/.test(fb[0].why), "the rider is told why, got " + JSON.stringify(fb));
 })();
 
-(function testHikeAscendingOnPlainRun() {
-  const run = classify(straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "walking UP a plain run is a hike, never ski, got " + (run && run.activity));
+(function testWalkingUpAPlainRunIsIgnored() {
+  const fb = [];
+  const run = classify.call({ onCoverage: (n, p, ok, why) => fb.push({ ok, why }) },
+    straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(run === undefined, "walking UP a plain run is ignored (not a boot pack), got " + JSON.stringify(run && run.activity));
+  assert(fb.length === 0, "silently");
 })();
 
 (function testAscendingFastIsRejectedNotHike() {
@@ -223,7 +231,7 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   const run = classify.call({ onCoverage: (n, p, ok, why) => fb.push({ ok, why }) },
     straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 8, dt: 1 }), "ski", QGeo, QUEST_TUNING);
   assert(run === undefined, "an 8 m/s ascent is not a hike, got " + JSON.stringify(run));
-  assert(fb.length === 1 && fb[0].ok === false && /too fast/.test(fb[0].why), "the player is told why, got " + JSON.stringify(fb));
+  assert(fb.length === 0, "going up a plain run is ignored silently (2026-10-01), got " + JSON.stringify(fb));
 })();
 
 (function testLiftAscending() {
@@ -259,9 +267,12 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run && run.activity === "ski", "a slowly skied chute is still ski (2026-09-17 rule kept), got " + (run && run.activity));
 })();
 
-(function testChuteAscendingIsHikeNotSki() {
-  const run = classify(chute, mkTrack(chute, { from: 1, to: 0, speed: 1.2, dt: 3 }), "ski", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "climbing a chute is a hike -- it used to score as ski either way, got " + (run && run.activity));
+(function testChuteAscendingIsIgnored() {
+  const fb = [];
+  const run = classify.call({ onCoverage: (n, p, ok, why) => fb.push({ ok, why }) },
+    chute, mkTrack(chute, { from: 1, to: 0, speed: 1.2, dt: 3 }), "ski", QGeo, QUEST_TUNING);
+  assert(run === undefined, "going up a chute is ignored -- not a boot pack, not a run (2026-10-01), got " + JSON.stringify(run && run.activity));
+  assert(fb.length === 0, "silently");
 })();
 
 (function testChuteStandingStillNotSkiing() {
@@ -451,10 +462,10 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   const along = classify.call(self, upRoute, mkTrack(upRoute, { speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
   assert(along && along.activity === "hike" && along.verticalM === -Math.round(95 * cov),
     "climbing a route along its drawn direction counts its climb, got " + (along && along.verticalM) + " cov=" + cov);
-  const climbedChute = Object.assign({}, chute, { descentM: 166, climbM: 0 });
-  const up = classify.call(self, climbedChute, mkTrack(climbedChute, { from: 1, to: 0, speed: 1.0, dt: 4 }), "ski", QGeo, QUEST_TUNING);
-  assert(up && up.activity === "hike" && up.verticalM === -Math.round(166 * cov),
-    "climbing a chute (against its drawn direction) counts its descent as the climb, got " + (up && up.verticalM));
+  const downRoute = Object.assign({}, hikeRoute, { descentM: 120, climbM: 0 });  // a boot-pack route drawn top-to-bottom
+  const up = classify.call(self, downRoute, mkTrack(downRoute, { from: 1, to: 0, speed: 1.0, dt: 4 }), "ski", QGeo, QUEST_TUNING);
+  assert(up && up.activity === "hike" && up.verticalM === -Math.round(120 * cov),
+    "climbing a boot-pack route against its drawn direction counts its descent as the climb, got " + (up && up.verticalM));
   const noClimb = Object.assign({}, hikeRoute, { descentM: 50 });              // older bundle: no climbM
   const old = classify.call(self, noClimb, mkTrack(noClimb, { speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
   assert(old && old.verticalM === -Math.round(50 * cov), "without climbM the old descent rule still applies");
@@ -471,7 +482,7 @@ const tEnd = a => (last(a).t - BASE) / 1000;
 })();
 
 (function testAuthoredDescentNeverNullOnHike() {
-  const c = withDescent(straightRun, 300);
+  const c = withDescent(hikeRoute, 300);
   const run = classify(c, mkTrack(c, { speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
   assert(run && run.activity === "hike" && run.verticalM < 0, "a hike on a corridor with authored descent is never null verticalM, got " + JSON.stringify(run && { a: run.activity, v: run.verticalM }));
 })();
@@ -507,14 +518,12 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(run && run.activity === "ski", "descending a run at ski pace is ski, got " + (run && run.activity));
 })();
 
-(function testRunWalkedDownSlowlyIsBootPack() {
-  const run = classify(straightRun, mkTrack(straightRun, { speed: 1.4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "walking a run down slowly is a boot pack (hike), got " + (run && run.activity));
-})();
-
-(function testRunClimbedIsBootPack() {
-  const run = classify(straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
-  assert(run && run.activity === "hike", "climbing a run is a boot pack (hike), got " + (run && run.activity));
+(function testOnlyMarkedRoutesAreBootPacks() {
+  const slowDown = classify(straightRun, mkTrack(straightRun, { speed: 1.4, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  const climbed = classify(straightRun, mkTrack(straightRun, { from: 1, to: 0, speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  const marked = classify(hikeRoute, mkTrack(hikeRoute, { from: 1, to: 0, speed: 1.2, dt: 5 }), "ski", QGeo, QUEST_TUNING);
+  assert(slowDown === undefined && climbed === undefined, "a run walked down or climbed is never a boot pack");
+  assert(marked && marked.activity === "hike", "a corridor marked as a boot pack is one");
 })();
 
 (function testOldActivitiesAreGone() {
@@ -599,7 +608,7 @@ const tEnd = a => (last(a).t - BASE) / 1000;
 
 (function testLongCorridorRaisesTheDurationCap() {
   // ~10 km corridor: a 110-minute pass must NOT be discarded (R12, 2026-08-19).
-  const longC = { zoneId: "zl", name: "Long", runType: "run", widthM: 20, lengthM: 10000,
+  const longC = { zoneId: "zl", name: "Long", runType: "hike", widthM: 20, lengthM: 10000,   // a long boot-pack route
     path: [[51.39, -117.05], [51.30, -117.05]], ref: [51.345, -117.05] };
   const run = classify(longC, mkTrack(longC, { speed: 1.5, dt: 10 }), "ski", QGeo, QUEST_TUNING);
   assert(run && run.activity === "hike", "a ~110 min pass of a 10 km corridor is kept once the cap scales with length, got " + JSON.stringify(run && run.activity));
@@ -803,8 +812,8 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
     feed(Q, straightRun, up);
     clock += 60000;                                  // past the post-log cooldown
     feed(Q, straightRun, mkTrack(straightRun, { speed: 8, t0: tEnd(up) + 60 }));
-    assert(logged.length === 2 && logged[0].activity === "hike" && logged[1].activity === "ski",
-      "walking up then skiing down logs a hike then a ski, got " + JSON.stringify(logged.map(r => r.activity)));
+    assert(logged.length === 1 && logged[0].activity === "ski",
+      "walking up a run is ignored, skiing down it logs one ski run (2026-10-01), got " + JSON.stringify(logged.map(r => r.activity)));
   } finally { Date.now = realNow; }
 })();
 

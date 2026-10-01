@@ -222,3 +222,19 @@ test("the hero map keeps its frame for copying on iPhone, copies inside a render
   assert.strictEqual(isBlank(ctxOf(0), 100, 100), true);
   assert.strictEqual(isBlank(ctxOf(140), 100, 100), false);
 });
+
+// 2026-10-01: "facebook image needs to have chutes skied like the story" -- up to 12 names, 2 columns.
+test("the Facebook image lists the chutes skied (2 columns, up to 12, +N more), inside the frame", () => {
+  const d = SC.testDay(cors);
+  const diffs = ["double-black", "black", "blue", "green"];
+  d.chutes = Array.from({ length: 15 }, (_, i) => ({ name: "Chute Number " + (i + 1), difficulty: diffs[i % 4], count: 1 + (i % 2), zoneId: "c" + i }));
+  d.chuteCount = 15;
+  const f = drawn(d, "wide");
+  const names = f.texts.filter(x => /^Chute Number /.test(x.t));
+  assert.strictEqual(names.length, 12, "12 names on the Facebook image");
+  assert.ok(f.texts.some(x => /\+3 MORE/.test(x.t)), "says +3 more");
+  assert.ok(new Set(names.map(n => Math.round(n.x / 100))).size >= 2, "two columns");
+  const brand = f.texts.find(x => x.t === "Ridge Quest");
+  assert.ok(names.every(n => n.y < brand.y - 20 && n.x >= SC.FORMATS.wide.heroW - 30), "in the right column, above the logo");
+  assert.ok(f.texts.some(x => /24 cm fresh/.test(x.t) && x.x < SC.FORMATS.wide.heroW), "weather over the map");
+});
