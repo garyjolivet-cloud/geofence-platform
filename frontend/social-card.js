@@ -89,6 +89,21 @@
   //   days (season card only),
   //   geo: { track:[[ [lon,lat]... ]], chutes:[path], lifts:[{name, path}], bootPacks:[path] }
   // }
+  // The whole resort (2026-10-01): every chute and lift of the project. The hero is always framed
+  // on THIS -- not on the rider's own lines -- so a phone export and the Fence Editor test screen
+  // show the same mountain from the same camera, and a day with nothing logged yet still gets
+  // the real 3D mountain (it used to fall back to drawn art: field report "mountains are not same").
+  function networkOf(corridors) {
+    var cs = (corridors || []).filter(function (c) { return c && c.path && c.path.length >= 2; });
+    var lifts = cs.filter(function (c) { return c.runType === "lift"; }).map(function (c) {
+      var up = liftTopIndex(c) === c.path.length - 1 ? c.path : c.path.slice().reverse();   // bottom -> top
+      return { name: shortLift(c.name), path: lonlat(up), gain: liftGain(c) };
+    }).sort(function (a, b) { return b.gain - a.gain; });
+    return {
+      chutes: cs.filter(function (c) { return c.runType === "chute"; }).map(function (c) { return lonlat(c.path); }),
+      lifts: lifts
+    };
+  }
   function liftList(rows) {
     return (rows || []).map(function (r) { return { name: shortLift(r.name), count: r.count, verticalM: Math.round(r.verticalM || 0) }; });
   }
@@ -136,6 +151,7 @@
       } : null,
       season: { days: days, verticalM: seasonV },
       geo: {
+        network: networkOf(ctx.corridors),
         track: (ctx.track || []).filter(function (s) { return s.length >= 2; }),
         chutes: pick(chutes.map(function (c) { return c.zoneId; })).map(function (c) { return lonlat(c.path); }),
         lifts: pick((lf.routes || []).map(function (r) { return r.zoneId; })).map(function (c) { return { name: shortLift(c.name), path: lonlat(c.path) }; }),
@@ -169,6 +185,7 @@
       lifts: liftList(lf.routes), liftRides: (lf.season && lf.season.count) || 0,
       weather: null, season: null,
       geo: {
+        network: networkOf(ctx.corridors),
         track: [],
         chutes: pick(chutes.map(function (c) { return c.zoneId; })).map(function (c) { return lonlat(c.path); }),
         lifts: pick((lf.routes || []).map(function (r) { return r.zoneId; })).map(function (c) { return { name: shortLift(c.name), path: lonlat(c.path) }; }),
@@ -236,6 +253,7 @@
       weather: { snow24: 24, tempC: -8, windKph: 15, windDir: "W" },
       season: { days: 38, verticalM: Math.round((liftV + bpV) * 38 * 0.62) },
       geo: {
+        network: networkOf(cors),
         track: skied.concat(routes.map(function (r) { return r.corr; })).map(function (c) { return lonlat(c.path); }),
         chutes: Object.keys(chuteMap).map(function (k) { return lonlat(skied.find(function (c) { return c.zoneId === k; }).path); }),
         lifts: liftRows.map(function (r) { return { name: r.name, path: lonlat(r.corr.path) }; }),
@@ -258,7 +276,7 @@
       lifts: day.lifts.map(function (l) { return { name: l.name, count: Math.round(l.count * days * f), verticalM: Math.round(l.verticalM * days * f) }; }),
       liftRides: Math.round(day.liftRides * days * f),
       weather: null, season: null,
-      geo: { track: [], chutes: day.geo.chutes, lifts: day.geo.lifts, bootPacks: day.geo.bootPacks }
+      geo: { network: day.geo.network, track: [], chutes: day.geo.chutes, lifts: day.geo.lifts, bootPacks: day.geo.bootPacks }
     };
   }
 
@@ -267,7 +285,7 @@
   // Off-screen at the exact pixel size; resolves to {canvas, labels:[{name,x,y}]}. Falls back to a
   // drawn mountain if anything fails or takes over 15 s, so the export never hangs.
   function heroBearing(geo) {
-    var l = (geo.lifts || [])[0];
+    var l = (geo.network && geo.network.lifts && geo.network.lifts[0]) || (geo.lifts || [])[0];
     if (!l || l.path.length < 2) return 250;
     // look roughly up the main lift (bottom -> top), so the peaks fill the frame
     var a = l.path[0], b = l.path[l.path.length - 1];
@@ -280,7 +298,10 @@
     if (!ml || !root.document) return Promise.resolve(null);
     // Frame the UPPER mountain -- chutes, boot packs and the lift tops -- not the long lower lift
     // lines and the village, so the peaks fill the picture.
-    var focus = [].concat(geo.chutes || [], geo.bootPacks || [], (geo.lifts || []).map(function (l) { return [l.path[l.path.length - 1]]; }));
+    var net = geo.network || {};
+    var focus = (net.chutes && net.chutes.length)
+      ? [].concat(net.chutes, (net.lifts || []).map(function (l) { return [l.path[l.path.length - 1]]; }))
+      : [].concat(geo.chutes || [], geo.bootPacks || [], (geo.lifts || []).map(function (l) { return [l.path[l.path.length - 1]]; }));
     var b = boundsOf(focus.length ? focus : [].concat(geo.track || [], (geo.lifts || []).map(function (l) { return l.path; })));
     if (!b) return Promise.resolve(null);
     return new Promise(function (resolve) {
@@ -308,11 +329,15 @@
         try {
           if (root.Terrain3D) { root.Terrain3D.setEnabled(map, true, { sky: true }); root.Terrain3D.applyWinter(map, { dem: true }); }
           var fc = function (paths) { return { type: "FeatureCollection", features: paths.map(function (p) { return { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: p } }; }) }; };
+          map.addSource("sc-net-chutes", { type: "geojson", data: fc(net.chutes || []) });
+          map.addSource("sc-net-lifts", { type: "geojson", data: fc((net.lifts || []).map(function (l) { return l.path; })) });
           map.addSource("sc-lifts", { type: "geojson", data: fc((geo.lifts || []).map(function (l) { return l.path; })) });
           map.addSource("sc-chutes", { type: "geojson", data: fc(geo.chutes || []) });
           map.addSource("sc-boot", { type: "geojson", data: fc(geo.bootPacks || []) });
           map.addSource("sc-track", { type: "geojson", data: fc(geo.track || []) });
           var lay = { "line-cap": "round", "line-join": "round" };
+          map.addLayer({ id: "sc-net-chutes", type: "line", source: "sc-net-chutes", layout: lay, paint: { "line-color": "#ffffff", "line-width": 2, "line-opacity": 0.35 } });
+          map.addLayer({ id: "sc-net-lifts", type: "line", source: "sc-net-lifts", layout: lay, paint: { "line-color": "#ffffff", "line-width": 2, "line-dasharray": [1.5, 1.5], "line-opacity": 0.45 } });
           map.addLayer({ id: "sc-lifts", type: "line", source: "sc-lifts", layout: lay, paint: { "line-color": "#ffffff", "line-width": 3, "line-dasharray": [1.5, 1.5], "line-opacity": 0.9 } });
           map.addLayer({ id: "sc-track-glow", type: "line", source: "sc-track", layout: lay, paint: { "line-color": COL.ice, "line-width": 14, "line-blur": 10, "line-opacity": 0.55 } });
           map.addLayer({ id: "sc-track", type: "line", source: "sc-track", layout: lay, paint: { "line-color": "#d8f6ff", "line-width": 3.5 } });

@@ -156,3 +156,24 @@ test("share sends the image on its own (no title / text), and downloads when sha
   assert.strictEqual(calls[0].files[0].name, "x.png");
   assert.ok(!/shareOrSave\(made\.blob, made\.filename, /.test(rq), "Ridge Quest passes no share text");
 });
+
+// 2026-10-01 field report "mountains are not same": a rider with nothing logged yet had no lines
+// to frame the map on, so the phone export fell back to drawn mountain art while the Fence Editor
+// test screen showed the real 3D mountain. Every card now carries the resort network and the
+// camera is framed on it, so both always show the same mountain from the same camera.
+test("every card carries the resort network, and the hero is framed on it", () => {
+  const day = SC.testDay(cors), season = SC.testSeason(cors);
+  for (const d of [day, season]) {
+    assert.strictEqual(d.geo.network.chutes.length, cors.filter(c => c.runType === "chute").length, "all chutes");
+    assert.deepStrictEqual(d.geo.network.lifts.map(l => l.name), ["Golden Eagle Express Gondola", "Stairway Chair"], "lifts, biggest first");
+  }
+  const g = day.geo.network.lifts[0].path;
+  assert.ok(g[0][1] > g[g.length - 1][1], "lift paths run bottom -> top (gondola base is north-east of its top)");
+  const hero = src.slice(src.indexOf("function renderHeroMap("), src.indexOf("function drawFallbackHero("));
+  assert.ok(/var net = geo\.network \|\| \{\};/.test(hero) && /\(net\.chutes && net\.chutes\.length\)/.test(hero), "framing comes from the network first");
+  assert.ok(/geo\.network && geo\.network\.lifts && geo\.network\.lifts\[0\]/.test(src), "bearing from the resort's biggest lift");
+  for (const fn of ["async function collectDay(", "async function collectSeason("]) {
+    const body = src.slice(src.indexOf(fn), src.indexOf(fn) + 4000);
+    assert.ok(/network: networkOf\(ctx\.corridors\)/.test(body), fn + " attaches the network");
+  }
+});
