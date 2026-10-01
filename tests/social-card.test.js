@@ -238,3 +238,11 @@ test("the Facebook image lists the chutes skied (2 columns, up to 12, +N more), 
   assert.ok(names.every(n => n.y < brand.y - 20 && n.x >= SC.FORMATS.wide.heroW - 30), "in the right column, above the logo");
   assert.ok(f.texts.some(x => /24 cm fresh/.test(x.t) && x.x < SC.FORMATS.wide.heroW), "weather over the map");
 });
+
+// 2026-10-01: WhatsApp on iPhone drops the image when you pick the WhatsApp icon and then a chat;
+// picking the person in the share sheet's top row works. The export says so under the button.
+test("the export tells riders how to send to WhatsApp", () => {
+  assert.ok(/id="seTip"[^>]*>Sending on WhatsApp\? Tap the person in the top row of the share sheet\./.test(rq));
+  const body = rq.slice(rq.indexOf("async function renderSocialExport(){"), rq.indexOf("async function renderYourChutes(mode){"));
+  assert.ok(/\$\("seShare"\)\.style\.display=""; \$\("seTip"\)\.style\.display="";/.test(body), "shown with the Save / Share button");
+});

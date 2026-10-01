@@ -3067,6 +3067,10 @@ async function renderSocialExport(){
     +'<p class="scrollhint" id="seStatus" style="margin:10px 0"></p>'
     +'<div id="sePreview" style="text-align:center"></div>'
     +'<button class="primary" id="seShare" style="display:none">Save / Share</button>'
+    // WhatsApp on iPhone (2026-10-01): picking the WhatsApp ICON in the share sheet and then a chat
+    // drops the image; picking the person in the share sheet's top row works, as does Save Image
+    // and attaching it from Photos. That's WhatsApp's share screen, not something the page controls.
+    +'<p class="scrollhint" id="seTip" style="display:none;margin:6px 0 10px">Sending on WhatsApp? Tap the person in the top row of the share sheet. Or tap <b>Save Image</b>, then attach it in WhatsApp from your photos.</p>'
     +'<button class="ghost" id="seBack">← Back</button>'
     +'</div>';
   const $=id=>document.getElementById(id);
@@ -3076,7 +3080,7 @@ async function renderSocialExport(){
     $("seStory").style.borderColor = format==="story"?"var(--coral)":"";
     $("seWide").style.borderColor = format==="wide"?"var(--coral)":"";
   };
-  const reset=()=>{ made=null; $("sePreview").innerHTML=""; $("seShare").style.display="none"; $("seStatus").textContent=""; paint(); };
+  const reset=()=>{ made=null; $("sePreview").innerHTML=""; $("seShare").style.display="none"; $("seTip").style.display="none"; $("seStatus").textContent=""; paint(); };
   $("seDay").onclick=()=>{ kind="day"; reset(); };
   $("seSeason").onclick=()=>{ kind="season"; reset(); };
   $("seStory").onclick=()=>{ format="story"; reset(); };
@@ -3104,7 +3108,7 @@ async function renderSocialExport(){
       img.style.cssText="max-width:100%;max-height:60vh;border-radius:12px;border:1px solid var(--rim)";
       $("sePreview").appendChild(img);
       status(made.hero ? "Ready." : "Ready (no signal for the map, so it uses the mountain art).");
-      $("seShare").style.display="";
+      $("seShare").style.display=""; $("seTip").style.display="";
     }catch(e){ status("Couldn't make the image: "+(e && e.message)); }
     finally{ btn.disabled=false; }
   };
