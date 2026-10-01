@@ -308,6 +308,17 @@
      setup. Same display:none/.open convention as #mapKeyOverlay. */
   #splashEditorOverlay{display:none;position:fixed;inset:0;z-index:250;background:rgba(0,0,0,.75)}
   #splashEditorOverlay.open{display:flex}
+  /* Social media export test screen (2026-09-30) — renders Ridge Quest's share images from fake
+     data (it is fall), same overlay convention as the Splash editor. */
+  #socialTestOverlay{display:none;position:fixed;inset:0;z-index:250;background:rgba(5,9,15,.94);overflow:auto}
+  #socialTestOverlay.open{display:block}
+  #socialTestOverlay .stBar{position:sticky;top:0;display:flex;gap:10px;align-items:center;padding:12px 18px;
+                            background:#151e2d;border-bottom:1px solid var(--rim);z-index:1}
+  #socialTestOverlay .stBar h2{font-family:"Barlow Condensed";font-size:16px;text-transform:uppercase;letter-spacing:.8px;margin:0 auto 0 0;color:var(--snow)}
+  #socialTestOverlay .stGrid{display:flex;flex-wrap:wrap;gap:22px;padding:22px;align-items:flex-start}
+  #socialTestOverlay figure{margin:0;display:flex;flex-direction:column;gap:6px}
+  #socialTestOverlay figure img{border-radius:10px;border:1px solid var(--rim);background:#0a1018}
+  #socialTestOverlay figcaption{font-family:"Barlow";font-size:12px;color:var(--fog);display:flex;gap:8px;align-items:center}
   #splashEditorMap{flex:1 1 auto;position:relative;min-width:0}
   #splashEditorPanel{width:340px;flex:0 0 340px;background:#151e2d;border-left:1px solid var(--rim);
                       display:flex;flex-direction:column;padding:16px;gap:10px;overflow-y:auto}
@@ -500,13 +511,14 @@
      splash uses, so the Splash Flyby editor's Preview button runs the
      exact flight code the splash will actually play. -->
 <script src="/splash-flight.js"></script>
+<script src="/social-card.js"></script>
 </head>
 <body>
 <div id="crossToolNav"></div>
 <div id="map"></div>
 <div class="base"><select id="baseSel" title="base map">
   <option value="sat">Satellite</option><option value="topo">Topo</option><option value="street">Street</option>
-</select><button id="tiltBtn" title="Tilt to see terrain (3D Mode)" style="display:none;margin-left:4px">⛰ Tilt</button><button id="splashEditorBtn" title="Edit the Ridge Quest splash flyby's camera keyframes" style="margin-left:4px">🎬 Splash</button></div>
+</select><button id="tiltBtn" title="Tilt to see terrain (3D Mode)" style="display:none;margin-left:4px">⛰ Tilt</button><button id="splashEditorBtn" title="Edit the Ridge Quest splash flyby's camera keyframes" style="margin-left:4px">🎬 Splash</button><button id="socialTestBtn" title="Preview Ridge Quest's social media export images with test data" style="margin-left:4px">📸 Social</button></div>
 <div class="status" id="status">click the map to read coordinates</div>
 
 <button id="mapKeyBtn" title="Map handle legend">⬤ Key</button>
@@ -577,6 +589,14 @@
   </div>
 </div>
 
+<!-- Social media export test screen — see #socialTestBtn / openSocialTest(). -->
+<div id="socialTestOverlay">
+  <div class="stBar"><h2>Social media export — test data</h2>
+    <span id="socialTestStatus" style="font:12px Barlow;color:var(--fog)"></span>
+    <button id="socialTestRegen">⟳ Regenerate</button>
+    <button onclick="closeSocialTest()">✕ Close</button></div>
+  <div class="stGrid" id="socialTestGrid"></div>
+</div>
 <!-- Splash Flyby editor — see #splashEditorBtn. Own MapLibre instance
      (#splashEditorMap), built lazily on first open in openSplashEditor(). -->
 <div id="splashEditorOverlay">
@@ -7921,6 +7941,50 @@ document.getElementById("splashKfSaveBtn").onclick = async () => {
 };
 
 document.getElementById("splashEditorBtn").onclick = openSplashEditor;
+
+/* ---- Social media export test screen (2026-09-30) ----
+   It is fall, so nobody can ski: this renders Ridge Quest's 4 share images (Today / Season x
+   Story / Facebook) with SocialCard.testDay/testSeason — a fake day of 10 gondola rides, 10
+   Stairway Chair rides and 3 boot packs built from THIS project's real corridors — through the
+   exact same drawing code riders get. Each image can be downloaded to check it on a phone. */
+let _socialTestSeed = 20261003;
+function _socialTestCorridors(){
+  return zones.filter(z=>z.shape && z.shape.type==="corridor" && (z.shape.coords||[]).length>=2).map(z=>({
+    zoneId:z.id, name:z.name, runType:z.runType||"run", difficulty:z.difficulty||null,
+    path:z.shape.coords.map(c=>[c[1],c[0]]), descentM:z.descentM!=null?z.descentM:null, climbM:z.climbM!=null?z.climbM:null
+  }));
+}
+async function renderSocialTest(){
+  const grid=document.getElementById("socialTestGrid"), st=document.getElementById("socialTestStatus");
+  grid.innerHTML="";
+  const cors=_socialTestCorridors();
+  if(!cors.length){ st.textContent="This project has no corridors to build test data from."; return; }
+  const day=SocialCard.testDay(cors,{ seed:_socialTestSeed }), season=SocialCard.testSeason(cors,{ seed:_socialTestSeed });
+  const jobs=[[day,"story"],[day,"wide"],[season,"story"],[season,"wide"]];
+  for(let i=0;i<jobs.length;i++){
+    const [d,fmt]=jobs[i];
+    st.textContent="Drawing "+(i+1)+" of "+jobs.length+"…";
+    try{
+      const r=await SocialCard.make(d, fmt, { onProgress:t=>{ st.textContent=(i+1)+"/"+jobs.length+": "+t; } });
+      const fig=document.createElement("figure"), img=new Image(), cap=document.createElement("figcaption");
+      img.src=URL.createObjectURL(r.blob); img.style.width=(fmt==="story"?360:600)+"px";
+      img.alt=(d.kind==="day"?"Today":"Season")+" "+SocialCard.FORMATS[fmt].label;
+      const dl=document.createElement("button"); dl.textContent="⬇ Download";
+      dl.onclick=()=>SocialCard.shareOrSave(r.blob, r.filename);
+      cap.append((d.kind==="day"?"Today":"Season")+" · "+SocialCard.FORMATS[fmt].label+" · "+SocialCard.FORMATS[fmt].w+"×"+SocialCard.FORMATS[fmt].h+(r.hero?"":" · map unavailable"), dl);
+      fig.append(img, cap); grid.appendChild(fig);
+    }catch(e){ console.warn("social test:", e); }
+  }
+  st.textContent="Test day: "+day.lifts.map(l=>l.name+" ×"+l.count).join(", ")+", "+day.bootPacks.count+" boot packs — "+day.verticalM.toLocaleString()+" m";
+}
+function openSocialTest(){
+  if(typeof SocialCard==="undefined"){ alert("social-card.js didn't load"); return; }
+  document.getElementById("socialTestOverlay").classList.add("open");
+  renderSocialTest();
+}
+function closeSocialTest(){ document.getElementById("socialTestOverlay").classList.remove("open"); }
+document.getElementById("socialTestBtn").onclick = openSocialTest;
+document.getElementById("socialTestRegen").onclick = ()=>{ _socialTestSeed++; renderSocialTest(); };
 document.getElementById("splashEditorOverlay").addEventListener("click", e => { if(e.target === e.currentTarget) closeSplashEditor(); });
 
 /* ---- advanced section toggle (also covers hazard + pipeline, folded in above) ---- */

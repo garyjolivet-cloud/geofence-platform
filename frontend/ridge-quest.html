@@ -55,6 +55,7 @@
      "Splash Flyby" keyframe editor uses for its live Preview, so what's
      previewed there is exactly what plays here. -->
 <script src="/splash-flight.js"></script>
+<script src="/social-card.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e;--amber:#ffd23f; }
   *{box-sizing:border-box}
@@ -2669,7 +2670,8 @@ function renderHome(){
     +'<button class="ghost guardBtn on" id="btnGuard" style="display:none;margin-top:8px" title="Corridor Guard — sounds a tone when you drift off a run. Tap to turn it on or off for every chute and run.">🛡 Guard ON</button>'
     +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0"></p>'
     +'<p class="scrollhint" id="cgDebug" style="margin:0 0 6px;font-size:11px;opacity:.7"></p>'
-    +'<button class="ghost" id="btnExportCgLog" style="font-size:11px;padding:4px 8px;margin:0 0 10px" title="Download this session\'s Corridor Guard log as a text file">⬇ Export guard log</button>'
+    +'<button class="ghost" id="btnSocial" style="margin:0 0 4px" title="Make an image of your day or season for Instagram / Facebook">📸 Social media export</button>'
+    +'<p style="margin:0 0 10px;text-align:right"><a href="#" id="btnExportCgLog" style="font-size:11px;color:var(--fog);opacity:.75" title="Download this session\'s Corridor Guard log as a text file">guard log</a></p>'
     +'<p class="scrollhint" id="coverageStatus" style="margin:0 0 14px"></p>'
     +'<p class="scrollhint" id="outboxNote" style="margin:-8px 0 14px;display:none"></p>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
@@ -2729,7 +2731,8 @@ function renderHome(){
   const trackBtn=document.getElementById("btnTrack");
   const statusEl=document.getElementById("gpsStatus");
   const coverageEl=document.getElementById("coverageStatus");
-  document.getElementById("btnExportCgLog").onclick=exportCgLog;
+  document.getElementById("btnExportCgLog").onclick=(e)=>{ e.preventDefault(); exportCgLog(); };
+  document.getElementById("btnSocial").onclick=()=>renderSocialExport();
   const onStatus=(st)=>{
     // Real bug, 2026-09-17: a permission-denied GPS error used to only ever
     // update this status text — Quest.start()'s stop() call (see its own
@@ -3031,6 +3034,79 @@ function bindChuteFolders(listEl, playerId){
     top.onkeydown = e=>{ if(e.key==="Enter" || e.key===" "){ e.preventDefault(); toggle(); } };
   });
 }
+/* ========================= SOCIAL MEDIA EXPORT =========================
+   (2026-09-30) A marketing-grade image of the rider's day or season for Instagram /
+   Facebook — drawn by frontend/social-card.js. Two steps on purpose: "Make image" (a tap)
+   builds it, then "Save / Share" (a second tap) opens the share sheet, because phones only
+   allow sharing from a fresh tap and the image takes a few seconds to draw. */
+async function renderSocialExport(){
+  const s=getSession();
+  if(typeof SocialCard==="undefined"){ rqToast("Social export isn't available — reload the page."); return; }
+  let kind="day", format="story", made=null;
+  app.innerHTML =
+    '<div class="card">'
+    +'<h2>Social media export</h2>'
+    +'<p class="lead">An image of your day or season to post on Instagram or Facebook.</p>'
+    +'<div style="display:flex;gap:10px;margin-bottom:10px">'
+      +'<button class="ghost" id="seDay" style="margin:0">Today</button>'
+      +'<button class="ghost" id="seSeason" style="margin:0">This season</button>'
+    +'</div>'
+    +'<div style="display:flex;gap:10px;margin-bottom:14px">'
+      +'<button class="ghost" id="seStory" style="margin:0">Story</button>'
+      +'<button class="ghost" id="seWide" style="margin:0">Facebook post</button>'
+    +'</div>'
+    +'<button class="primary" id="seMake">Make image</button>'
+    +'<p class="scrollhint" id="seStatus" style="margin:10px 0"></p>'
+    +'<div id="sePreview" style="text-align:center"></div>'
+    +'<button class="primary" id="seShare" style="display:none">Save / Share</button>'
+    +'<button class="ghost" id="seBack">← Back</button>'
+    +'</div>';
+  const $=id=>document.getElementById(id);
+  const paint=()=>{
+    $("seDay").style.borderColor = kind==="day"?"var(--coral)":"";
+    $("seSeason").style.borderColor = kind==="season"?"var(--coral)":"";
+    $("seStory").style.borderColor = format==="story"?"var(--coral)":"";
+    $("seWide").style.borderColor = format==="wide"?"var(--coral)":"";
+  };
+  const reset=()=>{ made=null; $("sePreview").innerHTML=""; $("seShare").style.display="none"; $("seStatus").textContent=""; paint(); };
+  $("seDay").onclick=()=>{ kind="day"; reset(); };
+  $("seSeason").onclick=()=>{ kind="season"; reset(); };
+  $("seStory").onclick=()=>{ format="story"; reset(); };
+  $("seWide").onclick=()=>{ format="wide"; reset(); };
+  $("seBack").onclick=renderHome;
+  paint();
+  $("seMake").onclick=async()=>{
+    const btn=$("seMake"); btn.disabled=true; $("seShare").style.display="none"; $("sePreview").innerHTML="";
+    const status=t=>{ const el=$("seStatus"); if(el) el.textContent=t; };
+    try{
+      status("Gathering your "+(kind==="day"?"day":"season")+"…");
+      const now=new Date();
+      const ctx={
+        playerId:s.player.id, rider:s.player.displayName||"", corridors:Quest.corridors||[],
+        track: RQTrack ? RQTrack.segments() : [],
+        dayKey: iso=>questDateBucketClient(new Date(iso)), today: questDateBucketClient(now),
+        seasonId: questSeasonIdClient(now),
+        dateLabel: now.toLocaleDateString("en-US",{ weekday:"long", month:"long", day:"numeric" }),
+        seasonLabel: "Season "+questSeasonIdClient(now).replace("-","–")
+      };
+      const data = kind==="day" ? await SocialCard.collectDay(api, ctx) : await SocialCard.collectSeason(api, ctx);
+      made = await SocialCard.make(data, format, { onProgress: status });
+      if(!document.getElementById("sePreview")) return;   // navigated away
+      const img=new Image(); img.src=URL.createObjectURL(made.blob);
+      img.style.cssText="max-width:100%;max-height:60vh;border-radius:12px;border:1px solid var(--rim)";
+      $("sePreview").appendChild(img);
+      status(made.hero ? "Ready." : "Ready (no signal for the map, so it uses the mountain art).");
+      $("seShare").style.display="";
+    }catch(e){ status("Couldn't make the image: "+(e && e.message)); }
+    finally{ btn.disabled=false; }
+  };
+  $("seShare").onclick=async()=>{
+    if(!made) return;
+    const r = await SocialCard.shareOrSave(made.blob, made.filename, "My "+(kind==="day"?"day":"season")+" on Ridge Quest");
+    $("seStatus").textContent = r==="downloaded" ? "Saved to your downloads: "+made.filename : r==="shared" ? "Shared." : "";
+  };
+}
+
 async function renderYourChutes(mode){
   mode = mode || "daily";
   const s=getSession();
