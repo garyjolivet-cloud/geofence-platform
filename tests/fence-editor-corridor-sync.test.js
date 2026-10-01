@@ -25,7 +25,8 @@ function extract(startTag) {
   }
   return html.slice(s, i + 1);
 }
-const SRC = [
+const SRC = "const _corrAddsInFlight=new Set();\n" + [
+  "function duplicateCorridorStops(){",
   "async function importCorridorFromLibrary(corridorId){",
   "function _matchCorridorRow(rows, z){",
   "async function reconcileLinkedCorridors(){",
@@ -63,7 +64,7 @@ function harness(zonesIn, rows) {
   // eslint-disable-next-line no-new-func
   const api = new Function(...Object.keys(env).filter(k => k !== "zones" && k !== "rows"),
     "let zones = arguments[arguments.length-1].zones; let sel = -1; let _corrReconcileBusy = false;\n" + SRC +
-    "\nreturn { importCorridorFromLibrary, reconcileLinkedCorridors, refreshCorridorShapeFromLibrary, get sel(){ return sel; }, get zones(){ return zones; } };")
+    "\nreturn { importCorridorFromLibrary, reconcileLinkedCorridors, refreshCorridorShapeFromLibrary, duplicateCorridorStops, get sel(){ return sel; }, get zones(){ return zones; } };")
     (...Object.keys(env).filter(k => k !== "zones" && k !== "rows").map(k => env[k]), env);
   return { api, toasts, renders };
 }
@@ -112,4 +113,31 @@ test("on load, two stops already sharing one corridor are flagged by name", asyn
   assert.ok(warn, "warned");
   assert.match(warn.m, /Porcupine \(id pioneer\) \+ Porcupine \(id porcupine\)/, "both now carry the library name, so the ids tell them apart");
   assert.ok(!/Alley 17/.test(warn.m), "a corridor used once is not flagged");
+});
+
+// 2026-09-30: Hot Milty, Pine Tree and Booter (x3) were each in RidgeQuest more than once -- a
+// second click landed while the first add was still fetching, before its stop existed.
+test("a double click (second add while the first is still fetching) adds the corridor once", async () => {
+  const h = harness([], [row("hm", "Hot Milty")]);
+  await Promise.all([h.api.importCorridorFromLibrary("hm"), h.api.importCorridorFromLibrary("hm"), h.api.importCorridorFromLibrary("hm")]);
+  assert.strictEqual(h.api.zones.length, 1, "one stop, not three");
+  await h.api.importCorridorFromLibrary("hm");
+  assert.strictEqual(h.api.zones.length, 1, "a later add still selects the existing stop");
+});
+
+test("a failed add can be retried", async () => {
+  const rows = [];
+  const h = harness([], rows);
+  await assert.rejects(h.api.importCorridorFromLibrary("late"), /alert: Add corridor failed/);
+  rows.push(row("late", "Late"));
+  await h.api.importCorridorFromLibrary("late");
+  assert.strictEqual(h.api.zones.length, 1, "the in-flight mark was cleared after the failure");
+});
+
+test("Copy refuses a library-linked corridor; Publish asks before publishing duplicates", () => {
+  const copy = extract("function copyZone(zoneId){");
+  assert.ok(copy.indexOf("if(zones[idx].corridorId)") > -1 && copy.indexOf("if(zones[idx].corridorId)") < copy.indexOf("JSON.parse(JSON.stringify("), "Copy stops before cloning a linked corridor");
+  const pub = extract("async function publishToPlatform(){");
+  assert.ok(/const dupStops=duplicateCorridorStops\(\);/.test(pub) && /confirm\(/.test(pub) && pub.indexOf("duplicateCorridorStops()") < pub.indexOf("fetch("),
+    "Publish checks for duplicate corridors and asks before sending");
 });

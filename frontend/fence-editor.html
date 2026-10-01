@@ -4386,10 +4386,24 @@ function _strideCorridor(points){
 // (Corridors palette pick / drag-onto-map). Geometry + width + difficulty +
 // runType + activityType all come from the row and are refreshed from it —
 // never edited here.
+// Corridor ids whose add is still waiting on its fetch. The "already in this project" check
+// below only sees stops that exist, so a double-click (or a click plus a drop) used to start
+// two adds before the first stop was created -- that is how Hot Milty, Pine Tree and Booter
+// (x3) each ended up in RidgeQuest more than once (2026-09-30).
+const _corrAddsInFlight=new Set();
+// Two stops linked to one library corridor = every pass logged twice in Ridge Quest.
+// Returns one ["Name (id x)", "Name (id y)", ...] list per corridor that is in the project more than once.
+function duplicateCorridorStops(){
+  const byCorr=new Map();
+  zones.forEach(z=>{ if(z.corridorId) byCorr.set(z.corridorId, (byCorr.get(z.corridorId)||[]).concat((z.name||"Corridor")+" (id "+z.id+")")); });
+  return [...byCorr.values()].filter(n=>n.length>1);
+}
 async function importCorridorFromLibrary(corridorId){
   // Already in this project? Select it -- a second stop on the same corridor logs every pass twice in Ridge Quest.
   const have=zones.findIndex(z=>z.corridorId===corridorId);
   if(have>=0){ sel=have; render(); refreshProps(); toast("“"+(zones[have].name||"Corridor")+"” is already in this project — selected it.","warn"); return; }
+  if(_corrAddsInFlight.has(corridorId)) return;   // the first click is still adding it
+  _corrAddsInFlight.add(corridorId);
   try{
     const r=await fetch("/api/corridor/"+corridorId,{headers:{authorization:"Bearer "+getToken()}});
     if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
@@ -4408,6 +4422,7 @@ async function importCorridorFromLibrary(corridorId){
     // New zone — full render() (tree rebuild + autoSave), then select it.
     sel=zones.length-1; render(); refreshProps();
   }catch(e){ alert("Add corridor failed: "+e.message); }
+  finally{ _corrAddsInFlight.delete(corridorId); }
 }
 
 /* ---- corridor stop <- Corridors-tree row (one-way pull) ---- */
@@ -4468,10 +4483,7 @@ async function reconcileLinkedCorridors(){
       z.corridorRev=row.updatedAt||z.corridorRev;
     }
     if(changed){ render(); refreshProps(); }
-    // Two stops linked to one library corridor = every pass logged twice in Ridge Quest.
-    const byCorr=new Map();
-    zones.forEach(z=>{ if(z.corridorId) byCorr.set(z.corridorId, (byCorr.get(z.corridorId)||[]).concat((z.name||"Corridor")+" (id "+z.id+")")); });
-    const dups=[...byCorr.values()].filter(n=>n.length>1);
+    const dups=duplicateCorridorStops();
     if(dups.length) toast("Same library corridor added more than once: "+dups.map(n=>n.join(" + ")).join("; ")+" — delete the extra stop and Publish, or each pass counts twice.","warn");
   } finally { _corrReconcileBusy=false; }
 }
@@ -4639,6 +4651,9 @@ function renameZone(zoneId){
 }
 function copyZone(zoneId){
   const idx=zones.findIndex(z=>z.id===zoneId); if(idx<0) return;
+  // A copy of a library-linked corridor is the same corridor twice (every pass logged twice,
+  // and its shape can't differ -- the library always wins).
+  if(zones[idx].corridorId){ toast("“"+(zones[idx].name||"Corridor")+"” is linked to the Corridors library — it can only be in a project once.","warn"); return; }
   const copy=JSON.parse(JSON.stringify(zones[idx])); // deep clone every field (shape, say, audio, pipeline, codeObjects, ...)
   copy.id=uniqueZoneId(slug(copy.name+"-copy"));
   copy.name=copy.name+" (copy)";
@@ -5353,6 +5368,15 @@ async function publishToPlatform(){
   const geomProblems=validateZoneGeometry(zones);
   if(geomProblems.length){ ps().textContent="publish blocked — fix stop geometry first";
     toast("Can't publish — fix these stops first: "+geomProblems.join("; "),"err"); return; }
+  const dupStops=duplicateCorridorStops();
+  if(dupStops.length && !confirm("These corridors are in this project more than once, so every pass would count twice in Ridge Quest:
+
+"
+      +dupStops.map(n=>"• "+n.join(" + ")).join("
+")+"
+
+Cancel to delete the extra stops first, or OK to publish anyway.")){
+    ps().textContent="publish cancelled — duplicate corridors"; return; }
   const token=getToken();
   if(!token){ ps().textContent="publish cancelled"; toast("Publish cancelled — no login/token available.","err"); return; }
   ps().textContent="publishing "+id+"…";
