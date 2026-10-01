@@ -85,7 +85,7 @@ function extract(startTag) {
   const save = extract('document.getElementById("saveBtn").onclick=async()=>');
   assert(save.indexOf("await ensureElevationBeforeSave()") > -1 && save.indexOf("await ensureElevationBeforeSave()") < save.indexOf("currentTotals()"),
     "Save fills missing elevation before computing the totals");
-  const saveAs = extract('document.getElementById("saveAsBtn").onclick=async()=>');
+  const saveAs = extract("async function saveAsNamed(name){");
   assert(saveAs.indexOf("await ensureElevationBeforeSave()") > -1 && saveAs.indexOf("await ensureElevationBeforeSave()") < saveAs.indexOf("currentTotals()"),
     "Save As fills missing elevation before computing the totals");
 

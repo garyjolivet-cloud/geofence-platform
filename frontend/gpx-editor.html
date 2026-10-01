@@ -1178,11 +1178,21 @@ document.getElementById("saveBtn").onclick=async()=>{
 };
 // Save As… — a name prompt; difficulty / type / activity / width come from
 // the Run details block.
+// Library duplicates found 2026-09-30: Darwin 2 was saved as two identical rows 19 s apart --
+// Save As keeping the open corridor's own name skipped the name match (it excluded the open
+// row) and POSTed a new one. Keeping the open corridor's name now saves over it, and a second
+// Save As can't start while one is still saving.
+let _saveAsBusy=false;
 document.getElementById("saveAsBtn").onclick=async()=>{
   if(!appId){ alert("Pick a company and project first."); return; }
   if(points.length<2) return;
+  if(_saveAsBusy) return;
   const name=(prompt("Name this corridor:", (loadedFrom&&loadedFrom.name)||"")||"").trim();
   if(!name) return;
+  _saveAsBusy=true;
+  try{ await saveAsNamed(name); } finally { _saveAsBusy=false; }
+};
+async function saveAsNamed(name){
   await ensureElevationBeforeSave();
   const rd=runDetailsPayload();
   const flatPoints=points.map(p=>[p[0],p[1],p[2]]);
@@ -1191,10 +1201,14 @@ document.getElementById("saveAsBtn").onclick=async()=>{
   // overwrite that row in place (PATCH) instead of POSTing a second corridor
   // with the same name. Skip the match against the corridor we already have
   // open — that's just a plain Save.
+  const sameAsOpen = !!(loadedFrom && loadedFrom.id && (loadedFrom.name||"").trim().toLowerCase()===name.toLowerCase());
   const existing=allCorridors.find(c=>c.name && c.name.trim().toLowerCase()===name.toLowerCase()
                                       && !(loadedFrom && loadedFrom.id===c.id));
   try{
-    if(existing){
+    if(sameAsOpen){
+      await patchJson("/api/corridor/"+loadedFrom.id,{points:flatPoints,distanceM,elevGainM,elevLossM,...rd});
+      Object.assign(loadedFrom, rd);
+    }else if(existing){
       if(!confirm('A corridor named "'+existing.name+'" already exists. Overwrite it?')) return;
       await patchJson("/api/corridor/"+existing.id,{points:flatPoints,distanceM,elevGainM,elevLossM,...rd});
       loadedFrom={kind:"corridor", id:existing.id, name:existing.name, ...rd};
@@ -1211,7 +1225,7 @@ document.getElementById("saveAsBtn").onclick=async()=>{
     gpxTree.refresh({appId});
     loadAllCorridors();
   }catch(e){ alert("Save failed: "+e.message); }
-};
+}
 
 /* ---- project/app resolution — corridor is app-scoped (not
    project-scoped), same as fence-editor.html's afAppId();
