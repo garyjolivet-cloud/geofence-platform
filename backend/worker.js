@@ -374,42 +374,71 @@ async function scrapeWeather(env) {
   if (!resp.ok) throw new Error('KH fetch failed: ' + resp.status);
   const html = await resp.text();
 
-  // Strip tags to plain text
-  const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
-
-  // Dogtooth section has both Dogtooth + WhiteWall columns merged per row
-  const sec = text.match(/DOGTOOTH SNOW STUDY PLOT([\s\S]+?)(?:Descriptions|PARTNERS|WHITE WALL REMOTE)/i)?.[1] || '';
-  // Data rows: start with month (1-2 digits) space day then 4-digit time
-  const rows = sec.split('\n').filter(l => /^\s{0,10}\d{1,2}\s+\d{1,2}\s+\d{3,4}\s/.test(l));
-  if (!rows.length) throw new Error('No Dogtooth data rows found');
-
-  const latest = rows[rows.length - 1].trim().split(/\s+/);
-  // cols: month day time dg_temp rh hn24 hst hs hour_precip precip_24hr gauge ww_time ww_temp ww_ws ww_wd ww_gust wind_run [month day]
-  if (latest.length < 16) throw new Error('Row too short: ' + latest.join(','));
-
-  // cols: month day time dg_temp rh hn24 hst hs hour_precip precip_24hr gauge ww_time ww_temp ww_ws ww_wd ww_gust wind_run [month day]
-  const [month, day, time, , , hn24, hst, hs, hourPrecip, precip24hr, , , wwTemp, wwWs, wwWd, wwGust] = latest;
-  const year = new Date().getUTCFullYear();
-  const readingDate = `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`;
+  const r = parseKhWeather(html);
 
   await env.DB.prepare(`
     INSERT INTO weather_cache (fetched_at, reading_date, reading_time, ww_temp_c, ww_wind_spd_kph, ww_wind_dir_deg, ww_wind_gust_kph, hour_precip_mm, precip_24hr_mm)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    new Date().toISOString(), readingDate, parseInt(time),
-    parseFloat(wwTemp), parseFloat(wwWs), parseInt(wwWd), parseFloat(wwGust),
-    parseFloat(hourPrecip), parseFloat(precip24hr)
+    new Date().toISOString(), r.readingDate, r.readingTime,
+    r.wwTemp, r.wwWs, r.wwWd, r.wwGust, r.hourPrecip, r.precip24hr
   ).run();
 
   await env.DB.prepare(
     `DELETE FROM weather_cache WHERE id NOT IN (SELECT id FROM weather_cache ORDER BY id DESC LIMIT 48)`
   ).run();
 
+  return r;
+}
+
+// Parses the "Dogtooth Snow Study Plot" table on KH's advanced-weather page (a
+// fixed-width <PRE>). Each row is the Dogtooth plot's columns (month day time temp
+// RH HN24 HST HS hour-precip 24h-precip gauge) followed by the White Wall
+// station's (time temp ws wd gust wind-run, then month day).
+// Rewritten 2026-10-02: off-season the Dogtooth half of every row is BLANK while
+// White Wall keeps reporting, and the old parser required rows to start with the
+// Dogtooth date, so every scrape since ~2026-08-23 threw "No Dogtooth data rows
+// found" and the app kept serving the Aug 8 reading. Now the row is split at the
+// White Wall "Time" column: White Wall feeds the weather, and the Dogtooth snow /
+// precip values are used only when that half of the latest row is complete
+// (otherwise null — never a stale or guessed number).
+function parseKhWeather(html, now) {
+  now = now || new Date();
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\r/g, '');
+  const sec = text.match(/DOGTOOTH SNOW STUDY PLOT([\s\S]+?)(?:Descriptions|PARTNERS|WHITE WALL REMOTE)/i)?.[1];
+  if (!sec) throw new Error('Dogtooth table not found');
+  const lines = sec.split('\n');
+  const header = lines.find(l => /\bDate\b/.test(l) && (l.match(/\bTime\b/g) || []).length >= 2);
+  if (!header) throw new Error('Dogtooth table header not found');
+  // White Wall's time is right-aligned under its "Time" label (4 chars); 2 more of slack.
+  const cut = header.lastIndexOf('Time') - 2;
+  const NUM = /^-?\d+(\.\d+)?$/;
+  const rows = [];
+  for (const line of lines) {
+    if (!line.trim() || line.length <= cut) continue;
+    const left = line.slice(0, cut).trim(), right = line.slice(cut).trim();
+    const L = left ? left.split(/\s+/) : [], R = right ? right.split(/\s+/) : [];
+    if (!R.length || !L.concat(R).every(t => NUM.test(t))) continue;
+    if (R.length !== 8 && R.length !== 6) continue;      // ww: time temp ws wd gust run [month day]
+    const date = R.length === 8 ? [R[6], R[7]] : (L.length >= 2 ? [L[0], L[1]] : null);
+    if (!date) continue;
+    rows.push({ L, R, month: +date[0], day: +date[1] });
+  }
+  if (!rows.length) throw new Error('No White Wall data rows found');
+  const last = rows[rows.length - 1];
+  if (!(last.month >= 1 && last.month <= 12 && last.day >= 1 && last.day <= 31)) throw new Error('Bad date in row: ' + last.R.join(' '));
+  // The page carries no year: a December row read in January belongs to last year.
+  const nowMonth = now.getUTCMonth() + 1;
+  const year = now.getUTCFullYear() - (last.month > nowMonth + 1 ? 1 : 0);
+  const readingDate = year + '-' + String(last.month).padStart(2, '0') + '-' + String(last.day).padStart(2, '0');
+  // Dogtooth half only when complete AND for the same day as the White Wall reading.
+  const dg = last.L.length === 11 && +last.L[0] === last.month && +last.L[1] === last.day ? last.L : null;
+  const f = v => (v == null ? null : parseFloat(v) + 0);   // + 0 turns the page's "-0" into 0 (else "-0°")
   return {
-    readingDate, readingTime: parseInt(time),
-    wwTemp: parseFloat(wwTemp), wwWs: parseFloat(wwWs), wwWd: parseInt(wwWd), wwGust: parseFloat(wwGust),
-    hourPrecip: parseFloat(hourPrecip), precip24hr: parseFloat(precip24hr),
-    hn24: parseFloat(hn24), hst: parseFloat(hst), hs: parseFloat(hs)
+    readingDate, readingTime: parseInt(last.R[0], 10),
+    wwTemp: f(last.R[1]), wwWs: f(last.R[2]), wwWd: parseInt(last.R[3], 10), wwGust: f(last.R[4]),
+    hourPrecip: dg ? f(dg[8]) : null, precip24hr: dg ? f(dg[9]) : null,
+    hn24: dg ? f(dg[5]) : null, hst: dg ? f(dg[6]) : null, hs: dg ? f(dg[7]) : null
   };
 }
 
