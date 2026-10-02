@@ -85,13 +85,15 @@ const f = t => pitchForPhoneTilt(MAX, t);
 (function testHandlerBehaviour() {
   const m = html.match(/DeviceHeading\.onChange\((\(h, tilt\)=>\{[\s\S]*?\n    \})\);/);
   if (!m) { assert(false, "could not extract the orientation handler"); return; }
-  const make = (autoOrient, currentPitch) => {
+  const hdM = html.match(/const HEADING_BEARING_DEADBAND_DEG = ([\d.]+);/);
+  assert(!!hdM, "found HEADING_BEARING_DEADBAND_DEG");
+  const make = (autoOrient, currentPitch, currentBearing = 0) => {
     const calls = [], headings = [];
-    const map = { getPitch: () => currentPitch, jumpTo: c => calls.push(c) };
+    const map = { getPitch: () => currentPitch, getBearing: () => currentBearing, jumpTo: c => calls.push(c) };
     const here = { setHeading: h => headings.push(h) };
     // eslint-disable-next-line no-new-func
-    const handler = new Function("autoOrient", "map", "here", "wedgeHeadingFor", "pitchForPhoneTilt", "TILT_PITCH_DEADBAND_DEG",
-      "return " + m[1])(autoOrient, map, here, h => h, t => pitchForPhoneTilt(MAX, t), dbM ? +dbM[1] : 1.5);
+    const handler = new Function("autoOrient", "map", "here", "wedgeHeadingFor", "pitchForPhoneTilt", "TILT_PITCH_DEADBAND_DEG", "HEADING_BEARING_DEADBAND_DEG",
+      "return " + m[1])(autoOrient, map, here, h => h, t => pitchForPhoneTilt(MAX, t), dbM ? +dbM[1] : 1.5, hdM ? +hdM[1] : 2);
     return { handler, calls, headings };
   };
 
@@ -116,6 +118,19 @@ const f = t => pitchForPhoneTilt(MAX, t);
 
   r = make(true, 0); r.handler(null, null);
   assert(r.calls.length === 0, "nothing usable => no camera update at all");
+
+  // Compass deadband (battery, 2026-10-02): hand shake must not re-render the map.
+  r = make(true, 40, 120); r.handler(121.5, 40);
+  assert(r.calls.length === 0, "a 1.5 deg compass wobble with steady tilt => no camera update, got " + JSON.stringify(r.calls));
+
+  r = make(true, 40, 120); r.handler(123, 40);
+  assert(r.calls.length === 1 && r.calls[0].bearing === 123, "a 3 deg turn still turns the map, got " + JSON.stringify(r.calls));
+
+  r = make(true, 40, 359); r.handler(0.5, 40);
+  assert(r.calls.length === 0, "359 -> 0.5 is a 1.5 deg wobble across north, not 358.5 => no update, got " + JSON.stringify(r.calls));
+
+  r = make(true, 40, -170); r.handler(185, 40);
+  assert(r.calls.length === 1 && r.calls[0].bearing === 185, "MapLibre's -170 bearing is compass 190; 185 is 5 deg away => turns, got " + JSON.stringify(r.calls));
 
   r = make(false, 0); r.handler(120, 40);
   assert(r.calls.length === 0, "a finger is on the map (autoOrient off) => the phone must NOT move the camera");

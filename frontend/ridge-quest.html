@@ -278,8 +278,9 @@ function releaseWakeLock(){
 // Screen sleep (battery, 2026-09-23). Most of a ski day is lift rides and
 // restaurant stops, and the Wake Lock above keeps the screen lit through all
 // of it. Two stages while tracking, and any touch overrides both:
-//   1. black overlay — after IDLE_MS untouched while on a lift (Battery Saver's
-//      lift mode) OR stationary for STATIONARY_DIM_MS. The wake lock is kept, so
+//   1. black overlay — after IDLE_MS untouched, anywhere while tracking (since
+//      2026-10-02 runs too: the phone is in a pocket for the whole descent, and
+//      the lit map kept redrawing behind it). The wake lock is kept, so
 //      GPS/tracking are untouched; on an OLED panel black pixels draw almost
 //      nothing (on an LCD the backlight stays on, so this saves little there).
 //   2. release the wake lock — stationary for STATIONARY_LOCK_MS AND untouched
@@ -291,7 +292,6 @@ function releaseWakeLock(){
 // dims again after IDLE_MS like a normal phone timeout.
 const SLEEP_TUNING = {
   IDLE_MS: 30000,
-  STATIONARY_DIM_MS: 5*60000,
   STATIONARY_LOCK_MS: 10*60000,
   STATIONARY_RADIUS_M: 30      // indoor GPS wanders 30-60 m at a desk; widened by the fix's own accuracy below
 };
@@ -310,13 +310,15 @@ function sleepDecision(s){
   const T = SLEEP_TUNING;
   if(s.saverOff) return "awake";
   const idle = s.now - s.lastTouchAt;
-  const stationary = s.stationaryForMs >= T.STATIONARY_DIM_MS;
-  if(idle < T.IDLE_MS || !(s.liftModeActive || stationary)) return "awake";
+  if(idle < T.IDLE_MS) return "awake";
   if(!s.liftModeActive && s.stationaryForMs >= T.STATIONARY_LOCK_MS && idle >= T.STATIONARY_LOCK_MS) return "dim-release";
   return "dim";
 }
 const ScreenSleep = {
   el:null, timer:null, anchor:null, lastTouchAt:Date.now(), dimmed:false, lockReleased:false, _onTouch:null,
+  // callback(dimmed) — set by "My map" to pause the compass, avatar moves and
+  // friend polling behind the black overlay (nothing visible, no redraws).
+  onDimChange:null,
   start(){
     this.stop();
     this.lastTouchAt = Date.now(); this.anchor = null;
@@ -372,9 +374,16 @@ const ScreenSleep = {
       document.body.appendChild(el);
       this.el = el;
     }
+    const was = this.dimmed;
     this.el.style.display = "flex"; this.dimmed = true;
+    if(!was) this._notify();
   },
-  _hide(){ if(this.el) this.el.style.display = "none"; this.dimmed = false; }
+  _hide(){
+    const was = this.dimmed;
+    if(this.el) this.el.style.display = "none"; this.dimmed = false;
+    if(was) this._notify();
+  },
+  _notify(){ try{ if(this.onDimChange) this.onDimChange(this.dimmed); }catch(e){} }
 };
 
 // Screen-lock / backgrounding awareness (battery — 2026-09-17). Wake Lock
@@ -3358,6 +3367,7 @@ async function renderFriends(){
 // null when the device gives no tilt (no permission / unsupported) — the caller then
 // leaves pitch to the two-finger gesture, exactly as before. Pure, so it is unit-tested.
 const TILT_PITCH_MAX_DEG = 60;
+const HEADING_BEARING_DEADBAND_DEG = 2;   // same for the compass: a sub-2 degree wobble doesn't turn (re-render) the map
 const TILT_PITCH_DEADBAND_DEG = 1.5;   // ignore hand tremor: don't re-render the map for a sub-1.5 degree wobble
 function pitchForPhoneTilt(tiltDeg){
   if(typeof tiltDeg !== "number" || !isFinite(tiltDeg)) return null;
@@ -3915,9 +3925,10 @@ function renderFogMap(){
     return;
   }
   // Live friends layer state — the ≤RQ_MAX_TRACK checked in the Friends
-  // screen, polled every 5s. Declared out here so the #fogBack handler
+  // screen, polled every FRIEND_POLL_MS. Declared out here so the #fogBack handler
   // (bound before the map, on purpose — see below) can tear them down.
   let friendPoll=null;
+  const FRIEND_POLL_MS = 15000;   // battery (2026-10-02): was 5 s; friends move slowly enough on a ski hill
   const friendMarkers=new Map(); // playerId -> maplibregl.Marker (name label)
   // Held so the #fogBack handler (bound before the map exists) can call
   // map.remove() on the way out — the map is heavier with DEM terrain and a
@@ -3933,7 +3944,7 @@ function renderFogMap(){
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
-    +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass and dims the screen while riding a lift or sitting still (tap the screen to wake). Tap to cycle Auto/On/Off.">🔋 Auto</button>'
+    +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass while riding a lift, and blacks out the screen after 30 s untouched while tracking (tap the screen to wake). Tap to cycle Auto/On/Off.">🔋 Auto</button>'
     +'<button class="ghost guardBtn fogMapGuard on" id="fogGuard" style="display:none" title="Corridor Guard — tap to turn it on or off for every chute and run. Press and hold a run: with Guard ON it mutes that run, with Guard OFF it turns Guard on for just that run.">🛡 Guard ON</button>'
     +'</div>';
   // Bind Back FIRST, before anything that can throw (maplibregl failing to
@@ -3943,6 +3954,7 @@ function renderFogMap(){
   document.getElementById("fogBack").onclick=()=>{
     Quest.onPosition=null;
     Quest.onLiftModeChange=null; Quest.onGuardChanged=null; Quest.onSkiedChanged=null; Quest.onChuteLineSaved=null;
+    ScreenSleep.onDimChange=null;
     try{ _armedLabelMarkers.forEach(m=>m.remove()); _armedLabelMarkers=[]; }catch(e){}
     _unbindHeading();
     // Battery (2026-09-17) — this screen is the only place device heading is
@@ -4098,7 +4110,7 @@ function renderFogMap(){
           terrainPausedByBattery = false;
           setTerrainOn(userWantsTerrain, { pitch: pitchBeforeBatteryPause });
         });
-        if(window.DeviceHeading) DeviceHeading.start();
+        if(window.DeviceHeading && !ScreenSleep.dimmed) DeviceHeading.start();
       }
       renderBatteryBtn();
     };
@@ -4153,7 +4165,7 @@ function renderFogMap(){
     // never granted in the first place, or if it's already running because
     // "Start tracking" primed it earlier this session and this is the very
     // first time My map has opened.
-    if(window.DeviceHeading) DeviceHeading.start();
+    if(window.DeviceHeading && !ScreenSleep.dimmed) DeviceHeading.start();
     // Auto-orientation (2026-09-19) — replaces the old manual "Compass
     // mode" toggle + MapLibre's stock NavigationControl (zoom/PTZ widget)
     // with fully automatic behavior: whenever no one is touching the map,
@@ -4220,24 +4232,27 @@ function renderFogMap(){
     if(window.DeviceHeading) _unbindHeading = DeviceHeading.onChange((h, tilt)=>{
       if(autoOrient){
         const cam = {};
-        if(h!=null) cam.bearing = h;
+        if(h!=null && Math.abs(((h - map.getBearing()) % 360 + 540) % 360 - 180) >= HEADING_BEARING_DEADBAND_DEG) cam.bearing = h;
         const tp = pitchForPhoneTilt(tilt);
         if(tp!=null && Math.abs(tp - map.getPitch()) >= TILT_PITCH_DEADBAND_DEG) cam.pitch = tp;
         if(cam.bearing!=null || cam.pitch!=null) map.jumpTo(cam);
       }
       if(h!=null) here.setHeading(wedgeHeadingFor(h));
     });
-    Quest.onPosition = p => here.update({ lon:p.lon, lat:p.lat,
+    let heldFix = null;   // newest fix while the screen is blacked out — drawn on wake, not behind the overlay
+    const drawFix = p => here.update({ lon:p.lon, lat:p.lat,
       // Device compass (which way the phone points) when we have it, else
       // the GPS travel heading (which way you're moving) — wedgeHeadingFor
       // collapses to "straight up" instead when compass mode has already
       // pointed the whole map that way (see its own comment above).
       headingDeg:wedgeHeadingFor((window.DeviceHeading && DeviceHeading.heading!=null) ? DeviceHeading.heading : p.headingTravel),
       accM:p.acc });
+    Quest.onPosition = p => { if(ScreenSleep.dimmed) heldFix = p; else drawFix(p); };
+    let pollFriendsNow = null;   // set below when friends are tracked
 
     // --- Live friends ---------------------------------------------------
-    // GET /api/presence/friends every 5s (same cadence as the tour
-    // engine's walker poll). It only ever returns friends who are sharing
+    // GET /api/presence/friends every FRIEND_POLL_MS (15 s; paused while the
+    // screen is blacked out). It only ever returns friends who are sharing
     // today AND fresh, and returns [] unless YOU'RE sharing too (strict
     // mutual, enforced server-side). We further keep just the ≤6 checked in
     // the Friends screen. Names are HTML markers, not a symbol layer — the
@@ -4293,10 +4308,28 @@ function renderFogMap(){
             "circle-stroke-width":2, "circle-stroke-color":"#0a1018"
           }});
         }
+        pollFriendsNow = pollFriends;
+        if(ScreenSleep.dimmed) return;   // started on wake
         pollFriends();
-        if(!friendPoll) friendPoll = setInterval(pollFriends, 5000);
+        if(!friendPoll) friendPoll = setInterval(pollFriends, FRIEND_POLL_MS);
       });
     }
+
+    // Battery (2026-10-02): behind the black overlay nothing on this map is
+    // visible, so stop the compass (it re-rendered the map on every reading),
+    // hold avatar moves and stop polling friends; catch everything up on wake.
+    // Lift mode keeps the compass off after a wake (its own handler restarts it).
+    ScreenSleep.onDimChange = dimmed=>{
+      if(dimmed){
+        if(window.DeviceHeading) DeviceHeading.stop();
+        if(friendPoll){ clearInterval(friendPoll); friendPoll=null; }
+        return;
+      }
+      if(window.DeviceHeading && !Quest.liftModeActive) DeviceHeading.start();
+      if(heldFix){ const p = heldFix; heldFix = null; drawFix(p); }
+      if(pollFriendsNow && !friendPoll){ pollFriendsNow(); friendPoll = setInterval(pollFriendsNow, FRIEND_POLL_MS); }
+    };
+    if(ScreenSleep.dimmed) ScreenSleep.onDimChange(true);
   }catch(e){
     document.getElementById("fogMap").outerHTML =
       '<div class="msg" style="padding-top:120px">Map couldn’t load (connection or device issue) — try again from a better signal.</div>';

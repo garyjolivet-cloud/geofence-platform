@@ -3,6 +3,7 @@
 //     since indoor GPS wanders)
 //   - sleepDecision: awake / dim (black overlay) / dim-release (also let the phone
 //     lock), given lift mode, time stationary, and time since the last touch
+//     (since 2026-10-02 any 30 s without a touch dims, runs included)
 //
 // Both are pure and extracted straight out of the shipped file (same technique as
 // quest-completion-pct.test.js), so this tests the code that ships. The overlay's
@@ -89,14 +90,9 @@ const st = o => Object.assign({ now: NOW, lastTouchAt: NOW - 5 * S, liftModeActi
   assert(d === "dim", "on a lift it only ever dims, even after 20 min idle and stationary, got " + d);
 })();
 
-(function testNotStationaryLongEnoughStaysAwake() {
-  const d = sleepDecision(st({ lastTouchAt: NOW - 2 * MIN, stationaryForMs: 4 * MIN }));
-  assert(d === "awake", "4 min stationary is not enough to dim, got " + d);
-})();
-
-(function testStationaryFiveMinutesDimsOnceIdle() {
-  const d = sleepDecision(st({ lastTouchAt: NOW - 30 * S, stationaryForMs: 5 * MIN }));
-  assert(d === "dim", "5 min stationary + 30 s idle dims, got " + d);
+(function testStationaryDimsOnceIdle() {
+  const d = sleepDecision(st({ lastTouchAt: NOW - 30 * S, stationaryForMs: 2 * MIN }));
+  assert(d === "dim", "stationary + 30 s idle dims, got " + d);
 })();
 
 (function testTouchOverridesStationaryDim() {
@@ -115,9 +111,21 @@ const st = o => Object.assign({ now: NOW, lastTouchAt: NOW - 5 * S, liftModeActi
   assert(d === "dim", "stationary 25 min but touched 2 min ago dims without releasing, got " + d);
 })();
 
-(function testMovingIsAwake() {
-  const d = sleepDecision(st({ lastTouchAt: NOW - 10 * MIN, stationaryForMs: 0 }));
-  assert(d === "awake", "not on a lift and not stationary is awake however long since the last touch, got " + d);
+(function testSkiingDimsAfterIdle() {
+  // 2026-10-02: the phone is in a pocket for the whole run — black it out too.
+  const d = sleepDecision(st({ lastTouchAt: NOW - 30 * S, stationaryForMs: 0 }));
+  assert(d === "dim", "moving (a run) + 30 s idle dims, got " + d);
+})();
+
+(function testMovingNeverReleasesTheWakeLock() {
+  // Only a long stationary stretch lets the phone lock; a locked phone stops tracking on iOS.
+  const d = sleepDecision(st({ lastTouchAt: NOW - 20 * MIN, stationaryForMs: 0 }));
+  assert(d === "dim", "moving with no touch for 20 min only dims, got " + d);
+})();
+
+(function testShortIdleWhileMovingStaysAwake() {
+  const d = sleepDecision(st({ lastTouchAt: NOW - 20 * S, stationaryForMs: 0 }));
+  assert(d === "awake", "a touch 20 s ago keeps the screen awake on a run, got " + d);
 })();
 
 (function testBatterySaverAlwaysOffDisablesEverything() {
@@ -160,6 +168,23 @@ function noteFix(self, fix) { return noteFixRaw.call(self, fix, realStep, QGeo, 
   noteFix(self, { lat: 51.3015, lon: -117.05, acc: 10 });    // ~167 m: really moved
   assert(self.anchor !== first && Math.abs(self.anchor.lat - 51.3015) < 1e-9,
     "a real move restarts the stationary clock (NaN distance would leave it stuck forever), got " + JSON.stringify(self.anchor));
+})();
+
+// ---- My map pauses behind the black overlay (battery, 2026-10-02) ----
+(function testMyMapPausesWhileDimmed() {
+  const m = html.match(/ScreenSleep\.onDimChange = dimmed=>\{[\s\S]*?\n    \};/);
+  assert(!!m, "My map sets ScreenSleep.onDimChange");
+  if (!m) return;
+  const body = m[0];
+  const dimPart = body.split("return;")[0];
+  assert(/DeviceHeading\.stop\(\)/.test(dimPart) && /clearInterval\(friendPoll\)/.test(dimPart),
+    "dimming stops the compass and the friend poll");
+  assert(/DeviceHeading\.start\(\)/.test(body) && /!Quest\.liftModeActive/.test(body) && /drawFix\(p\)/.test(body),
+    "waking restarts the compass (not on a lift) and draws the held fix");
+  assert(/Quest\.onPosition = p => \{ if\(ScreenSleep\.dimmed\) heldFix = p; else drawFix\(p\); \};/.test(html),
+    "avatar moves are held while dimmed");
+  assert(/ScreenSleep\.onDimChange=null;/.test(html), "Back clears the hook");
+  assert(/_notify\(\)\{ try\{/.test(html), "the hook is isolated in try/catch");
 })();
 
 console.log(pass + " passed, " + fail + " failed");
