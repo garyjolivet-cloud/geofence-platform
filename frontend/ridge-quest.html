@@ -987,6 +987,11 @@ const QUEST_TUNING = {
   // fragments on a narrow chute whenever GPS drifted a few metres.
   SAY_PREFETCH_M: 200,      // start fetching a corridor's narration audio when the player is this close (walking ~2 min out, skiing ~25 s), so speech starts instantly on entry. Field log 2026-09-21: the first /api/tts fetch took 1762 ms from entry to sound
   REC_HOLD_M: 40,
+  // Passing narration (2026-10-02): a chute / run / boot pack is announced once, when the
+  // rider comes within this many metres of its band, as "<say>, on your left|right" (side
+  // from travel heading). Re-armed beyond REC_HOLD_M, so this must stay below it.
+  PASS_ANNOUNCE_M: 30,
+  SIDE_MIN_DEG: 20,         // a corridor within this many degrees of straight ahead/behind gets no side yet
   // Armed isolation (Guard OFF + armed chutes only): an unarmed chute/run/hike whose band
   // comes within this many metres of an armed corridor's band ignores GPS while that one is
   // armed -- no narration, no recording, no run logged. About phone GPS error.
@@ -1111,6 +1116,25 @@ const QGeo = {
       else if(hintS!=null ? Math.abs(c.s-hintS) < Math.abs(pick.s-hintS) : c.s < pick.s) pick = c;
     }
     return pick;
+  },
+  // "left" | "right": which side of a rider travelling on headingDeg (0 = north) the
+  // nearest point of the corridor centreline lies. null without a heading.
+  sideOf(pt, corridor, headingDeg){
+    if(typeof headingDeg!=="number" || !isFinite(headingDeg)) return null;
+    const G = this.geom(corridor);
+    if(G.xy.length < 2) return null;
+    const near = this.projectOnPath(pt, G, null);
+    if(!near) return null;
+    const A = G.xy[near.seg], B = G.xy[near.seg+1];
+    const segL = G.cum[near.seg+1] - G.cum[near.seg];
+    const t = segL > 0 ? (near.s - G.cum[near.seg]) / segL : 0;
+    const P = this.toXY(pt, G.ref);
+    const vx = A.x + t*(B.x-A.x) - P.x, vy = A.y + t*(B.y-A.y) - P.y;   // rider -> nearest point
+    const h = headingDeg*Math.PI/180, hx = Math.sin(h), hy = Math.cos(h);  // x east, y north
+    const cross = hx*vy - hy*vx, len = Math.hypot(vx, vy);
+    // Straight ahead or behind (within SIDE_MIN_DEG) has no honest side: null, the caller waits.
+    if(!(len > 0) || Math.abs(cross)/len < Math.sin(QUEST_TUNING.SIDE_MIN_DEG*Math.PI/180)) return null;
+    return cross > 0 ? "left" : "right";
   },
   _median(a){
     const b = a.slice().sort((x,y)=>x-y), n = b.length;
@@ -1817,15 +1841,30 @@ const Quest = {
     // is on for this corridor for this rider. Lifts are never guarded, so they
     // always narrate; a workspace without Corridor Guard narrates everything.
     const narrOk = !this.narrateGuardedOnly || corridor.runType==="lift" || !this.chuteGuardEnabled || this.isGuarded(corridor.zoneId);
+    // Lifts are still announced on entering their band. Chutes, runs and boot packs are
+    // announced as the rider PASSES them (2026-10-02, see passingSay).
+    const isLift = corridor.runType==="lift";
     if(narrOk && corridor.say && this.onPrefetch && !st.sayPrefetched && (dist + halfW) <= halfW + QUEST_TUNING.SAY_PREFETCH_M){
       st.sayPrefetched = true;
-      this.onPrefetch(corridor.say);
+      if(isLift) this.onPrefetch(corridor.say);
+      else { this.onPrefetch(passingSay(corridor.say, "left")); this.onPrefetch(passingSay(corridor.say, "right")); }
+    }
+    // Passing: once per approach, within PASS_ANNOUNCE_M of the band, never while on a lift
+    // (chutes under the gondola stay quiet). Outside the band it waits for a travel heading
+    // to name the side; already on the corridor, the line is spoken without one.
+    if(!isLift && narrOk && corridor.say && this.onNarrate && st.narrArmed!==false && !this._liftRaw
+       && dist <= QUEST_TUNING.PASS_ANNOUNCE_M){
+      const side = dist > 0 ? QGeo.sideOf([p.lat,p.lon], corridor, p.headingTravel) : null;
+      if(side || dist <= 0){
+        st.narrArmed = false;
+        this.onNarrate(passingSay(corridor.say, side), corridor.zoneId);
+      }
     }
     if(st.phase==="idle" && inBand){
       if(Date.now() >= st.narrCooldownUntil){
         st.phase="inRun";
-        // Spoken narration (2026-09-17) -- fires once per approach.
-        if(narrOk && corridor.say && this.onNarrate && st.narrArmed!==false){
+        // Spoken narration (2026-09-17) -- fires once per approach. Lifts only since 2026-10-02.
+        if(isLift && narrOk && corridor.say && this.onNarrate && st.narrArmed!==false){
           st.narrArmed = false;
           this.onNarrate(corridor.say, corridor.zoneId);
         }
@@ -2605,6 +2644,13 @@ function chuteGuardCallbacks(){
 // audio bytes, then play those through ONE shared, gesture-unlocked <audio>
 // element — browser speechSynthesis is kept only as a last-resort fallback
 // if /api/tts is unreachable (offline), same as field-recorder.html.
+// "This is Big Dumper" + "left" -> "This is Big Dumper, on your left" (2026-10-02). The
+// authored line stays as typed in the Fence Editor; the side is added at speaking time
+// because it depends on which way the rider passes. No side -> the line unchanged.
+function passingSay(say, side){
+  if(!side) return say;
+  return String(say).trim().replace(/[.!,;:]+$/, "") + ", on your " + side;
+}
 const _sayTtsCache = new Map(); // say text -> blob: URL
 async function sayViaTts(text){
   if(_sayTtsCache.has(text)) return _sayTtsCache.get(text);

@@ -65,9 +65,14 @@ function extractMethodBody(tag) {
   }
   return html.slice(bodyStart, i);
 }
+// passingSay is a page-level helper _tick calls (2026-10-02); extracted the same way.
+const passingSayM = html.match(/function passingSay\(say, side\)\{[\s\S]*?\n\}/);
+if (!passingSayM) { console.log("FAIL: could not extract passingSay from ridge-quest.html"); process.exit(1); }
 // eslint-disable-next-line no-new-func
-const tickFn = new Function("corridor", "p", "selectedActivity", "QGeo", "QUEST_TUNING",
-  extractMethodBody("_tick(corridor, p, selectedActivity){"));
+const passingSay = new Function(passingSayM[0] + "\nreturn passingSay;")();
+// eslint-disable-next-line no-new-func
+const tickFn = new Function("passingSay", "return function(corridor, p, selectedActivity, QGeo, QUEST_TUNING){" +
+  extractMethodBody("_tick(corridor, p, selectedActivity){") + "};")(passingSay);
 
 // A Quest stand-in wired to the REAL _tick and REAL _classifyAndLog.
 function makeQuest(corridors) {
@@ -632,12 +637,13 @@ const tEnd = a => (last(a).t - BASE) / 1000;
   assert(r === false && calls.length === 0, "a probe of an incomplete pass returns false and stays silent, got " + r + " / " + calls.length);
 })();
 
-// ---- Quest._tick: narration band (unchanged behaviour) ----
+// ---- Quest._tick: narration band — LIFTS only since 2026-10-02 (chutes/runs/boot packs
+// are announced when passed, see the passing tests below) ----
 
 function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAndLog() { return false; } }; }
 
 (function testTickNarratesOnNarrowCorridor() {
-  const narrow = { zoneId: "nc1", name: "Test Chute", say: "test chute", runType: "chute", widthM: 4,
+  const narrow = { zoneId: "nc1", name: "Test Lift", say: "test chute", runType: "lift", widthM: 4,
     path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
   const self = makeNarrationThis();
   let narrated = null;
@@ -648,7 +654,7 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
 })();
 
 (function testTickHysteresisStillGuardsWideCorridor() {
-  const wide = { zoneId: "wc1", name: "Wide Run", say: "wide run", runType: "run", widthM: 20,
+  const wide = { zoneId: "wc1", name: "Wide Lift", say: "wide run", runType: "lift", widthM: 20,
     path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
   const halfW = 10;
   const barely = makeNarrationThis();
@@ -665,7 +671,7 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
 })();
 
 (function testTickExitHysteresisIgnoresJitter() {
-  const narrow = { zoneId: "nc2", name: "Test Chute", say: "test chute", runType: "chute", widthM: 4,
+  const narrow = { zoneId: "nc2", name: "Test Lift", say: "test chute", runType: "lift", widthM: 4,
     path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
   const self = makeNarrationThis();
   let narrateCount = 0;
@@ -694,7 +700,7 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
   const guarded = new Set(["g1"]);
   const base = { narrateGuardedOnly: true, chuteGuardEnabled: true, isGuarded: id => guarded.has(id) };
   let r = run(mk("g1", "chute"), base);
-  assert(r.said === 1 && r.prefetched === 1, "a guarded chute narrates (and prefetches) with the setting on");
+  assert(r.said === 1 && r.prefetched === 2, "a guarded chute narrates (and prefetches its left + right lines) with the setting on, got " + JSON.stringify(r));
   r = run(mk("u1", "chute"), base);
   assert(r.said === 0 && r.prefetched === 0, "an unguarded (muted / not armed) chute stays silent with the setting on, got " + JSON.stringify(r));
   r = run(mk("l1", "lift"), base);
@@ -739,12 +745,77 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
   tickFn.call(self, c, at(500, 0), "ski", QGeo, QUEST_TUNING);
   assert(seen.length === 0, "not prefetched while 500 m away");
   tickFn.call(self, c, at(150, 10), "ski", QGeo, QUEST_TUNING);
-  assert(seen.length === 1 && seen[0] === "test chute", "prefetched once the player is within ~200 m");
+  assert(seen.length === 2 && seen[0] === "test chute, on your left" && seen[1] === "test chute, on your right",
+    "a chute prefetches both passing lines once the player is within ~200 m, got " + JSON.stringify(seen));
   tickFn.call(self, c, at(120, 20), "ski", QGeo, QUEST_TUNING); tickFn.call(self, c, at(0, 30), "ski", QGeo, QUEST_TUNING);
-  assert(seen.length === 1, "and only once per corridor per session, got " + seen.length);
+  assert(seen.length === 2, "and only once per corridor per session, got " + seen.length);
   const noSay = Object.assign({}, c, { zoneId: "pf2", say: null }); const s2 = makeNarrationThis(); let n2 = 0; s2.onPrefetch = () => n2++;
   tickFn.call(s2, noSay, at(0, 0), "ski", QGeo, QUEST_TUNING);
   assert(n2 === 0, "a corridor with no narration never prefetches");
+})();
+
+// ---- passing narration: "<say>, on your left|right" (2026-10-02) ----
+// A north-south chute on lon -117.05; the rider skis past 20 m to its EAST.
+(function testPassingSaysTheSide() {
+  const chute = () => ({ zoneId: "ps1", name: "Big Dumper", say: "This is Big Dumper", runType: "chute", widthM: 10,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] });
+  const lonAt = m => -117.05 + m / QGeo.mPerDegLon(51.305);
+  const pass = (headingTravel, extra) => {
+    const self = Object.assign(makeNarrationThis(), extra);
+    const said = []; self.onNarrate = t => said.push(t);
+    tickFn.call(self, chute(), { lat: 51.305, lon: lonAt(20), t: BASE, acc: 8, headingTravel }, "ski", QGeo, QUEST_TUNING);
+    return said;
+  };
+  let said = pass(180);
+  assert(said.length === 1 && said[0] === "This is Big Dumper, on your right", "skiing south with the chute to the west => on your right, got " + JSON.stringify(said));
+  said = pass(0);
+  assert(said[0] === "This is Big Dumper, on your left", "skiing north past it => on your left, got " + JSON.stringify(said));
+  said = pass(90);
+  assert(said.length === 0, "chute straight behind (skiing away east) => no honest side, waits, got " + JSON.stringify(said));
+  said = pass(270);
+  assert(said.length === 0, "chute straight ahead (skiing west at it) => no side yet, got " + JSON.stringify(said));
+  said = pass(225);
+  assert(said[0] === "This is Big Dumper, on your right", "45 deg off the line of sight is clear enough: right, got " + JSON.stringify(said));
+  said = pass(null);
+  assert(said.length === 0, "no travel heading yet => waits instead of guessing a side");
+  said = pass(180, { _liftRaw: true });
+  assert(said.length === 0, "on a lift => chutes below stay quiet");
+})();
+
+(function testPassingRange() {
+  const c = { zoneId: "ps2", name: "Run", say: "This is Run", runType: "run", widthM: 10,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
+  const lonAt = m => -117.05 + m / QGeo.mPerDegLon(51.305);
+  const self = makeNarrationThis(); const said = []; self.onNarrate = t => said.push(t);
+  tickFn.call(self, c, { lat: 51.305, lon: lonAt(60), t: BASE, acc: 8, headingTravel: 180 }, "ski", QGeo, QUEST_TUNING);
+  assert(said.length === 0, "55 m from the band edge is too far to announce");
+  tickFn.call(self, c, { lat: 51.305, lon: lonAt(30), t: BASE + 3000, acc: 8, headingTravel: 180 }, "ski", QGeo, QUEST_TUNING);
+  assert(said.length === 1 && /, on your right$/.test(said[0]), "25 m from the edge announces once, got " + JSON.stringify(said));
+  tickFn.call(self, c, { lat: 51.305, lon: lonAt(10), t: BASE + 5000, acc: 8, headingTravel: 180 }, "ski", QGeo, QUEST_TUNING);
+  tickFn.call(self, c, { lat: 51.305, lon: lonAt(0), t: BASE + 7000, acc: 8, headingTravel: 180 }, "ski", QGeo, QUEST_TUNING);
+  assert(said.length === 1, "coming closer and skiing onto it does not repeat the line, got " + said.length);
+})();
+
+(function testOnItWithoutPassingSaysNoSide() {
+  const c = { zoneId: "ps3", name: "Chute", say: "This is Chute", runType: "chute", widthM: 10,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
+  const self = makeNarrationThis(); const said = []; self.onNarrate = t => said.push(t);
+  tickFn.call(self, c, { lat: 51.305, lon: -117.05, t: BASE, acc: 8, headingTravel: 180 }, "ski", QGeo, QUEST_TUNING);
+  assert(said.length === 1 && said[0] === "This is Chute", "first heard while already on it => the line without a side, got " + JSON.stringify(said));
+})();
+
+(function testLiftPassedIsNotAnnounced() {
+  const lift = { zoneId: "ps4", name: "Gondola", say: "This is the gondola", runType: "lift", widthM: 10,
+    path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] };
+  const self = makeNarrationThis(); const said = []; self.onNarrate = t => said.push(t);
+  tickFn.call(self, lift, { lat: 51.305, lon: -117.05 + 20 / QGeo.mPerDegLon(51.305), t: BASE, acc: 8, headingTravel: 180 }, "ski", QGeo, QUEST_TUNING);
+  assert(said.length === 0, "a lift line is only announced on entering it, not when passed beside it");
+})();
+
+(function testPassingSayText() {
+  assert(passingSay("This is Big Dumper", "left") === "This is Big Dumper, on your left", "adds the side");
+  assert(passingSay("Think twice bumps.", "right") === "Think twice bumps, on your right", "drops trailing punctuation before the comma");
+  assert(passingSay("This is Chute", null) === "This is Chute", "no side => unchanged");
 })();
 
 // ---- Quest._tick: the run recorder, end to end (real _tick + real _classifyAndLog) ----
