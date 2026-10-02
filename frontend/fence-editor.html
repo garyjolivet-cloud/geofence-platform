@@ -500,6 +500,7 @@
 <script src="/tour-state.js"></script>
 <script src="/kalman-filter.js"></script>
 <script src="/chute-guard.js"></script>
+<script src="/quest-narration.js"></script>
 <script src="/long-press.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="/code-objects.js"></script>
@@ -1388,6 +1389,9 @@ let _hazardAwareOn=false;
 // (ChuteGuard in geofence-engine.html/geofence-sim.html and this file's own
 // Test Mode).
 let _chuteGuardOn=false;
+// Workspace has Ridge Quest on (app.questEnabled): Test Mode then speaks corridor lines the
+// way the live Ridge Quest app does (QuestSim, frontend/quest-narration.js), not the tour engine's way.
+let _questOn=false;
 function isThreeDEnabled(){ return _threeDOn; }
 function updateTerrain(){
   if(!map.getSource(TERRAIN_SOURCE_ID)) return; // not loaded yet — updateTerrain() runs again from the load handler above
@@ -3472,6 +3476,7 @@ function updateAssetPaletteVisibility(){
   _visitorsFlyOn=!!(app&&app.visitorsFly);
   _hazardAwareOn=!!(app&&app.hazardAwareEnabled);
   _chuteGuardOn=!!(app&&app.chuteGuardEnabled);
+  _questOn=!!(app&&app.questEnabled);
   document.getElementById("assetPalette").classList.toggle("on", _threeDOn);
   // applyPanelVisibility()'s left-to-right row-packing runs once at boot,
   // before this (async, project-load-dependent) function has resolved
@@ -6155,6 +6160,8 @@ const SimFencer={state:{},onEvent:null,
     (zone.triggers||[]).forEach(t=>{
       if(t.fires_on===kind&&(!t.layer||t.layer===layer.kind))this._deliver(zone,t,subj);});},
   _deliver(zone,t,subj="visitor"){
+    // Ridge Quest never speaks a line on the tour engine's zone-enter trigger; QuestSim does it like live.
+    if(t.say && _questOn) return;
     if(t.say){if(!zone.audioUrl&&simSoundOn) simTTS(t.say, zone.ttsVoice);
       if(this.onEvent)this.onEvent({zone,kind:"say",text:t.say,subject:subj});}},
   reset(){this.state={}; _pathWalkStartT=null; _pathWalkStartDistM=null; _pathWalkStartPathId=null;}
@@ -7104,6 +7111,53 @@ function chuteGuardCallbacks(){
     }
   };
 }
+// Ridge Quest narration in Test Mode, exactly like live (user, 2026-10-02: "test mode has to be
+// exactly like live"). Same decision code as ridge-quest.html's Quest._tick
+// (QuestNarration.step: chutes/runs/boot packs "<say>, on your left|right" when passed within
+// 30 m, lifts on entering, once per approach, quiet on a lift), fed the same EKF-smoothed
+// position + travel heading, and the same voice: /api/tts with the text only, one <audio>
+// element, a newer line drops an older one still fetching. Every corridor counts as guarded
+// (live's default: Guard ON, nothing muted), so "narrate only guarded runs" never silences one.
+const QuestSim={
+  states:{}, corridors:[], cache:new Map(), gen:0, el:null,
+  load(bundle){
+    this.states={};
+    this.corridors=(bundle.zones||[]).map(z=>{
+      const tl=(z.layers||[]).find(l=>l.kind==="target"), g=tl&&tl.geometry;
+      if(!g || g.type!=="corridor" || z.movingAudio || !Array.isArray(g.path) || g.path.length<2) return null;
+      return { zoneId:z.id, name:z.name, runType:z.runType||"run", widthM:g.widthM||10, path:g.path,
+               say:(z.triggers||[]).map(t=>t.say).find(Boolean)||null };
+    }).filter(Boolean);
+  },
+  tick(sm){
+    if(!_questOn || typeof QuestNarration==='undefined') return;
+    const onLift=!!(typeof ChuteGuard!=='undefined' && ChuteGuard.isOnLift && ChuteGuard.isOnLift());
+    const now=Date.now();
+    this.corridors.forEach(c=>{
+      const st=this.states[c.zoneId]||(this.states[c.zoneId]={});
+      const nr=QuestNarration.step(st, c, [sm.lat,sm.lon], { headingDeg:sm.headingTravel, narrOk:true, onLift, now, canSay:true, canPrefetch:true });
+      nr.prefetch.forEach(text=>{ this.audio(text).catch(()=>{}); });
+      if(nr.say) this.say(nr.say);
+    });
+  },
+  audio(text){
+    if(this.cache.has(text)) return Promise.resolve(this.cache.get(text));
+    return fetch("/api/tts",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text})})
+      .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.blob(); })
+      .then(b=>{ const url=URL.createObjectURL(b); this.cache.set(text,url); return url; });
+  },
+  say(text){
+    simLogEv("sev-say","SAY    \""+text+"\"");
+    if(!simSoundOn) return;
+    const gen=++this.gen;
+    this.audio(text).then(url=>{
+      if(gen!==this.gen) return;   // superseded while fetching, like live
+      const el=this.el||(this.el=new Audio());
+      el.src=url;
+      el.play().catch(e=>simLogEv("sev-warn","SAY play() blocked: "+(e&&e.message||e)));
+    }).catch(e=>{ simLogEv("sev-warn","SAY /api/tts failed ("+(e&&e.message)+") — browser voice"); _ttsFallback(text); });
+  }
+};
 function feedSim(lat,lon,acc,t,bleFix){
   acc=acc||5; t=t||Date.now();
   // Altitude priority (3D-mode plan, Step 2, item D rescoped 2026-08-14):
@@ -7172,6 +7226,8 @@ function feedSim(lat,lon,acc,t,bleFix){
     syncCgTestAlarm();
   }
   const active=SimFencer.update(raw,simPrevRaw,t);
+  // Ridge Quest workspace: speak corridor lines exactly like the live app (see QuestSim).
+  try{ QuestSim.tick(sm); }catch(e){ simLogEv("sev-warn","QuestSim: "+(e&&e.message)); }
   simPrevRaw=raw;
   simPrev=p;
   // Global functions (Code Objects dropped on the map, not a stop) run on
@@ -7482,6 +7538,8 @@ function enterTestMode(){
   simBundle=editorToSimBundle();
   _cgGuardedIds = new Set(); // always start unarmed — see its own comment
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
+  QuestSim.load(simBundle);
+  if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>c.say).length+" corridor lines — chutes/runs/boot packs said when passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m (left/right), lifts on entry");
   chuteGuardStartSync();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(simBundle.globalCodeObjects||[], simPipelineCallbacks());
@@ -8035,6 +8093,7 @@ document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterT
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
+  QuestSim.load(simBundle);
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simDist=simDir>0?0:simPathTotal();
@@ -8071,6 +8130,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
+  QuestSim.load(simBundle);
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   _arNearState={};
   // Visited-stops/flags/counters are per-session tracking state just like

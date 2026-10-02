@@ -65,14 +65,12 @@ function extractMethodBody(tag) {
   }
   return html.slice(bodyStart, i);
 }
-// passingSay is a page-level helper _tick calls (2026-10-02); extracted the same way.
-const passingSayM = html.match(/function passingSay\(say, side\)\{[\s\S]*?\n\}/);
-if (!passingSayM) { console.log("FAIL: could not extract passingSay from ridge-quest.html"); process.exit(1); }
+// _tick's narration is the shared frontend/quest-narration.js (2026-10-02) — the real module.
+const QuestNarration = require("../frontend/quest-narration.js");
+const passingSay = QuestNarration.passingSay;
 // eslint-disable-next-line no-new-func
-const passingSay = new Function(passingSayM[0] + "\nreturn passingSay;")();
-// eslint-disable-next-line no-new-func
-const tickFn = new Function("passingSay", "return function(corridor, p, selectedActivity, QGeo, QUEST_TUNING){" +
-  extractMethodBody("_tick(corridor, p, selectedActivity){") + "};")(passingSay);
+const tickFn = new Function("QuestNarration", "return function(corridor, p, selectedActivity, QGeo, QUEST_TUNING){" +
+  extractMethodBody("_tick(corridor, p, selectedActivity){") + "};")(QuestNarration);
 
 // A Quest stand-in wired to the REAL _tick and REAL _classifyAndLog.
 function makeQuest(corridors) {

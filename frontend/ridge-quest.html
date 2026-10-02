@@ -36,6 +36,7 @@
      comment for the engage/coverage/heading gating; this page only supplies
      callbacks (WHAT happens), never touches its WHEN logic. -->
 <script src="/chute-guard.js"></script>
+<script src="/quest-narration.js"></script>
 <script src="/guard-edge.js"></script>
 <script src="/ridge-visuals.js"></script>
 <!-- Offline outbox: runs/chute lines logged without signal are sent later (see its header). -->
@@ -934,7 +935,6 @@ const QUEST_TUNING = {
   MAX_DURATION_S: 5400,    // 90 min — something went wrong (GPS stuck in-band), discard
   SKI_SPEED_MIN_MPS: 2.5,  // ~9 km/h; below this while descending a run = skinning/walking it, not skiing it
   COOLDOWN_MS: 4000,       // avoid double-counting a lingering crossing at the band edge
-  NARRATE_HYSTERESIS_M: 3, // in-band test used a hard dist<0 boundary with zero tolerance, so GPS jitter right at a corridor's edge (e.g. lingering near the far end before actually leaving) could flip idle<->inRun rapidly and re-speak the corridor's narration on what was really just noise, not a genuine re-entry. Schmitt-trigger margin: entering needs dist< -this (clearly inside), staying entered only exits once dist>=this (clearly outside) — see _tick() below.
   ACCURACY_CAP_M: 40,      // R2: fixes worse than this don't drive fog reveal — same value/reasoning as geofence-engine.html's TUNING.ACCURACY_CAP_M
   // --- Full-run verification (2026-09-21). Field report: skiing ACROSS a
   // corridor (a traverse) logged it as skied. Root causes, all in the old
@@ -985,13 +985,7 @@ const QUEST_TUNING = {
   // the last such fix. Much wider than the 3m narration band on purpose --
   // the old exit-on-first-fix-outside-the-band chopped a real run into
   // fragments on a narrow chute whenever GPS drifted a few metres.
-  SAY_PREFETCH_M: 200,      // start fetching a corridor's narration audio when the player is this close (walking ~2 min out, skiing ~25 s), so speech starts instantly on entry. Field log 2026-09-21: the first /api/tts fetch took 1762 ms from entry to sound
   REC_HOLD_M: 40,
-  // Passing narration (2026-10-02): a chute / run / boot pack is announced once, when the
-  // rider comes within this many metres of its band, as "<say>, on your left|right" (side
-  // from travel heading). Re-armed beyond REC_HOLD_M, so this must stay below it.
-  PASS_ANNOUNCE_M: 30,
-  SIDE_MIN_DEG: 20,         // a corridor within this many degrees of straight ahead/behind gets no side yet
   // Armed isolation (Guard OFF + armed chutes only): an unarmed chute/run/hike whose band
   // comes within this many metres of an armed corridor's band ignores GPS while that one is
   // armed -- no narration, no recording, no run logged. About phone GPS error.
@@ -1116,25 +1110,6 @@ const QGeo = {
       else if(hintS!=null ? Math.abs(c.s-hintS) < Math.abs(pick.s-hintS) : c.s < pick.s) pick = c;
     }
     return pick;
-  },
-  // "left" | "right": which side of a rider travelling on headingDeg (0 = north) the
-  // nearest point of the corridor centreline lies. null without a heading.
-  sideOf(pt, corridor, headingDeg){
-    if(typeof headingDeg!=="number" || !isFinite(headingDeg)) return null;
-    const G = this.geom(corridor);
-    if(G.xy.length < 2) return null;
-    const near = this.projectOnPath(pt, G, null);
-    if(!near) return null;
-    const A = G.xy[near.seg], B = G.xy[near.seg+1];
-    const segL = G.cum[near.seg+1] - G.cum[near.seg];
-    const t = segL > 0 ? (near.s - G.cum[near.seg]) / segL : 0;
-    const P = this.toXY(pt, G.ref);
-    const vx = A.x + t*(B.x-A.x) - P.x, vy = A.y + t*(B.y-A.y) - P.y;   // rider -> nearest point
-    const h = headingDeg*Math.PI/180, hx = Math.sin(h), hy = Math.cos(h);  // x east, y north
-    const cross = hx*vy - hy*vx, len = Math.hypot(vx, vy);
-    // Straight ahead or behind (within SIDE_MIN_DEG) has no honest side: null, the caller waits.
-    if(!(len > 0) || Math.abs(cross)/len < Math.sin(QUEST_TUNING.SIDE_MIN_DEG*Math.PI/180)) return null;
-    return cross > 0 ? "left" : "right";
   },
   _median(a){
     const b = a.slice().sort((x,y)=>x-y), n = b.length;
@@ -1360,7 +1335,7 @@ const Quest = {
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
   onCoverage: null,     // callback(corridorName, pct, passed, reason) — fired when a run is logged (passed:true) or when the player leaves a corridor having covered a meaningful part without completing it / a genuine pass is rejected (passed:false, reason = player-facing why), so a partial/rejected pass isn't silent. A plain traverse (little covered) stays silent.
   onCheckpointVertical: null, // callback(totalM) — fired when _tickCheckpoints credits a descent, so Home's "Vertical today" tile ticks up live
-  onPrefetch: null,      // callback(sayText) — fired once per corridor per session when the player comes within QUEST_TUNING.SAY_PREFETCH_M, so the narration audio is already cached when they enter
+  onPrefetch: null,      // callback(sayText) — fired once per corridor per session when the player comes within QuestNarration.TUNING.PREFETCH_M, so the narration audio is already cached when they enter
   onNarrate: null,       // callback(sayText, zoneId) — fired once per band entry for a corridor with narration authored, wired up regardless of which screen (Home/My map) is showing
 
   // Battery Saver ("lift mode") — see setLiftModeOverride()/_setLiftModeActive().
@@ -1803,75 +1778,19 @@ const Quest = {
     // band's own re-entry cooldown is separate (narrCooldownUntil) so a burst
     // of band flicker can never make the run recorder below drop fixes.
     if(Date.now() < st.cooldownUntil) return;
-    // Narration band hysteresis (see QUEST_TUNING.NARRATE_HYSTERESIS_M): while
-    // already in-run, a fix has to be clearly PAST the edge (dist >= +margin)
-    // to count as exiting; while idle, a fix has to be clearly INSIDE
-    // (dist < -margin) to count as (re-)entering. A single dist<0 boundary
-    // with no tolerance let ordinary GPS jitter right at the line flip
-    // idle<->inRun back and forth, re-speaking the corridor's narration on
-    // what was really just noise near the far edge, not a genuine re-entry.
-    //
-    // Bug fixed 2026-09 (field report: "the voice does not announce the
-    // corridor" -- a real road test on a narrow corridor): corridorDist()'s
-    // minimum possible value is -halfWidth (standing exactly on the
-    // centerline), so a FIXED 3m entry margin made entry mathematically
-    // impossible for any corridor narrower than 6m wide -- this project's
-    // "test Chute" is only 4m wide (halfWidth 2m), so dist could never go
-    // below -2, and the entry condition (dist< -3) never once fired. Margin
-    // is now capped to half the corridor's own half-width, so entry always
-    // has room to be satisfied regardless of how narrow the corridor is.
-    //
-    // This band now drives NARRATION ONLY. Run detection is the recorder
-    // further down: a 3m band around a 4m chute is far tighter than GPS
-    // error, so ending a run at the first fix outside it chopped one real
-    // descent into fragments.
     const halfW = (corridor.widthM||10)/2;
-    const margin = Math.min(QUEST_TUNING.NARRATE_HYSTERESIS_M, halfW*0.5);
     const dist = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref);
-    const inBand = st.phase==="inRun"
-      ? dist < margin
-      : dist < -margin;
-    // Re-arm narration only once the player has genuinely LEFT the area
-    // (beyond the run recorder's hold band), not merely stepped out of the
-    // narrow entry band. Field log 2026-09-21 (4 m test chute): GPS wander
-    // carried the smoothed position in and out of that ~1 m entry band ~17 times
-    // in 4 minutes, and each re-entry restarted the spoken narration.
-    if((dist + halfW) > halfW + QUEST_TUNING.REC_HOLD_M) st.narrArmed = true;
-    // Project setting "narrate only guarded runs": speak only when Corridor Guard
-    // is on for this corridor for this rider. Lifts are never guarded, so they
-    // always narrate; a workspace without Corridor Guard narrates everything.
+    // Narration: frontend/quest-narration.js (shared with Fence Editor Test Mode, which must
+    // behave exactly like live). Chutes / runs / boot packs are announced as the rider PASSES
+    // them, "<say>, on your left|right"; lifts on entering their band; once per approach.
+    // Project setting "narrate only guarded runs": speak only when Corridor Guard is on for
+    // this corridor for this rider. Lifts are never guarded, so they always narrate; a
+    // workspace without Corridor Guard narrates everything.
     const narrOk = !this.narrateGuardedOnly || corridor.runType==="lift" || !this.chuteGuardEnabled || this.isGuarded(corridor.zoneId);
-    // Lifts are still announced on entering their band. Chutes, runs and boot packs are
-    // announced as the rider PASSES them (2026-10-02, see passingSay).
-    const isLift = corridor.runType==="lift";
-    if(narrOk && corridor.say && this.onPrefetch && !st.sayPrefetched && (dist + halfW) <= halfW + QUEST_TUNING.SAY_PREFETCH_M){
-      st.sayPrefetched = true;
-      if(isLift) this.onPrefetch(corridor.say);
-      else { this.onPrefetch(passingSay(corridor.say, "left")); this.onPrefetch(passingSay(corridor.say, "right")); }
-    }
-    // Passing: once per approach, within PASS_ANNOUNCE_M of the band, never while on a lift
-    // (chutes under the gondola stay quiet). Outside the band it waits for a travel heading
-    // to name the side; already on the corridor, the line is spoken without one.
-    if(!isLift && narrOk && corridor.say && this.onNarrate && st.narrArmed!==false && !this._liftRaw
-       && dist <= QUEST_TUNING.PASS_ANNOUNCE_M){
-      const side = dist > 0 ? QGeo.sideOf([p.lat,p.lon], corridor, p.headingTravel) : null;
-      if(side || dist <= 0){
-        st.narrArmed = false;
-        this.onNarrate(passingSay(corridor.say, side), corridor.zoneId);
-      }
-    }
-    if(st.phase==="idle" && inBand){
-      if(Date.now() >= st.narrCooldownUntil){
-        st.phase="inRun";
-        // Spoken narration (2026-09-17) -- fires once per approach. Lifts only since 2026-10-02.
-        if(isLift && narrOk && corridor.say && this.onNarrate && st.narrArmed!==false){
-          st.narrArmed = false;
-          this.onNarrate(corridor.say, corridor.zoneId);
-        }
-      }
-    } else if(st.phase==="inRun" && !inBand){
-      st.phase="idle"; st.narrCooldownUntil=Date.now()+QUEST_TUNING.COOLDOWN_MS;
-    }
+    const nr = QuestNarration.step(st, corridor, [p.lat,p.lon], { headingDeg:p.headingTravel, narrOk,
+      onLift:!!this._liftRaw, now:Date.now(), canSay:!!this.onNarrate, canPrefetch:!!this.onPrefetch });
+    nr.prefetch.forEach(t=>this.onPrefetch(t));
+    if(nr.say) this.onNarrate(nr.say, corridor.zoneId);
 
     // ---- Run recorder ----
     // Records everything near the corridor, then asks QGeo.evaluateTraversal
@@ -2644,13 +2563,6 @@ function chuteGuardCallbacks(){
 // audio bytes, then play those through ONE shared, gesture-unlocked <audio>
 // element — browser speechSynthesis is kept only as a last-resort fallback
 // if /api/tts is unreachable (offline), same as field-recorder.html.
-// "This is Big Dumper" + "left" -> "This is Big Dumper, on your left" (2026-10-02). The
-// authored line stays as typed in the Fence Editor; the side is added at speaking time
-// because it depends on which way the rider passes. No side -> the line unchanged.
-function passingSay(say, side){
-  if(!side) return say;
-  return String(say).trim().replace(/[.!,;:]+$/, "") + ", on your " + side;
-}
 const _sayTtsCache = new Map(); // say text -> blob: URL
 async function sayViaTts(text){
   if(_sayTtsCache.has(text)) return _sayTtsCache.get(text);
