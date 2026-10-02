@@ -4423,6 +4423,19 @@ function duplicateCorridorStops(){
   zones.forEach(z=>{ if(z.corridorId) byCorr.set(z.corridorId, (byCorr.get(z.corridorId)||[]).concat((z.name||"Corridor")+" (id "+z.id+")")); });
   return [...byCorr.values()].filter(n=>n.length>1);
 }
+// A chute's bearing is its line's start -> finish direction (user, 2026-10-02), kept in
+// step with the library geometry like the shape itself. Returns true when it changed.
+// Only runType "chute"; every other stop keeps its hand-set bearing.
+function chuteBearingFromLine(z){
+  const c=(z && z.runType==="chute" && z.shape && z.shape.type==="corridor") ? (z.shape.coords||[]) : [];
+  if(c.length<2) return false;
+  const a=c[0], b=c[c.length-1];
+  if(a[0]===b[0] && a[1]===b[1]) return false;
+  const deg=Math.round(bearingTo(a,b))%360;
+  if(z.bearingDeg===deg) return false;
+  z.bearingDeg=deg;
+  return true;
+}
 async function importCorridorFromLibrary(corridorId){
   // Already in this project? Select it -- a second stop on the same corridor logs every pass twice in Ridge Quest.
   const have=zones.findIndex(z=>z.corridorId===corridorId);
@@ -4444,6 +4457,7 @@ async function importCorridorFromLibrary(corridorId){
     z.descentM=j.elevLossM!=null?Math.round(j.elevLossM):null;
     z.climbM=j.elevGainM!=null?Math.round(j.elevGainM):null;
     z.folderId=focusedStopFolderId||null;
+    chuteBearingFromLine(z);
     zones.push(z);
     _corrCenterCache.delete(corridorId);
     // New zone — full render() (tree rebuild + autoSave), then select it.
@@ -4511,7 +4525,11 @@ async function reconcileLinkedCorridors(){
       if(nclimb!==(z.climbM==null?null:z.climbM)){ z.climbM=nclimb; changed=true; }
       z.corridorRev=row.updatedAt||z.corridorRev;
     }
+    // Every chute (linked or not) points start -> finish.
+    let bearings=0;
+    for(const z of corr){ if(chuteBearingFromLine(z)){ bearings++; changed=true; } }
     if(changed){ render(); refreshProps(); }
+    if(bearings) toast("Set "+bearings+" chute bearing"+(bearings===1?"":"s")+" from start → finish — Publish to send.","ok");
     const dups=duplicateCorridorStops();
     if(dups.length) toast("Same library corridor added more than once: "+dups.map(n=>n.join(" + ")).join("; ")+" — delete the extra stop and Publish, or each pass counts twice.","warn");
   } finally { _corrReconcileBusy=false; }
@@ -4533,6 +4551,7 @@ async function refreshCorridorShapeFromLibrary(z){
     z.descentM=j.elevLossM!=null?Math.round(j.elevLossM):null;
     z.climbM=j.elevGainM!=null?Math.round(j.elevGainM):null;
     z.corridorRev=j.updatedAt||z.corridorRev;
+    chuteBearingFromLine(z);
     _corrCenterCache.delete(z.corridorId);
     render(); refreshProps();
   }catch(e){ alert("Refresh failed: "+e.message); }

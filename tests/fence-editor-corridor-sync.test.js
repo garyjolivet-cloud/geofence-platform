@@ -26,6 +26,8 @@ function extract(startTag) {
   return html.slice(s, i + 1);
 }
 const SRC = "const _corrAddsInFlight=new Set();\n" + [
+  "function bearingTo(a,b){",
+  "function chuteBearingFromLine(z){",
   "function duplicateCorridorStops(){",
   "async function importCorridorFromLibrary(corridorId){",
   "function _matchCorridorRow(rows, z){",
@@ -35,7 +37,10 @@ const SRC = "const _corrAddsInFlight=new Set();\n" + [
 
 const PTS = [[-117.05, 51.31, 2000], [-117.051, 51.309, 1990], [-117.052, 51.308, 1980]];
 const row = (id, name, extra = {}) => Object.assign({ id, name, points: PTS, widthM: 30, difficulty: "black", runType: "chute", activityType: "ski_chute", elevLossM: 20, updatedAt: "2026-09-25T01:24:36Z" }, extra);
-const corrZone = (id, name, corridorId) => ({ id, name, corridorId, shape: { type: "corridor", coords: PTS.map(p => [p[0], p[1]]), widthM: 30 }, difficulty: "black", runType: "chute", activityType: "ski_chute", descentM: 20 });
+// The PTS line's start -> finish bearing, so a stop that is otherwise in sync needs no redraw.
+// eslint-disable-next-line no-new-func
+const PTS_BEARING = Math.round(new Function(extract("function bearingTo(a,b){") + "\nreturn bearingTo;")()(PTS[0], PTS[PTS.length - 1])) % 360;
+const corrZone = (id, name, corridorId) => ({ id, name, corridorId, shape: { type: "corridor", coords: PTS.map(p => [p[0], p[1]]), widthM: 30 }, difficulty: "black", runType: "chute", activityType: "ski_chute", descentM: 20, bearingDeg: PTS_BEARING });
 
 function harness(zonesIn, rows) {
   const toasts = [], renders = [];
