@@ -1083,6 +1083,7 @@
     <div class="row" style="margin-top:6px;position:relative">
       <button id="coBulkMove" class="ghost" style="font-size:11px;padding:3px 8px" title="Move checked stops to a folder">📁 Move…</button>
       <button id="coBulkToggle" class="ghost" style="font-size:11px;padding:3px 8px">☐ Bulk assign</button>
+      <button id="sayThisIsAll" class="ghost" style="font-size:11px;padding:3px 8px" title="Set every stop's spoken line (TTS) to “This is” + the stop's name">🗣 This is…</button>
     </div>
     <input id="stopSearch" type="text" placeholder="search stops…" style="width:100%;margin:4px 0 6px;box-sizing:border-box">
     <div id="zlist"></div>
@@ -4887,6 +4888,24 @@ document.getElementById("coBulkToggle").onclick=()=>{
   drawList();
 };
 document.getElementById("coBulkMove").onclick=bulkMoveSelectedStops;
+// Every stop's spoken line (the TTS "say", not a pipeline) = "This is " + its name
+// (user, 2026-10-02). One-shot: later renames don't rewrite it. Returns the stops changed.
+function thisIsLine(z){ const n=(z.name||"").trim(); return n ? "This is "+n : null; }
+function setAllStopLinesThisIs(list){
+  let changed=0;
+  list.forEach(z=>{ const line=thisIsLine(z); if(line && z.say!==line){ z.say=line; changed++; } });
+  return changed;
+}
+document.getElementById("sayThisIsAll").onclick=()=>{
+  const todo=zones.filter(z=>{ const l=thisIsLine(z); return l && z.say!==l; });
+  if(!todo.length){ toast("Every stop already says “This is” + its name.","ok"); return; }
+  const custom=todo.filter(z=>z.say && z.say.trim()).length;
+  if(!confirm("Set the spoken line of "+todo.length+" stop"+(todo.length===1?"":"s")+" to “This is” + the stop's name?"
+    +(custom?"\n\n"+custom+" of them have their own line now, which will be replaced.":""))) return;
+  const n=setAllStopLinesThisIs(zones);
+  render(); refreshProps();
+  toast("Updated "+n+" spoken line"+(n===1?"":"s")+" — Publish to send.","ok");
+};
 document.getElementById("stopsToggleBtn").onclick=()=>{
   const body=document.getElementById("stopsBody");
   const panel=document.getElementById("mainPanel");
