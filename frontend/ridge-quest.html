@@ -2699,28 +2699,37 @@ function unlockSayAudio(){
     }
   }catch(e){}
 }
-function speakViaBrowserTts(text){
+function speakViaBrowserTts(text, done){
   // Last-resort fallback only (offline, or /api/tts failed) — same
   // restriction applies here, so this may still be silent on iOS when
   // triggered from the GPS callback, but it's better than nothing with no
-  // network to reach /api/tts at all.
-  try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(text)); }catch(e){}
+  // network to reach /api/tts at all. done (optional): the speech queue's "finished".
+  try{
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    if(done){ u.onend=done; u.onerror=done; }
+    speechSynthesis.speak(u);
+  }catch(e){ if(done) done(); }
 }
-// Bumped on every call — an in-flight sayViaTts() fetch checks its own
-// snapshot against the live value before playing, so a slow fetch for a
-// corridor the skier has already left doesn't speak late over whatever
-// they've since entered.
-let _sayGen = 0;
+// Speech queue (2026-10-03, user: "queue so both play"): a line waits for the one playing to end
+// instead of cutting it off (QuestNarration.makeSayQueue, shared with Test Mode: no repeats while
+// waiting, at most 3 waiting, a line older than 12 s is skipped, 20 s watchdog).
+const _sayQueue = QuestNarration.makeSayQueue({
+  log: m=>cgLog(m),
+  play(text, done){
+    const t0 = Date.now(), cached = _sayTtsCache.has(text);
+    cgLog("SAY requested"+(cached ? " (cached audio)" : " (fetching /api/tts)")+": \""+text.slice(0,40)+"\"");
+    sayViaTts(text).then(url=>{
+      const el=_ensureSayEl();
+      el.onended=done; el.onerror=done;
+      el.src=url;
+      el.play().then(()=>cgLog("SAY playing, "+(Date.now()-t0)+"ms after request")).catch(e=>{ cgLog("SAY play() rejected: "+(e&&e.name)); done(); });
+    }).catch(e=>{ cgLog("SAY tts failed ("+(e&&e.message)+") -> browser voice fallback"); speakViaBrowserTts(text, done); });
+  }
+});
 function narrateCorridor(text){
   if(!text) return;
-  const gen = ++_sayGen;
-  const t0 = Date.now(), cached = _sayTtsCache.has(text);
-  cgLog("SAY requested"+(cached ? " (cached audio)" : " (fetching /api/tts)")+": \""+text.slice(0,40)+"\"");
-  sayViaTts(text).then(url=>{
-    if(gen!==_sayGen){ cgLog("SAY dropped (superseded) after "+(Date.now()-t0)+"ms"); return; } // superseded by a newer entry while this was in flight
-    const el=_ensureSayEl();
-    el.src=url; el.play().then(()=>cgLog("SAY playing, "+(Date.now()-t0)+"ms after request")).catch(e=>cgLog("SAY play() rejected: "+(e&&e.name)));
-  }).catch(e=>{ cgLog("SAY tts failed ("+(e&&e.message)+") -> browser voice fallback"); speakViaBrowserTts(text); });
+  _sayQueue.say(text);
 }
 function renderHome(){
   const s=getSession();

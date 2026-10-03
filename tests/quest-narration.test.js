@@ -135,5 +135,26 @@ const fnSrc = tag => { const s = ed.slice(ed.indexOf(tag)); return s.slice(0, s.
     "live narrOk uses the same guard rule (isGuarded: master OFF => armed only)");
 })();
 
+
+
+
+// ---- speech queue (2026-10-03, "queue so both play") ----
+(function testSayQueue() {
+  let t = 0; const played = [], log = [];
+  let finish = null;
+  const q = QN.makeSayQueue({ now: () => t, log: m => log.push(m), play: (text, done) => { played.push(text); finish = done; } });
+  q.say("This is Legs Right"); q.say("This is Legs Left");
+  assert(played.join("|") === "This is Legs Right", "the second line waits instead of cutting the first off");
+  q.say("This is Legs Left");
+  assert(q.waiting() === 1, "a line already waiting is not added twice");
+  finish();
+  assert(played.join("|") === "This is Legs Right|This is Legs Left", "when the first ends, the second plays");
+  q.say("A"); q.say("B"); q.say("C"); q.say("D");
+  assert(q.waiting() === 3 && log.some(m => /queue full/.test(m)), "at most 3 wait; the oldest drops");
+  t += 13000; finish();
+  assert(played[played.length - 1] === "This is Legs Left" && log.some(m => /waited too long/.test(m)), "lines that waited over 12 s are skipped");
+  assert(q.busy() === false, "queue idle again");
+})();
+
 console.log(pass + " passed, " + fail + " failed");
 if (fail > 0) process.exit(1);

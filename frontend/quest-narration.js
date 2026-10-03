@@ -27,7 +27,10 @@
     PASS_ANNOUNCE_M: 5,      // chute/run/boot pack: announce within this many m of the band
     REARM_M: 40,             // re-arm beyond this many m from the band (= Ridge Quest REC_HOLD_M)
     PREFETCH_M: 200,         // fetch the audio this far out (first /api/tts took 1762 ms)
-    COOLDOWN_MS: 4000        // lift band: no re-entry within this after leaving
+    COOLDOWN_MS: 4000,       // lift band: no re-entry within this after leaving
+    QUEUE_MAX: 3,            // speech queue: lines waiting behind the one playing
+    QUEUE_MAX_WAIT_MS: 12000,// a line that waited longer than this is skipped (rider has moved on)
+    QUEUE_WATCHDOG_MS: 20000 // a line that never reports its end lets the next start after this
   };
   var M_PER_DEG_LAT = 111320;
 
@@ -114,7 +117,41 @@
     return out;
   }
 
-  var api = { TUNING: TUNING, bandDist: bandDist, insideRun: insideRun, lineFor: lineFor, step: step };
+  // Speech queue (2026-10-03, user: "queue so both play"). Overlapping chutes can produce two lines
+  // on one fix; the second used to cut the first off. Now a line waits until the one playing ends.
+  // A line already waiting isn't added twice; at most QUEUE_MAX wait (the oldest drops); a line
+  // that waited longer than QUEUE_MAX_WAIT_MS is skipped (the rider has moved on); and if a line
+  // never reports it ended, the next one starts after QUEUE_WATCHDOG_MS. The host's play(text, done)
+  // fetches/plays the audio and calls done() when it ends or fails. Shared by live and Test Mode.
+  function makeSayQueue(o) {
+    var q = [], busy = false;
+    var now = o.now || function () { return Date.now(); };
+    var log = o.log || function () {};
+    function next() {
+      var item = q.shift();
+      if (!item) { busy = false; return; }
+      if (now() - item.at > TUNING.QUEUE_MAX_WAIT_MS) { log("SAY dropped (waited too long): \"" + item.text + "\""); next(); return; }
+      busy = true;
+      var finished = false, timer = null;
+      var done = function () { if (finished) return; finished = true; if (timer) clearTimeout(timer); next(); };
+      timer = setTimeout(function () { log("SAY watchdog: no end reported, moving on"); done(); }, TUNING.QUEUE_WATCHDOG_MS);
+      try { o.play(item.text, done); } catch (e) { done(); }
+    }
+    return {
+      say: function (text) {
+        if (!text) return;
+        for (var i = 0; i < q.length; i++) if (q[i].text === text) return;
+        q.push({ text: text, at: now() });
+        while (q.length > TUNING.QUEUE_MAX) { var d = q.shift(); log("SAY dropped (queue full): \"" + d.text + "\""); }
+        if (busy) log("SAY queued (" + q.length + " waiting): \"" + text + "\"");
+        else next();
+      },
+      waiting: function () { return q.length; },
+      busy: function () { return busy; }
+    };
+  }
+
+  var api = { TUNING: TUNING, bandDist: bandDist, insideRun: insideRun, lineFor: lineFor, step: step, makeSayQueue: makeSayQueue };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.QuestNarration = api;
 })(typeof window !== "undefined" ? window : this);

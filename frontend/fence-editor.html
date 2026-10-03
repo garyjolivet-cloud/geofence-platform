@@ -7329,13 +7329,19 @@ const QuestSim={
   say(text){
     simLogEv("sev-say","SAY    \""+text+"\"");
     if(!simSoundOn) return;
-    const gen=++this.gen;
-    this.audio(text).then(url=>{
-      if(gen!==this.gen) return;   // superseded while fetching, like live
-      const el=this.el||(this.el=new Audio());
-      el.src=url;
-      el.play().catch(e=>simLogEv("sev-warn","SAY play() blocked: "+(e&&e.message||e)));
-    }).catch(e=>{ simLogEv("sev-warn","SAY /api/tts failed ("+(e&&e.message)+") — browser voice"); _ttsFallback(text); });
+    // Same speech queue as live (QuestNarration.makeSayQueue): a line waits for the one playing.
+    if(!this.q) this.q=QuestNarration.makeSayQueue({
+      log: m=>simLogEv("sev-sys",m),
+      play: (t, done)=>{
+        this.audio(t).then(url=>{
+          const el=this.el||(this.el=new Audio());
+          el.onended=done; el.onerror=done;
+          el.src=url;
+          el.play().catch(e=>{ simLogEv("sev-warn","SAY play() blocked: "+(e&&e.message||e)); done(); });
+        }).catch(e=>{ simLogEv("sev-warn","SAY /api/tts failed ("+(e&&e.message)+") — browser voice"); _ttsFallback(t, done); });
+      }
+    });
+    this.q.say(text);
   }
 };
 function feedSim(lat,lon,acc,t,bleFix){
