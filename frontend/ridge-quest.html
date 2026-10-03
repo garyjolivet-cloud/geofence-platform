@@ -1781,13 +1781,16 @@ const Quest = {
     const halfW = (corridor.widthM||10)/2;
     const dist = QGeo.corridorDist([p.lat,p.lon], corridor, corridor.ref);
     // Narration: frontend/quest-narration.js (shared with Fence Editor Test Mode, which must
-    // behave exactly like live). Chutes / runs / boot packs are announced as the rider PASSES
-    // them, "<say>, on your left|right"; lifts on entering their band; once per approach.
+    // behave exactly like live). While skiing inside a chute or run, the chutes / runs / boot
+    // packs passed within 5 m are announced "<line>, on your left|right" (the one you are in, with
+    // no side); lifts on entering; once per approach; no line = "This is <name>".
     // Project setting "narrate only guarded runs": speak only when Corridor Guard is on for
     // this corridor for this rider. Lifts are never guarded, so they always narrate; a
     // workspace without Corridor Guard narrates everything.
     const narrOk = !this.narrateGuardedOnly || corridor.runType==="lift" || !this.chuteGuardEnabled || this.isGuarded(corridor.zoneId);
-    const nr = QuestNarration.step(st, corridor, [p.lat,p.lon], { headingDeg:p.headingTravel, narrOk,
+    // Inside a chute or run right now? Worked out once per fix (p), not once per corridor.
+    if(this._inRunFix !== p){ this._inRunFix = p; this._inRunNow = QuestNarration.insideRun([p.lat,p.lon], this.corridors || [corridor]); }
+    const nr = QuestNarration.step(st, corridor, [p.lat,p.lon], { headingDeg:p.headingTravel, inRun:this._inRunNow, narrOk,
       onLift:!!this._liftRaw, now:Date.now(), canSay:!!this.onNarrate, canPrefetch:!!this.onPrefetch });
     nr.prefetch.forEach(t=>this.onPrefetch(t));
     if(nr.say) this.onNarrate(nr.say, corridor.zoneId);

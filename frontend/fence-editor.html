@@ -7113,11 +7113,12 @@ function chuteGuardCallbacks(){
 }
 // Ridge Quest narration in Test Mode, exactly like live (user, 2026-10-02: "test mode has to be
 // exactly like live"). Same decision code as ridge-quest.html's Quest._tick
-// (QuestNarration.step: chutes/runs/boot packs "<say>, on your left|right" when passed within
-// 30 m, lifts on entering, once per approach, quiet on a lift), fed the same EKF-smoothed
-// position + travel heading, and the same voice: /api/tts with the text only, one <audio>
-// element, a newer line drops an older one still fetching. Every corridor counts as guarded
-// (live's default: Guard ON, nothing muted), so "narrate only guarded runs" never silences one.
+// (QuestNarration.step: while skiing inside a chute or run, chutes/runs/boot packs passed within
+// 5 m are said "<line>, on your left|right", the one you are in with no side; lifts on entry;
+// once per approach; "This is <name>" when there is no line; quiet on a lift), fed the same
+// EKF-smoothed position + travel heading, and the same voice: /api/tts with the text only, one
+// <audio> element, a newer line drops an older one still fetching. Every corridor counts as
+// guarded (live's default: Guard ON, nothing muted), so "narrate only guarded runs" never silences one.
 const QuestSim={
   states:{}, corridors:[], cache:new Map(), gen:0, el:null,
   load(bundle){
@@ -7133,9 +7134,10 @@ const QuestSim={
     if(!_questOn || typeof QuestNarration==='undefined') return;
     const onLift=!!(typeof ChuteGuard!=='undefined' && ChuteGuard.isOnLift && ChuteGuard.isOnLift());
     const now=Date.now();
+    const inRun=QuestNarration.insideRun([sm.lat,sm.lon], this.corridors);
     this.corridors.forEach(c=>{
       const st=this.states[c.zoneId]||(this.states[c.zoneId]={});
-      const nr=QuestNarration.step(st, c, [sm.lat,sm.lon], { headingDeg:sm.headingTravel, narrOk:true, onLift, now, canSay:true, canPrefetch:true });
+      const nr=QuestNarration.step(st, c, [sm.lat,sm.lon], { headingDeg:sm.headingTravel, inRun, narrOk:true, onLift, now, canSay:true, canPrefetch:true });
       nr.prefetch.forEach(text=>{ this.audio(text).catch(()=>{}); });
       if(nr.say) this.say(nr.say);
     });
@@ -7539,7 +7541,7 @@ function enterTestMode(){
   _cgGuardedIds = new Set(); // always start unarmed — see its own comment
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   QuestSim.load(simBundle);
-  if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>c.say).length+" corridor lines — chutes/runs/boot packs said when passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m (left/right), lifts on entry");
+  if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said with left/right; lifts on entry");
   chuteGuardStartSync();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(simBundle.globalCodeObjects||[], simPipelineCallbacks());

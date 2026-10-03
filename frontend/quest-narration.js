@@ -4,13 +4,17 @@
  * fence-editor.html Test Mode so Test Mode is exactly like live (user: "test mode has to
  * be exactly like live").
  *
- *  - Chutes, runs and boot packs: announced once per approach when the rider comes within
- *    PASS_ANNOUNCE_M of the corridor's band, as "<say>, on your left|right". The side is
- *    the nearest centreline point relative to the rider's travel heading (riders only go
- *    down, so the heading is reliable). Within SIDE_MIN_DEG of straight ahead/behind, or
- *    with no heading yet, it waits; already on the corridor, the line is said with no side.
- *    Silent while the rider is on a lift (chutes under the gondola).
+ *  - Chutes, runs and boot packs are announced as the rider PASSES them, once per approach,
+ *    within PASS_ANNOUNCE_M of the band, as "<line>, on your left|right" — but only while the
+ *    rider is skiing inside a chute or run themselves (ctx.inRun, see insideRun()). The side is
+ *    the nearest centreline point relative to the rider's travel heading (riders only go down,
+ *    so the heading is reliable). Within SIDE_MIN_DEG of straight ahead/behind, or with no
+ *    heading yet, it waits. The corridor the rider is actually in is said with no side.
+ *    User 2026-10-02: 30 m was "too far out", "try 5 meters", "only when in chute or run".
+ *  - A chute / run / boot pack with no authored line says "This is <name>" (user: "make it
+ *    automatic"). A lift with no line stays silent.
  *  - Lifts: announced on entering the band (Schmitt-trigger hysteresis, see step()).
+ *  - Quiet while the rider is on a lift (chutes under the gondola), except the lift itself.
  *  - Re-armed only after the rider is REARM_M from the band (GPS wander can't repeat it).
  *  - Both side variants (or the lift line) are prefetched at PREFETCH_M.
  *
@@ -22,7 +26,7 @@
 
   var TUNING = {
     NARRATE_HYSTERESIS_M: 3, // lift band: entering needs dist < -margin, leaving dist >= margin
-    PASS_ANNOUNCE_M: 30,     // chute/run/boot pack: announce within this many m of the band
+    PASS_ANNOUNCE_M: 5,      // chute/run/boot pack: announce within this many m of the band
     SIDE_MIN_DEG: 20,        // within this of straight ahead/behind there is no honest side
     REARM_M: 40,             // re-arm beyond this many m from the band (= Ridge Quest REC_HOLD_M)
     PREFETCH_M: 200,         // fetch the audio this far out (first /api/tts took 1762 ms)
@@ -57,6 +61,15 @@
     return n ? n.d - (corridor.widthM || 10) / 2 : Infinity;
   }
 
+  // True when pt is inside any chute or run (the gate for passing announcements).
+  function insideRun(pt, corridors) {
+    for (var i = 0; i < corridors.length; i++) {
+      var c = corridors[i];
+      if ((c.runType === "chute" || c.runType === "run") && bandDist(pt, c) <= 0) return true;
+    }
+    return false;
+  }
+
   // "left" | "right" | null for a rider at pt travelling on headingDeg (0 = north).
   function sideOf(pt, corridor, headingDeg) {
     if (typeof headingDeg !== "number" || !isFinite(headingDeg)) return null;
@@ -76,17 +89,25 @@
     return String(say).trim().replace(/[.!,;:]+$/, "") + ", on your " + side;
   }
 
+  // The line spoken for a corridor: its authored say, else "This is <name>" for a chute / run /
+  // boot pack. null = nothing to say.
+  function lineFor(corridor) {
+    if (corridor.say && String(corridor.say).trim()) return corridor.say;
+    var name = (corridor.name || "").trim();
+    return corridor.runType !== "lift" && name ? "This is " + name : null;
+  }
+
   // One fix for one corridor. st = per-corridor state object (kept by the host, starts {}).
-  // corridor = { runType, widthM, say, path, ref? }. ctx = { headingDeg, narrOk, onLift,
-  // now, canSay, canPrefetch } (canSay/canPrefetch: the host has somewhere to send them).
-  // Returns { say: text | null, prefetch: [texts] }.
+  // corridor = { runType, widthM, say, name, path, ref? }. ctx = { headingDeg, inRun, narrOk,
+  // onLift, now, canSay, canPrefetch } (inRun: insideRun() for this fix; canSay/canPrefetch:
+  // the host has somewhere to send them). Returns { say: text | null, prefetch: [texts] }.
   function step(st, corridor, pt, ctx) {
     var out = { say: null, prefetch: [] };
     var now = ctx.now != null ? ctx.now : Date.now();
     var halfW = (corridor.widthM || 10) / 2;
     var dist = bandDist(pt, corridor);
     var isLift = corridor.runType === "lift";
-    var say = corridor.say;
+    var say = lineFor(corridor);
     if (!st.phase) st.phase = "idle";
     if (st.narrCooldownUntil == null) st.narrCooldownUntil = 0;
 
@@ -94,10 +115,13 @@
 
     if (ctx.narrOk && say && ctx.canPrefetch && !st.sayPrefetched && dist <= TUNING.PREFETCH_M) {
       st.sayPrefetched = true;
-      out.prefetch = isLift ? [say] : [passingSay(say, "left"), passingSay(say, "right")];
+      out.prefetch = isLift ? [say] : [say, passingSay(say, "left"), passingSay(say, "right")];
     }
 
-    if (!isLift && ctx.narrOk && say && ctx.canSay && st.narrArmed !== false && !ctx.onLift && dist <= TUNING.PASS_ANNOUNCE_M) {
+    // Passing / entering a chute, run or boot pack: only while skiing inside a chute or run.
+    // Outside its band it waits for a travel heading to name the side; inside, no side.
+    if (!isLift && ctx.narrOk && say && ctx.canSay && st.narrArmed !== false && !ctx.onLift && ctx.inRun
+        && dist <= TUNING.PASS_ANNOUNCE_M) {
       var side = dist > 0 ? sideOf(pt, corridor, ctx.headingDeg) : null;
       if (side || dist <= 0) {
         st.narrArmed = false;
@@ -123,7 +147,8 @@
     return out;
   }
 
-  var api = { TUNING: TUNING, bandDist: bandDist, sideOf: sideOf, passingSay: passingSay, step: step };
+  var api = { TUNING: TUNING, bandDist: bandDist, insideRun: insideRun, sideOf: sideOf,
+              passingSay: passingSay, lineFor: lineFor, step: step };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.QuestNarration = api;
 })(typeof window !== "undefined" ? window : this);
