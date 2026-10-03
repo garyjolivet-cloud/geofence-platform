@@ -1032,6 +1032,29 @@ function excursionSteps({ speedMps = 1.5, coverM = 70, driftSeconds = 25, latera
   assert(events.warn.length > 0, "normal alerting resumes once off the lift");
 })();
 
+// Test Mode log 2026-10-03: part-way down Torpedo Alley, onto the gondola line (suppressed),
+// then off the lift 54 m outside the chute -> full-level tone for 10 s. A lift ride now means
+// the rider has left every chute: no alarm until they've been back inside it.
+(function testLeavingALiftDoesNotResumeAnOldChuteAlarm(){
+  const cg = freshChuteGuard();
+  const corridor = makeCorridor("c1", { lenM: 400, widthM: 40 });        // halfW 20, edge 20.5
+  const liftPath = []; for (let f = 0; f <= 400; f += 20) liftPath.push(trackPoint(f, 60));  // parallel lift 60 m east
+  const lift = { id: "lift1", name: "Gondola", runType: "lift", layers: [{ geometry: { type: "corridor", path: liftPath, widthM: 10 } }] };
+  const events = { warn: [] };
+  cg.load([corridor, lift], { onWarn: (id, name, info) => events.warn.push(Object.assign({ id, name }, info)) });
+  let t = 1700000000000;
+  const at = (f, lat) => { const p = trackPoint(f, lat); cg.tick({ lat: p[0], lon: p[1], acc: 5, speed: 5, t: (t += 1000) }, 0); };
+  for (let f = 0; f <= 100; f += 10) at(f, 0);                 // skiing inside the chute
+  assert(cg.getActiveAlarm() === null && events.warn.length === 0, "sanity: inside the chute, quiet");
+  for (let f = 110; f <= 150; f += 10) at(f, 60);              // on the lift line
+  assert(cg.isOnLift() === true, "sanity: on the lift");
+  for (let f = 160; f <= 220; f += 10) at(f, 25);              // off the lift, 4.5 m outside the chute's edge
+  assert(events.warn.length === 0 && cg.getActiveAlarm() === null, "leaving the lift does not resume the chute's alarm, got " + events.warn.length + " warns");
+  for (let f = 230; f <= 270; f += 10) at(f, 0);               // back inside the chute
+  for (let f = 280; f <= 300; f += 10) at(f, 25);              // then off its edge again
+  assert(events.warn.length > 0, "after being back inside, drifting out alarms as normal");
+})();
+
 // ============================================================
 // isOnLift() (Battery Saver support): must work even for a project with NO
 // alertable corridors at all (e.g. a summer sightseeing gondola with no ski

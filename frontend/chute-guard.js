@@ -486,15 +486,16 @@
     // meaningful to say about any OTHER corridor right now — clear whatever
     // was already sounding and skip evaluation entirely for this tick, same
     // as if no corridors were relevant at all.
+    // Riding a lift also means the rider has LEFT every chute (2026-10-03): the whole state,
+    // everInside included, is reset, so a chute only alarms again after the rider has been back
+    // inside it. It used to keep everInside ("don't make them re-earn entry"), and a Test Mode log
+    // showed the cost: part-way down Torpedo Alley, onto the gondola line, then off it 54 m
+    // outside the chute -> a full-level tone for 10 s until back near the chute.
     if(currentlyOnLift){
       for(const c of corridors){
         const st = stateByCorridor.get(c.id);
-        if(st.level>0){
-          if(cb.onClear) cb.onClear(c.id, c.name);
-          const everInside = st.everInside; // not "gone out of relevant range" — just airborne; don't make them re-earn entry once they're back on the ground
-          Object.assign(st, freshState());
-          st.everInside = everInside;
-        }
+        if(st.level>0 && cb.onClear) cb.onClear(c.id, c.name);
+        Object.assign(st, freshState());
       }
       return;
     }
