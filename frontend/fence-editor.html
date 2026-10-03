@@ -777,6 +777,7 @@
       <span id="cgDrLookaheadV" style="font-family:'Barlow Condensed';font-size:11px;color:var(--fog);flex:0 0 40px;text-align:right">3.0s</span>
     </div>
     <div class="row">
+      <button id="simGuard" class="ghost on" style="flex:1;display:none" title="Corridor Guard, like Ridge Quest's yellow button: ON = every run guarded (press and hold a run to mute it); OFF = only armed runs (press and hold to arm). The tone, yellow boundary lines and voice follow it.">🛡 Guard ON</button>
       <button id="simMute" class="ghost" style="flex:1">Sound ◼</button>
       <button id="simReset" class="ghost" style="flex:1">Reset</button>
     </div>
@@ -6509,9 +6510,17 @@ function _simRunLongPressHandler(feature){
   const id=feature && feature.properties && feature.properties.id;
   if(id==null) return;
   const name=(feature.properties&&feature.properties.name)||"corridor";
-  if(_cgGuardedIds.has(id)){ _cgGuardedIds.delete(id); simLogEv("sev-sys","Corridor Guard disarmed: \""+name+"\""); }
-  else { _cgGuardedIds.add(id); simLogEv("sev-sys","Corridor Guard armed: \""+name+"\""); }
+  // Mode-aware like Ridge Quest: Guard ON mutes / unmutes, Guard OFF arms / disarms.
+  if(_cgTestMaster){
+    if(_cgMutedIds.has(id)){ _cgMutedIds.delete(id); simLogEv("sev-sys","Corridor Guard unmuted: \""+name+"\""); }
+    else { _cgMutedIds.add(id); simLogEv("sev-sys","Corridor Guard muted: \""+name+"\""); }
+  } else {
+    if(_cgGuardedIds.has(id)){ _cgGuardedIds.delete(id); simLogEv("sev-sys","Corridor Guard disarmed: \""+name+"\""); }
+    else { _cgGuardedIds.add(id); simLogEv("sev-sys","Corridor Guard armed: \""+name+"\""); }
+  }
+  paintSimGuardBtn();
   refreshSimCorridorLabels();
+  syncCgTestAlarm();
 }
 function refreshSimCorridorLabels(){
   clearSimCorridorLabels();
@@ -6530,8 +6539,10 @@ function refreshSimCorridorLabels(){
     return {type:"Feature",
       properties:{id:c.id,name:c.name,difficulty:c.difficulty,activityType:c.activityType,runType:c.runType,
                   lengthM:Math.round(c.lengthM),col:st.col,halo:st.halo,dash:st.dash,tier:st.tier,
-                  // guarded: press-and-hold arms/disarms one chute at a time — see _cgGuardedIds
-                  guarded:_cgGuardedIds.has(c.id),
+                  // guarded = cyan "armed" look, only for an armed run with Guard OFF (Ridge Quest never
+                  // recolours with Guard ON, it would erase the difficulty colours); muted = greyed.
+                  guarded:!_cgTestMaster && _cgGuardedIds.has(c.id),
+                  muted:_cgTestMaster && _cgMutedIds.has(c.id),
                   // shared corridor renderer (width band + piste-glow, no dashes)
                   corridor:true,widthM:(c.widthM>0?c.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(c.path[0][0])},
       geometry:{type:"LineString",coordinates:c.path.map(p=>[p[1],p[0]])}}; // [lat,lon] -> [lon,lat]
@@ -6568,7 +6579,9 @@ function refreshSimCorridorLabels(){
   // it must never be able to abort the rest of Test Mode's corridor setup (markers, press-and-hold).
   try{
     const edgeFc=GuardEdge.featureCollection(cors,bufferM);
-    edgeFc.features.forEach(f=>{ f.properties.guarded=_cgGuardedIds.has(f.properties.id); });
+    // Solid yellow boundary on every guarded corridor (Guard ON: all but muted; OFF: armed), never a lift.
+    const _rt=new Map(cors.map(c=>[c.id,c.runType]));
+    edgeFc.features.forEach(f=>{ f.properties.guarded=_rt.get(f.properties.id)!=="lift" && _cgTestGuarded(f.properties.id); });
     if(edgeFc.features.length){
       map.addSource("runLinesEdge",{type:"geojson",data:edgeFc});
       map.addLayer({id:"runLines-edge",type:"line",source:"runLinesEdge",
@@ -7056,10 +7069,28 @@ function chuteGuardStopSync(){
 // isOnLift() correct). Ephemeral by design, reset on every Test Mode entry
 // — matches this file's existing "Test Mode always starts fresh" ChuteGuard
 // convention, unlike Ridge Quest's own persisted version of this same set.
+// Guard ON/OFF (2026-10-03, user: "add guard on off to test"): Test Mode now has Ridge Quest's
+// master switch too (#simGuard, starts ON like live). ON = every corridor guarded except the
+// muted ones (_cgMutedIds); OFF = only the armed ones (_cgGuardedIds). Press-and-hold mutes with
+// Guard ON and arms with Guard OFF; each set is kept across a flip. Same rule as ridge-quest's
+// isCorridorGuarded(); _cgTestGuarded() is the one place Test Mode asks it.
 let _cgGuardedIds = new Set();
+let _cgMutedIds = new Set();
+let _cgTestMaster = true;
+function _cgTestGuarded(id){
+  if(!_chuteGuardOn) return false;
+  return _cgTestMaster ? !_cgMutedIds.has(id) : _cgGuardedIds.has(id);
+}
+function paintSimGuardBtn(){
+  const b=document.getElementById("simGuard"); if(!b) return;
+  b.style.display=_chuteGuardOn?"":"none";
+  const n=_cgGuardedIds.size;
+  b.textContent=_cgTestMaster ? "🛡 Guard ON" : ("🛡 Guard OFF"+(n?" · "+n+" armed":""));
+  b.classList.toggle("on", _cgTestMaster);
+}
 function syncCgTestAlarm(){
   if(typeof ChuteGuard==="undefined") return;
-  const active = ChuteGuard.getActiveAlarm(id=>_cgGuardedIds.has(id));
+  const active = ChuteGuard.getActiveAlarm(id=>_cgTestGuarded(id));
   if(!active){
     if(_cgTestAlarmCorridorId!=null){ _cgTestAlarmCorridorId=null; chuteGuardStopTone(); }
     return;
@@ -7080,17 +7111,17 @@ let _cgTestAlarmCorridorId = null;
 function chuteGuardCallbacks(){
   return {
     onWarn(corridorId,name,info){
-      if(!_cgGuardedIds.has(corridorId)) return; // not armed — see _cgGuardedIds's own comment
+      if(!_cgTestGuarded(corridorId)) return; // not guarded — see _cgTestGuarded
       if(!info || info.alertCount===1 || info.levelChanged)
         simLogEv("sev-hazard","off \""+(name||"corridor")+"\" — L"+((info&&info.level)||1)+
           " +"+((info&&info.excessM)||0).toFixed(1)+"m past edge");
     },
     onClear(corridorId,name){
-      if(!_cgGuardedIds.has(corridorId)) return;
+      if(!_cgTestGuarded(corridorId)) return;
       simLogEv("sev-sys","back inside \""+(name||"corridor")+"\"");
     },
     onDisengage(corridorId,name,info){
-      if(!_cgGuardedIds.has(corridorId)) return;
+      if(!_cgTestGuarded(corridorId)) return;
       simLogEv("sev-sys","left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
     },
     // Temporary-use diagnostic (see chute-guard.js's own comment) — shows
@@ -7119,12 +7150,11 @@ function chuteGuardCallbacks(){
 // <audio> element, a newer line drops an older one still fetching.
 // Guard, same rule as live's narrOk (user 2026-10-03: "when guard is off voice is only used for
 // selected guard runs"): with the project's "narrate only guarded runs" on (⚙, default on) and the
-// workspace's Corridor Guard on, a chute/run/boot pack speaks only if it is ARMED (press-and-hold,
-// _cgGuardedIds). Test Mode's Corridor Guard is always the live "Guard OFF + armed" mode (no master
-// switch here), so with nothing armed only lifts speak. Lifts are never guarded and always speak.
+// workspace's Corridor Guard on, a chute/run/boot pack speaks only while guarded (_cgTestGuarded:
+// Guard ON = not muted, Guard OFF = armed). Lifts are never guarded and always speak.
 function questSimNarrOk(c){
   const guardedOnly=document.getElementById("pNarrateGuarded")?.checked!==false;
-  return !guardedOnly || c.runType==="lift" || !_chuteGuardOn || _cgGuardedIds.has(c.zoneId);
+  return !guardedOnly || c.runType==="lift" || !_chuteGuardOn || _cgTestGuarded(c.zoneId);
 }
 const QuestSim={
   states:{}, corridors:[], cache:new Map(), gen:0, el:null,
@@ -7545,7 +7575,8 @@ function enterTestMode(){
   if(tool){draft=[];tool=null;resetShapePickerBtn();updateDrawUiVisibility(null);render();}
   selectZone(-1);
   simBundle=editorToSimBundle();
-  _cgGuardedIds = new Set(); // always start unarmed — see its own comment
+  _cgGuardedIds = new Set(); _cgMutedIds = new Set(); _cgTestMaster = true; // fresh each entry, Guard ON like live
+  paintSimGuardBtn();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   QuestSim.load(simBundle);
   if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said; lifts on entry"
@@ -8113,6 +8144,14 @@ document.getElementById("simDirBtn").onclick=(e)=>{
   simDir=-simDir;
   e.currentTarget.textContent=simDir>0?"⏩":"⏪";
   e.currentTarget.title="Walk direction: "+(simDir>0?"forward":"backward");
+};
+document.getElementById("simGuard").onclick=()=>{
+  _cgTestMaster=!_cgTestMaster;
+  simLogEv("sev-sys", _cgTestMaster ? "Guard ON — every run guarded"+(_cgMutedIds.size?" except "+_cgMutedIds.size+" muted":"")+" (press and hold to mute)"
+                                    : "Guard OFF — only armed runs"+(_cgGuardedIds.size?" ("+_cgGuardedIds.size+" armed)":", none armed yet")+" (press and hold to arm)");
+  paintSimGuardBtn();
+  refreshSimCorridorLabels();
+  syncCgTestAlarm();
 };
 document.getElementById("simMute").onclick=(e)=>{simSoundOn=!simSoundOn;
   e.target.textContent=simSoundOn?"Sound ◼":"Muted ◻";e.target.classList.toggle("on",simSoundOn);

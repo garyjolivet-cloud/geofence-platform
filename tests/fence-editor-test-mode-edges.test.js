@@ -38,7 +38,8 @@ function run(overrides = {}) {
   const sources = {}, layers = [], warns = [];
   const scope = {
     GuardEdge: overrides.GuardEdge || REAL_GUARD_EDGE, cors, bufferM: 0.5,
-    _cgGuardedIds: overrides.armed || new Set(["bend"]),
+    // the edge block asks _cgTestGuarded(id) (Guard ON/OFF aware since 2026-10-03); here: armed set
+    _cgTestGuarded: id => (overrides.armed || new Set(["bend"])).has(id),
     map: { addSource: (id, def) => { sources[id] = def; }, addLayer: def => { layers.push(def); } },
     console: { warn: (...a) => warns.push(a.join(" ")) },
   };

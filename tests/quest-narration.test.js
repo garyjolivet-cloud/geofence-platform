@@ -86,21 +86,43 @@ const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"),
   assert(!/function passingSay\(|sideOf\(pt, corridor, headingDeg\)\{|on your " \+ side/.test(rq), "no private copy of the narration rules (or left/right) left in ridge-quest");
 })();
 
-// ---- Guard OFF: only armed runs speak (user 2026-10-03), Test Mode and live alike ----
-(function testGuardOffOnlyArmedRunsSpeak() {
-  const src = ed.slice(ed.indexOf("function questSimNarrOk(c){"));
-  const body = src.slice(0, src.indexOf("\n}") + 2);
-  const run = (guardedOnly, chuteGuardOn, armed, c) => {
-    const document = { getElementById: () => ({ checked: guardedOnly }) };
+// ---- Guard ON/OFF in Test Mode (user 2026-10-03: "when guard is off voice is only used for
+// selected guard runs", "add guard on off to test"), same rule as live ----
+const fnSrc = tag => { const s = ed.slice(ed.indexOf(tag)); return s.slice(0, s.indexOf("\n}") + 2); };
+(function testGuardDecidesWhoSpeaks() {
+  const body = fnSrc("function _cgTestGuarded(id){") + "\n" + fnSrc("function questSimNarrOk(c){");
+  const run = (o, c) => {
+    const document = { getElementById: () => ({ checked: o.guardedOnly !== false }) };
     // eslint-disable-next-line no-new-func
-    return new Function("document", "_chuteGuardOn", "_cgGuardedIds", body + "\nreturn questSimNarrOk;")(document, chuteGuardOn, armed)(c);
+    return new Function("document", "_chuteGuardOn", "_cgTestMaster", "_cgMutedIds", "_cgGuardedIds", body + "\nreturn questSimNarrOk;")(
+      document, o.workspace !== false, !!o.master, o.muted || new Set(), o.armed || new Set())(c);
   };
-  const armed = new Set(["cat-fight"]);
-  assert(run(true, true, armed, { runType: "chute", zoneId: "cat-fight" }) === true, "Test Mode: an armed chute speaks");
-  assert(run(true, true, armed, { runType: "chute", zoneId: "hallowed" }) === false, "Test Mode: an unarmed chute is silent (Guard OFF + armed)");
-  assert(run(true, true, new Set(), { runType: "lift", zoneId: "gondola" }) === true, "Test Mode: lifts always speak");
-  assert(run(false, true, new Set(), { runType: "chute", zoneId: "hallowed" }) === true, "setting \"narrate only guarded runs\" off => every run speaks");
-  assert(run(true, false, new Set(), { runType: "chute", zoneId: "hallowed" }) === true, "workspace without Corridor Guard => every run speaks");
+  const cat = { runType: "chute", zoneId: "cat-fight" }, hal = { runType: "chute", zoneId: "hallowed" };
+  const armed = new Set(["cat-fight"]), muted = new Set(["cat-fight"]);
+  // Guard OFF: armed only
+  assert(run({ master: false, armed }, cat) === true, "Guard OFF: an armed chute speaks");
+  assert(run({ master: false, armed }, hal) === false, "Guard OFF: an unarmed chute is silent");
+  assert(run({ master: false }, { runType: "lift", zoneId: "gondola" }) === true, "lifts always speak");
+  // Guard ON: everything but muted
+  assert(run({ master: true }, hal) === true, "Guard ON: every chute speaks");
+  assert(run({ master: true, muted }, cat) === false, "Guard ON: a muted chute is silent");
+  assert(run({ master: true, muted, armed }, hal) === true, "Guard ON ignores the armed set");
+  assert(run({ master: false, muted, armed }, cat) === true, "Guard OFF ignores the muted set (each survives a flip)");
+  // gates that open everything
+  assert(run({ master: false, guardedOnly: false }, hal) === true, "setting \"narrate only guarded runs\" off => every run speaks");
+  assert(run({ master: false, workspace: false }, hal) === true, "workspace without Corridor Guard => every run speaks");
+})();
+
+(function testGuardSwitchWiring() {
+  assert(/<button id="simGuard"/.test(ed), "Test Mode has a Guard ON/OFF button");
+  assert(/_cgGuardedIds = new Set\(\); _cgMutedIds = new Set\(\); _cgTestMaster = true;/.test(ed), "each Test Mode entry starts Guard ON with nothing muted or armed, like live's default");
+  assert(/getActiveAlarm\(id=>_cgTestGuarded\(id\)\)/.test(ed), "the tone follows the same Guard rule");
+  const lp = fnSrc("function _simRunLongPressHandler(feature){");
+  assert(/if\(_cgTestMaster\)\{[\s\S]*_cgMutedIds[\s\S]*\} else \{[\s\S]*_cgGuardedIds/.test(lp), "press-and-hold mutes with Guard ON and arms with Guard OFF");
+  assert(!/_cgGuardedIds\.has\(corridorId\)/.test(ed), "no Guard check left that ignores the ON/OFF switch");
+})();
+
+(function testLiveRuleMatches() {
   // live: the same rule with Guard OFF (master false) => only the armed set
   const live = rq.match(/const narrOk = (.*);/);
   assert(!!live && /this\.isGuarded\(corridor\.zoneId\)/.test(live[1]) && /corridor\.runType==="lift"/.test(live[1]),
