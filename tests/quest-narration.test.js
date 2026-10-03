@@ -5,6 +5,9 @@
 //
 // Run: `node --test tests/quest-narration.test.js` (or the full suite).
 "use strict";
+// ridge-quest.html shows a rider's own chute names via rqName / RQNames (2026-10-03); none are set in these tests.
+global.rqName = (zoneId, official) => official;
+global.RQNames = { get: () => null, map: new Map() };
 const fs = require("fs");
 const path = require("path");
 const QN = require("../frontend/quest-narration.js");
@@ -81,7 +84,8 @@ const ed = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html")
 const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
 (function testLiveUsesModule() {
   assert(/<script src="\/quest-narration\.js"><\/script>/.test(rq), "ridge-quest loads the shared module");
-  assert(/QuestNarration\.step\(st, corridor, \[p\.lat,p\.lon\], \{ inRun:this\._inRunNow, narrOk/.test(rq)
+  assert(/QuestNarration\.step\(st, corridor, \[p\.lat,p\.lon\], \{ line: myName \? "This is "\+myName : null, inRun:this\._inRunNow, narrOk/.test(rq)
+    && /const myName = RQNames\.get\(corridor\.zoneId\);/.test(rq)
     && /this\._inRunNow = QuestNarration\.insideRun\(/.test(rq), "_tick narrates through the shared module, with the in-a-run gate worked out once per fix");
   assert(!/function passingSay\(|sideOf\(pt, corridor, headingDeg\)\{|on your " \+ side/.test(rq), "no private copy of the narration rules (or left/right) left in ridge-quest");
 })();

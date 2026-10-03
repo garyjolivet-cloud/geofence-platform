@@ -7,6 +7,9 @@
 //
 // Run: `node --test tests/quest-armed-isolation.test.js`
 "use strict";
+// ridge-quest.html shows a rider's own chute names via rqName / RQNames (2026-10-03); none are set in these tests.
+global.rqName = (zoneId, official) => official;
+global.RQNames = { get: () => null, map: new Map() };
 const fs = require("fs");
 const path = require("path");
 

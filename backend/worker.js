@@ -636,6 +636,15 @@ function cleanChuteLinePoints(points) {
 // clientId that becomes the row id. Returns null (new), "mine" (already stored for this player =
 // done) or "taken" (another player's row has that id -- never expected with UUIDs).
 function validClientId(v) { return typeof v === "string" && /^[A-Za-z0-9-]{8,64}$/.test(v); }
+// A rider's own chute name (player_corridor_name, 2026-10-03): control characters and angle
+// brackets removed, inner whitespace collapsed, trimmed, 1-CORRIDOR_NAME_MAX characters. null when
+// nothing usable is left.
+const CORRIDOR_NAME_MAX = 40;
+function cleanCorridorName(v) {
+  if (typeof v !== "string") return null;
+  const s = v.replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f<>]/g, "").trim();   // tabs/newlines -> space first
+  return s && s.length <= CORRIDOR_NAME_MAX ? s : null;
+}
 async function clientIdCheck(env, table, clientId, playerId) {
   if (!validClientId(clientId)) return null;
   const row = await env.DB.prepare("SELECT player_id FROM " + table + " WHERE id=?").bind(clientId).first();
@@ -1119,6 +1128,8 @@ async function api(request, env, url) {
       env.DB.prepare("DELETE FROM player_day_activity_stats WHERE player_id=?").bind(P.playerId),
       // Chute lines (0068) — player_id FK, so this must go before player_account.
       env.DB.prepare("DELETE FROM chute_line WHERE player_id=?").bind(P.playerId),
+      // A rider's own chute names (0069) — player_id FK, so before player_account too.
+      env.DB.prepare("DELETE FROM player_corridor_name WHERE player_id=?").bind(P.playerId),
       // Friends list + live-location share (2026-09) — plain columns, no FK,
       // so these wouldn't block the delete, but leaving them behind would
       // keep a removed player in other people's friend lists.
@@ -1297,6 +1308,41 @@ async function api(request, env, url) {
       return o;
     });
     return json({ lines }, 200, AC);
+  }
+  // --- A rider's own chute names (migrations/0069, 2026-10-03): shown only to that rider (their
+  // screens + the voice). Never used for quest_run.run_name, the leaderboard or the social image.
+  // Keyed by the stop id, so a new chute or a GPX Editor rename never breaks a rider's name.
+  //   GET    /api/players/:id/corridor-names            -> { names: { zoneId: name } }
+  //   PUT    /api/players/:id/corridor-names/:zoneId    { name }  (1-40 characters after cleaning)
+  //   DELETE /api/players/:id/corridor-names/:zoneId    back to the resort's name
+  //   DELETE /api/players/:id/corridor-names            every name back to the resort's
+  const mpcn = path.match(/^\/api\/players\/([^/]+)\/corridor-names(?:\/([^/]+))?$/);
+  if (mpcn && (method === "GET" || method === "PUT" || method === "DELETE")) {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mpcn[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const zoneId = mpcn[2] ? decodeURIComponent(mpcn[2]).slice(0, 200) : null;
+    if (method === "GET" && !zoneId) {
+      const { results } = await env.DB.prepare("SELECT zone_id,name FROM player_corridor_name WHERE player_id=?").bind(P.playerId).all();
+      const names = {}; (results || []).forEach(r => { names[r.zone_id] = r.name; });
+      return json({ names }, 200, AC);
+    }
+    if (method === "PUT" && zoneId) {
+      const b = await request.json().catch(() => ({}));
+      const name = cleanCorridorName(b && b.name);
+      if (!name) return json({ error: "name must be 1-" + CORRIDOR_NAME_MAX + " characters" }, 400, AC);
+      await env.DB.prepare(
+        "INSERT INTO player_corridor_name (player_id,zone_id,name,updated_at) VALUES (?,?,?,?) " +
+        "ON CONFLICT(player_id,zone_id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at"
+      ).bind(P.playerId, zoneId, name, new Date().toISOString()).run();
+      return json({ ok: true, zoneId, name }, 200, AC);
+    }
+    if (method === "DELETE") {
+      if (zoneId) await env.DB.prepare("DELETE FROM player_corridor_name WHERE player_id=? AND zone_id=?").bind(P.playerId, zoneId).run();
+      else await env.DB.prepare("DELETE FROM player_corridor_name WHERE player_id=?").bind(P.playerId).run();
+      return json({ ok: true }, 200, AC);
+    }
+    return json({ error: "not found" }, 404, AC);
   }
   const mchl = path.match(/^\/api\/chute-lines\/([^/]+)$/);
   if (mchl && (method === "PATCH" || method === "DELETE")) {
@@ -2226,7 +2272,7 @@ async function api(request, env, url) {
     // same set as POST /api/players/:id/forget) or a deleted workspace
     // leaves orphan player_account rows, and a stale google_sub then blocks
     // that person signing up anywhere else.
-    for (const t of ["player_session", "quest_run", "player_fog_cell", "player_day_stats", "player_day_activity_stats", "player_presence", "chute_line"]) {
+    for (const t of ["player_session", "quest_run", "player_fog_cell", "player_day_stats", "player_day_activity_stats", "player_presence", "chute_line", "player_corridor_name"]) {
       await env.DB.prepare(`DELETE FROM ${t} WHERE player_id IN (SELECT id FROM player_account WHERE app_id=?)`).bind(aid).run().catch(() => {});
     }
     await env.DB.prepare("DELETE FROM player_friend WHERE app_id=?").bind(aid).run().catch(() => {});

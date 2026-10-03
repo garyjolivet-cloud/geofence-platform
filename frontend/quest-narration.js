@@ -81,7 +81,8 @@
     var halfW = (corridor.widthM || 10) / 2;
     var dist = bandDist(pt, corridor);
     var isLift = corridor.runType === "lift";
-    var say = lineFor(corridor);
+    // ctx.line: the host's override, e.g. "This is <the rider's own name>" (2026-10-03).
+    var say = ctx.line || lineFor(corridor);
     if (!st.phase) st.phase = "idle";
     if (st.narrCooldownUntil == null) st.narrCooldownUntil = 0;
 

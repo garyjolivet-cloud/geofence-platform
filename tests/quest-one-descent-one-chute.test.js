@@ -5,6 +5,9 @@
 //
 // Run: `node --test tests/quest-one-descent-one-chute.test.js` (or the full suite).
 "use strict";
+// ridge-quest.html shows a rider's own chute names via rqName / RQNames (2026-10-03); none are set in these tests.
+global.rqName = (zoneId, official) => official;
+global.RQNames = { get: () => null, map: new Map() };
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");

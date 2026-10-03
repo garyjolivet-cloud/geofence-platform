@@ -474,7 +474,7 @@ const RQOut = (typeof RQOutbox!=="undefined") ? RQOutbox.createOutbox({
   playerId: ()=>{ const s=getSession(); return s && s.player ? s.player.id : null; },
   onSent: item=>{
     if(item.kind==="run" && Quest.onRunLogged) Quest.onRunLogged(item.body);
-    if(item.kind==="run" && Quest.onRunDelivered) Quest.onRunDelivered(item.body.runName);
+    if(item.kind==="run" && Quest.onRunDelivered) Quest.onRunDelivered(rqName(item.body.zoneId, item.body.runName));
     if(item.kind==="line" && Quest.onChuteLineSaved) Quest.onChuteLineSaved(item.body.zoneId);
   },
   onChange: ()=>{ try{ if(typeof paintOutboxNote==="function") paintOutboxNote(); }catch(e){} }
@@ -907,6 +907,40 @@ function setMutedCorridors(ids){ try{ localStorage.setItem("rq.mutedCorridors", 
 // ARMS just that one (guard + boundary lines for it alone) instead of muting.
 // Its own key — the legacy rq.guardedCorridors list is deliberately not revived.
 // Corridors the author set Off for Guard ON that this rider turned on by press-and-hold.
+// ---- A rider's own chute names (2026-10-03) ----
+// Saved on the account (GET/PUT/DELETE /api/players/:id/corridor-names, migrations/0069) so they
+// last the season and follow the rider; a copy in localStorage ("rq.myNames.<playerId>") shows
+// them at once and offline. Keyed by stop id, so a new chute or a GPX Editor rename never breaks
+// one. Used ONLY on the rider's own screens and in the voice: runs sent to the server, the
+// leaderboard and the social media image always keep the resort's names (user: "I can't have
+// poor names under the name Kicking Horse").
+const RQNames = {
+  map: new Map(), playerId: null,
+  _key(){ return "rq.myNames." + (this.playerId||""); },
+  load(playerId){
+    this.playerId = playerId || null;
+    this.map = new Map();
+    try{ Object.entries(JSON.parse(localStorage.getItem(this._key())||"{}")).forEach(([k,v])=>{ if(typeof v==="string") this.map.set(k,v); }); }catch(e){}
+    if(!playerId) return Promise.resolve();
+    return api("/api/players/"+encodeURIComponent(playerId)+"/corridor-names").then(j=>{
+      this.map = new Map(Object.entries((j&&j.names)||{}));
+      this._cache();
+    }).catch(()=>{});   // offline: keep the cached copy
+  },
+  _cache(){ try{ localStorage.setItem(this._key(), JSON.stringify(Object.fromEntries(this.map))); }catch(e){} },
+  get(zoneId){ return zoneId!=null ? this.map.get(String(zoneId)) || null : null; },
+  async set(zoneId, name){
+    const j = await api("/api/players/"+encodeURIComponent(this.playerId)+"/corridor-names/"+encodeURIComponent(zoneId), { method:"PUT", body:JSON.stringify({ name }) });
+    this.map.set(String(zoneId), j.name); this._cache(); return j.name;
+  },
+  async clear(zoneId){
+    await api("/api/players/"+encodeURIComponent(this.playerId)+"/corridor-names"+(zoneId!=null?"/"+encodeURIComponent(zoneId):""), { method:"DELETE" });
+    if(zoneId!=null) this.map.delete(String(zoneId)); else this.map.clear();
+    this._cache();
+  }
+};
+// The name to SHOW this rider: their own if they set one, else the resort's.
+function rqName(zoneId, official){ return RQNames.get(zoneId) || official; }
 function getGuardOnCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.guardOnCorridors")||"[]"); }catch(e){ return []; } }
 function setGuardOnCorridors(ids){ try{ localStorage.setItem("rq.guardOnCorridors", JSON.stringify(ids)); }catch(e){} }
 function getArmedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.armedCorridors")||"[]"); }catch(e){ return []; } }
@@ -1833,7 +1867,8 @@ const Quest = {
     const narrOk = !this.narrateGuardedOnly || corridor.runType==="lift" || !this.chuteGuardEnabled || this.isGuarded(corridor.zoneId);
     // Inside a chute or run right now? Worked out once per fix (p), not once per corridor.
     if(this._inRunFix !== p){ this._inRunFix = p; this._inRunNow = QuestNarration.insideRun([p.lat,p.lon], this.corridors || [corridor]); }
-    const nr = QuestNarration.step(st, corridor, [p.lat,p.lon], { inRun:this._inRunNow, narrOk,
+    const myName = RQNames.get(corridor.zoneId);   // the rider's own name replaces the line in the voice
+    const nr = QuestNarration.step(st, corridor, [p.lat,p.lon], { line: myName ? "This is "+myName : null, inRun:this._inRunNow, narrOk,
       onLift:!!this._liftRaw, now:Date.now(), canSay:!!this.onNarrate, canPrefetch:!!this.onPrefetch });
     nr.prefetch.forEach(t=>this.onPrefetch(t));
     if(nr.say) this.onNarrate(nr.say, corridor.zoneId);
@@ -1940,7 +1975,7 @@ const Quest = {
     const descending = trip.dir==="down", ascending = trip.dir==="up";
     const distanceM = trip.distanceM, avgSpeedMps = trip.avgSpeedMps, maxSpeedMps = trip.maxSpeedMps;
     // Genuine pass, not creditable: tell the player why, and consume it.
-    const reject = (why)=>{ if(this.onCoverage) this.onCoverage(corridor.name, coverage, false, why); return "rejected"; };
+    const reject = (why)=>{ if(this.onCoverage) this.onCoverage(rqName(corridor.zoneId, corridor.name), coverage, false, why); return "rejected"; };
     // verticalM (which feeds POINTS) is assigned after the activity block
     // below -- it depends on the classified activity.
 
@@ -2087,14 +2122,14 @@ const Quest = {
       if(better){ this._dropPass(c, better); continue; }
       if(!force && now < c.at + QUEST_TUNING.PASS_SETTLE_MS && this._rivalRecording(c.corridor.zoneId)) continue;
       c.state = "logged";
-      if(this.onCoverage) this.onCoverage(c.corridor.name, c.coverage, true);
+      if(this.onCoverage) this.onCoverage(rqName(c.corridor.zoneId, c.corridor.name), c.coverage, true);
       this._postRun(c.corridor, c.run, c.fixes);
     }
   },
   _dropPass(c, winner){
     c.state = "dropped";
     if(typeof cgLog==="function") cgLog("RUN not counted: \""+c.corridor.name+"\" (off by "+c.fitM.toFixed(1)+" m) -- same descent as \""+winner.corridor.name+"\" ("+winner.fitM.toFixed(1)+" m)");
-    if(this.onCoverage) this.onCoverage(c.corridor.name, c.coverage, false, "not counted, you were on "+winner.corridor.name);
+    if(this.onCoverage) this.onCoverage(rqName(c.corridor.zoneId, c.corridor.name), c.coverage, false, "not counted, you were on "+rqName(winner.corridor.zoneId, winner.corridor.name));
   },
   // Another chute/run is part-way through a pass right now (its recorder has seen one end).
   _rivalRecording(zoneId){
@@ -2111,9 +2146,9 @@ const Quest = {
     run.clientId = rqNewClientId();
     this._saveChuteLine(corridor, run, fixes);   // Guard state is judged NOW, not when signal returns
     rqDeliver({ kind:"run", path:"/api/quest-runs", body:run }).then(res=>{
-      if(res==="dropped"){ if(this.onSaveError) this.onSaveError(corridor.name); return; }
+      if(res==="dropped"){ if(this.onSaveError) this.onSaveError(rqName(corridor.zoneId, corridor.name)); return; }
       this._celebrate(run);
-      if(res==="queued" && this.onRunQueued) this.onRunQueued(corridor.name);
+      if(res==="queued" && this.onRunQueued) this.onRunQueued(rqName(corridor.zoneId, corridor.name));
     });
   }
 };
@@ -2154,7 +2189,7 @@ function questSeasonIdClient(date){
 function groupRuns(runs){
   const map = new Map();
   (runs||[]).forEach(r=>{
-    const name = r.run_name || r.runName || "Run";
+    const name = rqName(r.zone_id || r.zoneId, r.run_name || r.runName || "Run");   // the rider's own name, if set
     const verticalM = r.vertical_m!=null ? r.vertical_m : r.verticalM;
     const distanceM = r.distance_m!=null ? r.distance_m : r.distanceM;
     const durationS = r.duration_s!=null ? r.duration_s : r.durationS;
@@ -2761,7 +2796,8 @@ function renderHome(){
     +'<button class="ghost" id="btnLogout">Log out</button>'
     +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
     +'</div>';
-  refreshRuns(s.player.id);
+  // The rider's own chute names (cached copy at once, then the account's) before the run list draws.
+  RQNames.load(s.player.id).finally(()=>refreshRuns(s.player.id));
   refreshStats(s.player.id);
   loadSkiedToday(s.player.id);
   (async ()=>{
@@ -3045,7 +3081,7 @@ function chuteRowHtml(c, maxCount){
     +'<div class="chuteTop" role="button" tabindex="0" aria-expanded="false">'
       +'<span class="fold">▸</span>'
       +difficultyMarkHtml(c.difficulty)
-      +'<span class="name">'+esc(c.name)+'</span>'
+      +'<span class="name">'+esc(rqName(c.zoneId, c.name))+'</span>'
       +'<span class="count">×'+c.count+'</span>'
     +'</div>'
     +'<div class="chuteBar"><i style="width:'+pct+'%"></i></div>'
@@ -3073,7 +3109,7 @@ async function openChuteLines(row, playerId){
     box.innerHTML = lines.map(l=>
       '<div class="lineRow" data-id="'+esc(l.id)+'">'
         +'<span class="sw" style="background:'+(colors[l.id]||"transparent")+'"></span>'
-        +'<span class="lbl">'+esc(l.runName||name)+' — '+esc(fmtLineWhen(l.startedAt))+'</span>'
+        +'<span class="lbl">'+esc(rqName(l.zoneId, l.runName||name))+' — '+esc(fmtLineWhen(l.startedAt))+'</span>'
         +'<button class="ghost lnToggle" aria-pressed="'+(l.visible?"true":"false")+'">'+(l.visible?"On":"Off")+'</button>'
         +'<button class="ghost lnDel" aria-label="Delete this line">🗑</button>'
       +'</div>').join("");
@@ -3195,9 +3231,16 @@ async function renderYourChutes(mode){
       +'<button class="ghost" id="chSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
     +'</div>'
     +'<div id="chList"><div class="empty">Loading…</div></div>'
+    +(RQNames.map.size ? '<button class="ghost" id="chResetNames" title="Your own names show only to you; this puts every chute, run, boot pack and lift back to the resort’s name.">↩ Use the resort’s names again ('+RQNames.map.size+' renamed)</button>' : '')
     +'<button class="ghost" id="chBack">← Back</button>'
     +'</div>';
   document.getElementById("chBack").onclick=renderHome;
+  const resetBtn=document.getElementById("chResetNames");
+  if(resetBtn) resetBtn.onclick=async()=>{
+    if(!confirm("Put all "+RQNames.map.size+" of your names back to the resort’s names?")) return;
+    try{ await RQNames.clear(null); rqToast("Back to the resort’s names"); renderYourChutes(mode); }
+    catch(e){ rqToast("Couldn’t save — check your signal"); }
+  };
   document.getElementById("chDailyBtn").onclick=()=>renderYourChutes("daily");
   document.getElementById("chSeasonBtn").onclick=()=>renderYourChutes("season");
   const listEl=document.getElementById("chList");
@@ -3228,7 +3271,7 @@ function tallyRowHtml(r, maxCount, marks){
   return '<div class="chuteRow">'
     +'<div class="chuteTop">'
       +(marks ? difficultyMarkHtml(r.difficulty) : '')
-      +'<span class="name">'+esc(r.name)+'</span>'
+      +'<span class="name">'+esc(rqName(r.zoneId, r.name))+'</span>'
       +'<span class="count">×'+r.count+' · '+Math.round(r.verticalM||0)+'m</span>'
     +'</div>'
     +'<div class="chuteBar"><i style="width:'+pct+'%"></i></div>'
@@ -3560,7 +3603,7 @@ function _rebuildArmedLabels(map, cors){
   cors.forEach(c=>{
     if(!Quest.armedCorridors.has(c.zoneId) || !c.path || c.path.length<2) return;
     const mid=c.path[Math.floor(c.path.length/2)]; // [lat,lon]
-    const el=document.createElement("div"); el.className="runLabel"; el.textContent=c.name;
+    const el=document.createElement("div"); el.className="runLabel"; el.textContent=rqName(c.zoneId, c.name);
     _armedLabelMarkers.push(new maplibregl.Marker({ element:el, anchor:"center" }).setLngLat([mid[1], mid[0]]).addTo(map));
   });
 }
@@ -3887,12 +3930,32 @@ function drawAllRuns(map){
   function showRunPopup(feature, lngLat){
     const p = feature && feature.properties; if(!p) return;
     const act = p.activityType || (p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
-    new maplibregl.Popup({ closeButton:true, offset:8 })
+    // The rider's own name, if set (2026-10-03), with the resort's name under it; ✏️ renames it for
+    // this rider only, ↩ goes back to the resort's name. Saved on their account.
+    const mine = RQNames.get(p.id);
+    const btn = 'style="font:600 13px system-ui,sans-serif;padding:6px 10px;margin:8px 6px 0 0;border:1px solid #b9c7d6;border-radius:8px;background:#fff;color:#0a1018;cursor:pointer"';
+    const popup = new maplibregl.Popup({ closeButton:true, offset:8 })
       .setLngLat(lngLat)
       .setHTML('<div style="font:600 16px/1.35 system-ui,sans-serif;color:#0a1018">'+
-        esc(p.name)+'</div><div style="font:14px system-ui,sans-serif;color:#5b7088">'+
-        [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
+        esc(mine || p.name)+'</div>'+
+        (mine ? '<div style="font:12px system-ui,sans-serif;color:#5b7088">resort name: '+esc(p.name)+'</div>' : '')+
+        '<div style="font:14px system-ui,sans-serif;color:#5b7088">'+
+        [p.difficulty&&esc(p.difficulty), act&&esc(act), p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>'+
+        '<div><button class="rqRename" '+btn+'>✏️ Rename</button>'+(mine ? '<button class="rqRevert" '+btn+'>↩ Resort name</button>' : '')+'</div>'+
+        '<div style="font:11px system-ui,sans-serif;color:#8193a6;margin-top:4px">Your name is only on your phone and voice — never the leaderboard.</div>')
       .addTo(map);
+    const root = popup.getElement();
+    const done = msg=>{ popup.remove(); rqToast(msg); try{ _rebuildArmedLabels(map, cors); }catch(e){} };
+    root.querySelector(".rqRename")?.addEventListener("click", async ()=>{
+      const v = prompt("Your name for “"+p.name+"” (only you see it, max 40 characters):", mine || p.name);
+      if(v==null) return;
+      if(!v.trim() || v.trim()===p.name){ if(mine){ try{ await RQNames.clear(p.id); done("Back to “"+p.name+"”"); }catch(e){ rqToast("Couldn’t save — check your signal"); } } return; }
+      try{ const n = await RQNames.set(p.id, v); done("Renamed to “"+n+"” — only for you"); }
+      catch(e){ rqToast("Couldn’t save that name — "+((e&&e.message)||"check your signal")); }
+    });
+    root.querySelector(".rqRevert")?.addEventListener("click", async ()=>{
+      try{ await RQNames.clear(p.id); done("Back to “"+p.name+"”"); }catch(e){ rqToast("Couldn’t save — check your signal"); }
+    });
   }
   // Set every corridor's muted/guardEdges FEATURE-STATE from Quest state, so the
   // yellow boundary lines and the muted grey track the master button and
@@ -3952,7 +4015,7 @@ function drawAllRuns(map){
         // OFF: this toggles ARM (guard + boundary lines for just this run). Returns whether it is
         // now guarded.
         const guarded = Quest.toggleGuardForCorridor(zoneId);
-        const name = (feature.properties && feature.properties.name) || "run";
+        const name = rqName(zoneId, (feature.properties && feature.properties.name) || "run");
         rqToast(guarded ? ("🛡 Guarding: "+name) : ("Stopped guarding: "+name));
         applyGuardState();
         paintGuardButtons();   // the OFF button shows how many runs are armed
