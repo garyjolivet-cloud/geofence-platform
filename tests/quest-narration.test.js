@@ -70,7 +70,7 @@ const ed = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html")
   assert(/<script src="\/quest-narration\.js"><\/script>/.test(ed), "the editor loads the shared module");
   assert(/_questOn=!!\(app&&app\.questEnabled\);/.test(ed), "Ridge Quest mode follows the workspace's questEnabled flag");
   assert(/if\(t\.say && _questOn\) return;/.test(ed), "in a Ridge Quest workspace the tour engine's zone-enter line is not spoken");
-  assert(/QuestNarration\.step\(st, c, \[sm\.lat,sm\.lon\], \{ inRun, narrOk:true/.test(ed) && /const inRun=QuestNarration\.insideRun\(\[sm\.lat,sm\.lon\], this\.corridors\);/.test(ed),
+  assert(/QuestNarration\.step\(st, c, \[sm\.lat,sm\.lon\], \{ inRun, narrOk:questSimNarrOk\(c\)/.test(ed) && /const inRun=QuestNarration\.insideRun\(\[sm\.lat,sm\.lon\], this\.corridors\);/.test(ed),
     "Test Mode feeds the smoothed position and the in-a-run gate, like live");
   assert(/const active=SimFencer\.update\(raw,simPrevRaw,t\);\s*\n\s*\/\/[^\n]*\n\s*try\{ QuestSim\.tick\(sm\); \}/.test(ed), "every simulated fix ticks QuestSim");
   assert((ed.match(/QuestSim\.load\(simBundle\);/g) || []).length === 3, "QuestSim reloads wherever ChuteGuard does (enter, walk, reset)");
@@ -84,6 +84,27 @@ const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"),
   assert(/QuestNarration\.step\(st, corridor, \[p\.lat,p\.lon\], \{ inRun:this\._inRunNow, narrOk/.test(rq)
     && /this\._inRunNow = QuestNarration\.insideRun\(/.test(rq), "_tick narrates through the shared module, with the in-a-run gate worked out once per fix");
   assert(!/function passingSay\(|sideOf\(pt, corridor, headingDeg\)\{|on your " \+ side/.test(rq), "no private copy of the narration rules (or left/right) left in ridge-quest");
+})();
+
+// ---- Guard OFF: only armed runs speak (user 2026-10-03), Test Mode and live alike ----
+(function testGuardOffOnlyArmedRunsSpeak() {
+  const src = ed.slice(ed.indexOf("function questSimNarrOk(c){"));
+  const body = src.slice(0, src.indexOf("\n}") + 2);
+  const run = (guardedOnly, chuteGuardOn, armed, c) => {
+    const document = { getElementById: () => ({ checked: guardedOnly }) };
+    // eslint-disable-next-line no-new-func
+    return new Function("document", "_chuteGuardOn", "_cgGuardedIds", body + "\nreturn questSimNarrOk;")(document, chuteGuardOn, armed)(c);
+  };
+  const armed = new Set(["cat-fight"]);
+  assert(run(true, true, armed, { runType: "chute", zoneId: "cat-fight" }) === true, "Test Mode: an armed chute speaks");
+  assert(run(true, true, armed, { runType: "chute", zoneId: "hallowed" }) === false, "Test Mode: an unarmed chute is silent (Guard OFF + armed)");
+  assert(run(true, true, new Set(), { runType: "lift", zoneId: "gondola" }) === true, "Test Mode: lifts always speak");
+  assert(run(false, true, new Set(), { runType: "chute", zoneId: "hallowed" }) === true, "setting \"narrate only guarded runs\" off => every run speaks");
+  assert(run(true, false, new Set(), { runType: "chute", zoneId: "hallowed" }) === true, "workspace without Corridor Guard => every run speaks");
+  // live: the same rule with Guard OFF (master false) => only the armed set
+  const live = rq.match(/const narrOk = (.*);/);
+  assert(!!live && /this\.isGuarded\(corridor\.zoneId\)/.test(live[1]) && /corridor\.runType==="lift"/.test(live[1]),
+    "live narrOk uses the same guard rule (isGuarded: master OFF => armed only)");
 })();
 
 console.log(pass + " passed, " + fail + " failed");

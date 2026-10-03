@@ -7116,8 +7116,16 @@ function chuteGuardCallbacks(){
 // (QuestNarration.step: while skiing inside a chute or run, chutes/runs/boot packs within 5 m
 // (or the one you are in) are said; lifts on entry; once per approach; "This is <name>" when
 // there is no line; quiet on a lift), fed the same EKF-smoothed position, and the same voice: /api/tts with the text only, one
-// <audio> element, a newer line drops an older one still fetching. Every corridor counts as
-// guarded (live's default: Guard ON, nothing muted), so "narrate only guarded runs" never silences one.
+// <audio> element, a newer line drops an older one still fetching.
+// Guard, same rule as live's narrOk (user 2026-10-03: "when guard is off voice is only used for
+// selected guard runs"): with the project's "narrate only guarded runs" on (⚙, default on) and the
+// workspace's Corridor Guard on, a chute/run/boot pack speaks only if it is ARMED (press-and-hold,
+// _cgGuardedIds). Test Mode's Corridor Guard is always the live "Guard OFF + armed" mode (no master
+// switch here), so with nothing armed only lifts speak. Lifts are never guarded and always speak.
+function questSimNarrOk(c){
+  const guardedOnly=document.getElementById("pNarrateGuarded")?.checked!==false;
+  return !guardedOnly || c.runType==="lift" || !_chuteGuardOn || _cgGuardedIds.has(c.zoneId);
+}
 const QuestSim={
   states:{}, corridors:[], cache:new Map(), gen:0, el:null,
   load(bundle){
@@ -7136,7 +7144,7 @@ const QuestSim={
     const inRun=QuestNarration.insideRun([sm.lat,sm.lon], this.corridors);
     this.corridors.forEach(c=>{
       const st=this.states[c.zoneId]||(this.states[c.zoneId]={});
-      const nr=QuestNarration.step(st, c, [sm.lat,sm.lon], { inRun, narrOk:true, onLift, now, canSay:true, canPrefetch:true });
+      const nr=QuestNarration.step(st, c, [sm.lat,sm.lon], { inRun, narrOk:questSimNarrOk(c), onLift, now, canSay:true, canPrefetch:true });
       nr.prefetch.forEach(text=>{ this.audio(text).catch(()=>{}); });
       if(nr.say) this.say(nr.say);
     });
@@ -7540,7 +7548,8 @@ function enterTestMode(){
   _cgGuardedIds = new Set(); // always start unarmed — see its own comment
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
   QuestSim.load(simBundle);
-  if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said; lifts on entry");
+  if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said; lifts on entry"
+    +(questSimNarrOk({runType:"chute",zoneId:null})?"":". Guard OFF: only ARMED runs speak — press and hold a run to arm it"));
   chuteGuardStartSync();
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.prefetch) PipelineRuntime.prefetch(simBundle.zones);
   if(typeof PipelineRuntime!=='undefined'&&PipelineRuntime.loadGlobal) PipelineRuntime.loadGlobal(simBundle.globalCodeObjects||[], simPipelineCallbacks());
