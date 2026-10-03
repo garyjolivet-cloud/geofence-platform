@@ -41,12 +41,14 @@ const QUEST_TUNING = eval("(" + tuningM[0].replace(/^const QUEST_TUNING = /, "")
 const startTag = "_classifyAndLog(corridor, buffer, selectedActivity, isFinal){";
 const startIdx = html.indexOf(startTag);
 if (startIdx < 0) { console.log("FAIL: could not find _classifyAndLog in ridge-quest.html"); process.exit(1); }
-const endTag = "\n    this._postRun(";
+const endTag = "\n    return this._offerPass(";   // the run then goes through the overlap tie-break (2026-10-03)
 const endIdx = html.indexOf(endTag, startIdx);
 if (endIdx < 0) { console.log("FAIL: could not find end of _classifyAndLog body in ridge-quest.html"); process.exit(1); }
 // eslint-disable-next-line no-new-func
 const classifyRaw = new Function("corridor", "buffer", "selectedActivity", "isFinal", "QGeo", "QUEST_TUNING",
-  html.slice(startIdx + startTag.length, endIdx) + "\nreturn run;");
+  html.slice(startIdx + startTag.length, endIdx) +
+  // No overlapping rival here, so _settlePasses would log it at once: report it the same way.
+  "\nif(this && this.onCoverage) this.onCoverage(corridor.name, coverage, true);\nreturn run;");
 // Old call shape (corridor, buffer, activity, QGeo, QUEST_TUNING), as a
 // player who has LEFT the corridor (isFinal). Returns the run, or undefined.
 function classify(corridor, buffer, sel, QG, QT) {

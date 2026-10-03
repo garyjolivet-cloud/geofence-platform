@@ -292,7 +292,7 @@ test("source wiring: track feed is isolated in try/catch, back-out clears the ho
   assert.ok(/cgLog\("LIFT MODE "/.test(html) && /cgLog\("TRACK points="/.test(html) && /cgLog\("BATTERY SAVER set to "/.test(html), "lift mode, track stats and Battery Saver changes are logged");
   assert.ok(html.includes("Quest.onSkiedChanged=null;"));
   assert.ok(html.includes('<script src="/ridge-visuals.js"></script>'));
-  assert.ok(html.includes("this._postRun(corridor, run, trip.fixes);"));
+  assert.ok(html.includes("this._postRun(c.corridor, c.run, c.fixes);"));   // via the one-descent-one-chute tie-break (2026-10-03)
   assert.ok(extract("_postRun(corridor, run, fixes){").includes("this._celebrate(run);"));
   const applySkiedBody = extract("function setupRideVisuals(");
   assert.ok(!/setData\(RidgeVisuals\.trackFeatureCollection[\s\S]*skied/.test(applySkiedBody.split("function applySkied")[1].split("Quest.onSkiedChanged")[0]), "skied state never reloads a source");

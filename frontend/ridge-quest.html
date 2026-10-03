@@ -904,6 +904,14 @@ function setArmedCorridors(ids){ try{ localStorage.setItem("rq.armedCorridors", 
 // master switch is on and this corridor isn't muted, or the master switch is
 // off and the rider armed this corridor by hand. (armedSet is ignored while
 // the master is on, and mutedSet while it is off, so each survives a flip.)
+// Pure -- two verified passes are "the same descent" when they are of different non-lift corridors
+// and overlap in time by at least half of the shorter one (Quest._settlePasses, 2026-10-03).
+function passesOverlap(a, b){
+  if(a.corridor.zoneId===b.corridor.zoneId) return false;
+  if(a.run.activity==="lift" || b.run.activity==="lift") return false;
+  const ov = Math.min(a.t1, b.t1) - Math.max(a.t0, b.t0);
+  return ov > 0 && ov >= 0.5 * Math.min(a.t1 - a.t0, b.t1 - b.t0);
+}
 function isCorridorGuarded(workspaceOn, masterOn, mutedSet, armedSet, id){
   if(!workspaceOn) return false;
   return masterOn ? !mutedSet.has(id) : armedSet.has(id);
@@ -986,6 +994,7 @@ const QUEST_TUNING = {
   // the old exit-on-first-fix-outside-the-band chopped a real run into
   // fragments on a narrow chute whenever GPS drifted a few metres.
   REC_HOLD_M: 40,
+  PASS_SETTLE_MS: 15000,    // a verified pass waits up to this long for an overlapping chute's pass, then the best fit is logged (Quest._settlePasses)
   // Armed isolation (Guard OFF + armed chutes only): an unarmed chute/run/hike whose band
   // comes within this many metres of an armed corridor's band ignores GPS while that one is
   // armed -- no narration, no recording, no run logged. About phone GPS error.
@@ -1121,6 +1130,14 @@ const QGeo = {
   // corridor's length. On a ~90m corridor a generous 20m tolerance let a
   // diagonal ski-across sit "on" it at both ends; short corridors get the
   // tight minimum instead (a corridor >= 250m long is unaffected).
+  // Mean distance (m) of the fixes from the corridor's centreline: how well a pass fits it.
+  meanOffsetM(corridor, fixes){
+    const G = this.geom(corridor);
+    if(!fixes || !fixes.length || G.xy.length < 2) return Infinity;
+    let sum = 0, lastS = null;
+    fixes.forEach(f=>{ const pr = this.projectOnPath([f.lat,f.lon], G, lastS); lastS = pr.s; sum += pr.d; });
+    return sum / fixes.length;
+  },
   fixTol(acc, L, T){
     const cap = Math.min(T.RUN_TOL_MAX_M, Math.max(T.RUN_TOL_MIN_M, L*0.08));
     return Math.max(T.RUN_TOL_MIN_M, Math.min(cap, acc!=null ? acc : 10));
@@ -1536,6 +1553,7 @@ const Quest = {
   },
   stop(){
     if(this.watchId!=null){ navigator.geolocation.clearWatch(this.watchId); this.watchId=null; }
+    try{ this._settlePasses(true); }catch(e){}   // log whatever was still waiting on a rival
     // Flush the checkpoint total one last time (unthrottled) so a session
     // that ends between throttled posts still lands its final number.
     if(this.checkpointVert && this.checkpointVert.total>0) this._reportCheckpointVertical(this.checkpointVert.total, true);
@@ -1619,6 +1637,7 @@ const Quest = {
     }
     // Armed isolation: a run next to an armed chute ignores GPS (refreshIgnoredCorridors).
     this.corridors.forEach(corridor=>{ if(!this.ignoredCorridors.has(corridor.zoneId)) this._tick(corridor, p, this.selectedActivity); });
+    try{ this._settlePasses(false); }catch(e){}   // one descent, one chute: release passes whose rivals finished
     // Off-course chute warning — travel heading, not device compass, same
     // "phone in a pocket" reasoning Guidance Bot already uses elsewhere in
     // this codebase (a stationary/paused compass reading would falsely gate
@@ -2011,9 +2030,52 @@ const Quest = {
       activity, startedAt: new Date(trip.tStart).toISOString(), endedAt: new Date(trip.tEnd).toISOString(),
       durationS, verticalM, distanceM: Math.round(distanceM), avgSpeedMps, maxSpeedMps
     };
-    if(this.onCoverage) this.onCoverage(corridor.name, coverage, true);
-    this._postRun(corridor, run, trip.fixes);
-    return true;
+    return this._offerPass(corridor, run, trip);
+  },
+  // ---- One descent, one chute (2026-10-03) ----
+  // Kicking Horse chutes are drawn 50-100 m wide and many overlap, so one descent could verify
+  // two of them (12 pairs on the live map, e.g. Legs Right / Legs Left, Darwin 2 / Darwin 3).
+  // A verified pass is a CANDIDATE: when passes of different corridors overlap in time (at least
+  // half of the shorter one), only the best fit is logged -- the one whose centreline the track
+  // stayed closest to on average (QGeo.meanOffsetM) -- and the rest are reported "not counted,
+  // you were on X". A candidate is logged at once when no other chute/run is mid-recording
+  // (the usual case: the toast is instant); otherwise it waits up to PASS_SETTLE_MS for a
+  // rival to finish. A pass that overlaps one already logged is never logged too. Lifts are
+  // never part of this. Pure overlap rule: passesOverlap().
+  _passes: [],
+  _offerPass(corridor, run, trip){
+    const cand = { corridor, run, fixes:trip.fixes, coverage:trip.coverage, t0:trip.tStart, t1:trip.tEnd,
+                   fitM:QGeo.meanOffsetM(corridor, trip.fixes), at:Date.now(), state:"pending" };
+    this._passes.push(cand);
+    this._settlePasses(false);
+    if(cand.state==="pending") setTimeout(()=>{ try{ this._settlePasses(false); }catch(e){} }, QUEST_TUNING.PASS_SETTLE_MS + 100);
+    return cand.state==="dropped" ? "rejected" : true;
+  },
+  _settlePasses(force){
+    const now = Date.now();
+    this._passes = this._passes.filter(p=>p.state==="pending" || now - p.at < 10*60000);
+    for(const c of this._passes){
+      if(c.state!=="pending") continue;
+      const rivals = this._passes.filter(o=>o!==c && o.state!=="dropped" && passesOverlap(o, c));
+      const counted = rivals.find(o=>o.state==="logged");
+      if(counted){ this._dropPass(c, counted); continue; }
+      const better = rivals.find(o=>o.fitM < c.fitM);
+      if(better){ this._dropPass(c, better); continue; }
+      if(!force && now < c.at + QUEST_TUNING.PASS_SETTLE_MS && this._rivalRecording(c.corridor.zoneId)) continue;
+      c.state = "logged";
+      if(this.onCoverage) this.onCoverage(c.corridor.name, c.coverage, true);
+      this._postRun(c.corridor, c.run, c.fixes);
+    }
+  },
+  _dropPass(c, winner){
+    c.state = "dropped";
+    if(typeof cgLog==="function") cgLog("RUN not counted: \""+c.corridor.name+"\" (off by "+c.fitM.toFixed(1)+" m) -- same descent as \""+winner.corridor.name+"\" ("+winner.fitM.toFixed(1)+" m)");
+    if(this.onCoverage) this.onCoverage(c.corridor.name, c.coverage, false, "not counted, you were on "+winner.corridor.name);
+  },
+  // Another chute/run is part-way through a pass right now (its recorder has seen one end).
+  _rivalRecording(zoneId){
+    return (this.corridors||[]).some(c=>c.zoneId!==zoneId && c.runType!=="lift"
+      && this.states[c.zoneId] && this.states[c.zoneId].rec && (this.states[c.zoneId].rec.sawTop || this.states[c.zoneId].rec.sawBottom));
   },
   // Sends a logged run (and its chute line) through the offline outbox (frontend/rq-outbox.js):
   // with no signal both are kept on the phone and sent when the connection returns, and the

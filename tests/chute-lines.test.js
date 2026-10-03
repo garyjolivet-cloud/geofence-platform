@@ -194,9 +194,12 @@ test("a failed save is swallowed and never throws into run logging", async () =>
   assert.strictEqual(bad.save(chute, skiRun, passFixes), null, "an exception inside the gate returns null");
 });
 
-test("_classifyAndLog hands the run and the verified pass's own fixes to _postRun", () => {
+test("_classifyAndLog hands the run and the verified pass's own fixes to _postRun (via the overlap tie-break)", () => {
   const src = extractFrom(html, "_classifyAndLog(corridor, buffer, selectedActivity, isFinal){");
-  assert.ok(src.includes("this._postRun(corridor, run, trip.fixes);"));
+  assert.ok(src.includes("return this._offerPass(corridor, run, trip);"));
+  const offer = extractFrom(html, "_offerPass(corridor, run, trip){");
+  assert.ok(offer.includes("fixes:trip.fixes"));
+  assert.ok(extractFrom(html, "_settlePasses(force){").includes("this._postRun(c.corridor, c.run, c.fixes);"));
 });
 
 // ---- the REAL Quest._postRun: run + line go through the offline outbox ----
