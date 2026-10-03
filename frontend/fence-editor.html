@@ -1089,6 +1089,8 @@
       <button id="coBulkMove" class="ghost" style="font-size:11px;padding:3px 8px" title="Move checked stops to a folder">📁 Move…</button>
       <button id="coBulkToggle" class="ghost" style="font-size:11px;padding:3px 8px">☐ Bulk assign</button>
       <button id="sayThisIsAll" class="ghost" style="font-size:11px;padding:3px 8px" title="Set every stop's spoken line (TTS) to “This is” + the stop's name">🗣 This is…</button>
+      <!-- Same as ⚙ → Guard defaults (that popover scrolls and the button sat below the fold). -->
+      <button id="stopsGuardDefaults" class="ghost" style="font-size:11px;padding:3px 8px" title="Ridge Quest: set overlapping chutes/runs Off when Guard is ON">🛡 Guard defaults…</button>
     </div>
     <input id="stopSearch" type="text" placeholder="search stops…" style="width:100%;margin:4px 0 6px;box-sizing:border-box">
     <div id="zlist"></div>
@@ -3695,6 +3697,7 @@ function openGuardDefaults(){
   document.body.appendChild(ov);
 }
 document.getElementById("pGuardDefaults")?.addEventListener("click", openGuardDefaults);
+document.getElementById("stopsGuardDefaults")?.addEventListener("click", openGuardDefaults);
 async function loadNarrateGuarded(){
   const cb=document.getElementById("pNarrateGuarded"); if(!cb) return;
   const pid=afProjectId();
