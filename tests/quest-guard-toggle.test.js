@@ -31,10 +31,11 @@ function extractBody(startTag) {
 // eslint-disable-next-line no-new-func
 const getChuteGuardMaster = new Function("localStorage", extractBody("function getChuteGuardMaster(){"));
 // eslint-disable-next-line no-new-func
-const isCorridorGuarded = new Function("workspaceOn", "masterOn", "mutedSet", "armedSet", "id",
-  extractBody("function isCorridorGuarded(workspaceOn, masterOn, mutedSet, armedSet, id){"));
+const isCorridorGuarded = new Function("workspaceOn", "masterOn", "mutedSet", "armedSet", "id", "defaultOffSet", "onSet",
+  extractBody("function isCorridorGuarded(workspaceOn, masterOn, mutedSet, armedSet, id, defaultOffSet, onSet){"));
 // eslint-disable-next-line no-new-func
-const toggleGuard = new Function("setMutedCorridors", "setArmedCorridors", extractBody("toggleGuardForCorridor(zoneId){").replace(/^/, "return function(zoneId){") + "};");
+const toggleGuard = new Function("setMutedCorridors", "setArmedCorridors", "setGuardOnCorridors",
+  extractBody("toggleGuardForCorridor(zoneId){").replace(/^/, "return function(zoneId){") + "};");
 const store = v => ({ getItem: () => v });
 
 // ---- default ON ----
@@ -109,12 +110,31 @@ const store = v => ({ getItem: () => v });
 
 // ---- toggleGuardForCorridor: what press-and-hold does ----
 
-function holdRig(masterOn) {
-  const savedMuted = [], savedArmed = [];
-  const fn = toggleGuard(ids => savedMuted.push(ids), ids => savedArmed.push(ids));
-  const self = { chuteGuardMaster: masterOn, mutedCorridors: new Set(), armedCorridors: new Set(), refreshIgnoredCorridors(){} };
-  return { self, hold: id => fn.call(self, id), savedMuted, savedArmed };
+function holdRig(masterOn, defaultOff) {
+  const savedMuted = [], savedArmed = [], savedOn = [];
+  const fn = toggleGuard(ids => savedMuted.push(ids), ids => savedArmed.push(ids), ids => savedOn.push(ids));
+  const self = { chuteGuardMaster: masterOn, mutedCorridors: new Set(), armedCorridors: new Set(),
+    defaultOffCorridors: new Set(defaultOff || []), guardOnCorridors: new Set(), refreshIgnoredCorridors(){} };
+  return { self, hold: id => fn.call(self, id), savedMuted, savedArmed, savedOn };
 }
+
+// ---- Guard defaults (2026-10-03): the author sets an overlapping run Off for Guard ON ----
+(function testAuthorOffRunsAreOffWithGuardOnUntilHeld() {
+  const off = new Set(["legs-left"]);
+  assert(isCorridorGuarded(true, true, new Set(), new Set(), "legs-left", off, new Set()) === false, "Guard ON: a run the author set Off is not guarded");
+  assert(isCorridorGuarded(true, true, new Set(), new Set(), "legs-right", off, new Set()) === true, "Guard ON: every other run still is");
+  assert(isCorridorGuarded(true, true, new Set(), new Set(), "legs-left", off, new Set(["legs-left"])) === true, "Guard ON: a rider who turned it on (hold) gets it");
+  assert(isCorridorGuarded(true, false, new Set(), new Set(["legs-left"]), "legs-left", off, new Set()) === true, "Guard OFF: arming works for an author-Off run too");
+  assert(isCorridorGuarded(true, false, new Set(), new Set(), "legs-left", off, new Set(["legs-left"])) === false, "Guard OFF: the Guard-ON turn-on does not arm it");
+  assert(isCorridorGuarded(true, true, new Set(), new Set(), "a") === true, "old callers without the new sets behave as before");
+  const r = holdRig(true, ["legs-left"]);
+  assert(r.hold("legs-left") === true && r.self.guardOnCorridors.has("legs-left") && r.self.mutedCorridors.size === 0,
+    "Guard ON + author-Off run: a hold turns it ON for this rider (not a mute)");
+  assert(r.hold("legs-left") === false && !r.self.guardOnCorridors.has("legs-left"), "a second hold turns it back off");
+  assert(r.savedOn.length === 2 && r.savedMuted.length === 0, "persisted in its own list, got " + JSON.stringify(r.savedOn));
+  const r2 = holdRig(false, ["legs-left"]);
+  assert(r2.hold("legs-left") === true && r2.self.armedCorridors.has("legs-left"), "Guard OFF: a hold arms it as usual");
+})();
 
 (function testHoldMutesWhileMasterIsOn() {
   const r = holdRig(true);

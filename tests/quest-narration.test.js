@@ -94,8 +94,8 @@ const fnSrc = tag => { const s = ed.slice(ed.indexOf(tag)); return s.slice(0, s.
   const run = (o, c) => {
     const document = { getElementById: () => ({ checked: o.guardedOnly !== false }) };
     // eslint-disable-next-line no-new-func
-    return new Function("document", "_chuteGuardOn", "_cgTestMaster", "_cgMutedIds", "_cgGuardedIds", body + "\nreturn questSimNarrOk;")(
-      document, o.workspace !== false, !!o.master, o.muted || new Set(), o.armed || new Set())(c);
+    return new Function("document", "_chuteGuardOn", "_cgTestMaster", "_cgMutedIds", "_cgGuardedIds", "_cgDefaultOffIds", "_cgOnIds", body + "\nreturn questSimNarrOk;")(
+      document, o.workspace !== false, !!o.master, o.muted || new Set(), o.armed || new Set(), o.defaultOff || new Set(), o.on || new Set())(c);
   };
   const cat = { runType: "chute", zoneId: "cat-fight" }, hal = { runType: "chute", zoneId: "hallowed" };
   const armed = new Set(["cat-fight"]), muted = new Set(["cat-fight"]);
@@ -108,6 +108,12 @@ const fnSrc = tag => { const s = ed.slice(ed.indexOf(tag)); return s.slice(0, s.
   assert(run({ master: true, muted }, cat) === false, "Guard ON: a muted chute is silent");
   assert(run({ master: true, muted, armed }, hal) === true, "Guard ON ignores the armed set");
   assert(run({ master: false, muted, armed }, cat) === true, "Guard OFF ignores the muted set (each survives a flip)");
+  // Guard defaults: the author set Cat Fight Off for Guard ON
+  const off = new Set(["cat-fight"]);
+  assert(run({ master: true, defaultOff: off }, cat) === false, "Guard ON: an author-Off run is silent");
+  assert(run({ master: true, defaultOff: off, on: new Set(["cat-fight"]) }, cat) === true, "Guard ON: ...until held on");
+  assert(run({ master: true, defaultOff: off }, hal) === true, "Guard ON: other runs unaffected");
+  assert(run({ master: false, defaultOff: off, armed }, cat) === true, "Guard OFF: arming still works for it");
   // gates that open everything
   assert(run({ master: false, guardedOnly: false }, hal) === true, "setting \"narrate only guarded runs\" off => every run speaks");
   assert(run({ master: false, workspace: false }, hal) === true, "workspace without Corridor Guard => every run speaks");
@@ -115,7 +121,7 @@ const fnSrc = tag => { const s = ed.slice(ed.indexOf(tag)); return s.slice(0, s.
 
 (function testGuardSwitchWiring() {
   assert(/<button id="simGuard"/.test(ed), "Test Mode has a Guard ON/OFF button");
-  assert(/_cgGuardedIds = new Set\(\); _cgMutedIds = new Set\(\); _cgTestMaster = true;/.test(ed), "each Test Mode entry starts Guard ON with nothing muted or armed, like live's default");
+  assert(/_cgGuardedIds = new Set\(\); _cgMutedIds = new Set\(\); _cgOnIds = new Set\(\); _cgTestMaster = true;/.test(ed), "each Test Mode entry starts Guard ON with nothing muted or armed, like live's default");
   assert(/getActiveAlarm\(id=>_cgTestGuarded\(id\)\)/.test(ed), "the tone follows the same Guard rule");
   const lp = fnSrc("function _simRunLongPressHandler(feature){");
   assert(/if\(_cgTestMaster\)\{[\s\S]*_cgMutedIds[\s\S]*\} else \{[\s\S]*_cgGuardedIds/.test(lp), "press-and-hold mutes with Guard ON and arms with Guard OFF");

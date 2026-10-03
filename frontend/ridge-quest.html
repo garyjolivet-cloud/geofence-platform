@@ -893,17 +893,6 @@ function setTrackFriends(ids){ localStorage.setItem("rq.trackFriends", JSON.stri
 // output, not chute-guard.js's input, or isOnLift() breaks too).
 function getChuteGuardMaster(){ try{ return localStorage.getItem("rq.chuteGuard")!=="off"; }catch(e){ return true; } }
 function setChuteGuardMaster(on){ try{ localStorage.setItem("rq.chuteGuard", on ? "on" : "off"); }catch(e){} }
-function getMutedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.mutedCorridors")||"[]"); }catch(e){ return []; } }
-function setMutedCorridors(ids){ try{ localStorage.setItem("rq.mutedCorridors", JSON.stringify(ids)); }catch(e){} }
-// The other half of press-and-hold: with the master switch OFF, holding a run
-// ARMS just that one (guard + boundary lines for it alone) instead of muting.
-// Its own key — the legacy rq.guardedCorridors list is deliberately not revived.
-function getArmedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.armedCorridors")||"[]"); }catch(e){ return []; } }
-function setArmedCorridors(ids){ try{ localStorage.setItem("rq.armedCorridors", JSON.stringify(ids)); }catch(e){} }
-// Pure — a corridor alerts iff its workspace has the feature on AND either the
-// master switch is on and this corridor isn't muted, or the master switch is
-// off and the rider armed this corridor by hand. (armedSet is ignored while
-// the master is on, and mutedSet while it is off, so each survives a flip.)
 // Pure -- two verified passes are "the same descent" when they are of different non-lift corridors
 // and overlap in time by at least half of the shorter one (Quest._settlePasses, 2026-10-03).
 function passesOverlap(a, b){
@@ -912,9 +901,30 @@ function passesOverlap(a, b){
   const ov = Math.min(a.t1, b.t1) - Math.max(a.t0, b.t0);
   return ov > 0 && ov >= 0.5 * Math.min(a.t1 - a.t0, b.t1 - b.t0);
 }
-function isCorridorGuarded(workspaceOn, masterOn, mutedSet, armedSet, id){
+function getMutedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.mutedCorridors")||"[]"); }catch(e){ return []; } }
+function setMutedCorridors(ids){ try{ localStorage.setItem("rq.mutedCorridors", JSON.stringify(ids)); }catch(e){} }
+// The other half of press-and-hold: with the master switch OFF, holding a run
+// ARMS just that one (guard + boundary lines for it alone) instead of muting.
+// Its own key — the legacy rq.guardedCorridors list is deliberately not revived.
+// Corridors the author set Off for Guard ON that this rider turned on by press-and-hold.
+function getGuardOnCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.guardOnCorridors")||"[]"); }catch(e){ return []; } }
+function setGuardOnCorridors(ids){ try{ localStorage.setItem("rq.guardOnCorridors", JSON.stringify(ids)); }catch(e){} }
+function getArmedCorridors(){ try{ return JSON.parse(localStorage.getItem("rq.armedCorridors")||"[]"); }catch(e){ return []; } }
+function setArmedCorridors(ids){ try{ localStorage.setItem("rq.armedCorridors", JSON.stringify(ids)); }catch(e){} }
+// Pure — a corridor alerts iff its workspace has the feature on AND either the
+// master switch is on and this corridor isn't muted, or the master switch is
+// off and the rider armed this corridor by hand. (armedSet is ignored while
+// the master is on, and mutedSet while it is off, so each survives a flip.)
+// Guard defaults (2026-10-03): the author can set an overlapping chute/run to Off when Guard is
+// ON (Fence Editor ⚙ → Guard defaults, zone.guardDefaultOff, sent on Publish). With the master on,
+// such a corridor is guarded only if this rider turned it on with a press-and-hold (onSet,
+// localStorage "rq.guardOnCorridors"); every other corridor is guarded unless muted. With the
+// master off nothing changes: only armed corridors. defaultOffSet/onSet are optional.
+function isCorridorGuarded(workspaceOn, masterOn, mutedSet, armedSet, id, defaultOffSet, onSet){
   if(!workspaceOn) return false;
-  return masterOn ? !mutedSet.has(id) : armedSet.has(id);
+  if(!masterOn) return armedSet.has(id);
+  if(defaultOffSet && defaultOffSet.has(id)) return !!(onSet && onSet.has(id));
+  return !mutedSet.has(id);
 }
 
 // Battery Saver ("lift mode") — how long the raw ChuteGuard.isOnLift()
@@ -1367,12 +1377,15 @@ const Quest = {
   // right before tracking has ever begun.
   chuteGuardMaster: getChuteGuardMaster(),          // the yellow button; default ON
   mutedCorridors: new Set(getMutedCorridors()),     // zoneIds muted by press-and-hold WHILE the master is on
+  defaultOffCorridors: new Set(),                    // author's Guard defaults: Off when Guard is ON (zone.guardDefaultOff, from the bundle)
+  guardOnCorridors: new Set(getGuardOnCorridors()), // ...of those, the ones this rider turned on by press-and-hold
   armedCorridors: new Set(getArmedCorridors()),     // zoneIds armed by press-and-hold WHILE the master is off
   ignoredCorridors: new Set(), // zoneIds next to an armed corridor (Guard OFF + armed only) -- _onFix skips them; see refreshIgnoredCorridors()
   onGuardChanged: null,     // callback() — set by drawAllRuns() while "My map" is open so the boundary lines/mute look redraw live; nulled on #fogBack
   onChuteLineSaved: null,   // callback(zoneId) — set by setupChuteLines() so an open map shows a just-saved line; nulled on #fogBack
   isGuarded(zoneId){
-    return isCorridorGuarded(this.chuteGuardEnabled, this.chuteGuardMaster, this.mutedCorridors, this.armedCorridors, zoneId);
+    return isCorridorGuarded(this.chuteGuardEnabled, this.chuteGuardMaster, this.mutedCorridors, this.armedCorridors, zoneId,
+      this.defaultOffCorridors, this.guardOnCorridors);
   },
   // Press-and-hold on one corridor: with the master ON it toggles MUTE (guard
   // everything except this), with the master OFF it toggles ARM (guard nothing
@@ -1401,6 +1414,14 @@ const Quest = {
   },
   toggleGuardForCorridor(zoneId){
     const master = this.chuteGuardMaster;
+    // Guard ON + a corridor the author set Off: the hold turns it on (or back off) for this rider.
+    if(master && this.defaultOffCorridors.has(zoneId)){
+      const on = this.guardOnCorridors;
+      if(on.has(zoneId)) on.delete(zoneId); else on.add(zoneId);
+      setGuardOnCorridors(Array.from(on));
+      this.refreshIgnoredCorridors();
+      return on.has(zoneId);
+    }
     const set = master ? this.mutedCorridors : this.armedCorridors;
     if(set.has(zoneId)) set.delete(zoneId); else set.add(zoneId);
     (master ? setMutedCorridors : setArmedCorridors)(Array.from(set));
@@ -1440,6 +1461,8 @@ const Quest = {
       // Fence Editor ⚙ "narrate only guarded runs" (live-injected, default on;
       // older servers without the field = false = narrate everything as before).
       this.narrateGuardedOnly = bundle.narrateGuardedOnly === true;
+      // Guard defaults: corridors the author set Off for Guard ON (Fence Editor ⚙ → Guard defaults).
+      this.defaultOffCorridors = new Set((bundle.zones||[]).filter(z=>z.guardDefaultOff===true).map(z=>z.id));
       // Same live-owner injection — the workspace's 3D-terrain toggle. When
       // on, renderFogMap() drapes the fog/runs over DEM terrain and opens
       // the map pitched.
@@ -1511,6 +1534,7 @@ const Quest = {
     this._liftRawSinceT = 0;
     this.chuteGuardMaster = getChuteGuardMaster();
     this.mutedCorridors = new Set(getMutedCorridors());
+    this.guardOnCorridors = new Set(getGuardOnCorridors());
     this.armedCorridors = new Set(getArmedCorridors());
     this.refreshIgnoredCorridors();
     this.checkpointVert = getCheckpointVert();
@@ -3875,7 +3899,7 @@ function drawAllRuns(map){
         // Lifts are never alertable; only real corridors carry a Guard look.
         if(c.runType==="lift") return;
         map.setFeatureState({ source:"runLines", id:c.zoneId }, {
-          muted: !!(Quest.chuteGuardMaster && Quest.mutedCorridors.has(c.zoneId))
+          muted: !!(Quest.chuteGuardMaster && !Quest.isGuarded(c.zoneId))   // muted, or Off by the author's Guard defaults
         });
         if(hasEdges) map.setFeatureState({ source:"runGuardEdges", id:c.zoneId }, { guardEdges: Quest.isGuarded(c.zoneId) });
       });
@@ -3915,8 +3939,9 @@ function drawAllRuns(map){
       onLongPress(feature){
         const zoneId = feature && feature.properties && feature.properties.id;
         if(zoneId==null) return;
-        // Master ON: this toggles MUTE. Master OFF: this toggles ARM (guard +
-        // boundary lines for just this run). Returns whether it is now guarded.
+        // Master ON: this toggles MUTE (or, for a run the author set Off, turns it on). Master
+        // OFF: this toggles ARM (guard + boundary lines for just this run). Returns whether it is
+        // now guarded.
         const guarded = Quest.toggleGuardForCorridor(zoneId);
         const name = (feature.properties && feature.properties.name) || "run";
         rqToast(guarded ? ("🛡 Guarding: "+name) : ("Stopped guarding: "+name));

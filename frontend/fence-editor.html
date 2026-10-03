@@ -501,6 +501,7 @@
 <script src="/kalman-filter.js"></script>
 <script src="/chute-guard.js"></script>
 <script src="/quest-narration.js"></script>
+<script src="/guard-overlap.js"></script>
 <script src="/long-press.js"></script>
 <script src="/ble-gps.js"></script>
 <script src="/code-objects.js"></script>
@@ -1204,6 +1205,7 @@
   <label style="margin-top:2px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ice);cursor:pointer" title="Ridge Quest: a run's spoken narration only plays when Corridor Guard is on for that run for the rider (Guard ON and the run not muted, or Guard OFF and the run armed). Lifts always narrate. Has no effect when the workspace has Corridor Guard turned off. Applies immediately, not part of Publish.">
     <input type="checkbox" id="pNarrateGuarded" style="width:auto;flex:0 0 auto" checked> 🔊 narrate only guarded runs
   </label>
+  <button id="pGuardDefaults" class="ghost" style="margin-top:4px;font-size:12px" title="Ridge Quest: the chutes and runs that overlap a neighbour. Set one Off and it stays off when a rider turns Guard ON (no tone, no yellow lines, no voice) until they press and hold it on My map. Sent with Publish.">🛡 Guard defaults…</button>
 </div>
 
 <!-- Audio palette: drag-source-only clip browser. All editing (record/trim/
@@ -3643,6 +3645,56 @@ document.getElementById("tileSeason")?.addEventListener("change",async()=>{
 
 // Ridge Quest narration gate (#pNarrateGuarded) — same load-fresh-on-open +
 // PATCH-on-change pattern as the season select above. Column default is ON.
+// ⚙ → "🛡 Guard defaults…" (2026-10-03): every chute / run that overlaps a neighbour
+// (frontend/guard-overlap.js), each with On / Off. Off = zone.guardDefaultOff: in Ridge Quest it
+// stays off when the rider turns Guard ON (no tone, no yellow lines, no voice) until they press
+// and hold it on My map; Guard OFF arming is unchanged. Saved in the draft, sent with Publish.
+// A top-level overlay on <body>, never inside #mainPanel (its backdrop-filter would clip it).
+function openGuardDefaults(){
+  if(typeof GuardOverlap==="undefined"){ alert("Guard defaults couldn't load — reload the page."); return; }
+  const byId=new Map(zones.map(z=>[z.id,z]));
+  const list=GuardOverlap.overlapping(zones.filter(z=>z.shape&&z.shape.type==="corridor").map(z=>({
+    id:z.id, name:z.name||"Run", runType:z.runType||"run", widthM:z.shape.widthM||10,
+    path:z.shape.coords||[], descentM:z.descentM, climbM:z.climbM })));
+  document.getElementById("guardDefaultsOverlay")?.remove();
+  const ov=document.createElement("div");
+  ov.id="guardDefaultsOverlay";
+  ov.style.cssText="position:fixed;inset:0;z-index:5000;background:rgba(5,10,16,.6);display:flex;align-items:center;justify-content:center;padding:16px";
+  const box=document.createElement("div");
+  box.style.cssText="background:var(--slate);border:1px solid var(--rim);border-radius:12px;max-width:640px;width:100%;max-height:85vh;display:flex;flex-direction:column;color:var(--snow);font-size:13px";
+  const head=document.createElement("div");
+  head.style.cssText="padding:12px 14px;border-bottom:1px solid var(--rim)";
+  const count=()=>list.filter(r=>byId.get(r.id)&&byId.get(r.id).guardDefaultOff).length;
+  const paintHead=()=>{
+    head.innerHTML='<div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px;flex:1">🛡 Guard defaults</b><button class="ghost" id="gdClose" style="width:auto;padding:4px 10px">Close</button></div>'
+      +'<div style="margin-top:6px;color:var(--fog);line-height:1.4">'+list.length+' chutes and runs overlap a neighbour (closest first). Set one <b>Off</b> and it stays off when a rider turns Guard ON — no tone, no yellow lines, no voice — until they press and hold it on My map. Guard OFF is unchanged. <b>'+count()+' set Off.</b> Publish to send.</div>';
+    head.querySelector("#gdClose").onclick=()=>ov.remove();
+  };
+  paintHead();
+  const body=document.createElement("div");
+  body.style.cssText="overflow-y:auto;padding:6px 14px 12px";
+  if(!list.length) body.innerHTML='<p style="color:var(--fog)">No chutes or runs overlap a neighbour.</p>';
+  list.forEach(r=>{
+    const z=byId.get(r.id); if(!z) return;
+    const row=document.createElement("div");
+    row.style.cssText="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--rim)";
+    const txt=document.createElement("div");
+    txt.style.cssText="flex:1;min-width:0";
+    const nb=r.neighbours.slice(0,3).map(n=>esc(n.name)+" ("+(n.apartM<5?"crosses":n.apartM+" m apart")+")").join(", ")+(r.neighbours.length>3?" +"+(r.neighbours.length-3)+" more":"");
+    txt.innerHTML='<b>'+esc(r.name)+'</b> <span style="color:var(--fog)">'+r.runType+' · '+r.widthM+' m</span><div style="color:var(--fog);font-size:12px">overlaps '+nb+'</div>';
+    const btn=document.createElement("button");
+    btn.className="ghost";
+    btn.style.cssText="width:auto;flex:0 0 auto;min-width:64px;padding:4px 10px";
+    const paint=()=>{ btn.textContent=z.guardDefaultOff?"Off":"On"; btn.classList.toggle("on",!z.guardDefaultOff); btn.title=z.guardDefaultOff?"Off when Guard is ON (rider holds it to turn it on)":"Guarded when Guard is ON"; };
+    paint();
+    btn.onclick=()=>{ z.guardDefaultOff=!z.guardDefaultOff; paint(); paintHead(); render(); };   // render() autosaves the draft
+    row.appendChild(txt); row.appendChild(btn); body.appendChild(row);
+  });
+  box.appendChild(head); box.appendChild(body); ov.appendChild(box);
+  ov.addEventListener("click",e=>{ if(e.target===ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+document.getElementById("pGuardDefaults")?.addEventListener("click", openGuardDefaults);
 async function loadNarrateGuarded(){
   const cb=document.getElementById("pNarrateGuarded"); if(!cb) return;
   const pid=afProjectId();
@@ -5000,6 +5052,7 @@ function zoneToEngine(z){
   if(s.type==="corridor"){
     if(z.difficulty) zo.difficulty=z.difficulty;
     if(z.runType) zo.runType=z.runType;
+    if(z.guardDefaultOff) zo.guardDefaultOff=true;   // Guard defaults: Off when Guard is ON (Ridge Quest)
     if(z.activityType) zo.activityType=z.activityType;
   }
   // Elevation checkpoint (Ridge Quest, circle stops only) — a known-elevation
@@ -5212,6 +5265,7 @@ function engineToZone(zo){
   const z=makeZone(zo.name||zo.id||"Stop",shape); z.id=zo.id||z.id;
   if(shape.type==="corridor"){
     z.difficulty=zo.difficulty||null; z.runType=zo.runType||"run";
+    z.guardDefaultOff=zo.guardDefaultOff===true;
     z.activityType=zo.activityType||"hike";
     const tgtC=(zo.layers||[]).find(l=>l.geometry&&l.geometry.type==="corridor");
     z.descentM=(tgtC&&tgtC.geometry.descentM!=null)?tgtC.geometry.descentM:null;
@@ -6513,7 +6567,10 @@ function _simRunLongPressHandler(feature){
   if(id==null) return;
   const name=(feature.properties&&feature.properties.name)||"corridor";
   // Mode-aware like Ridge Quest: Guard ON mutes / unmutes, Guard OFF arms / disarms.
-  if(_cgTestMaster){
+  if(_cgTestMaster && _cgDefaultOffIds.has(id)){
+    if(_cgOnIds.has(id)){ _cgOnIds.delete(id); simLogEv("sev-sys","Corridor Guard off again (Guard defaults): \""+name+"\""); }
+    else { _cgOnIds.add(id); simLogEv("sev-sys","Corridor Guard turned on (was Off in Guard defaults): \""+name+"\""); }
+  } else if(_cgTestMaster){
     if(_cgMutedIds.has(id)){ _cgMutedIds.delete(id); simLogEv("sev-sys","Corridor Guard unmuted: \""+name+"\""); }
     else { _cgMutedIds.add(id); simLogEv("sev-sys","Corridor Guard muted: \""+name+"\""); }
   } else {
@@ -6544,7 +6601,7 @@ function refreshSimCorridorLabels(){
                   // guarded = cyan "armed" look, only for an armed run with Guard OFF (Ridge Quest never
                   // recolours with Guard ON, it would erase the difficulty colours); muted = greyed.
                   guarded:!_cgTestMaster && _cgGuardedIds.has(c.id),
-                  muted:_cgTestMaster && _cgMutedIds.has(c.id),
+                  muted:_chuteGuardOn && _cgTestMaster && !_cgTestGuarded(c.id),   // muted, or Off by Guard defaults
                   // shared corridor renderer (width band + piste-glow, no dashes)
                   corridor:true,widthM:(c.widthM>0?c.widthM:10),pxPerMeterAtZ0:TileFog.pxPerMeterAtZ0(c.path[0][0])},
       geometry:{type:"LineString",coordinates:c.path.map(p=>[p[1],p[0]])}}; // [lat,lon] -> [lon,lat]
@@ -6698,6 +6755,8 @@ function editorToSimBundle(){
       // stay in sync from day one instead of drifting like ttsVoice did.
       difficulty:s.type==="corridor"?(z.difficulty||null):null,
       runType:s.type==="corridor"?(z.runType||"run"):null,
+      // Guard defaults (2026-10-03): Off when Guard is ON until held — same 3-mirror rule as above.
+      guardDefaultOff:s.type==="corridor" && z.guardDefaultOff===true,
       // Corridor line style (dash/colour by activity) — same "3 mirrors stay in sync"
       // reasoning as difficulty/runType above.
       activityType:s.type==="corridor"?(z.activityType||"hike"):null,
@@ -7076,13 +7135,20 @@ function chuteGuardStopSync(){
 // muted ones (_cgMutedIds); OFF = only the armed ones (_cgGuardedIds). Press-and-hold mutes with
 // Guard ON and arms with Guard OFF; each set is kept across a flip. Same rule as ridge-quest's
 // isCorridorGuarded(); _cgTestGuarded() is the one place Test Mode asks it.
+// Guard defaults (2026-10-03): corridors the author set Off for Guard ON (zone.guardDefaultOff,
+// _cgDefaultOffIds) are off with Guard ON until held (_cgOnIds), exactly like live.
 let _cgGuardedIds = new Set();
 let _cgMutedIds = new Set();
+let _cgDefaultOffIds = new Set();
+let _cgOnIds = new Set();
 let _cgTestMaster = true;
 function _cgTestGuarded(id){
   if(!_chuteGuardOn) return false;
-  return _cgTestMaster ? !_cgMutedIds.has(id) : _cgGuardedIds.has(id);
+  if(!_cgTestMaster) return _cgGuardedIds.has(id);
+  if(_cgDefaultOffIds.has(id)) return _cgOnIds.has(id);
+  return !_cgMutedIds.has(id);
 }
+function _cgLoadDefaults(){ _cgDefaultOffIds = new Set(((simBundle&&simBundle.zones)||[]).filter(z=>z.guardDefaultOff===true).map(z=>z.id)); }
 function paintSimGuardBtn(){
   const b=document.getElementById("simGuard"); if(!b) return;
   b.style.display=_chuteGuardOn?"":"none";
@@ -7577,10 +7643,10 @@ function enterTestMode(){
   if(tool){draft=[];tool=null;resetShapePickerBtn();updateDrawUiVisibility(null);render();}
   selectZone(-1);
   simBundle=editorToSimBundle();
-  _cgGuardedIds = new Set(); _cgMutedIds = new Set(); _cgTestMaster = true; // fresh each entry, Guard ON like live
+  _cgGuardedIds = new Set(); _cgMutedIds = new Set(); _cgOnIds = new Set(); _cgTestMaster = true; // fresh each entry, Guard ON like live
   paintSimGuardBtn();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
-  QuestSim.load(simBundle);
+  QuestSim.load(simBundle); _cgLoadDefaults();
   if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said; lifts on entry"
     +(questSimNarrOk({runType:"chute",zoneId:null})?"":". Guard OFF: only ARMED runs speak — press and hold a run to arm it"));
   chuteGuardStartSync();
@@ -8136,7 +8202,7 @@ document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterT
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
-  QuestSim.load(simBundle);
+  QuestSim.load(simBundle); _cgLoadDefaults();
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simDist=simDir>0?0:simPathTotal();
@@ -8181,7 +8247,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
-  QuestSim.load(simBundle);
+  QuestSim.load(simBundle); _cgLoadDefaults();
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   _arNearState={};
   // Visited-stops/flags/counters are per-session tracking state just like
