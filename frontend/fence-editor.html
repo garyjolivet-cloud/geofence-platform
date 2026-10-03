@@ -714,7 +714,9 @@
   <!-- SIM PANEL — visible in test mode only -->
   <div id="simPanel" style="display:none">
     <label class="k">zone states</label>
-    <div id="simChips"></div>
+    <!-- Capped at ~8 rows with its own scrollbar (2026-10-03): RidgeQuest's 145 stops pushed the
+         log, Walk, Guard, Sound and Reset below the bottom of the panel. -->
+    <div id="simChips" style="max-height:330px;overflow-y:auto"></div>
     <div id="simLog"></div>
     <!-- Temporary-use debugging aid (Chute Guard rollout) — downloads the
          full sim log as a .txt file instead of relying on a screenshot of
