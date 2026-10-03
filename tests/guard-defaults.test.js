@@ -56,8 +56,19 @@ test("guardDefaultOff survives Publish (zoneToEngine), reload (engineToZone) and
 test("the ⚙ button opens the list; toggling autosaves", () => {
   assert.ok(/<button id="pGuardDefaults"/.test(ed) && ed.includes('<script src="/guard-overlap.js"></script>'));
   assert.ok(/getElementById\("pGuardDefaults"\)\?\.addEventListener\("click", openGuardDefaults\)/.test(ed));
-  assert.ok(/btn\.onclick=\(\)=>\{ z\.guardDefaultOff=!z\.guardDefaultOff;[^}]*render\(\);/.test(ed), "a toggle flips the field and render() autosaves");
-  assert.ok(/document\.body\.appendChild\(ov\)/.test(ed), "overlay on <body>, never inside #mainPanel");
+  assert.ok(/b\.onclick=\(\)=>\{ const z=byId\.get\(c\.id\); z\.guardDefaultOff=!z\.guardDefaultOff; paintName\(c\.id\); paintHead\(\); render\(\); \};/.test(ed),
+    "tapping a name flips that run's field, repaints every row with it, and render() autosaves");
+  assert.ok(/document\.body\.appendChild\(box\)/.test(ed), "panel on <body>, never inside #mainPanel");
+  assert.ok(/GuardOverlap\.pairs\(/.test(ed) && /show\.onclick=\(\)=>_gdShowPair\(/.test(ed), "one row per conflict, each with 👁 Show");
+  assert.ok(/const close=\(\)=>\{ _gdClearHighlight\(\); box\.remove\(\); \};/.test(ed), "closing removes the map highlight");
+  assert.ok(ed.includes('id="stopsGuardDefaults"'), "also reachable from the stops toolbar");
+});
+
+test("pairs(): each conflict once, closest first", () => {
+  const p = GO.pairs([C("a", 0, 40), C("b", 30, 40), C("c", 200, 40), C("d", 215, 40)]);
+  assert.deepStrictEqual(p.map(x => [x.a.id, x.b.id].sort().join("+")), ["c+d", "a+b"]);
+  assert.deepStrictEqual(p.map(x => x.apartM), [15, 30]);
+  assert.strictEqual(p[0].a.widthM, 40);
 });
 test("Ridge Quest and Test Mode both read it", () => {
   assert.ok(rq.includes("this.defaultOffCorridors = new Set((bundle.zones||[]).filter(z=>z.guardDefaultOff===true).map(z=>z.id));"));

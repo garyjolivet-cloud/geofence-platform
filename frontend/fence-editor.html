@@ -3647,54 +3647,124 @@ document.getElementById("tileSeason")?.addEventListener("change",async()=>{
 
 // Ridge Quest narration gate (#pNarrateGuarded) — same load-fresh-on-open +
 // PATCH-on-change pattern as the season select above. Column default is ON.
-// ⚙ → "🛡 Guard defaults…" (2026-10-03): every chute / run that overlaps a neighbour
-// (frontend/guard-overlap.js), each with On / Off. Off = zone.guardDefaultOff: in Ridge Quest it
-// stays off when the rider turns Guard ON (no tone, no yellow lines, no voice) until they press
-// and hold it on My map; Guard OFF arming is unchanged. Saved in the draft, sent with Publish.
-// A top-level overlay on <body>, never inside #mainPanel (its backdrop-filter would clip it).
+// ⚙ / stops toolbar → "🛡 Guard defaults…" (2026-10-03, reworked the same day: user "I need to know
+// what chutes conflict with each other and be able to select the one I want"). One row per
+// CONFLICT — two chutes/runs whose bands overlap (frontend/guard-overlap.js pairs()) — with both
+// names as On/Off buttons (tap a name to switch it; every row with that run repaints) and 👁 Show,
+// which zooms the map to the pair and draws the two lines in two bright colours with their names.
+// Off = zone.guardDefaultOff: in Ridge Quest it stays off when the rider turns Guard ON (no tone,
+// no yellow lines, no voice) until they press and hold it on My map; Guard OFF arming is
+// unchanged. Saved in the draft (render() autosaves), sent with Publish. A panel docked on the
+// right of <body> (never inside #mainPanel, whose backdrop-filter would clip it) so the map stays
+// visible.
+const GD_COLORS = ["#ff7a00", "#00d1ff"];
+function _gdClearHighlight(){
+  try{
+    ["gdHighlight-line","gdHighlight-casing"].forEach(id=>{ if(map.getLayer(id)) map.removeLayer(id); });
+    if(map.getSource("gdHighlight")) map.removeSource("gdHighlight");
+  }catch(e){}
+  (window._gdLabels||[]).forEach(m=>m.remove()); window._gdLabels=[];
+}
+function _gdShowPair(za, zb){
+  _gdClearHighlight();
+  const feats=[za,zb].map((z,i)=>({type:"Feature",properties:{col:GD_COLORS[i]},
+    geometry:{type:"LineString",coordinates:(z.shape.coords||[]).map(c=>[c[0],c[1]])}}));
+  try{
+    map.addSource("gdHighlight",{type:"geojson",data:{type:"FeatureCollection",features:feats}});
+    map.addLayer({id:"gdHighlight-casing",type:"line",source:"gdHighlight",layout:{"line-cap":"round","line-join":"round"},
+      paint:{"line-color":"#000","line-width":9,"line-opacity":0.7}});
+    map.addLayer({id:"gdHighlight-line",type:"line",source:"gdHighlight",layout:{"line-cap":"round","line-join":"round"},
+      paint:{"line-color":["get","col"],"line-width":5}});
+  }catch(e){}
+  [za,zb].forEach((z,i)=>{
+    const cs=z.shape.coords||[]; if(!cs.length) return;
+    const el=document.createElement("div");
+    el.textContent=z.name||"Run";
+    el.style.cssText="background:"+GD_COLORS[i]+";color:#000;font:600 12px system-ui,sans-serif;padding:2px 6px;border-radius:6px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.5)";
+    const mid=cs[Math.floor(cs.length/2)];
+    window._gdLabels.push(new maplibregl.Marker({element:el,anchor:i?"left":"right",offset:[i?10:-10,0]}).setLngLat([mid[0],mid[1]]).addTo(map));
+  });
+  const all=[...(za.shape.coords||[]),...(zb.shape.coords||[])];
+  if(all.length){
+    const b=all.reduce((acc,c)=>[[Math.min(acc[0][0],c[0]),Math.min(acc[0][1],c[1])],[Math.max(acc[1][0],c[0]),Math.max(acc[1][1],c[1])]],[[Infinity,Infinity],[-Infinity,-Infinity]]);
+    try{ map.fitBounds(b,{padding:{top:80,bottom:60,left:60,right:470},maxZoom:17,duration:600}); }catch(e){}
+  }
+}
 function openGuardDefaults(){
   if(typeof GuardOverlap==="undefined"){ alert("Guard defaults couldn't load — reload the page."); return; }
   const byId=new Map(zones.map(z=>[z.id,z]));
-  const list=GuardOverlap.overlapping(zones.filter(z=>z.shape&&z.shape.type==="corridor").map(z=>({
+  const pairs=GuardOverlap.pairs(zones.filter(z=>z.shape&&z.shape.type==="corridor").map(z=>({
     id:z.id, name:z.name||"Run", runType:z.runType||"run", widthM:z.shape.widthM||10,
-    path:z.shape.coords||[], descentM:z.descentM, climbM:z.climbM })));
+    path:z.shape.coords||[], descentM:z.descentM, climbM:z.climbM }))).filter(p=>byId.has(p.a.id)&&byId.has(p.b.id));
   document.getElementById("guardDefaultsOverlay")?.remove();
-  const ov=document.createElement("div");
-  ov.id="guardDefaultsOverlay";
-  ov.style.cssText="position:fixed;inset:0;z-index:5000;background:rgba(5,10,16,.6);display:flex;align-items:center;justify-content:center;padding:16px";
+  _gdClearHighlight();
   const box=document.createElement("div");
-  box.style.cssText="background:var(--slate);border:1px solid var(--rim);border-radius:12px;max-width:640px;width:100%;max-height:85vh;display:flex;flex-direction:column;color:var(--snow);font-size:13px";
+  box.id="guardDefaultsOverlay";
+  box.style.cssText="position:fixed;top:64px;right:12px;bottom:12px;width:440px;max-width:calc(100vw - 24px);z-index:5000;"
+    +"background:var(--slate);border:1px solid var(--rim);border-radius:12px;display:flex;flex-direction:column;color:var(--snow);font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5)";
+  const close=()=>{ _gdClearHighlight(); box.remove(); };
   const head=document.createElement("div");
   head.style.cssText="padding:12px 14px;border-bottom:1px solid var(--rim)";
-  const count=()=>list.filter(r=>byId.get(r.id)&&byId.get(r.id).guardDefaultOff).length;
+  const ids=new Set(); pairs.forEach(p=>{ ids.add(p.a.id); ids.add(p.b.id); });
   const paintHead=()=>{
-    head.innerHTML='<div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px;flex:1">🛡 Guard defaults</b><button class="ghost" id="gdClose" style="width:auto;padding:4px 10px">Close</button></div>'
-      +'<div style="margin-top:6px;color:var(--fog);line-height:1.4">'+list.length+' chutes and runs overlap a neighbour (closest first). Set one <b>Off</b> and it stays off when a rider turns Guard ON — no tone, no yellow lines, no voice — until they press and hold it on My map. Guard OFF is unchanged. <b>'+count()+' set Off.</b> Publish to send.</div>';
-    head.querySelector("#gdClose").onclick=()=>ov.remove();
+    const off=[...ids].filter(id=>byId.get(id).guardDefaultOff).length;
+    head.querySelector("#gdCount").textContent=pairs.length+" conflicts · "+ids.size+" chutes/runs · "+off+" set Off";
   };
-  paintHead();
+  head.innerHTML='<div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px;flex:1">🛡 Guard defaults</b><button class="ghost" id="gdClose" style="width:auto;padding:4px 10px">Close</button></div>'
+    +'<div id="gdCount" style="margin-top:4px;font-weight:600"></div>'
+    +'<div style="margin-top:4px;color:var(--fog);line-height:1.4">Each row is two chutes/runs that overlap. <b>Tap a name</b> to switch it <b>Off</b> — it then stays off when a rider turns Guard ON, until they press and hold it. Tap <b>👁</b> to see the pair on the map. Publish to send.</div>'
+    +'<input id="gdSearch" type="text" placeholder="search a name…" style="width:100%;box-sizing:border-box;margin-top:8px">';
+  head.querySelector("#gdClose").onclick=close;
   const body=document.createElement("div");
-  body.style.cssText="overflow-y:auto;padding:6px 14px 12px";
-  if(!list.length) body.innerHTML='<p style="color:var(--fog)">No chutes or runs overlap a neighbour.</p>';
-  list.forEach(r=>{
-    const z=byId.get(r.id); if(!z) return;
+  body.style.cssText="overflow-y:auto;padding:4px 14px 12px;flex:1";
+  const nameBtns=new Map();   // zone id -> [buttons], so every row with that run repaints together
+  const paintName=id=>{
+    const z=byId.get(id);
+    (nameBtns.get(id)||[]).forEach(b=>{
+      b.classList.toggle("on",!z.guardDefaultOff);
+      b.style.opacity=z.guardDefaultOff?"0.55":"1";
+      b.style.textDecoration=z.guardDefaultOff?"line-through":"none";
+      b.title=(z.name||"Run")+": "+(z.guardDefaultOff?"OFF when Guard is ON — tap to turn on":"ON when Guard is ON — tap to turn off");
+      b.querySelector(".gdState").textContent=z.guardDefaultOff?"Off":"On";
+    });
+  };
+  const nameBtn=(c)=>{
+    const b=document.createElement("button");
+    b.className="ghost";
+    b.style.cssText="width:auto;flex:1 1 0;min-width:0;padding:5px 8px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    b.innerHTML=esc(c.name)+' <span class="gdState" style="font-size:11px;font-weight:700;margin-left:4px"></span>';
+    b.onclick=()=>{ const z=byId.get(c.id); z.guardDefaultOff=!z.guardDefaultOff; paintName(c.id); paintHead(); render(); };
+    if(!nameBtns.has(c.id)) nameBtns.set(c.id,[]);
+    nameBtns.get(c.id).push(b);
+    return b;
+  };
+  const rows=[];
+  if(!pairs.length) body.innerHTML='<p style="color:var(--fog)">No chutes or runs overlap a neighbour.</p>';
+  pairs.forEach(p=>{
     const row=document.createElement("div");
-    row.style.cssText="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--rim)";
-    const txt=document.createElement("div");
-    txt.style.cssText="flex:1;min-width:0";
-    const nb=r.neighbours.slice(0,3).map(n=>esc(n.name)+" ("+(n.apartM<5?"crosses":n.apartM+" m apart")+")").join(", ")+(r.neighbours.length>3?" +"+(r.neighbours.length-3)+" more":"");
-    txt.innerHTML='<b>'+esc(r.name)+'</b> <span style="color:var(--fog)">'+r.runType+' · '+r.widthM+' m</span><div style="color:var(--fog);font-size:12px">overlaps '+nb+'</div>';
-    const btn=document.createElement("button");
-    btn.className="ghost";
-    btn.style.cssText="width:auto;flex:0 0 auto;min-width:64px;padding:4px 10px";
-    const paint=()=>{ btn.textContent=z.guardDefaultOff?"Off":"On"; btn.classList.toggle("on",!z.guardDefaultOff); btn.title=z.guardDefaultOff?"Off when Guard is ON (rider holds it to turn it on)":"Guarded when Guard is ON"; };
-    paint();
-    btn.onclick=()=>{ z.guardDefaultOff=!z.guardDefaultOff; paint(); paintHead(); render(); };   // render() autosaves the draft
-    row.appendChild(txt); row.appendChild(btn); body.appendChild(row);
+    row.style.cssText="padding:7px 0;border-bottom:1px solid var(--rim)";
+    const line=document.createElement("div");
+    line.style.cssText="display:flex;align-items:center;gap:6px";
+    const vs=document.createElement("span"); vs.textContent="⟷"; vs.style.cssText="color:var(--fog);flex:0 0 auto";
+    const show=document.createElement("button");
+    show.className="ghost"; show.textContent="👁"; show.title="Show this pair on the map";
+    show.style.cssText="width:auto;flex:0 0 auto;padding:5px 8px";
+    show.onclick=()=>_gdShowPair(byId.get(p.a.id), byId.get(p.b.id));
+    line.appendChild(nameBtn(p.a)); line.appendChild(vs); line.appendChild(nameBtn(p.b)); line.appendChild(show);
+    const meta=document.createElement("div");
+    meta.style.cssText="color:var(--fog);font-size:11px;margin-top:3px";
+    meta.textContent=(p.apartM<5?"lines cross or join":p.apartM+" m apart")+" · "+p.a.runType+" "+p.a.widthM+" m / "+p.b.runType+" "+p.b.widthM+" m";
+    row.appendChild(line); row.appendChild(meta); body.appendChild(row);
+    rows.push({row, text:(p.a.name+" "+p.b.name).toLowerCase()});
   });
-  box.appendChild(head); box.appendChild(body); ov.appendChild(box);
-  ov.addEventListener("click",e=>{ if(e.target===ov) ov.remove(); });
-  document.body.appendChild(ov);
+  nameBtns.forEach((_,id)=>paintName(id));
+  head.querySelector("#gdSearch").oninput=e=>{
+    const q=e.target.value.trim().toLowerCase();
+    rows.forEach(r=>{ r.row.style.display=!q||r.text.includes(q)?"":"none"; });
+  };
+  box.appendChild(head); box.appendChild(body);
+  document.body.appendChild(box);
+  paintHead();
 }
 document.getElementById("pGuardDefaults")?.addEventListener("click", openGuardDefaults);
 document.getElementById("stopsGuardDefaults")?.addEventListener("click", openGuardDefaults);

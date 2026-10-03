@@ -74,7 +74,25 @@
     return out;
   }
 
-  var api = { overlapping: overlapping };
+  // Each conflict once: [{ a:{id,name,runType,widthM}, b:{...}, apartM }], closest first.
+  function pairs(corridors) {
+    var list = overlapping(corridors), byId = {}, seen = {}, out = [];
+    list.forEach(function (x) { byId[x.id] = x; });
+    list.forEach(function (x) {
+      x.neighbours.forEach(function (n) {
+        var k = x.id < n.id ? x.id + "|" + n.id : n.id + "|" + x.id;
+        if (seen[k]) return;
+        seen[k] = true;
+        var y = byId[n.id];
+        var pick = function (c) { return { id: c.id, name: c.name, runType: c.runType, widthM: c.widthM }; };
+        out.push({ a: pick(x), b: pick(y), apartM: n.apartM });
+      });
+    });
+    out.sort(function (p, q) { return p.apartM - q.apartM || String(p.a.name).localeCompare(String(q.a.name)); });
+    return out;
+  }
+
+  var api = { overlapping: overlapping, pairs: pairs };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.GuardOverlap = api;
 })(typeof window !== "undefined" ? window : this);
