@@ -3140,6 +3140,7 @@ async function openChuteLines(row, playerId){
 function bindChuteFolders(listEl, playerId){
   listEl.querySelectorAll(".chuteRow").forEach(row=>{
     const top = row.querySelector(".chuteTop"), box = row.querySelector(".chuteLines"), fold = row.querySelector(".fold");
+    if(!box || !fold) return;   // a "Not yet" row has no saved lines to open
     const toggle = ()=>{
       const open = box.hidden;
       box.hidden = !open; fold.textContent = open ? "▾" : "▸"; top.setAttribute("aria-expanded", open?"true":"false");
@@ -3254,9 +3255,23 @@ async function renderYourChutes(mode){
     const j = await api("/api/players/"+s.player.id+"/chutes/"+mode);
     const chutes = j.chutes||[];
     const maxCount = chutes.length ? chutes[0].count : 0;
-    listEl.innerHTML = chutes.length
-      ? chutes.map(c=>chuteRowHtml(c, maxCount)).join("")
-      : '<div class="empty">No chutes skied yet '+(mode==="daily"?"today":"this season")+'.</div>';
+    // Skied / Not yet (2026-10-04): every chute on the map not in this period's list, by name.
+    const skiedIds = new Set(chutes.map(c=>c.zoneId));
+    const allChutes = (Quest.corridors||[]).filter(c=>c.runType==="chute");
+    const notYet = allChutes.filter(c=>!skiedIds.has(c.zoneId))
+      .map(c=>({ zoneId:c.zoneId, name:rqName(c.zoneId, c.name), difficulty:c.difficulty }))
+      .sort((a,b)=>a.name.localeCompare(b.name));
+    const when = mode==="daily" ? "today" : "this season";
+    listEl.innerHTML =
+      (allChutes.length ? '<h3 style="margin:4px 0 8px">Skied '+when+' — '+skiedIds.size+' of '+allChutes.length+'</h3>' : '')
+      +(chutes.length
+        ? chutes.map(c=>chuteRowHtml(c, maxCount)).join("")
+        : '<div class="empty">No chutes skied yet '+when+'.</div>')
+      +(notYet.length
+        ? '<h3 style="margin:16px 0 8px">Not yet '+when+' — '+notYet.length+'</h3>'
+          +notYet.map(c=>'<div class="chuteRow"><div class="chuteTop">'+difficultyMarkHtml(c.difficulty)
+            +'<span class="name" style="opacity:.75">'+esc(c.name)+'</span></div></div>').join("")
+        : (allChutes.length && chutes.length ? '<div class="empty" style="margin-top:12px">Every chute skied '+when+' 🎉</div>' : ''));
     bindChuteFolders(listEl, s.player.id);
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load your chutes.</div>';
@@ -3715,6 +3730,7 @@ function orderRideLayers(map){
   try{
     const first = ["runLines-width","runLines-halo","runLines-casing"].find(id=>map.getLayer(id));
     if(map.getLayer("myTrack-line") && first) map.moveLayer("myTrack-line", first);
+    if(map.getLayer("runLines-collection")) map.moveLayer("runLines-collection");   // season gold/grey under today's stripe
     if(map.getLayer("runLines-skied")) map.moveLayer("runLines-skied");
     if(map.getLayer("chuteLines-line")) map.moveLayer("chuteLines-line");   // saved lines sit on top of the chute they were skied in
   }catch(e){}
@@ -3802,6 +3818,64 @@ function setupRideVisuals(map, cors){
   paint(); place(); host.appendChild(b);
   try{ if(guardBtn && typeof ResizeObserver!=="undefined") new ResizeObserver(place).observe(guardBtn); }catch(e){}
   setupChuteLines(map, host, b, ()=>down>0);
+  setupCollection(map, host, cors);
+}
+// Chute collection (2026-10-04, user: "skied / not yet"): a "Season 38/70" switch under Skied /
+// Lines. On: every chute skied this season (GET /chutes/season) draws gold, every chute not yet
+// skied grey — feature-state `seasonSkied` on the runLines source (never setData). A chute
+// finished now turns gold at once (Quest.onSkiedChanged). Default off; remembered in
+// rq.showCollection.
+const COLLECTION_LAYER = {
+  id:"runLines-collection", type:"line", source:"runLines",
+  filter:["==",["get","runType"],"chute"],
+  layout:{ "line-cap":"round", "line-join":"round" },
+  paint:{
+    "line-color":["case",["boolean",["feature-state","seasonSkied"],false],"#ffc94d","#8e9aa6"],
+    "line-opacity":["case",["boolean",["feature-state","seasonSkied"],false],0.95,0.75],
+    "line-width":["interpolate",["linear"],["zoom"],12,2.5,15,5,17,8]
+  }
+};
+function setupCollection(map, host, cors){
+  const KEY="rq.showCollection";
+  let show = (()=>{ try{ return localStorage.getItem(KEY)==="1"; }catch(e){ return false; } })();
+  const chuteIds = cors.filter(c=>c.runType==="chute").map(c=>c.zoneId);
+  if(!chuteIds.length) return;
+  const season = new Set();
+  try{
+    map.addLayer(COLLECTION_LAYER);
+    map.setLayoutProperty("runLines-collection","visibility", show?"visible":"none");
+    if(map.getLayer("runLines-skied")) map.moveLayer("runLines-skied");
+    if(map.getLayer("chuteLines-line")) map.moveLayer("chuteLines-line");
+  }catch(e){ console.warn("collection layer:", e && e.message); return; }
+  const apply = ()=>{ try{ chuteIds.forEach(id=>map.setFeatureState({ source:"runLines", id }, { seasonSkied: season.has(id) })); }catch(e){} };
+  const b = document.createElement("button");
+  b.className = "ghost fogMapLayer"; b.id = "fogCollectionBtn";
+  const paint = ()=>{
+    const n = chuteIds.filter(id=>season.has(id)).length;
+    b.textContent = "Season "+n+"/"+chuteIds.length+(show?" on":"");
+    b.setAttribute("aria-pressed", show?"true":"false");
+    b.title = n+" of "+chuteIds.length+" chutes skied this season. On: skied ones gold, not yet grey.";
+  };
+  const anchor = ()=>document.getElementById("fogLinesBtn") || document.getElementById("fogSkiedBtn");
+  const place = ()=>{ const a = anchor(); b.style.top = (a && a.offsetHeight ? a.offsetTop + a.offsetHeight + 8 : 150)+"px"; };
+  const load = ()=>{
+    try{
+      const s = getSession(); if(!s || !s.player) return;
+      api("/api/players/"+s.player.id+"/chutes/season").then(j=>{
+        (j.chutes||[]).forEach(c=>season.add(c.zoneId)); apply(); paint();
+      }).catch(()=>{});
+    }catch(e){}   // offline / signed out: the button still works with what this session knows
+  };
+  b.onclick = ()=>{
+    show = !show; try{ localStorage.setItem(KEY, show?"1":"0"); }catch(e){}
+    try{ map.setLayoutProperty("runLines-collection","visibility", show?"visible":"none"); }catch(e){}
+    if(show) load();
+    paint();
+  };
+  const prev = Quest.onSkiedChanged;
+  Quest.onSkiedChanged = (zoneId, justCompleted)=>{ if(prev) prev(zoneId, justCompleted); if(zoneId){ season.add(zoneId); apply(); paint(); } };
+  paint(); host.appendChild(b); place(); load();
+  try{ const a = anchor(); if(a && typeof ResizeObserver!=="undefined") new ResizeObserver(place).observe(a); }catch(e){}
 }
 // Saved chute lines (2026-09-24): the rider's own smoothed lines for chutes that Corridor
 // Guard is on for right now, one colour per line (newest first, same colours as the swatches

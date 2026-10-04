@@ -192,7 +192,8 @@ function runSetup(overrides = {}) {
   };
   var guard = overrides.guard || { offsetTop: 58, offsetHeight: 40 }; // eslint-disable-line no-var
   var ro = {}; // eslint-disable-line no-var
-  const src = ["function getRideToggle(", "function setRideToggle(", "function orderRideLayers(", "function setupRideVisuals(", "function setupChuteLines("].map(extract).join("\n");
+  const src = ["function getRideToggle(", "function setRideToggle(", "function orderRideLayers(", "function setupRideVisuals(", "function setupChuteLines(",
+    "const COLLECTION_LAYER = {", "function setupCollection("].map(extract).join("\n");
   const fn = new Function(...Object.keys(scope), src + "; return { setupRideVisuals };");
   const api = fn(...Object.values(scope));
   const cors = [{ zoneId: "c1", runType: "chute" }, { zoneId: "c2", runType: "chute" }, { zoneId: "r1", runType: "run" }, { zoneId: "l1", runType: "lift" }];
@@ -203,10 +204,11 @@ function runSetup(overrides = {}) {
 test("setupRideVisuals adds the track under the runs, the stripe on the runLines source, and ONE Skied toggle", () => {
   const r = runSetup();
   const ids = r.layers.map(l => l.def.id);
-  assert.deepStrictEqual(ids, ["myTrack-line", "runLines-skied"]);
+  assert.deepStrictEqual(ids, ["myTrack-line", "runLines-skied", "runLines-collection"]);
   assert.strictEqual(r.layers[0].before, "runLines-width", "track goes beneath the run lines");
   assert.strictEqual(r.layers[1].def.source, "runLines");
-  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn"], "Track and Skied are one button");
+  assert.strictEqual(r.layers[2].def.source, "runLines", "season collection (2026-10-04) is feature-state on the same source");
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogCollectionBtn"], "Track and Skied are one button; Season collection is its own");
   assert.strictEqual(r.host.kids[0].textContent, "Skied on", "default ON");
 });
 
@@ -220,7 +222,7 @@ test("finishing a chute flashes its stripe for ~2 s then clears it; repeats and 
   const r = runSetup();
   r.scope.Quest.skiedToday.add("c2");
   r.scope.Quest.onSkiedChanged("c2", true);
-  assert.deepStrictEqual(r.states.c2, { skied: true, flash: true });
+  assert.deepStrictEqual(r.states.c2, { skied: true, flash: true, seasonSkied: true }, "and it turns gold in the season collection at once");
   const t = r.timers.find(x => x.ms === 2000);
   assert.ok(t, "a 2 s timer clears the flash");
   t.f();
@@ -331,10 +333,10 @@ const lastLinesData = r => (r.dataLog.filter(x => x.id === "chuteLines").pop() |
 test("chute lines: one layer, a Lines button under Skied (default on), only guarded chutes drawn", async () => {
   const guarded = new Set(["c1"]);
   const reqs = [];
-  const r = runSetup({ Quest: linesQuest(guarded), api: p => { reqs.push(p); return Promise.resolve({ lines: savedLines }); } });
+  const r = runSetup({ Quest: linesQuest(guarded), api: p => { if (p.includes("chute-lines")) reqs.push(p); return Promise.resolve({ lines: savedLines }); } });   // the Season button's own request isn't counted here
   await flush();
   assert.ok(r.layers.some(l => l.def.id === "chuteLines-line"), "layer added");
-  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogLinesBtn"]);
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogLinesBtn", "fogCollectionBtn"]);
   assert.strictEqual(r.host.kids[1].textContent, "Lines on", "default ON");
   assert.deepStrictEqual(reqs, ["/api/players/p1/chute-lines?visibleOnly=1&withPoints=1"]);
   const d = lastLinesData(r);
@@ -366,12 +368,31 @@ test("chute lines: no layer or button when the workspace has Corridor Guard off"
   const q = linesQuest(new Set()); q.chuteGuardEnabled = false;
   const r = runSetup({ Quest: q });
   assert.ok(!r.layers.some(l => l.def.id === "chuteLines-line"));
-  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn"]);
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogCollectionBtn"]);
 });
 
 test("chute lines: a failed load leaves the map working", async () => {
   const r = runSetup({ Quest: linesQuest(new Set(["c1"])), api: () => Promise.reject(new Error("offline")) });
   await flush();
   assert.strictEqual(lastLinesData(r), undefined, "nothing drawn, nothing thrown");
-  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogLinesBtn"]);
+  assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogLinesBtn", "fogCollectionBtn"]);
+});
+
+/* ---------- season chute collection (2026-10-04, "skied / not yet") ---------- */
+test("collection: Season n/total button, gold for skied this season, grey for not yet, remembered", async () => {
+  const reqs = [];
+  const r = runSetup({ api: p => { reqs.push(p); return Promise.resolve(p.endsWith("/chutes/season") ? { chutes: [{ zoneId: "c1" }] } : { lines: [] }); } });
+  await flush();
+  const btn = r.host.kids.find(b => b.id === "fogCollectionBtn");
+  assert.ok(reqs.includes("/api/players/p1/chutes/season"));
+  assert.strictEqual(btn.textContent, "Season 1/2", "1 of the 2 chutes (runs and lifts don't count)");
+  assert.strictEqual(r.states.c1.seasonSkied, true);
+  assert.strictEqual(r.states.c2.seasonSkied, false);
+  assert.ok(!("r1" in r.states && "seasonSkied" in r.states.r1), "only chutes");
+  assert.strictEqual(r.calls.vis["runLines-collection"], "none", "default off");
+  btn.onclick();
+  assert.strictEqual(r.calls.vis["runLines-collection"], "visible");
+  assert.strictEqual(r.scope.localStorage.getItem("rq.showCollection"), "1");
+  assert.ok(/ on$/.test(btn.textContent));
+  assert.strictEqual(r.calls.setData, 0, "feature-state only, never a source reload");
 });
