@@ -11,10 +11,34 @@
      first navigation after a deploy. Its name has no version — audio is
      addressed by immutable per-clip URLs, so there's nothing to invalidate.
    activate cleanup also runs OUTSIDE waitUntil so claim()/control is never
-   held up by cache deletion. */
-const PAGE_CACHE = 'gp-offline-v81';
+   held up by cache deletion.
+
+   2026-10-04 (Ridge Quest "map with no signal", user chose "keep what you've seen"):
+   - TILE_CACHE — map tiles the phone has ALREADY shown (Esri World Imagery + the
+     Terrarium elevation tiles), kept across deploys so a mountain viewed once with
+     signal still draws without it. CACHE-FIRST: a weak mountain signal no longer
+     stalls the map, and it saves data and battery. Capped at TILE_MAX (oldest
+     dropped). Only tiles already viewed — nothing is bulk-downloaded (Esri's terms
+     don't allow bulk/offline download of World Imagery).
+   - Requests that carry an Authorization header (a signed-in rider's runs, stats,
+     friends, names ...) are never cached: network only, so nothing private sits in
+     Cache Storage on a shared phone. */
+const PAGE_CACHE = 'gp-offline-v82';
 const AUDIO_CACHE = 'gp-audio';
-const KEEP = new Set([PAGE_CACHE, AUDIO_CACHE]);
+const TILE_CACHE = 'gp-tiles';
+const TILE_MAX = 4000;          // ~60-120 MB of imagery + elevation at typical tile sizes
+const KEEP = new Set([PAGE_CACHE, AUDIO_CACHE, TILE_CACHE]);
+// Esri World Imagery and the Terrarium DEM (frontend/terrain-3d.js) — the tiles every map draws.
+function isMapTile(url) {
+  return (url.hostname === 'server.arcgisonline.com' && url.pathname.indexOf('/World_Imagery/MapServer/tile/') >= 0)
+      || (url.hostname === 's3.amazonaws.com' && url.pathname.indexOf('/elevation-tiles-prod/') === 0);
+}
+let _tilePuts = 0;
+async function trimTiles(c) {
+  const keys = await c.keys();   // insertion order: oldest first
+  const extra = keys.length - TILE_MAX;
+  if (extra > 0) await Promise.all(keys.slice(0, extra + Math.round(TILE_MAX * 0.1)).map(k => c.delete(k)));
+}
 
 self.addEventListener('install', e => { self.skipWaiting(); });
 
@@ -54,6 +78,28 @@ self.addEventListener('fetch', e => {
     })());
     return;
   }
+
+  // map tiles — cache-first from the persistent tile cache (see TILE_CACHE above)
+  if (isMapTile(url)) {
+    e.respondWith((async () => {
+      const c = await caches.open(TILE_CACHE);
+      const hit = await c.match(req);
+      if (hit) return hit;
+      try {
+        const res = await fetch(req);
+        if (res.ok && res.status !== 206) {
+          c.put(req, res.clone()).then(() => { if (++_tilePuts % 50 === 0) return trimTiles(c); }).catch(() => {});
+        }
+        return res;
+      } catch (err) {
+        return new Response('', { status: 504 });
+      }
+    })());
+    return;
+  }
+
+  // a signed-in rider's own data — never stored on the phone (see header)
+  if (req.headers.get('authorization')) return;
 
   // everything else (pages, JS, bundle, fonts) — network-first, cache as offline fallback
   e.respondWith((async () => {

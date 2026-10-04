@@ -907,6 +907,12 @@ function setMutedCorridors(ids){ try{ localStorage.setItem("rq.mutedCorridors", 
 // ARMS just that one (guard + boundary lines for it alone) instead of muting.
 // Its own key — the legacy rq.guardedCorridors list is deliberately not revived.
 // Corridors the author set Off for Guard ON that this rider turned on by press-and-hold.
+// Offline (2026-10-04): the shared service worker (frontend/sw.js) keeps this page, its scripts,
+// the published bundle and every map tile the phone has already shown, so the app reopens and the
+// map draws where you've been, even with no signal. Signed-in data is never cached.
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{ /* offline cache unavailable; the app still runs online */ });
+}
 // ---- A rider's own chute names (2026-10-03) ----
 // Saved on the account (GET/PUT/DELETE /api/players/:id/corridor-names, migrations/0069) so they
 // last the season and follow the rider; a copy in localStorage ("rq.myNames.<playerId>") shows
