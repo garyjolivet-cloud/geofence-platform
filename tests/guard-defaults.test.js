@@ -74,3 +74,22 @@ test("Ridge Quest and Test Mode both read it", () => {
   assert.ok(rq.includes("this.defaultOffCorridors = new Set((bundle.zones||[]).filter(z=>z.guardDefaultOff===true).map(z=>z.id));"));
   assert.ok(ed.includes("filter(z=>z.guardDefaultOff===true)"), "Test Mode loads the same set");
 });
+
+test("fitWidths: both shrink in proportion until the edges meet, never wider, 20 m floor", () => {
+  // a 40 m + 40 m pair 30 m apart -> each 30 m; a 10 m one next to a 40 m one 13 m apart stays 10, the 40 drops to the floor
+  const r = GO.fitWidths([C("a", 0, 40), C("b", 30, 40), C("n", 200, 10), C("w", 213, 40)]);
+  const by = Object.fromEntries(r.map(x => [x.id, x.newWidthM]));
+  assert.strictEqual(by.a, 30); assert.strictEqual(by.b, 30);
+  assert.strictEqual(by.w, 20, "the wide one stops at the 20 m floor");
+  assert.ok(!("n" in by), "a run drawn narrower than the floor is never widened or changed");
+  assert.strictEqual(GO.fitWidths([C("x", 0, 20), C("y", 100, 20)]).length, 0, "nothing overlapping -> nothing changes");
+});
+
+test("GPX Editor: overlap warning after Save / Save As, and the Fit widths button saves widths only", () => {
+  const gpx = fs.readFileSync(path.join(__dirname, "../frontend/gpx-editor.html"), "utf8");
+  assert.ok(gpx.includes('<script src="guard-overlap.js"></script>'));
+  assert.ok(/alert\("Saved\."\+warn\)/.test(gpx) && /if\(warn\) alert\("Saved\."\+warn\)/.test(gpx), "both save paths warn");
+  assert.ok(/GuardOverlap\.fitWidths\(libraryForOverlap\(null\)\)/.test(gpx) && /patchJson\("\/api\/corridor\/"\+r\.id,\{ widthM:r\.newWidthM \}\)/.test(gpx),
+    "fit computes from the whole library and PATCHes width only");
+  assert.ok(/if\(!confirm\(list\.length\+" width"/.test(gpx), "shows the list and asks first");
+});

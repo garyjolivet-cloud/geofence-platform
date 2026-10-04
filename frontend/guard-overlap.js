@@ -92,7 +92,37 @@
     return out;
   }
 
-  var api = { overlapping: overlapping, pairs: pairs };
+  // Widths that stop neighbours overlapping, staying as close to the author's widths as possible
+  // (2026-10-04, GPX Editor "Fit widths to neighbours"; same rule as the 2026-10-03 one-off run):
+  // for every overlapping pair, both are scaled down by the same factor until their edges just
+  // meet (apart >= (wA+wB)/2), repeated until nothing changes; never wider than the author's
+  // width; never below floorM (20 m: narrower and normal GPS wobble sets Guard's tone off and on)
+  // unless the author drew it narrower. Lines closer than the floor allows simply stay at the
+  // floor (they still overlap — Guard defaults handles those).
+  // Returns [{ id, name, runType, oldWidthM, newWidthM }] for the ones that change.
+  function fitWidths(corridors, floorM) {
+    floorM = floorM == null ? 20 : floorM;
+    var ps = pairs(corridors);
+    var w = {}, orig = {}, names = {}, types = {};
+    (corridors || []).forEach(function (c) { var x = c.widthM > 0 ? c.widthM : 10; w[c.id] = x; orig[c.id] = x; names[c.id] = c.name; types[c.id] = c.runType; });
+    for (var it = 0; it < 100; it++) {
+      var changed = false;
+      ps.forEach(function (p) {
+        var s = (w[p.a.id] + w[p.b.id]) / 2;
+        if (s > p.apartM + 0.01) { var f = p.apartM / s; w[p.a.id] *= f; w[p.b.id] *= f; changed = true; }
+      });
+      if (!changed) break;
+    }
+    var out = [];
+    Object.keys(w).forEach(function (id) {
+      var nw = Math.min(orig[id], Math.max(Math.min(floorM, orig[id]), Math.floor(w[id])));
+      if (nw !== orig[id]) out.push({ id: id, name: names[id], runType: types[id], oldWidthM: orig[id], newWidthM: nw });
+    });
+    out.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    return out;
+  }
+
+  var api = { overlapping: overlapping, pairs: pairs, fitWidths: fitWidths };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.GuardOverlap = api;
 })(typeof window !== "undefined" ? window : this);

@@ -12,6 +12,7 @@
 <script src="terrain-3d.js"></script>
 <!-- Shared corridor renderer (width band + piste-glow). Side-effect-free IIFE. -->
 <script src="tile-fog.js"></script>
+<script src="guard-overlap.js"></script>
 <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet">
 <script>RoleGate.require(['admin','operator']);</script>
 <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
@@ -198,6 +199,7 @@
       <button id="saveBtn" class="on" disabled>Save</button>
       <button id="saveAsBtn">Save As&hellip;</button>
     </div>
+    <button id="fitWidthsBtn" class="ghost" style="margin-top:6px;font-size:12px" title="Narrow overlapping chutes and runs so neighbours stop overlapping — as close to your widths as possible, never wider, at least 20 m. Shows the list first. Then Publish from the Fence Editor.">↔ Fit widths to neighbours…</button>
   </div>
 </div>
 
@@ -1161,6 +1163,46 @@ async function postJson(url, body){
   if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
   return r.json();
 }
+// ---- Overlaps (2026-10-04): keep widths tidy as new chutes and runs are added ----
+// Library rows -> the shape frontend/guard-overlap.js wants (its rule: top 5% of each line ignored,
+// bottom counts). `override` replaces one row with what is being saved right now.
+function libraryForOverlap(override){
+  const rows=allCorridors.filter(c=>!override || c.id!==override.id).map(c=>({ id:c.id, name:c.name||"Corridor",
+    runType:c.runType||"run", widthM:c.widthM||10, path:(c.points||[]).map(p=>[p[0],p[1]]),
+    descentM:c.elevLossM, climbM:c.elevGainM }));
+  if(override) rows.push(override);
+  return rows;
+}
+// After a save: which neighbours the saved chute/run overlaps, as text for the "Saved." message.
+function overlapWarning(id, name, rd){
+  if(typeof GuardOverlap==="undefined" || !id || (rd.runType!=="chute" && rd.runType!=="run")) return "";
+  const {elevGainM,elevLossM}=currentTotals();
+  const me={ id, name:name||"this run", runType:rd.runType, widthM:rd.widthM, path:points.map(p=>[p[0],p[1]]), descentM:elevLossM, climbM:elevGainM };
+  const hits=GuardOverlap.pairs(libraryForOverlap(me)).filter(p=>p.a.id===id||p.b.id===id)
+    .map(p=>{ const o=p.a.id===id?p.b:p.a; return o.name+" ("+(p.apartM<5?"lines cross or join":p.apartM+" m apart")+", "+o.widthM+" m wide)"; });
+  if(!hits.length) return "";
+  return "\n\nIt overlaps "+hits.length+" neighbour"+(hits.length===1?"":"s")+":\n• "+hits.slice(0,8).join("\n• ")+(hits.length>8?"\n• +"+(hits.length-8)+" more":"")
+    +"\n\nNarrow it (width "+rd.widthM+" m), use ↔ Fit widths to neighbours, or set one Off in the Fence Editor's 🛡 Guard defaults.";
+}
+document.getElementById("fitWidthsBtn").onclick=async()=>{
+  if(!appId){ alert("Pick a company and project first."); return; }
+  if(typeof GuardOverlap==="undefined"){ alert("Couldn't load the overlap tool — reload the page."); return; }
+  await loadAllCorridors();
+  const list=GuardOverlap.fitWidths(libraryForOverlap(null));
+  if(!list.length){ alert("No chutes or runs overlap more than they need to — nothing to change."); return; }
+  if(!confirm(list.length+" width"+(list.length===1?"":"s")+" would narrow so neighbours stop overlapping (never wider than now, at least 20 m):\n\n"
+    +list.slice(0,25).map(r=>r.name+": "+r.oldWidthM+" → "+r.newWidthM+" m").join("\n")+(list.length>25?"\n… +"+(list.length-25)+" more":"")
+    +"\n\nSave these to the Corridors library? Riders get them after you Publish in the Fence Editor.")) return;
+  let ok=0; const failed=[];
+  for(const r of list){
+    try{ await patchJson("/api/corridor/"+r.id,{ widthM:r.newWidthM }); ok++; }
+    catch(e){ failed.push(r.name+" ("+e.message+")"); }
+  }
+  gpxTree.refresh({appId});
+  await loadAllCorridors();
+  if(loadedFrom && list.some(r=>r.id===loadedFrom.id)) document.getElementById("gpxWidth").value=list.find(r=>r.id===loadedFrom.id).newWidthM;
+  alert("Narrowed "+ok+" of "+list.length+"."+(failed.length?"\nCouldn't save: "+failed.join(", "):"")+"\n\nOpen the Fence Editor and Publish to send them to riders.");
+};
 document.getElementById("saveBtn").onclick=async()=>{
   if(!loadedFrom) return;
   await ensureElevationBeforeSave();
@@ -1171,9 +1213,10 @@ document.getElementById("saveBtn").onclick=async()=>{
     await patchJson("/api/corridor/"+loadedFrom.id,{points:flatPoints,distanceM,elevGainM,elevLossM,...rd});
     Object.assign(loadedFrom, rd);
     captureBaseline();
+    const warn=overlapWarning(loadedFrom.id, loadedFrom.name, rd);   // before the library reload, which is async
     gpxTree.refresh({appId});
     loadAllCorridors();
-    alert("Saved.");
+    alert("Saved."+warn);
   }catch(e){ alert("Save failed: "+e.message); }
 };
 // Save As… — a name prompt; difficulty / type / activity / width come from
@@ -1222,8 +1265,10 @@ async function saveAsNamed(name){
     gpxTree.setActive(loadedFrom.id);
     document.getElementById("saveBtn").disabled=false;
     captureBaseline();
+    const warn=overlapWarning(loadedFrom.id, loadedFrom.name, rd);
     gpxTree.refresh({appId});
     loadAllCorridors();
+    if(warn) alert("Saved."+warn);
   }catch(e){ alert("Save failed: "+e.message); }
 }
 

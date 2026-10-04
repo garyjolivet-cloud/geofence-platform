@@ -34,6 +34,7 @@ function rig(loadedFrom, allCorridors, confirmAnswer) {
     gpxTree: { getUploadTarget: () => null, setActive() {}, refresh() {} },
     updateHdrCrumb() {}, captureBaseline() {}, loadAllCorridors() {},
     confirm: () => confirmAnswer, alert: m => { throw new Error("alert: " + m); },
+    overlapWarning: () => "",   // 2026-10-04 overlap warning after a save; none in these cases
     document: { getElementById: () => ({}) }
   };
   const keys = Object.keys(env);
