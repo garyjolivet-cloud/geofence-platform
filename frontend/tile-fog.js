@@ -325,7 +325,10 @@ function addCorridorLayers(map, o){
       // opacity — invisible. Those numbers were tuned while the layer wasn't drawing
       // at all. Now ~4-6 px of soft colour beyond the black outline.
       "line-opacity": ["case", guardedExpr, 0.85, 0.6],
-      "line-blur": ["case", guardedExpr, 4, 6],
+      // o.lightGlow (2026-10-06, Fence Editor + its Test Mode only): no blur — a wide blurred line
+      // is one of the most expensive things to draw, and the editor draws ~145 of them. The phone
+      // and the other hosts keep the soft glow.
+      "line-blur": o.lightGlow ? 0 : ["case", guardedExpr, 4, 6],
       // ONE top-level zoom interpolate, with the guarded 1.4x multiplied into each
       // stop's value. This used to be ["case", guarded, ["*",1.4,interpolate], interpolate]:
       // two zoom curves in one expression, which MapLibre's validator rejects ("Only one

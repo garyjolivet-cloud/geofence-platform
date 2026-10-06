@@ -1336,7 +1336,10 @@ function styleFor(k){ return {version:8,
   sources:{base:{type:"raster",tiles:BASES[k].tiles,tileSize:256,attribution:BASES[k].attr}},
   layers:[{id:"base",type:"raster",source:"base"}]}; }
 
-const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16,maxZoom:24});
+// pixelRatio capped at 1.5 (speed, 2026-10-06): on a 2x/3x screen the map otherwise draws 4-9x the
+// pixels for every glow and boundary line; 1.5x is hard to tell apart and far cheaper.
+const map=new maplibregl.Map({container:"map",style:styleFor("sat"),center:REF,zoom:16,maxZoom:24,
+  pixelRatio:Math.min(window.devicePixelRatio||1,1.5)});
 map.addControl(new maplibregl.NavigationControl({visualizePitch:true}));
 map.doubleClickZoom.disable(); // dblclick on a stop opens the rename/copy/delete menu instead of zooming (map-wide trade-off, MapLibre has no per-layer dblclick-zoom toggle)
 // AR-object live 3D preview module/map-load race handshake — stash the map
@@ -1400,27 +1403,36 @@ let _chuteGuardOn=false;
 // way the live Ridge Quest app does (QuestSim, frontend/quest-narration.js), not the tour engine's way.
 let _questOn=false;
 function isThreeDEnabled(){ return _threeDOn; }
+// Speed (2026-10-06, user: "panning zooming tilting edit and test so slow"): 3D terrain is only ON
+// while the map is TILTED (pitch > TERRAIN_MIN_PITCH). Looking straight down, every chute's glow,
+// boundary and label used to be draped over the DEM on every frame for nothing. Tilting (⛰ Tilt
+// or two fingers) turns it on at once; back to flat turns it off when the tilt ends. The winter
+// DEM shading (relief / hillshade) follows it, so flat views don't fetch elevation tiles either.
+const TERRAIN_MIN_PITCH=5;
+let _terrainActive=false;
+function syncTerrainToPitch(force){
+  if(!map.getSource(TERRAIN_SOURCE_ID)) return;
+  const want=_threeDOn && map.getPitch()>TERRAIN_MIN_PITCH;
+  if(want===_terrainActive && !force) return;
+  _terrainActive=want;
+  map.setTerrain(want?{source:TERRAIN_SOURCE_ID,exaggeration:1}:null);
+  ["winter-relief","winter-hillshade"].forEach(id=>{ if(map.getLayer(id)) map.setLayoutProperty(id,"visibility",want?"visible":"none"); });
+  if(map.getLayer("vext-vol")){
+    map.setLayoutProperty("vext-vol","visibility",want?"visible":"none");
+    map.setLayoutProperty("vext-ring","visibility",want?"none":"visible");
+    renderSources();
+    if(want) map.once("idle",renderSources);
+  }
+}
+map.on("pitch",()=>{ if(!_terrainActive && _threeDOn && map.getPitch()>TERRAIN_MIN_PITCH) syncTerrainToPitch(); });   // on as soon as you tilt
+map.on("pitchend",()=>syncTerrainToPitch());                                                                              // off once you're flat again
 function updateTerrain(){
   if(!map.getSource(TERRAIN_SOURCE_ID)) return; // not loaded yet — updateTerrain() runs again from the load handler above
-  map.setTerrain(_threeDOn?{source:TERRAIN_SOURCE_ID,exaggeration:1}:null);
+  syncTerrainToPitch(true);
   document.getElementById("tiltBtn").style.display=_threeDOn?"inline-block":"none";
   if(!_threeDOn) map.easeTo({pitch:0});
-  // Vertical-extent volume needs terrain to compute ground-relative
-  // base/height (see renderSourcesInner()'s vextBase/vextTop comment) —
-  // swap to the flat 2D ring when terrain is off, real 3D volume when on.
-  // Immediate renderSources() right after setTerrain() runs before DEM
-  // tiles at any zone's location have actually loaded — queryTerrainElevation
-  // returns null, every feature skips its extrusion props, vext-vol renders
-  // nothing (and vext-ring is hidden whenever 3D is on) until the next
-  // unrelated re-render (drag, prop edit). Re-render once more when the map
-  // settles so a static just-loaded view doesn't sit with only the label
-  // showing indefinitely.
-  if(map.getLayer("vext-vol")){
-    map.setLayoutProperty("vext-vol","visibility",_threeDOn?"visible":"none");
-    map.setLayoutProperty("vext-ring","visibility",_threeDOn?"none":"visible");
-    renderSources();
-    if(_threeDOn) map.once("idle",renderSources);
-  }
+  // Vertical-extent volume (vext-vol / vext-ring) follows _terrainActive in syncTerrainToPitch():
+  // it needs terrain for ground-relative base/height, re-rendered once the DEM settles.
 }
 // Winter map treatment — project.season, same trigger every map surface uses.
 // _season is seeded from the bundle in loadFromPlatform and kept current by
@@ -1431,7 +1443,11 @@ let _season=null;
 function updateWinter(){
   if(typeof Terrain3D==="undefined") return;
   const go=()=>{
-    if(_season==="winter") Terrain3D.applyWinter(map,{dem:_threeDOn, beforeId:"walkpath-line"});
+    if(_season==="winter"){
+      Terrain3D.applyWinter(map,{dem:_threeDOn, beforeId:"walkpath-line"});
+      // DEM shading only while tilted (terrain on) — see syncTerrainToPitch()
+      ["winter-relief","winter-hillshade"].forEach(id=>{ if(map.getLayer(id)) map.setLayoutProperty(id,"visibility",_terrainActive?"visible":"none"); });
+    }
     else Terrain3D.clearWinter(map);
   };
   // NOT map.once("idle") — this editor's many frequently-re-setData()'d
@@ -1975,6 +1991,20 @@ function fc(features){ return {type:"FeatureCollection",features}; }
 // it. Wrapping the whole function surfaces exactly that class of failure
 // directly in the status line instead of silently doing nothing, so a
 // report can include the real error text instead of another guess.
+// Speed (2026-10-06): renderSources() runs on every selection, hover-free click, prop edit and Test
+// Mode step, and re-sending "fences" (every stop incl. ~145 corridors with their glow) makes MapLibre
+// re-cut every tile even when nothing changed — the editor never settled. Only send what changed.
+// Keyed by the source OBJECT too: a style reload (base-map switch) recreates the source empty, and
+// that new source must get the data even though the JSON is the same as last time.
+const _lastSourceJson=new Map();
+function setDataIfChanged(id, data){
+  const src=map.getSource(id); if(!src) return false;
+  const s=JSON.stringify(data), last=_lastSourceJson.get(id);
+  if(last && last.src===src && last.json===s) return false;
+  _lastSourceJson.set(id, { src, json:s });
+  src.setData(data);
+  return true;
+}
 function renderSources(){
   try{ renderSourcesInner(); refreshArPreview(); }
   catch(e){
@@ -2190,7 +2220,7 @@ function renderSourcesInner(){
     }
     }catch(e){ console.error("renderSources: skipping zone",z&&z.id,e); }
   });
-  if(map.getSource("fences")) map.getSource("fences").setData(fc(feats));
+  setDataIfChanged("fences", fc(feats));
 
   // project-level rings — shown only when a dot button is active (centred on all-zones centroid)
   if(map.getSource("project-rings")){
@@ -2279,7 +2309,7 @@ map.on("load",()=>{
   // Shared corridor renderer — width band + piste-glow, grade-coloured,
   // NO dashes. Same stack as Test Mode / Ridge Quest / engine / sim /
   // gpx-editor. Selected corridor's core turns green.
-  TileFog.addCorridorLayers(map,{source:"fences",id:"fenceCorr",
+  TileFog.addCorridorLayers(map,{source:"fences",id:"fenceCorr",lightGlow:true,   // no glow blur in the editor (speed)
     coreColor:["case",["get","sel"],"#38e0a6",["coalesce",["get","col"],"#ff6a3d"]]});
   // Invisible wider click target for tripline (see TRIPLINE_HIT_HALF_WIDTH_M) —
   // fill-opacity 0 so it's never seen, but still hit-tested like any other
@@ -2976,7 +3006,7 @@ function renderGlobalCodeObjectsChips(){
   function _resumeTerrainAfterDrag(){
     if(!_terrainSuspendedForDrag) return;
     _terrainSuspendedForDrag=false;
-    if(_threeDOn) map.setTerrain({source:TERRAIN_SOURCE_ID,exaggeration:1});
+    if(_threeDOn && _terrainActive) map.setTerrain({source:TERRAIN_SOURCE_ID,exaggeration:1});   // only if it was on (tilted)
   }
   function setupMapDrop(){
     const canvas=map.getCanvas();
@@ -6697,7 +6727,7 @@ function refreshSimCorridorLabels(){
   // the tint band's edge was the other "line" being seen). The dashed edge
   // line IS the precise boundary now; a second faint band next to it only
   // confuses which one actually matters.
-  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",smoothEdges:true});
+  TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",smoothEdges:true,lightGlow:true});   // no glow blur in Test Mode (speed)
   // Widened 14->30px, matching ridge-quest.html's own fix — see its comment.
   map.addLayer({id:"runLines-hit",type:"line",source:"runLines",
     paint:{"line-color":"#000","line-opacity":0,"line-width":30}});

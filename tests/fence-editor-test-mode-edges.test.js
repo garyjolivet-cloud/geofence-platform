@@ -99,7 +99,7 @@ test("a GuardEdge failure is contained: it warns and never aborts the rest of Te
 
 test("wiring: script loaded, tile-fog offset lines off, both layers cleaned up, old helper gone", () => {
   assert.ok(html.includes('<script src="/guard-edge.js"></script>'));
-  assert.ok(html.includes('TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",smoothEdges:true});'));
+  assert.ok(html.includes('TileFog.addCorridorLayers(map,{source:"runLines",id:"runLines",smoothEdges:true,lightGlow:true});'));   // lightGlow: speed, 2026-10-06
   assert.ok(/SIM_RUN_LAYERS=[^\n]*"runLines-edge","runLines-edge-armed"/.test(html));
   assert.ok(html.includes('if(map.getSource("runLinesEdge")) map.removeSource("runLinesEdge");'));
   assert.ok(!html.includes("_corridorEdgeSegments"), "the per-segment offset helper is gone");
