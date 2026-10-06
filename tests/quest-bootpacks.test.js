@@ -53,10 +53,11 @@ test("the endpoint answers routes plus both totals", () => {
 });
 
 test("Home shows boot-pack tiles and a Boot packs screen", () => {
-  assert.ok(/id="bpTodayN"/.test(html) && /id="bpTodayM"/.test(html) && /id="bpSeasonM"/.test(html), "three tiles");
+  // 2026-10-06 Home redesign: built by small helpers (hs = picture overlay, mini = Today/Season strips)
+  assert.ok(/hs\("bpTodayN","Boot packs"/.test(html) && /mini\("bpTodayM","Climbed"\)/.test(html) && /mini\("bpSeasonM","Climbed"\)/.test(html), "three tiles");
   assert.ok(/refreshClimbTiles\(playerId\);/.test(extract(html, "async function refreshStats(playerId){")), "tiles refresh with the stats");
   assert.ok(/"\/bootpacks\/daily"/.test(extract(html, "async function refreshClimbTiles(playerId){")));
-  assert.ok(/id="btnBootPacks"/.test(html) && /btnBootPacks"\)\.onclick=\(\)=>renderBootPacks\(\)/.test(html), "Home button opens the screen");
+  assert.ok(/tile\("btnBootPacks","🥾","Boot packs"\)/.test(html) && /btnBootPacks"\)\.onclick=\(\)=>renderBootPacks\(\)/.test(html), "Home button opens the screen");
   assert.ok(/"\/"\+kind\+"\/"\+mode/.test(extract(html, "async function renderTally(kind, mode){")), "the screen fetches /bootpacks|lifts/<mode>");
   assert.ok(/return renderTally\("bootpacks", mode\)/.test(html) && /return renderTally\("lifts", mode\)/.test(html));
 });
@@ -67,10 +68,10 @@ test("lift rides are tallied per lift, with a Home tile and their own screen", (
   assert.ok(/activity='lift'/.test(lifts), lifts);
   assert.ok(worker.includes("(bootpacks|lifts)\\/(daily|season)"), "one endpoint serves both");
   assert.ok(/prepare\(mpbp\[2\] === "lifts" \? LIFTS_SQL : BOOTPACKS_SQL\)/.test(worker));
-  assert.ok(/id="liftTodayN"/.test(html) && /"\/lifts\/daily"/.test(extract(html, "async function refreshClimbTiles(playerId){")), "Lift rides today tile");
+  assert.ok(/hs\("liftTodayN","Lift rides"\)/.test(html) && /"\/lifts\/daily"/.test(extract(html, "async function refreshClimbTiles(playerId){")), "Lift rides today tile");
   assert.ok(/vertical_m/.test(worker.match(/const LIFTS_SQL = "([^"]+)"/)[1]), "lift rides carry their vertical");
   assert.ok(/b\.activity === "lift" \? 0 : Math\.abs\(verticalM \|\| 0\)/.test(worker), "lift vertical stays out of the scored day vertical_m");
-  assert.ok(/id="btnLifts"/.test(html) && /btnLifts"\)\.onclick=\(\)=>renderLifts\(\)/.test(html), "Home button opens Lift rides");
+  assert.ok(/tile\("btnLifts","🚡","Lift rides"\)/.test(html) && /btnLifts"\)\.onclick=\(\)=>renderLifts\(\)/.test(html), "Home button opens Lift rides");
   const day = r => r.slice(0, 10);
   const rows = [
     { zone_id: "gondola", run_name: "Golden Eagle Express", started_at: "2026-09-30T10:00:00Z" },

@@ -130,7 +130,7 @@ const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"),
 const fe = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html"), "utf8");
 test("Ridge Quest: Social media export button, guard log kept as a small link, two-tap share", () => {
   assert.ok(rq.includes('<script src="/social-card.js"></script>'));
-  assert.ok(/id="btnSocial"[^>]*>📸 Social media export</.test(rq));
+  assert.ok(/tile\("btnSocial","📸","Social export"\)/.test(rq), "Home tile (2026-10-06 grid)");
   assert.ok(/id="btnExportCgLog"[^>]*>guard log</.test(rq) && /btnExportCgLog"\)\.onclick=\(e\)=>\{ e\.preventDefault\(\); exportCgLog\(\); \}/.test(rq), "guard log still exports");
   const s = rq.indexOf("async function renderSocialExport(){"), body = rq.slice(s, rq.indexOf("async function renderYourChutes(mode){"));
   assert.ok(/SocialCard\.make\(/.test(body) && /SocialCard\.shareOrSave\(/.test(body));

@@ -798,7 +798,8 @@
     FORMATS: FORMATS, COL: COL,
     collectDay: collectDay, collectSeason: collectSeason,
     testDay: testDay, testSeason: testSeason,
-    renderHeroMap: renderHeroMap, draw: draw, drawStory: drawStory, drawWide: drawWide,
+    renderHeroMap: renderHeroMap, drawFallbackHero: drawFallbackHero,   // also used by Home's picture (rq-hero.js)
+    draw: draw, drawStory: drawStory, drawWide: drawWide,
     make: make, shareOrSave: shareOrSave,
     jpegWithExif: jpegWithExif, readExif: readExif, meta: meta, summary: summary,
     _shortLift: shortLift

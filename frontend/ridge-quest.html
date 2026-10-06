@@ -57,6 +57,7 @@
      previewed there is exactly what plays here. -->
 <script src="/splash-flight.js"></script>
 <script src="/social-card.js"></script>
+<script src="/rq-hero.js"></script>
 <style>
   :root{ --night:#0a1018;--slate:#141d2b;--rim:#26344a;--coral:#ff6a3d;--snow:#eef4fb;--ice:#8fb6d4;--fog:#5b7088;--go:#38e0a6;--hazard:#ff2f4e;--amber:#ffd23f; }
   *{box-sizing:border-box}
@@ -108,6 +109,38 @@
   .now .stat span{font-size:11px;color:var(--fog);text-transform:uppercase;letter-spacing:.4px}
   .welcome{text-align:center;padding:20px 6px}
   .welcome .go{font-family:"Black Han Sans";font-size:26px;color:var(--go);margin:0 0 6px}
+  /* Home (2026-10-06 redesign, "as pleasing as the social media export"): the 3D today picture on
+     top with the big numbers over it, Start tracking under it, Today / Season strips, an icon grid
+     instead of a stack of buttons, the run list, and Account folded away. */
+  .heroBox{position:relative;border-radius:18px;overflow:hidden;aspect-ratio:16/10;margin:0 0 14px;
+    background:linear-gradient(180deg,#1b1446 0%,#6a2a6e 45%,#e0755a 75%,#f6c27a 100%);box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  .heroBox img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  .heroBox::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(10,16,24,.6) 0%,rgba(10,16,24,0) 26%,rgba(10,16,24,0) 48%,rgba(10,16,24,.94) 100%)}
+  .heroTop{position:absolute;left:14px;right:14px;top:10px;z-index:1;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .heroTop .r{font-family:"Black Han Sans";font-size:19px;letter-spacing:.02em;text-shadow:0 1px 6px rgba(0,0,0,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .heroTop .d{font-family:"Barlow Condensed";font-weight:600;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#d6e2ee;white-space:nowrap}
+  .heroStats{position:absolute;left:8px;right:8px;bottom:20px;z-index:1;display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+  .heroStats .hs{text-align:center;min-width:0}
+  .heroStats b{display:block;font-family:"Black Han Sans";font-weight:400;font-size:24px;line-height:1.05;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.6);white-space:nowrap}
+  .heroStats span{display:block;font-family:"Barlow Condensed";font-weight:600;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#cfdbe8}
+  .heroStats .hs.gold b{color:#ffcf4a} .heroStats .hs.green b{color:#7ee08a} .heroStats .hs.ice b{color:#bfe8ff}
+  .heroWhen{position:absolute;left:0;right:0;bottom:5px;z-index:1;text-align:center;font-size:10.5px;color:#9fb0c2}
+  .statusBox p{margin:5px 0 0;font-size:12.5px;line-height:1.4;color:var(--ice);text-align:center}
+  .statusBox p:empty{display:none}
+  .strip{background:var(--slate);border:1px solid var(--rim);border-radius:14px;padding:10px 12px 12px;margin:12px 0 0}
+  .strip h3{margin:0 0 6px;font-family:"Barlow Condensed";font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fog)}
+  .stripRow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .stripRow .m{text-align:center;min-width:0}
+  .stripRow b{display:block;font-family:"Black Han Sans";font-weight:400;font-size:20px;line-height:1.2;white-space:nowrap}
+  .stripRow span{font-family:"Barlow Condensed";font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ice)}
+  .exploreGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0 0}
+  .exploreGrid button.ghost{margin:0;display:flex;align-items:center;gap:9px;text-align:left;padding:13px 12px;background:var(--slate);color:var(--snow)}
+  .exploreGrid button.ghost .ico{font-size:18px;line-height:1;flex:0 0 auto}
+  .exploreGrid button.ghost.wide{grid-column:1 / -1}
+  details.acct{margin-top:18px;border-top:1px solid var(--rim);padding-top:6px}
+  details.acct summary{cursor:pointer;font-family:"Barlow Condensed";font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--fog);padding:8px 0}
+  .condBack{display:block;text-align:center;margin-top:12px;font-size:13px;color:var(--ice);text-decoration:underline;cursor:pointer}
   .trackBtn{background:var(--go);color:#052018}
   .trackBtn.tracking{background:var(--hazard);color:#2a0f14}
   .runlist{margin-top:16px}
@@ -797,7 +830,7 @@ function sumSnow(rows,n){
   return Math.round(slice.reduce((s,r)=>s+(r.hn24_cm||0),0)*10)/10;
 }
 
-async function renderConditions(onContinue){
+async function renderConditions(onContinue, onStart){
   app.innerHTML = '<div class="card"><h2>Conditions</h2><p class="lead">Loading…</p></div>';
   let now=null, history=[];
   try{ now = await api("/api/weather"); }catch(e){}
@@ -819,9 +852,23 @@ async function renderConditions(onContinue){
       +'<div class="stat"><b>'+(snow7!=null?snow7+'cm':'—')+'</b><span>Last 7 days</span></div>'
       +'<div class="stat"><b>'+(snow14!=null?snow14+'cm':'—')+'</b><span>Last 14 days</span></div>'
       +'</div>'
-    +'<button class="primary" id="btnCont">Continue</button>'
+    // 2026-10-06 (Gary): "the continue button on the conditions page can be replaced with the start
+    // tracking button". Start tracking goes to Home and starts in the same tap (iOS needs the tap to
+    // unlock audio + the compass); already tracking -> "Back"; "just look around" = Home, no tracking.
+    +(Quest.active()
+      ? '<button class="primary" id="btnCont">Back</button>'
+      : '<button class="primary trackBtn" id="btnCont">Start tracking</button><a class="condBack" id="btnLookAround">just look around</a>')
     +'</div>';
-  document.getElementById("btnCont").onclick=onContinue;
+  document.getElementById("btnCont").onclick = (!Quest.active() && onStart) ? onStart : onContinue;
+  const look = document.getElementById("btnLookAround");
+  if(look) look.onclick = onContinue;
+}
+// From the conditions page: open Home and press its Start tracking in the SAME tap, so the tap still
+// counts as the user gesture iOS needs (audio unlock, compass permission, wake lock).
+function startTrackingFromConditions(){
+  renderHome();
+  const b = document.getElementById("btnTrack");
+  if(b && !Quest.active()) b.click();
 }
 
 /* ================ CORRIDOR CROSSING DETECTOR (R1) ================
@@ -1399,6 +1446,7 @@ const Quest = {
   onSkiedChanged: null, // callback(zoneId|null, justCompleted) — set by drawAllRuns() while "My map" is open; nulled on #fogBack
   onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
   onShare: null,        // callback(p) — same p as onPosition; set by renderHome to POST /api/presence (throttled) while sharing-with-friends is on. Independent of onPosition so it survives Home<->Map navigation.
+  onGondolaBoard: null, // callback() — the rider just got on the main lift at its bottom station; redraws Home's 3D picture (set once, page-level, next to paintHero)
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
   onCoverage: null,     // callback(corridorName, pct, passed, reason) — fired when a run is logged (passed:true) or when the player leaves a corridor having covered a meaningful part without completing it / a genuine pass is rejected (passed:false, reason = player-facing why), so a partial/rejected pass isn't silent. A plain traverse (little covered) stays silent.
   onCheckpointVertical: null, // callback(totalM) — fired when _tickCheckpoints credits a descent, so Home's "Vertical today" tile ticks up live
@@ -1730,7 +1778,12 @@ const Quest = {
       // unconditionally every tick (cheap no-op via _setLiftModeActive's own
       // equality check once already in that state).
       const onLift = ChuteGuard.isOnLift();
-      if(onLift !== this._liftRaw){ this._liftRaw = onLift; this._liftRawSinceT = fix.t; }
+      if(onLift !== this._liftRaw){
+        this._liftRaw = onLift; this._liftRawSinceT = fix.t;
+        // Just got on a lift: at the main lift's bottom station (the gondola) -> redraw Home's 3D
+        // today picture (rq-hero.js; Gary: "updated only when you get on gondola at bottom of hill").
+        try{ if(onLift && this.onGondolaBoard && typeof RQHero!=="undefined" && RQHero.isMainLiftBoarding([fix.lat, fix.lon], this.corridors)) this.onGondolaBoard(); }catch(e){}
+      }
       // Today's ski track (breadcrumb for the map). Isolated in a try/catch so a track problem
       // can never break the tracking pipeline. Only the RAW near-lift reading goes in: the track
       // itself waits TRACK.LIFT_CONFIRM_MS before treating it as a ride (walking past a lift base
@@ -2251,24 +2304,21 @@ async function refreshRuns(playerId){
 // rides today. Points + streak come from GET /api/players/:id/stats; the vertical and the
 // boot-pack / lift numbers from /bootpacks and /lifts. The tiles are drawn first with dashes,
 // so a failing request blanks only its own numbers, never the whole row.
+// Home's numbers (2026-10-06 layout: the picture overlay + the Today / This season strips). The
+// elements are part of renderHome's markup; this only fills them. Best-effort: a failed fetch
+// leaves its dashes.
 async function refreshStats(playerId){
-  const tilesEl=document.getElementById("statsTiles");
   const streakEl=document.getElementById("statsStreak");
-  if(!tilesEl) return;
-  tilesEl.innerHTML =
-    '<div class="now">'
-    +'<div class="stat"><b id="chutesTodayNum">'+Quest.skiedToday.size+'</b><span>Chutes today</span></div>'
-    +'<div class="stat"><b id="ptsToday">—</b><span>Points today</span></div>'
-    +'<div class="stat vtoday"><b id="vertToday">—</b><span>Vertical today</span></div>'
-    +'<div class="stat"><b id="vertSeason">—</b><span>This season</span></div>'
-    +'</div>'
-    +'<div class="now bootTiles" id="bootTiles">'
-    +'<div class="stat"><b id="bpTodayN">—</b><span>Boot packs today</span></div>'
-    +'<div class="stat"><b id="bpTodayM">—</b><span>Climbed today</span></div>'
-    +'<div class="stat"><b id="bpSeasonM">—</b><span>Climbed this season</span></div>'
-    +'<div class="stat"><b id="liftTodayN">—</b><span>Lift rides today</span></div>'
-    +'</div>';
+  if(!document.getElementById("ptsToday")) return;   // not on Home
+  const ct=document.getElementById("chutesTodayNum"); if(ct) ct.textContent=Quest.skiedToday.size;
   refreshClimbTiles(playerId);
+  // Season chutes: n of the resort's chutes skied this season.
+  api("/api/players/"+playerId+"/chutes/season").then(j=>{
+    const el=document.getElementById("chutesSeason"); if(!el) return;
+    const total=(Quest.corridors||[]).filter(c=>c.runType==="chute").length;
+    const n=(j.chutes||[]).length;
+    el.textContent = total ? n+"/"+total : String(n);
+  }).catch(()=>{});
   try{
     const j = await api("/api/players/"+playerId+"/stats");
     const days = j.days||[];
@@ -2282,7 +2332,7 @@ async function refreshStats(playerId){
       cursor = new Date(cursor.getTime()-24*3600000);
     }
     const el=document.getElementById("ptsToday"); if(el) el.textContent=Math.round(today.points||0);
-    if(streakEl) streakEl.textContent = streak>0 ? streak+"-day streak" : "";
+    if(streakEl) streakEl.textContent = String(streak);
   }catch(e){}
 }
 // Total vertical (lifts + boot packs) for today and the season, plus the boot-pack and lift tiles.
@@ -2772,36 +2822,84 @@ function narrateCorridor(text){
   if(!text) return;
   _sayQueue.say(text);
 }
+// ---- Home's 3D today picture (frontend/rq-hero.js, 2026-10-06) ----
+// The same data the social export collects for "today" (SocialCard.collectDay).
+function socialDayCtx(s){
+  const now=new Date();
+  return {
+    playerId:s.player.id, rider:s.player.displayName||"", corridors:Quest.corridors||[],
+    track: RQTrack ? RQTrack.segments() : [],
+    dayKey: iso=>questDateBucketClient(new Date(iso)), today: questDateBucketClient(now),
+    seasonId: questSeasonIdClient(now),
+    dateLabel: now.toLocaleDateString("en-US",{ weekday:"long", month:"long", day:"numeric" }),
+    seasonLabel: "Season "+questSeasonIdClient(now).replace("-","–")
+  };
+}
+function heroRefresh(s, reason){
+  if(typeof RQHero==="undefined" || typeof SocialCard==="undefined" || !s || !s.player) return;
+  return RQHero.refresh(s.player.id, reason, ()=>SocialCard.collectDay(api, socialDayCtx(s)), questDateBucketClient(new Date()));
+}
+// Shows the saved picture at once; draws the first one of the day (or a stale one) if needed.
+// Otherwise Home never redraws it — only boarding the gondola does (Quest.onGondolaBoard).
+function paintHero(s){
+  const dateEl=document.getElementById("heroDate");
+  if(dateEl) dateEl.textContent=new Date().toLocaleDateString("en-US",{ weekday:"short", month:"short", day:"numeric" });
+  if(typeof RQHero==="undefined") return;
+  const show=v=>{
+    const im=document.getElementById("heroImg"); if(!im || !v || !v.img) return;
+    im.src=v.img; im.hidden=false;
+    const w=document.getElementById("heroWhen");
+    if(w){
+      const t=new Date(v.at).toLocaleTimeString([], { hour:"numeric", minute:"2-digit" });
+      w.textContent = v.reason==="gondola" ? "updated "+t+" at the gondola" : "updates each time you board the gondola";
+    }
+  };
+  const cached=RQHero.load(s.player.id);
+  if(cached) show(cached);
+  RQHero.state.onUpdated=show;
+  if(!RQHero.isFreshFor(cached, questDateBucketClient(new Date()))) heroRefresh(s, cached && cached.stale ? "stale" : "first");
+}
+Quest.onGondolaBoard = ()=>{ heroRefresh(getSession(), "gondola"); };
 function renderHome(){
   const s=getSession();
+  // Home (2026-10-06 redesign): the 3D today picture (rq-hero.js) with the day's big numbers over
+  // it, Start tracking, Today / Season strips, an icon grid, today's runs, Account folded away.
+  // The Corridor Guard switch is on My map only. Element ids are unchanged where code fills them.
+  const ws = getWorkspace() || {};
+  const hs = (id, label, cls)=>'<div class="hs '+(cls||'')+'"><b id="'+id+'">—</b><span>'+label+'</span></div>';
+  const mini = (id, label)=>'<div class="m"><b id="'+id+'">—</b><span>'+label+'</span></div>';
+  const tile = (id, ico, label, cls)=>'<button class="ghost '+(cls||'')+'" id="'+id+'"><span class="ico">'+ico+'</span><span class="lbl">'+label+'</span></button>';
   app.innerHTML =
-    '<div class="card welcome">'
-    +'<p class="go">You’re in.</p>'
-    +'<p class="lead">Welcome, '+esc(s.player.displayName||s.player.email)+'. Track runs, earn points, and climb the leaderboard.</p>'
-    +'<div id="statsTiles"></div>'
-    +'<p class="scrollhint" id="statsStreak" style="margin-bottom:14px"></p>'
-    +'<button class="primary trackBtn" id="btnTrack">Start tracking</button>'
-    +'<button class="ghost guardBtn on" id="btnGuard" style="display:none;margin-top:8px" title="Corridor Guard — sounds a tone when you drift off a run. Tap to turn it on or off for every chute and run.">🛡 Guard ON</button>'
-    +'<p class="scrollhint" id="gpsStatus" style="margin:6px 0"></p>'
-    +'<p class="scrollhint" id="cgDebug" style="margin:0 0 6px;font-size:11px;opacity:.7"></p>'
-    +'<button class="ghost" id="btnSocial" style="margin:0 0 4px" title="Make an image of your day or season for Instagram / Facebook">📸 Social media export</button>'
-    +'<p style="margin:0 0 10px;text-align:right"><a href="#" id="btnExportCgLog" style="font-size:11px;color:var(--fog);opacity:.75" title="Download this session\'s Corridor Guard log as a text file">guard log</a></p>'
-    +'<p class="scrollhint" id="coverageStatus" style="margin:0 0 14px"></p>'
-    +'<p class="scrollhint" id="outboxNote" style="margin:-8px 0 14px;display:none"></p>'
+    '<div class="home">'
+    +'<div class="heroBox" id="heroBox">'
+      +'<img id="heroImg" alt="Today on the mountain: your chutes in gold and boot packs in green" hidden>'
+      +'<div class="heroTop"><span class="r">'+esc(ws.appName||"Ridge Quest")+'</span><span class="d" id="heroDate"></span></div>'
+      +'<div class="heroStats">'
+        +hs("vertToday","Vertical","ice")+hs("chutesTodayNum","Chutes","gold")+hs("bpTodayN","Boot packs","green")+hs("liftTodayN","Lift rides")
+      +'</div>'
+      +'<div class="heroWhen" id="heroWhen"></div>'
+    +'</div>'
+    +'<button class="primary trackBtn" id="btnTrack" style="margin-top:0">Start tracking</button>'
+    +'<div class="statusBox"><p id="gpsStatus"></p><p id="coverageStatus"></p><p id="outboxNote" style="display:none"></p><p id="cgDebug" style="font-size:11px;opacity:.7"></p></div>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
-    +'<button class="ghost" id="btnMap">My map</button>'
-    +'<button class="ghost" id="btnLeaderboard">Leaderboard</button>'
-    +'<button class="ghost" id="btnChutes">Your chutes</button>'
-    +'<button class="ghost" id="btnBootPacks">Boot packs</button>'
-    +'<button class="ghost" id="btnLifts">Lift rides</button>'
-    +'<button class="ghost" id="btnFriends">Friends</button>'
-    +'<button class="ghost" id="btnShare"></button>'
-    +'<div class="runlist"><h3>Today</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
-    +'<button class="ghost" id="btnConditions">Check conditions again</button>'
-    +'<button class="ghost" id="btnSwitchResort">Switch resort</button>'
-    +'<button class="ghost" id="btnLogout">Log out</button>'
-    +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
+    +'<div class="strip"><h3>Today</h3><div class="stripRow">'+mini("ptsToday","Points")+mini("bpTodayM","Climbed")+mini("statsStreak","Day streak")+'</div></div>'
+    +'<div class="strip"><h3>This season</h3><div class="stripRow">'+mini("vertSeason","Vertical")+mini("bpSeasonM","Climbed")+mini("chutesSeason","Chutes")+'</div></div>'
+    +'<div class="exploreGrid">'
+      +tile("btnMap","🗺","My map")+tile("btnChutes","◆","Your chutes")
+      +tile("btnBootPacks","🥾","Boot packs")+tile("btnLifts","🚡","Lift rides")
+      +tile("btnLeaderboard","🏆","Leaderboard")+tile("btnFriends","👥","Friends")
+      +tile("btnSocial","📸","Social export")+tile("btnConditions","❄","Conditions")
+      +tile("btnShare","📍","Share my location","wide")
+    +'</div>'
+    +'<div class="runlist"><h3>Today’s runs</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
+    +'<details class="acct"><summary>⚙ Account — '+esc(s.player.displayName||s.player.email)+'</summary>'
+      +'<button class="ghost" id="btnSwitchResort">Switch resort</button>'
+      +'<button class="ghost" id="btnLogout">Log out</button>'
+      +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
+      +'<p style="margin:10px 0 0;text-align:right"><a href="#" id="btnExportCgLog" style="font-size:11px;color:var(--fog);opacity:.75" title="Download this session\'s Corridor Guard log as a text file">guard log</a></p>'
+    +'</details>'
     +'</div>';
+  paintHero(s);
   // The rider's own chute names (cached copy at once, then the account's) before the run list draws.
   RQNames.load(s.player.id).finally(()=>refreshRuns(s.player.id));
   refreshStats(s.player.id);
@@ -2837,12 +2935,10 @@ function renderHome(){
     // rider would otherwise be surprised by alarms on every run.
     if(Quest.chuteGuardEnabled && !localStorage.getItem("rq.guardDefaultOnNoticeShown")){
       try{ localStorage.setItem("rq.guardDefaultOnNoticeShown","1"); }catch(e){}
-      rqToast("Corridor Guard is now on for every run. Use the yellow button to turn it off.");
+      rqToast("Corridor Guard is now on for every run. Use the yellow 🛡 button on My map to turn it off.");
     }
   })();
-  const guardBtn=document.getElementById("btnGuard");
-  if(guardBtn) guardBtn.onclick=()=>Quest.setChuteGuardMaster(!Quest.chuteGuardMaster);
-  paintGuardButtons();   // right state at first paint (the flag may already be loaded from a previous Home render)
+  // (The Corridor Guard switch lives on My map only since the 2026-10-06 Home redesign.)
   const trackBtn=document.getElementById("btnTrack");
   const statusEl=document.getElementById("gpsStatus");
   const coverageEl=document.getElementById("coverageStatus");
@@ -2972,7 +3068,8 @@ function renderHome(){
   const shareBtn=document.getElementById("btnShare");
   function paintShareBtn(){
     const on = RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now();
-    shareBtn.textContent = on ? "Sharing my location with friends — tap to stop" : "Share my location with friends today";
+    const lbl = shareBtn.querySelector(".lbl") || shareBtn;
+    lbl.textContent = on ? "Sharing my location with friends — tap to stop" : "Share my location with friends today";
     shareBtn.style.borderColor = on ? "var(--coral)" : "";
   }
   paintShareBtn();
@@ -2996,7 +3093,7 @@ function renderHome(){
     rqLastShareAt = now;
     api("/api/presence", {method:"POST", body:JSON.stringify({lat:p.lat, lon:p.lon, heading:p.headingTravel, acc:p.acc})}).catch(()=>{});
   };
-  document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome);
+  document.getElementById("btnConditions").onclick=()=>renderConditions(renderHome, startTrackingFromConditions);
   document.getElementById("btnSwitchResort").onclick=()=>{ Quest.stop(); renderWorkspacePicker(); };
   document.getElementById("btnLogout").onclick=async()=>{
     Quest.stop(); Quest.onShare=null;
@@ -3200,15 +3297,7 @@ async function renderSocialExport(){
     const status=t=>{ const el=$("seStatus"); if(el) el.textContent=t; };
     try{
       status("Gathering your "+(kind==="day"?"day":"season")+"…");
-      const now=new Date();
-      const ctx={
-        playerId:s.player.id, rider:s.player.displayName||"", corridors:Quest.corridors||[],
-        track: RQTrack ? RQTrack.segments() : [],
-        dayKey: iso=>questDateBucketClient(new Date(iso)), today: questDateBucketClient(now),
-        seasonId: questSeasonIdClient(now),
-        dateLabel: now.toLocaleDateString("en-US",{ weekday:"long", month:"long", day:"numeric" }),
-        seasonLabel: "Season "+questSeasonIdClient(now).replace("-","–")
-      };
+      const ctx=socialDayCtx(s);   // shared with Home's 3D picture
       const data = kind==="day" ? await SocialCard.collectDay(api, ctx) : await SocialCard.collectSeason(api, ctx);
       made = await SocialCard.make(data, format, { onProgress: status });
       if(!document.getElementById("sePreview")) return;   // navigated away
@@ -4819,7 +4908,7 @@ async function boot(){
   }
   const gateOk = await runGate();
   if(!gateOk) return; // runGate's own screens handle re-entry
-  renderConditions(renderHome);
+  renderConditions(renderHome, startTrackingFromConditions);
 }
 boot();
 </script>
