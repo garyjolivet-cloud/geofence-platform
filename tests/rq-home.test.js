@@ -89,7 +89,9 @@ test("the picture is drawn with My map's own pieces, and only once the runs are 
   assert.ok(/const feats = runLineFeatures\(cors\);/.test(rq.slice(rq.indexOf("function drawAllRuns(map){"))), "drawAllRuns shares it");
   assert.ok(/TileFog\.addCorridorLayers\(map,\{ source:"runLines", id:"runLines", guardByState:true \}\)/.test(r), "same corridor layers as My map");
   assert.ok(/Terrain3D\.setEnabled\(map, true, \{ sky:true \}\)/.test(r) && /const pitch=Quest\.threeDEnabled\?60:0;/.test(r), "3D, tilted like My map's 3D button");
-  assert.ok(/cameraForBounds\(b,\{ padding:[^}]*, pitch \}\)/.test(r), "framed with the tilt so the runs fill the picture");
+  assert.ok(/RQHero\.mainLift\(cors\)/.test(r) && /cameraForBounds\(b,\{ padding:[^}]*, bearing \}\)/.test(r) && /pitch, bearing \}\);/.test(r),
+    "looks up the main lift, framed on the upper mountain (chutes + lift tops)");
+  assert.ok(/if\(c\.runType==="chute"\) \(c\.path\|\|\[\]\)\.forEach/.test(r) && /focus\.push\(\[t\[1\],t\[0\]\]\);/.test(r), "chutes and lift TOPS only");
   assert.ok(/Terrain3D\.applyWinter/.test(r) && /map\.addLayer\(HOME_TODAY_LAYER\)/.test(r) && /RidgeVisuals\.trackLayer/.test(r), "winter, today's gold glow, track");
   assert.ok(/const todayIds=new Set\(\[\.\.\.today\.skied, \.\.\.\(today\.bootPacks\|\|\[\]\)\]\);/.test(r), "today's chutes and boot packs both glow");
   assert.ok(/canvasContextAttributes:\{ preserveDrawingBuffer:true/.test(r) && /SocialCard\.isBlank/.test(r), "iPhone black-frame guard");
