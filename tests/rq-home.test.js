@@ -40,7 +40,7 @@ test("refresh: at most one gondola redraw per 10 minutes; a locked phone marks i
   H.state.lastAt = 0;
   const r1 = await H.refresh("p1", "gondola", async () => ({}), "2026-12-01");
   assert.strictEqual(r1, "stale");
-  assert.ok(JSON.parse(store["rq.hero.p1"]).stale, "remembered for the next Home open");
+  assert.ok(JSON.parse(store["rq.hero.v2.p1"]).stale, "remembered for the next Home open");
   const r2 = await H.refresh("p1", "gondola", async () => ({}), "2026-12-01");
   assert.strictEqual(r2, "skipped", "a second boarding within 10 min does nothing");
   delete global.document; delete global.localStorage;
@@ -80,4 +80,29 @@ test("Share my location is on the Friends screen, not Home; sending still runs f
   assert.ok(/id="btnShare"/.test(friends.slice(0, 1200)) && /bindShareButton\(document\.getElementById\("btnShare"\)\);/.test(friends.slice(0, 2500)));
   assert.ok(/api\("\/api\/share", \{method:"POST", body:JSON\.stringify\(\{on:turningOn\}\)\}\)/.test(rq.slice(rq.indexOf("function bindShareButton(btn){"))));
   assert.ok(/Quest\.onShare = \(p\)=>\{/.test(rq), "the location POST piggyback is still set up");
+});
+
+// 2026-10-06 follow-up: "The map is not the 3d map. It needed to look exactly like the my map."
+test("the picture is drawn with My map's own pieces, and only once the runs are loaded", () => {
+  const r = rq.slice(rq.indexOf("function renderMyMapPicture(w, h, today){"), rq.indexOf("// Today's chutes skied and boot packs climbed"));
+  assert.ok(/features:runLineFeatures\(cors\)/.test(r), "same run features as My map (drawAllRuns uses runLineFeatures too)");
+  assert.ok(/const feats = runLineFeatures\(cors\);/.test(rq.slice(rq.indexOf("function drawAllRuns(map){"))), "drawAllRuns shares it");
+  assert.ok(/TileFog\.addCorridorLayers\(map,\{ source:"runLines", id:"runLines", guardByState:true \}\)/.test(r), "same corridor layers as My map");
+  assert.ok(/Terrain3D\.setEnabled\(map, true, \{ sky:true \}\)/.test(r) && /const pitch=Quest\.threeDEnabled\?60:0;/.test(r), "3D, tilted like My map's 3D button");
+  assert.ok(/cameraForBounds\(b,\{ padding:[^}]*, pitch \}\)/.test(r), "framed with the tilt so the runs fill the picture");
+  assert.ok(/Terrain3D\.applyWinter/.test(r) && /map\.addLayer\(HOME_TODAY_LAYER\)/.test(r) && /RidgeVisuals\.trackLayer/.test(r), "winter, today's gold glow, track");
+  assert.ok(/const todayIds=new Set\(\[\.\.\.today\.skied, \.\.\.\(today\.bootPacks\|\|\[\]\)\]\);/.test(r), "today's chutes and boot packs both glow");
+  assert.ok(/canvasContextAttributes:\{ preserveDrawingBuffer:true/.test(r) && /SocialCard\.isBlank/.test(r), "iPhone black-frame guard");
+  const h = rq.slice(rq.indexOf("async function heroRefresh(s, reason){"));
+  assert.ok(/if\(!\(Quest\.corridors\|\|\[\]\)\.length\)\{ try\{ await Quest\.loadCorridors\(\); \}catch\(e\)\{\} \}/.test(h.slice(0, 600)), "waits for the runs (the drawn-mountain bug)");
+});
+
+test("a failed render is never saved as the picture", async () => {
+  const store = {};
+  global.localStorage = { getItem: k => store[k] || null, setItem: (k, v) => { store[k] = v; } };
+  global.document = { hidden: false };
+  H.state.lastAt = 0;
+  assert.strictEqual(await H.refresh("p2", "first", async () => null, "2026-12-01"), "failed");
+  assert.strictEqual(store["rq.hero.v2.p2"], undefined, "nothing cached, so the next Home open tries again");
+  delete global.document; delete global.localStorage;
 });

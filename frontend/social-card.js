@@ -798,7 +798,8 @@
     FORMATS: FORMATS, COL: COL,
     collectDay: collectDay, collectSeason: collectSeason,
     testDay: testDay, testSeason: testSeason,
-    renderHeroMap: renderHeroMap, drawFallbackHero: drawFallbackHero,   // also used by Home's picture (rq-hero.js)
+    renderHeroMap: renderHeroMap, drawFallbackHero: drawFallbackHero,
+    isBlank: isBlank,   // also used by Home's My-map picture (ridge-quest.html renderMyMapPicture)
     draw: draw, drawStory: drawStory, drawWide: drawWide,
     make: make, shareOrSave: shareOrSave,
     jpegWithExif: jpegWithExif, readExif: readExif, meta: meta, summary: summary,

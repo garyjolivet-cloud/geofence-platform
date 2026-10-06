@@ -2832,9 +2832,120 @@ function socialDayCtx(s){
     seasonLabel: "Season "+questSeasonIdClient(now).replace("-","–")
   };
 }
-function heroRefresh(s, reason){
-  if(typeof RQHero==="undefined" || typeof SocialCard==="undefined" || !s || !s.player) return;
-  return RQHero.refresh(s.player.id, reason, ()=>SocialCard.collectDay(api, socialDayCtx(s)), questDateBucketClient(new Date()));
+// Home's picture looks EXACTLY like My map (Gary 2026-10-06: "The map is not the 3d map. It needed
+// to look exactly like the my map"): an off-screen map built with My map's own pieces — Esri
+// satellite, 3D terrain + sky (when the workspace has 3D), the winter look, every run from
+// runLineFeatures() through TileFog.addCorridorLayers (difficulty colours + glow + lift towers),
+// today's track, today's skied-chute stripe (feature-state `skied`) and today's boot packs in
+// green — framed on the whole run network like My map and tilted to 60° like its 3D button.
+// One frame is copied out (inside a `render` after `idle`, preserveDrawingBuffer — the iPhone
+// black-map lessons from social-card.js) and the map is removed. Resolves a canvas or null.
+// Today's chutes AND boot packs get one bold gold glow (feature-state `today`): gold is the one colour
+// no run uses (green/blue/black/pink are difficulties), so it stands out at picture scale, where the
+// thin skied stripe and a green boot pack disappeared among the green runs (headless render check).
+const HOME_TODAY_LAYER = { id:"runLines-today", type:"line", source:"runLines",
+  layout:{ "line-cap":"round", "line-join":"round" },
+  paint:{ "line-color":"#ffcf4a", "line-blur":1.5,
+    "line-opacity":["case",["boolean",["feature-state","today"],false],0.95,0],
+    "line-width":["interpolate",["linear"],["zoom"],11,4,13,6,15,10,17,16] } };
+function renderMyMapPicture(w, h, today){
+  const cors = Quest.corridors || [];
+  if(!cors.length || typeof maplibregl==="undefined" || typeof TileFog==="undefined") return Promise.resolve(null);
+  return new Promise(resolve=>{
+    let done=false, map=null, timer=null;
+    const box=document.createElement("div");
+    // on screen but invisible: iPhone Safari may skip drawing a WebGL canvas parked off-screen
+    box.style.cssText="position:fixed;left:0;top:0;width:"+w+"px;height:"+h+"px;pointer-events:none;opacity:0;z-index:-1";
+    document.body.appendChild(box);
+    const finish=c=>{ if(done) return; done=true; clearTimeout(timer); try{ if(map) map.remove(); }catch(e){} box.remove(); resolve(c); };
+    timer=setTimeout(()=>finish(null), 25000);
+    try{
+      map=new maplibregl.Map({ container:box, interactive:false, attributionControl:false, pixelRatio:1, fadeDuration:0,
+        canvasContextAttributes:{ preserveDrawingBuffer:true, antialias:true },
+        style:{ version:8,
+          sources:{ base:{ type:"raster", tileSize:256, tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"] } },
+          layers:[{ id:"base", type:"raster", source:"base" }] },
+        center:[Quest.ref[1], Quest.ref[0]], zoom:13 });
+    }catch(e){ finish(null); return; }
+    map.on("error",()=>{});
+    map.once("load",()=>{
+      try{
+        if(Quest.threeDEnabled && typeof Terrain3D!=="undefined") Terrain3D.setEnabled(map, true, { sky:true });
+        map.addSource("runLines",{ type:"geojson", promoteId:"id", data:{ type:"FeatureCollection", features:runLineFeatures(cors) } });
+        TileFog.addCorridorLayers(map,{ source:"runLines", id:"runLines", guardByState:true });
+        if(Quest.season==="winter" && typeof Terrain3D!=="undefined") Terrain3D.applyWinter(map,{ dem:!!Quest.threeDEnabled });
+        if(typeof RidgeVisuals!=="undefined"){
+          map.addSource("myTrack",{ type:"geojson", data:RidgeVisuals.trackFeatureCollection(RQTrack ? RQTrack.segments() : []) });
+          map.addLayer(RidgeVisuals.trackLayer("myTrack-line","myTrack"));
+        }
+        map.addLayer(HOME_TODAY_LAYER);
+        orderRideLayers(map);
+        try{ applyTimeOfDayLight(map); }catch(e){}
+        const todayIds=new Set([...today.skied, ...(today.bootPacks||[])]);
+        cors.forEach(c=>{ if(todayIds.has(c.zoneId)) map.setFeatureState({ source:"runLines", id:c.zoneId }, { today:true }); });
+        // Camera (headless render checks, 2026-10-06): a north-up tilt of the whole network left the runs
+        // small (fit flat, then tilted) or cut off the long east-west spread. Like the social image:
+        // look UP the main lift (bottom -> top) at the mountain face, framed on the upper mountain —
+        // every chute plus the lift tops — and tilted 60° like My map's 3D button.
+        const pitch=Quest.threeDEnabled?60:0;
+        const ml=(typeof RQHero!=="undefined") ? RQHero.mainLift(cors) : null;
+        let bearing=0;
+        if(ml){
+          const top = ml.bottom===ml.lift.path[0] ? ml.lift.path[ml.lift.path.length-1] : ml.lift.path[0];
+          const dx=(top[1]-ml.bottom[1])*Math.cos(ml.bottom[0]*Math.PI/180), dy=top[0]-ml.bottom[0];
+          bearing=(Math.atan2(dx,dy)*180/Math.PI+360)%360;
+        }
+        const focus=[];
+        cors.forEach(c=>{
+          if(c.runType==="chute") (c.path||[]).forEach(p=>focus.push([p[1],p[0]]));
+          else if(c.runType==="lift" && c.path && c.path.length){
+            // only the lift's TOP (uphill end by elevation): the bottoms pulled the frame down to the village
+            const upAlong = c.climbM!=null && c.descentM!=null ? c.climbM > c.descentM : true;
+            const t = upAlong ? c.path[c.path.length-1] : c.path[0];
+            focus.push([t[1],t[0]]);
+          }
+        });
+        let b=null;
+        if(focus.length){
+          let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+          focus.forEach(([x,y])=>{ x0=Math.min(x0,x); x1=Math.max(x1,x); y0=Math.min(y0,y); y1=Math.max(y1,y); });
+          b=[[x0,y0],[x1,y1]];
+        } else b=questMapBounds();
+        const cam=b ? map.cameraForBounds(b,{ padding:Math.round(Math.min(w,h)*0.06), bearing }) : null;
+        map.jumpTo({ center:(cam&&cam.center)||map.getCenter(), zoom:((cam&&cam.zoom)||13)+0.15, pitch, bearing });
+      }catch(e){ finish(null); return; }
+      map.once("idle",()=>{
+        map.once("render",()=>{
+          try{
+            const out=document.createElement("canvas"); out.width=w; out.height=h;
+            const ctx=out.getContext("2d");
+            ctx.drawImage(map.getCanvas(),0,0,w,h);
+            const blank = typeof SocialCard!=="undefined" && SocialCard.isBlank && SocialCard.isBlank(ctx,w,h);
+            finish(blank ? null : out);   // never keep a black frame as the picture
+          }catch(e){ finish(null); }
+        });
+        map.triggerRepaint();
+      });
+    });
+  });
+}
+// Today's chutes skied and boot packs climbed, for the picture.
+async function heroTodayData(s){
+  const pid=encodeURIComponent(s.player.id);
+  const [ch, bp]=await Promise.all([
+    api("/api/players/"+pid+"/chutes/daily").catch(()=>null),
+    api("/api/players/"+pid+"/bootpacks/daily").catch(()=>null)
+  ]);
+  const skied=new Set(Quest.skiedToday);
+  ((ch&&ch.chutes)||[]).forEach(c=>skied.add(c.zoneId));
+  return { skied, bootPacks:((bp&&bp.routes)||[]).map(r=>r.zoneId) };
+}
+async function heroRefresh(s, reason){
+  if(typeof RQHero==="undefined" || !s || !s.player) return;
+  // The run network must be loaded first — on the first Home open it often isn't yet, and a
+  // render with no runs used to fall back to the drawn-mountain art and keep it all day.
+  if(!(Quest.corridors||[]).length){ try{ await Quest.loadCorridors(); }catch(e){} }
+  return RQHero.refresh(s.player.id, reason, async()=>renderMyMapPicture(RQHero.W, RQHero.H, await heroTodayData(s)), questDateBucketClient(new Date()));
 }
 // Shows the saved picture at once; draws the first one of the day (or a stale one) if needed.
 // Otherwise Home never redraws it — only boarding the gondola does (Quest.onGondolaBoard).
@@ -4021,9 +4132,9 @@ function setupChuteLines(map, host, skiedBtn, fingerDown){
   paint(); host.appendChild(b); place();
   try{ if(typeof ResizeObserver!=="undefined") new ResizeObserver(place).observe(skiedBtn); }catch(e){}
 }
-function drawAllRuns(map){
-  const cors = Quest.corridors || [];
-  if(!cors.length) return;
+// The runLines features My map draws (piste-glow, coloured by difficulty, plus lift towers) —
+// shared by drawAllRuns() and Home's picture (renderMyMapPicture) so they look the same.
+function runLineFeatures(cors){
   const feats = cors.map(c=>{
     const st = runStyleFor(c);
     const latRef = (c.path && c.path[0] && c.path[0][0]) || Quest.ref[0];
@@ -4048,6 +4159,12 @@ function drawAllRuns(map){
   cors.forEach(c=>{
     feats.push(...TileFog.towerFeatures({ runType:c.runType, points:(c.path||[]).map(p=>[p[1],p[0]]) }));
   });
+  return feats;
+}
+function drawAllRuns(map){
+  const cors = Quest.corridors || [];
+  if(!cors.length) return;
+  const feats = runLineFeatures(cors);
   // promoteId: features get ids from their `id` property so setFeatureState() can
   // target one corridor (see applyGuardState()).
   map.addSource("runLines", { type:"geojson", promoteId:"id", data:{ type:"FeatureCollection", features:feats } });
