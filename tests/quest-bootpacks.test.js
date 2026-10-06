@@ -52,12 +52,15 @@ test("the endpoint answers routes plus both totals", () => {
   assert.ok(/playerAuth\(request, env\)/.test(ep) && /P\.playerId !== decodeURIComponent\(mpbp\[1\]\)/.test(ep), "own stats only");
 });
 
-test("Home shows boot-pack tiles and a Boot packs screen", () => {
-  // 2026-10-06 Home redesign: built by small helpers (hs = picture overlay, mini = Today/Season strips)
-  assert.ok(/hs\("bpTodayN","Boot packs"/.test(html) && /mini\("bpTodayM","Climbed"\)/.test(html) && /mini\("bpSeasonM","Climbed"\)/.test(html), "three tiles");
-  assert.ok(/refreshClimbTiles\(playerId\);/.test(extract(html, "async function refreshStats(playerId){")), "tiles refresh with the stats");
-  assert.ok(/"\/bootpacks\/daily"/.test(extract(html, "async function refreshClimbTiles(playerId){")));
-  assert.ok(/tile\("btnBootPacks","🥾","Boot packs"\)/.test(html) && /btnBootPacks"\)\.onclick=\(\)=>renderBootPacks\(\)/.test(html), "Home button opens the screen");
+// 2026-10-06 (Gary: "Remove boot pack stats info. Only use boot pack to calculate elevation"):
+// no boot pack numbers, tile or screen button on Home; boot packs still feed Vertical.
+test("Home: no boot pack stats; boot packs still count toward vertical", () => {
+  const home = extract(html, "function renderHome(){");
+  assert.ok(!/bpTodayN|bpTodayM|bpSeasonM|btnBootPacks/.test(home), "no boot pack tiles or button on Home");
+  assert.ok(/refreshClimbTiles\(playerId\);/.test(extract(html, "async function refreshStats(playerId){")), "vertical still refreshes with the stats");
+  const climb = extract(html, "async function refreshClimbTiles(playerId){");
+  assert.ok(/"\/bootpacks\/daily"/.test(climb) && /set\("vertToday", m\(\(\(bp\.today&&bp\.today\.verticalM\)\|\|0\) \+ \(\(lf\.today&&lf\.today\.verticalM\)\|\|0\)\)\);/.test(climb),
+    "Vertical today = boot packs + lifts");
   assert.ok(/"\/"\+kind\+"\/"\+mode/.test(extract(html, "async function renderTally(kind, mode){")), "the screen fetches /bootpacks|lifts/<mode>");
   assert.ok(/return renderTally\("bootpacks", mode\)/.test(html) && /return renderTally\("lifts", mode\)/.test(html));
 });

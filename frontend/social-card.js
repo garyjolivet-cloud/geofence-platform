@@ -477,7 +477,8 @@
       { v: fmtInt(d.chuteCount), l: plural(d.chuteCount, "chute", "chutes"), c: COL.gold, m: topDiff(d.chutes) },
       d.kind === "season" ? { v: fmtInt(d.days), l: plural(d.days, "day on the hill", "days on the hill"), c: COL.coral }
                           : { v: fmtInt(d.runs), l: plural(d.runs, "run", "runs"), c: COL.coral },
-      { v: fmtInt(d.bootPacks.count), l: "boot packs · " + fmtM(d.bootPacks.verticalM), c: COL.go },
+      // 2026-10-06: no boot pack numbers ("only use boot pack to calculate elevation") — points instead.
+      { v: fmtInt(d.points), l: plural(d.points, "point", "points"), c: COL.go },
       { v: fmtInt(d.liftRides), l: plural(d.liftRides, "lift ride", "lift rides"), c: COL.ice }
     ];
     return a;
@@ -525,7 +526,7 @@
     setFont(ctx, "400", size, BIG);
     text(ctx, "m", P + ctx.measureText(fmtInt(d.verticalM)).width + 12, y, { family: BIG, weight: "400", size: Math.round(size * 0.43), color: COL.coral });
     text(ctx, d.kind === "season" ? "VERTICAL THIS SEASON" : "VERTICAL TODAY", P, y + 58, { size: 42, weight: "700", color: COL.coral, maxW: W - 2 * P });
-    text(ctx, "lifts + boot packs  ·  " + fmtInt(d.points) + " points", P, y + 100, { size: 32, weight: "500", color: COL.fog, maxW: W - 2 * P });
+    text(ctx, "vertical from lifts + boot packs", P, y + 100, { size: 32, weight: "500", color: COL.fog, maxW: W - 2 * P });   // points are a tile now
     // four stat tiles in one row
     var cy = 956, gap = 14, cw = (W - 2 * P - 3 * gap) / 4, ch = 132;
     chipsFor(d).forEach(function (c, i) { chip(ctx, P + i * (cw + gap), cy, cw, ch, c.v, c.l, c.c, c.m); });
@@ -588,7 +589,7 @@
     setFont(ctx, "400", size, BIG);
     text(ctx, "m", X + ctx.measureText(fmtInt(d.verticalM)).width + 8, y, { family: BIG, weight: "400", size: Math.round(size * 0.45), color: COL.coral });
     text(ctx, d.kind === "season" ? "VERTICAL THIS SEASON" : "VERTICAL TODAY", X, y + 36, { size: 26, weight: "700", color: COL.coral, maxW: RW });
-    text(ctx, "lifts + boot packs  ·  " + fmtInt(d.points) + " points", X, y + 66, { size: 20, weight: "500", color: COL.fog, maxW: RW });
+    text(ctx, "vertical from lifts + boot packs", X, y + 66, { size: 20, weight: "500", color: COL.fog, maxW: RW });   // points are a tile now
     // four tiles in one row
     var cy = y + 84, gap = 10, cw = (RW - 3 * gap) / 4, ch = 78;
     chipsFor(d).forEach(function (c, i) { chip(ctx, X + i * (cw + gap), cy, cw, ch, c.v, c.l, c.c, c.m); });
@@ -735,7 +736,6 @@
       (d.kind === "season" ? "Season " : "") + fmtM(d.verticalM) + " vertical (lifts + boot packs)",
       d.chuteCount + " " + plural(d.chuteCount, "chute", "chutes") + (d.chutes && d.chutes.length ? " (" + d.chutes.slice(0, 6).map(function (c) { return c.name + (c.difficulty ? " " + c.difficulty : ""); }).join(", ") + ")" : ""),
       (d.kind === "season" ? d.days + " days, " : "") + d.runs + " runs",
-      d.bootPacks.count + " boot packs, " + fmtM(d.bootPacks.verticalM) + " climbed",
       d.liftRides + " lift rides" + (d.lifts && d.lifts.length ? " (" + d.lifts.map(function (l) { return l.name + " x" + l.count; }).join(", ") + ")" : ""),
       d.weather ? weatherLine(d.weather).replace("❄ ", "") : "",
       fmtInt(d.points) + " points"

@@ -1111,9 +1111,10 @@ const QUEST_TUNING = {
 // A climb (up a chute, a slow/uphill pass, a corridor marked hike) is still stored as
 // "hike" -- history, leaderboards and the server all key on that -- but riders see it
 // as "Boot pack". Used by the Leaderboard tabs.
+// 2026-10-06 (Gary: "Remove boot pack stats info. Only use boot pack to calculate elevation"): no
+// Boot pack leaderboard tab — tabs are All · Ski. Boot packs still count toward vertical.
 const QUEST_ACTIVITIES = [
-  { key: "ski", label: "Ski" },
-  { key: "hike", label: "Boot pack" }
+  { key: "ski", label: "Ski" }
 ];
 // Labels for every stored activity, including ones no longer offered, so older runs
 // logged as bike / drive / XC ski still read correctly in history.
@@ -2304,7 +2305,7 @@ async function refreshRuns(playerId){
 // rides today. Points + streak come from GET /api/players/:id/stats; the vertical and the
 // boot-pack / lift numbers from /bootpacks and /lifts. The tiles are drawn first with dashes,
 // so a failing request blanks only its own numbers, never the whole row.
-// Home's numbers (2026-10-06 layout: the picture overlay + the Today / This season strips). The
+// Home's numbers (2026-10-06 layout: the picture overlay + the This season strip). The
 // elements are part of renderHome's markup; this only fills them. Best-effort: a failed fetch
 // leaves its dashes.
 async function refreshStats(playerId){
@@ -2874,21 +2875,21 @@ function renderHome(){
     +'<div class="heroBox" id="heroBox">'
       +'<img id="heroImg" alt="Today on the mountain: your chutes in gold and boot packs in green" hidden>'
       +'<div class="heroTop"><span class="r">'+esc(ws.appName||"Ridge Quest")+'</span><span class="d" id="heroDate"></span></div>'
+      // No boot pack numbers (2026-10-06): boot packs only feed Vertical (lifts + boot packs).
       +'<div class="heroStats">'
-        +hs("vertToday","Vertical","ice")+hs("chutesTodayNum","Chutes","gold")+hs("bpTodayN","Boot packs","green")+hs("liftTodayN","Lift rides")
+        +hs("vertToday","Vertical","ice")+hs("chutesTodayNum","Chutes","gold")+hs("liftTodayN","Lift rides")+hs("ptsToday","Points")
       +'</div>'
       +'<div class="heroWhen" id="heroWhen"></div>'
     +'</div>'
     +'<button class="primary trackBtn" id="btnTrack" style="margin-top:0">Start tracking</button>'
     +'<div class="statusBox"><p id="gpsStatus"></p><p id="coverageStatus"></p><p id="outboxNote" style="display:none"></p><p id="cgDebug" style="font-size:11px;opacity:.7"></p></div>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
-    +'<div class="strip"><h3>Today</h3><div class="stripRow">'+mini("ptsToday","Points")+mini("bpTodayM","Climbed")+mini("statsStreak","Day streak")+'</div></div>'
-    +'<div class="strip"><h3>This season</h3><div class="stripRow">'+mini("vertSeason","Vertical")+mini("bpSeasonM","Climbed")+mini("chutesSeason","Chutes")+'</div></div>'
+    +'<div class="strip"><h3>This season</h3><div class="stripRow">'+mini("vertSeason","Vertical")+mini("chutesSeason","Chutes")+mini("statsStreak","Day streak")+'</div></div>'
     +'<div class="exploreGrid">'
       +tile("btnMap","🗺","My map")+tile("btnChutes","◆","Your chutes")
-      +tile("btnBootPacks","🥾","Boot packs")+tile("btnLifts","🚡","Lift rides")
-      +tile("btnLeaderboard","🏆","Leaderboard")+tile("btnFriends","👥","Friends")
-      +tile("btnSocial","📸","Social export")+tile("btnConditions","❄","Conditions")
+      +tile("btnLifts","🚡","Lift rides")+tile("btnLeaderboard","🏆","Leaderboard")
+      +tile("btnFriends","👥","Friends")+tile("btnSocial","📸","Social export")
+      +tile("btnConditions","❄","Conditions","wide")
     +'</div>'
     +'<div class="runlist"><h3>Today’s runs</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<details class="acct"><summary>⚙ Account — '+esc(s.player.displayName||s.player.email)+'</summary>'
@@ -3058,7 +3059,6 @@ function renderHome(){
   document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
   document.getElementById("btnChutes").onclick=()=>renderYourChutes();
-  document.getElementById("btnBootPacks").onclick=()=>renderBootPacks();
   document.getElementById("btnLifts").onclick=()=>renderLifts();
   document.getElementById("btnFriends").onclick=()=>renderFriends();
   // "Share my location with friends today" — POST /api/share sets/clears

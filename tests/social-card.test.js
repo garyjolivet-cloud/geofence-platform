@@ -75,9 +75,11 @@ for (const format of ["story", "wide"]) {
     const f = drawn(d, format);
     const all = f.texts.map(x => x.t).join(" | ");
     for (const want of ["14,479", "VERTICAL TODAY", "KICKING HORSE", "lifts + boot packs", "Golden Eagle Express Gondola ×10", "Stairway Chair ×10",
-      "BOOT PACKS · 229 M", "RUNS", "CHUTES", "LIFT RIDES", "Ridge Quest", "LIVE TO SKI. SKI TO LIVE.", "24 cm fresh", "-8°C", "points"]) {
+      "RUNS", "CHUTES", "LIFT RIDES", "POINTS", "Ridge Quest", "LIVE TO SKI. SKI TO LIVE.", "24 cm fresh", "-8°C"]) {
       assert.ok(all.includes(want), "shows " + want + " -- got: " + all);
     }
+    // 2026-10-06: boot packs only feed the vertical — no boot pack numbers on the image
+    assert.ok(!/BOOT PACKS ·|boot packs ·|\bclimbed\b/i.test(all), "no boot pack stats: " + all);
     assert.ok(/SATURDAY, FEBRUARY 14|FEBRUARY 14/.test(all), "the date");
     if (format === "story") assert.ok(all.includes("Season so far"), "season line on the day story");
     assert.ok(!/speed|m\/s|km\/h|\bturns?\b/i.test(all), "never speed or turn counts: " + all);
@@ -114,7 +116,8 @@ test("JPEG + EXIF: stats, artist, date, software and GPS are written and read ba
   assert.deepStrictEqual(Array.from(out.subarray(out.length - 7)), Array.from(jpg.subarray(jpg.length - 7)), "the image data after it is untouched");
   const x = SC.readExif(out);
   assert.strictEqual(x._segmentStart, 20, "EXIF right after the JFIF header");
-  assert.ok(/14,479 m vertical/.test(x.ImageDescription) && /Golden Eagle Express Gondola x10/.test(x.ImageDescription) && /3 boot packs, 229 m climbed/.test(x.ImageDescription), x.ImageDescription);
+  assert.ok(/14,479 m vertical/.test(x.ImageDescription) && /Golden Eagle Express Gondola x10/.test(x.ImageDescription), x.ImageDescription);
+  assert.ok(!/boot packs, \d/.test(x.ImageDescription), "no boot pack stats in the photo data either (2026-10-06): " + x.ImageDescription);
   assert.ok(/^[\x20-\x7e]*$/.test(x.ImageDescription), "EXIF ASCII only");
   assert.strictEqual(x.Make, "Ridge Quest");
   assert.strictEqual(x.Software, "Ridge Quest");

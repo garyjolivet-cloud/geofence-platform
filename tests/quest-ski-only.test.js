@@ -20,8 +20,8 @@ const lib = new Function(
   grab(/function questActivityLabel\(key\)\{[^\n]*\}/, "questActivityLabel") +
   "\nreturn { QUEST_ACTIVITIES, questActivityLabel };")();
 
-test("only Ski and Boot pack are offered", () => {
-  assert.deepStrictEqual(lib.QUEST_ACTIVITIES.map(a => a.key), ["ski", "hike"]);
+test("only Ski is offered as a leaderboard tab (no Boot pack tab since 2026-10-06); climbs still read 'Boot pack'", () => {
+  assert.deepStrictEqual(lib.QUEST_ACTIVITIES.map(a => a.key), ["ski"]);
   assert.strictEqual(lib.questActivityLabel("hike"), "Boot pack");
   assert.strictEqual(lib.questActivityLabel("ski"), "Ski");
 });

@@ -48,7 +48,8 @@ test("refresh: at most one gondola redraw per 10 minutes; a locked phone marks i
 
 test("Home: picture on top, Start tracking under it, strips, grid, account folded; no Guard button", () => {
   const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
-  const order = ['id="heroBox"', 'id="btnTrack"', '<h3>Today</h3>', '<h3>This season</h3>', 'class="exploreGrid"', 'id="todayRuns"', 'details class="acct"'];
+  // (the Today strip went 2026-10-06 with the boot pack stats; points moved onto the picture)
+  const order = ['id="heroBox"', 'id="btnTrack"', '<h3>This season</h3>', 'class="exploreGrid"', 'id="todayRuns"', 'details class="acct"'];
   let last = -1;
   order.forEach(k => { const i = home.indexOf(k); assert.ok(i > last, k + " in order"); last = i; });
   assert.ok(!/btnGuard/.test(home), "Guard switch is on My map only");
