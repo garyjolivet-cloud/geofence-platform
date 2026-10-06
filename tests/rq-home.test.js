@@ -71,3 +71,12 @@ test("conditions page: Start tracking replaces Continue (Back while tracking), w
   const s = rq.slice(rq.indexOf("function startTrackingFromConditions(){"));
   assert.ok(/renderHome\(\);[\s\S]{0,80}b\.click\(\)/.test(s.slice(0, 300)), "same tap starts tracking on Home");
 });
+
+test("Share my location is on the Friends screen, not Home; sending still runs from any screen", () => {
+  const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
+  assert.ok(!/btnShare/.test(home), "not on Home");
+  const friends = rq.slice(rq.indexOf("async function renderFriends(){"));
+  assert.ok(/id="btnShare"/.test(friends.slice(0, 1200)) && /bindShareButton\(document\.getElementById\("btnShare"\)\);/.test(friends.slice(0, 2500)));
+  assert.ok(/api\("\/api\/share", \{method:"POST", body:JSON\.stringify\(\{on:turningOn\}\)\}\)/.test(rq.slice(rq.indexOf("function bindShareButton(btn){"))));
+  assert.ok(/Quest\.onShare = \(p\)=>\{/.test(rq), "the location POST piggyback is still set up");
+});

@@ -2889,7 +2889,6 @@ function renderHome(){
       +tile("btnBootPacks","🥾","Boot packs")+tile("btnLifts","🚡","Lift rides")
       +tile("btnLeaderboard","🏆","Leaderboard")+tile("btnFriends","👥","Friends")
       +tile("btnSocial","📸","Social export")+tile("btnConditions","❄","Conditions")
-      +tile("btnShare","📍","Share my location","wide")
     +'</div>'
     +'<div class="runlist"><h3>Today’s runs</h3><div id="todayRuns"><div class="empty">Loading…</div></div></div>'
     +'<details class="acct"><summary>⚙ Account — '+esc(s.player.displayName||s.player.email)+'</summary>'
@@ -3065,24 +3064,8 @@ function renderHome(){
   // "Share my location with friends today" — POST /api/share sets/clears
   // share_until server-side; RQ_SHARE_UNTIL mirrors it so the label + the
   // Quest.onShare gate below stay right without a round-trip.
-  const shareBtn=document.getElementById("btnShare");
-  function paintShareBtn(){
-    const on = RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now();
-    const lbl = shareBtn.querySelector(".lbl") || shareBtn;
-    lbl.textContent = on ? "Sharing my location with friends — tap to stop" : "Share my location with friends today";
-    shareBtn.style.borderColor = on ? "var(--coral)" : "";
-  }
-  paintShareBtn();
-  shareBtn.onclick=async()=>{
-    const turningOn = !(RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now());
-    shareBtn.disabled=true;
-    try{
-      const j = await api("/api/share", {method:"POST", body:JSON.stringify({on:turningOn})});
-      RQ_SHARE_UNTIL = j.shareUntil || null;
-      rqToast(turningOn ? "Sharing until tonight" : "Location sharing off");
-    }catch(e){ rqToast(e.message); }
-    finally{ shareBtn.disabled=false; paintShareBtn(); }
-  };
+  // The "Share my location" switch is on the Friends screen (2026-10-06, bindShareButton); the
+  // sending itself stays here so it runs whichever screen is open.
   // Piggyback the fix stream (no second watchPosition). Guarded by
   // RQ_SHARE_UNTIL and throttled; the POST itself is refused server-side
   // unless share_until is live, so a stale RQ_SHARE_UNTIL just wastes one call.
@@ -3434,11 +3417,35 @@ function renderLifts(mode){ return renderTally("lifts", mode); }
    persists in localStorage["rq.trackFriends"], same idea as rq.activity.
    Visibility is STRICT MUTUAL server-side: you only see a friend on a day
    you're BOTH sharing (GET /api/presence/friends returns [] otherwise). */
+// "Share my location with friends today" (moved from Home to Friends, 2026-10-06). POST /api/share
+// sets/clears share_until server-side; RQ_SHARE_UNTIL mirrors it so the label and the Quest.onShare
+// gate (set in renderHome) stay right without a round-trip.
+function bindShareButton(btn){
+  if(!btn) return;
+  const paint=()=>{
+    const on = RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now();
+    btn.textContent = on ? "📍 Sharing my location — tap to stop" : "📍 Share my location with friends today";
+    btn.style.borderColor = on ? "var(--coral)" : "";
+    btn.style.color = on ? "var(--coral)" : "";
+  };
+  paint();
+  btn.onclick=async()=>{
+    const turningOn = !(RQ_SHARE_UNTIL && RQ_SHARE_UNTIL > Date.now());
+    btn.disabled=true;
+    try{
+      const j = await api("/api/share", {method:"POST", body:JSON.stringify({on:turningOn})});
+      RQ_SHARE_UNTIL = j.shareUntil || null;
+      rqToast(turningOn ? "Sharing until tonight" : "Location sharing off");
+    }catch(e){ rqToast(e.message); }
+    finally{ btn.disabled=false; paint(); }
+  };
+}
 async function renderFriends(){
   app.innerHTML =
     '<div class="card">'
     +'<h2>Friends</h2>'
     +'<p class="lead">Add friends by email or your invite link. On a day you’re <em>both</em> sharing, up to '+RQ_MAX_TRACK+' checked friends show live on your map.</p>'
+    +'<button class="ghost" id="btnShare" style="margin-top:0"></button>'
     +'<div id="friendsErr"></div>'
     +'<label for="fAddEmail">Add a friend by email</label>'
     +'<div style="display:flex;gap:8px"><input id="fAddEmail" type="email" autocomplete="off" placeholder="friend@email.com" style="flex:1">'
@@ -3450,6 +3457,7 @@ async function renderFriends(){
     +'<button class="ghost" id="fBack">← Back</button>'
     +'</div>';
   document.getElementById("fBack").onclick=renderHome;
+  bindShareButton(document.getElementById("btnShare"));
   const errEl=document.getElementById("friendsErr");
   const showErr=(m)=>{ errEl.innerHTML='<div class="err">'+esc(m)+'</div>'; };
 
