@@ -2345,11 +2345,7 @@ async function refreshClimbTiles(playerId){
     api("/api/players/"+playerId+"/bootpacks/daily").catch(()=>null),
     api("/api/players/"+playerId+"/lifts/daily").catch(()=>null)
   ]);
-  if(bp){
-    set("bpTodayN", (bp.today&&bp.today.count)||0);
-    set("bpTodayM", m(bp.today&&bp.today.verticalM));
-    set("bpSeasonM", m(bp.season&&bp.season.verticalM));
-  }
+  // (no boot pack numbers on Home since 2026-10-06 — boot packs only feed the vertical below)
   if(lf) set("liftTodayN", (lf.today&&lf.today.count)||0);
   if(bp && lf){
     set("vertToday", m(((bp.today&&bp.today.verticalM)||0) + ((lf.today&&lf.today.verticalM)||0)));
