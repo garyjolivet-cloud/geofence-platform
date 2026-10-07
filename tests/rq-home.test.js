@@ -125,3 +125,16 @@ test("a failed render is never saved as the picture", async () => {
   assert.strictEqual(store["rq.hero.v2.p2"], undefined, "nothing cached, so the next Home open tries again");
   delete global.document; delete global.localStorage;
 });
+
+// 2026-10-06: "for todays runs on home screen create a scroll window so account information will
+// never be pushed off bottom of screen. make it max size yet keep account info button at bottom"
+test("today's runs scroll in their own box sized to the screen; Account stays at the bottom", () => {
+  assert.ok(/#todayRuns\{overflow-y:auto;/.test(rq), "the list scrolls on its own");
+  const f = rq.slice(rq.indexOf("function sizeRunList(){"), rq.indexOf("function renderHome(){"));
+  assert.ok(/window\.innerHeight - top - acctH - 12/.test(f) && /list\.style\.maxHeight = Math\.max\(RUNLIST_MIN_PX, avail\)/.test(f), "fills the space down to Account");
+  assert.ok(/const RUNLIST_MIN_PX = 140;/.test(f), "function-local: renderHome may run before a top-level const is initialised");
+  assert.ok(/details\.acct\{[^}]*\n?\s*position:sticky;bottom:0;/.test(rq), "Account pinned to the bottom even on a short phone");
+  const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
+  assert.ok(/sizeRunList\(\);/.test(home) && /new ResizeObserver\(\(\)=>sizeRunList\(\)\)/.test(home), "sized on render and when anything above changes");
+  assert.ok(/addEventListener\("resize", \(\)=>sizeRunList\(\)\)/.test(rq), "and on resize");
+});

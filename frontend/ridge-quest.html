@@ -139,12 +139,15 @@
   .exploreGrid button.ghost{margin:0;display:flex;align-items:center;gap:9px;text-align:left;padding:13px 12px;background:var(--slate);color:var(--snow)}
   .exploreGrid button.ghost .ico{font-size:18px;line-height:1;flex:0 0 auto}
   .exploreGrid button.ghost.wide{grid-column:1 / -1}
-  details.acct{margin-top:18px;border-top:1px solid var(--rim);padding-top:6px}
+  details.acct{margin-top:18px;border-top:1px solid var(--rim);padding-top:6px;
+    position:sticky;bottom:0;z-index:2;background:var(--night)}   /* stays on screen even on a short phone (2026-10-06) */
   details.acct summary{cursor:pointer;font-family:"Barlow Condensed";font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--fog);padding:8px 0}
   .condBack{display:block;text-align:center;margin-top:12px;font-size:13px;color:var(--ice);text-decoration:underline;cursor:pointer}
   .trackBtn{background:var(--go);color:#052018}
   .trackBtn.tracking{background:var(--hazard);color:#2a0f14}
   .runlist{margin-top:16px}
+  /* Today's runs scroll in their own box (2026-10-06) so Account stays on screen; sized by sizeRunList(). */
+  #todayRuns{overflow-y:auto;overscroll-behavior:contain;border-radius:10px}
   .runlist h3{font-family:"Barlow Condensed";font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--fog);margin:18px 0 8px}
   .runrow{display:flex;align-items:center;gap:10px;background:var(--night);border:1px solid var(--rim);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13.5px}
   .runrow .badge{flex:0 0 auto;font-family:"Barlow Condensed";font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:3px 8px;border-radius:6px;background:var(--rim);color:var(--snow)}
@@ -2980,6 +2983,26 @@ function paintHero(s){
   if(!RQHero.isFreshFor(cached, questDateBucketClient(new Date()))) heroRefresh(s, cached && cached.stale ? "stale" : "first");
 }
 Quest.onGondolaBoard = ()=>{ heroRefresh(getSession(), "gondola"); };
+// Today's runs box (2026-10-06, Gary: "create a scroll window so account information will never be
+// pushed off bottom of screen. make it max size yet keep account info button at bottom"): the
+// list gets the screen height left between its top and the folded Account row, so a long day
+// scrolls inside the box and Account stays at the bottom of the screen. Never under
+// RUNLIST_MIN_PX (a small phone scrolls the page a little instead). Re-sized on resize / rotate and
+// whenever something above it (picture, status lines) changes height.
+// (function-local / var on purpose: renderHome can run before a top-level const here is initialised)
+var _runListRO = null;
+function sizeRunList(){
+  const RUNLIST_MIN_PX = 140;
+  const list = document.getElementById("todayRuns"), acct = document.querySelector(".home details.acct");
+  if(!list || !acct) return;
+  const summary = acct.querySelector("summary");
+  const acctH = (summary ? summary.offsetHeight : 40) + 18 + 7;         // margin-top + padding/border of details.acct
+  const top = list.getBoundingClientRect().top + window.scrollY;      // where the box starts on the page
+  const avail = Math.floor(window.innerHeight - top - acctH - 12);    // 12 px breathing room under Account
+  list.style.maxHeight = Math.max(RUNLIST_MIN_PX, avail) + "px";
+}
+window.addEventListener("resize", ()=>sizeRunList());
+window.addEventListener("orientationchange", ()=>setTimeout(sizeRunList, 300));
 function renderHome(){
   const s=getSession();
   // Home (2026-10-06 redesign): the 3D today picture (rq-hero.js) with the day's big numbers over
@@ -3018,6 +3041,14 @@ function renderHome(){
     +'</details>'
     +'</div>';
   paintHero(s);
+  sizeRunList();
+  try{
+    if(_runListRO) _runListRO.disconnect();
+    if(typeof ResizeObserver!=="undefined"){
+      _runListRO = new ResizeObserver(()=>sizeRunList());
+      document.querySelectorAll(".home > :not(.runlist):not(details)").forEach(el=>_runListRO.observe(el));
+    }
+  }catch(e){}
   // The rider's own chute names (cached copy at once, then the account's) before the run list draws.
   RQNames.load(s.player.id).finally(()=>refreshRuns(s.player.id));
   refreshStats(s.player.id);
