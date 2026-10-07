@@ -1,0 +1,21 @@
+Copyright (c) 2026 Ridge Quest. All rights reserved.
+
+Ridge Quest is owned by Gary Jolivet. "Ridge Quest", the Ridge Quest name and
+logo are trademarks of Ridge Quest.
+
+This repository and everything in it (source code, documentation, designs,
+graphics, data and other materials) is proprietary and confidential to
+Ridge Quest. No licence is granted. You may not use, copy, modify, merge,
+publish, distribute, sublicense, sell, rent, reverse-engineer or create
+derivative works from any part of it, or use the Ridge Quest name or logo,
+without prior written permission from Ridge Quest.
+
+Third-party components (for example MapLibre GL, map imagery from Esri and
+Maxar, and Terrarium elevation tiles from AWS Open Data) remain under their
+own licences and terms.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+RIDGE QUEST OR ITS OWNER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.

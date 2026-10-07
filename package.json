@@ -1,6 +1,8 @@
 {
   "name": "geofence-platform",
   "private": true,
+  "license": "UNLICENSED",
+  "author": "Ridge Quest (Gary Jolivet)",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"

@@ -431,6 +431,10 @@ NUS also carries optional altitude fields (`alt_m`, `alt_acc_m`) for a barometri
 
 Only works in Chrome or Edge (Web Bluetooth API).
 
+## Legal / ownership (2026-10-06)
+
+**Ridge Quest** is the company and the protected name; **Gary Jolivet owns it**. The code is proprietary (`LICENSE`, `package.json` `"license": "UNLICENSED"`), with the copyright footer on `README.md` / `SECURITY.md`. In the app: Account → **⚖ Legal** (`renderLegal()`: copyright, trademark, proprietary-use terms, resort non-affiliation, Esri/Maxar + Terrarium attribution, "as is", and the three sign-up notices to re-read) with `RQ_COPYRIGHT` ("© 2026 Ridge Quest. All rights reserved.") under it; the help page footer carries the same line. Not legal advice — wording to be reviewed by a lawyer; the sign-up notices are still marked placeholder. Tests: `tests/legal-notice.test.js`.
+
 ## Guardrails
 
 - **Never** hardcode or commit Cloudflare account IDs, API tokens, or `ADMIN_TOKEN`.

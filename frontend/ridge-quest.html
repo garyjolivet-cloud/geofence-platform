@@ -141,6 +141,11 @@
   .exploreGrid button.ghost.wide{grid-column:1 / -1}
   details.acct{margin-top:18px;border-top:1px solid var(--rim);padding-top:6px;
     position:sticky;bottom:0;z-index:2;background:var(--night)}   /* stays on screen even on a short phone (2026-10-06) */
+  .legalLine{margin:12px 0 0;font-size:11.5px;color:var(--fog);text-align:center}
+  .card.legal p{font-size:13.5px;line-height:1.5;color:var(--ice)}
+  .card.legal h3{font-family:"Barlow Condensed";font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--fog);margin:18px 0 6px}
+  details.legalDoc{border-top:1px solid var(--rim);padding:8px 0}
+  details.legalDoc summary{cursor:pointer;font-weight:600;color:var(--snow)}
   details.acct summary{cursor:pointer;font-family:"Barlow Condensed";font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--fog);padding:8px 0}
   .condBack{display:block;text-align:center;margin-top:12px;font-size:13px;color:var(--ice);text-decoration:underline;cursor:pointer}
   .trackBtn{background:var(--go);color:#052018}
@@ -743,6 +748,29 @@ function renderResetPassword(email, code){
       errEl.innerHTML='<div class="err">'+esc(e.message)+'</div>'; btn.disabled=false;
     }
   };
+}
+
+/* ============================== LEGAL ==============================
+   Legal notice (2026-10-06, Gary: "put a standard legal notice in app settings ... Ridge Quest is
+   the company and name to be protected. Gary Jolivet owns the company"). Account -> ⚖ Legal, plus
+   the one-line copyright under it; the same line is the help page footer and the repo's LICENSE /
+   README footer. The three notices accepted at sign-up can be re-read here. */
+const RQ_COPYRIGHT = "© 2026 Ridge Quest. All rights reserved.";
+function renderLegal(){
+  app.innerHTML =
+    '<div class="card legal">'
+    +'<h2>Legal</h2>'
+    +'<p><b>'+RQ_COPYRIGHT+'</b></p>'
+    +'<p>Ridge Quest™, the Ridge Quest name and logo are trademarks of Ridge Quest, owned by Gary Jolivet.</p>'
+    +'<p>The Ridge Quest app, including its software, design, text, graphics and data, is the property of Ridge Quest and is protected by copyright and other intellectual property laws. You may use the app for your own personal, non-commercial use. You may not copy, modify, distribute, sell, rent, reverse-engineer or make derivative works from any part of it, or use the Ridge Quest name or logo, without written permission from Ridge Quest.</p>'
+    +'<p>Resort, run, chute and lift names, and resort maps, belong to their respective owners. Ridge Quest is not affiliated with or endorsed by any ski resort unless stated.</p>'
+    +'<p>Map imagery © Esri, Maxar and their contributors. Elevation data: Terrarium tiles, AWS Open Data.</p>'
+    +'<p>The app is provided “as is”, without warranties of any kind, to the extent permitted by law. See <b>Risk &amp; liability</b> below.</p>'
+    +'<h3>Notices you accepted</h3>'
+    +GATE_SCOPES.map((g,i)=>'<details class="legalDoc"><summary>'+esc(g.title)+'</summary><div class="doc">'+g.body+'</div></details>').join('')
+    +'<button class="ghost" id="lgBack">← Back</button>'
+    +'</div>';
+  document.getElementById("lgBack").onclick=renderHome;
 }
 
 /* ========================= ONBOARDING GATE ========================= */
@@ -3059,6 +3087,8 @@ function renderHome(){
       +'<button class="ghost" id="btnSwitchResort">Switch resort</button>'
       +'<button class="ghost" id="btnLogout">Log out</button>'
       +'<button class="danger" id="btnDelete">Delete my account &amp; data</button>'
+      +'<button class="ghost" id="btnLegal">⚖ Legal</button>'
+      +'<p class="legalLine">'+RQ_COPYRIGHT+'</p>'
       +'<p style="margin:10px 0 0;text-align:right"><a href="#" id="btnExportCgLog" style="font-size:11px;color:var(--fog);opacity:.75" title="Download this session\'s Corridor Guard log as a text file">guard log</a></p>'
     +'</details>'
     +'</div>';
@@ -3114,6 +3144,7 @@ function renderHome(){
   const statusEl=document.getElementById("gpsStatus");
   const coverageEl=document.getElementById("coverageStatus");
   document.getElementById("btnExportCgLog").onclick=(e)=>{ e.preventDefault(); exportCgLog(); };
+  document.getElementById("btnLegal").onclick=()=>renderLegal();
   document.getElementById("btnSocial").onclick=()=>renderSocialExport();
   const onStatus=(st)=>{
     // Real bug, 2026-09-17: a permission-denied GPS error used to only ever
