@@ -73,9 +73,10 @@ const ed = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html")
   assert(/<script src="\/quest-narration\.js"><\/script>/.test(ed), "the editor loads the shared module");
   assert(/_questOn=!!\(app&&app\.questEnabled\);/.test(ed), "Ridge Quest mode follows the workspace's questEnabled flag");
   assert(/if\(t\.say && _questOn\) return;/.test(ed), "in a Ridge Quest workspace the tour engine's zone-enter line is not spoken");
-  assert(/QuestNarration\.step\(st, c, \[sm\.lat,sm\.lon\], \{ inRun, narrOk:questSimNarrOk\(c\)/.test(ed) && /const inRun=QuestNarration\.insideRun\(\[sm\.lat,sm\.lon\], this\.corridors\);/.test(ed),
-    "Test Mode feeds the smoothed position and the in-a-run gate, like live");
-  assert(/const active=SimFencer\.update\(raw,simPrevRaw,t\);\s*\n\s*\/\/[^\n]*\n\s*try\{ QuestSim\.tick\(sm\); \}/.test(ed), "every simulated fix ticks QuestSim");
+  // 2026-10-06: the avatar's exact position (raw), not the EKF-smoothed one — see testHostsPassAfterGapAndTestModeUsesRaw
+  assert(/QuestNarration\.step\(st, c, \[pos\.lat,pos\.lon\], \{ inRun, narrOk:questSimNarrOk\(c\)/.test(ed) && /const inRun=QuestNarration\.insideRun\(\[pos\.lat,pos\.lon\], this\.corridors\);/.test(ed),
+    "Test Mode feeds the position and the in-a-run gate to the shared rules, like live");
+  assert(/const active=SimFencer\.update\(raw,simPrevRaw,t\);\s*\n\s*\/\/[^\n]*\n\s*try\{ QuestSim\.tick\(raw\); \}/.test(ed), "every simulated fix ticks QuestSim");
   assert((ed.match(/QuestSim\.load\(simBundle\);/g) || []).length === 3, "QuestSim reloads wherever ChuteGuard does (enter, walk, reset)");
   assert(/body:JSON\.stringify\(\{text\}\)/.test(ed.slice(ed.indexOf("const QuestSim={"))), "same voice as live: /api/tts with the text only");
 })();
@@ -158,6 +159,30 @@ const fnSrc = tag => { const s = ed.slice(ed.indexOf(tag)); return s.slice(0, s.
   t += 13000; finish();
   assert(played[played.length - 1] === "This is Legs Left" && log.some(m => /waited too long/.test(m)), "lines that waited over 12 s are skipped");
   assert(q.busy() === false, "queue idle again");
+})();
+
+
+// 2026-10-06, Test Mode log: no fix for 6 s, then the avatar 180 m away; the EKF's coasting
+// estimate passed Lou's Huckle Berry (210 m from the rider) and the voice named it.
+(function testQuietAfterAGap() {
+  assert(QN.TUNING.GAP_QUIET_MS === 3000, "gap = more than 3 s between fixes");
+  assert(QN.afterGap(1000, 2000) === false && QN.afterGap(1000, 9000) === true && QN.afterGap(null, 9000) === false, "afterGap()");
+  const c = chute({ say: null, name: "Lou's Huckle Berry" }), on = [LAT, mLon(0)], st = {};
+  assert(QN.step(st, c, on, ctx({ afterGap: true })).say === null, "the fix after a gap says nothing");
+  assert(QN.step(st, c, on, ctx({ afterGap: false })).say === "This is Lou's Huckle Berry", "really there: named on the next fix");
+  const lift = chute({ runType: "lift", say: "Golden Eagle" }), ls = {};
+  assert(QN.step(ls, lift, on, ctx({ inRun: false, afterGap: true })).say === null, "a lift isn't entered on a gap fix");
+  assert(QN.step(ls, lift, on, ctx({ inRun: false, afterGap: false })).say === "Golden Eagle", "...but is on the next");
+})();
+
+(function testHostsPassAfterGapAndTestModeUsesRaw() {
+  const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8").replace(/\r/g, "");
+  const fe = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html"), "utf8").replace(/\r/g, "");
+  assert(/this\._narrAfterGap = QuestNarration\.afterGap\(this\._lastNarrFixT, fix\.t\); this\._lastNarrFixT = fix\.t;/.test(rq), "live works out the gap per fix");
+  assert(/afterGap:!!this\._narrAfterGap \}\);/.test(rq), "live passes it");
+  assert(/try\{ QuestSim\.tick\(raw\); \}catch/.test(fe), "Test Mode narrates from the avatar's exact position, not the EKF-smoothed one");
+  assert(/const afterGap=QuestNarration\.afterGap\(this\.lastT, now\); this\.lastT=now;/.test(fe) && /canPrefetch:true, afterGap \}\);/.test(fe), "Test Mode passes it");
+  assert(/this\.states=\{\}; this\.lastT=null;/.test(fe), "reset on each Test Mode entry");
 })();
 
 console.log(pass + " passed, " + fail + " failed");

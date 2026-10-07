@@ -30,7 +30,8 @@
     COOLDOWN_MS: 4000,       // lift band: no re-entry within this after leaving
     QUEUE_MAX: 3,            // speech queue: lines waiting behind the one playing
     QUEUE_MAX_WAIT_MS: 12000,// a line that waited longer than this is skipped (rider has moved on)
-    QUEUE_WATCHDOG_MS: 20000 // a line that never reports its end lets the next start after this
+    QUEUE_WATCHDOG_MS: 20000,// a line that never reports its end lets the next start after this
+    GAP_QUIET_MS: 3000       // the first fix after a gap this long announces nothing (2026-10-06, see afterGap)
   };
   var M_PER_DEG_LAT = 111320;
 
@@ -71,10 +72,16 @@
     return corridor.runType !== "lift" && name ? "This is " + name : null;
   }
 
+  // True when a fix at time t follows the previous one (prevT) by more than GAP_QUIET_MS. After a
+  // gap the position is a guess (2026-10-06, Test Mode log: no fix for 6 s, then the filter's
+  // coasting estimate passed Lou's Huckle Berry, 210 m from the rider, and named it). That fix
+  // says nothing; the next one, if the rider really is there, announces as normal.
+  function afterGap(prevT, t) { return prevT != null && t != null && t - prevT > TUNING.GAP_QUIET_MS; }
+
   // One fix for one corridor. st = per-corridor state object (kept by the host, starts {}).
   // corridor = { runType, widthM, say, name, path, ref? }. ctx = { inRun, narrOk,
-  // onLift, now, canSay, canPrefetch } (inRun: insideRun() for this fix; canSay/canPrefetch:
-  // the host has somewhere to send them). Returns { say: text | null, prefetch: [texts] }.
+  // onLift, now, canSay, canPrefetch, afterGap } (inRun: insideRun() for this fix; canSay/canPrefetch:
+  // the host has somewhere to send them; afterGap: afterGap() for this fix — announce nothing). Returns { say: text | null, prefetch: [texts] }.
   function step(st, corridor, pt, ctx) {
     var out = { say: null, prefetch: [] };
     var now = ctx.now != null ? ctx.now : Date.now();
@@ -94,7 +101,8 @@
     }
 
     // Passing / entering a chute, run or boot pack: only while skiing inside a chute or run.
-    if (!isLift && ctx.narrOk && say && ctx.canSay && st.narrArmed !== false && !ctx.onLift && ctx.inRun
+    var quiet = !!ctx.afterGap;   // not armed off either: the next real fix can still announce it
+    if (!isLift && !quiet && ctx.narrOk && say && ctx.canSay && st.narrArmed !== false && !ctx.onLift && ctx.inRun
         && dist <= TUNING.PASS_ANNOUNCE_M) {
       st.narrArmed = false;
       out.say = say;
@@ -103,7 +111,7 @@
     // Lift band. The margin is capped at half the half-width so even a 4 m corridor can be entered.
     var margin = Math.min(TUNING.NARRATE_HYSTERESIS_M, halfW * 0.5);
     var inBand = st.phase === "inRun" ? dist < margin : dist < -margin;
-    if (st.phase === "idle" && inBand) {
+    if (st.phase === "idle" && inBand && !quiet) {          // entering waits for a real fix
       if (now >= st.narrCooldownUntil) {
         st.phase = "inRun";
         if (isLift && ctx.narrOk && say && ctx.canSay && st.narrArmed !== false) {
@@ -152,7 +160,7 @@
     };
   }
 
-  var api = { TUNING: TUNING, bandDist: bandDist, insideRun: insideRun, lineFor: lineFor, step: step, makeSayQueue: makeSayQueue };
+  var api = { TUNING: TUNING, bandDist: bandDist, insideRun: insideRun, lineFor: lineFor, afterGap: afterGap, step: step, makeSayQueue: makeSayQueue };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.QuestNarration = api;
 })(typeof window !== "undefined" ? window : this);

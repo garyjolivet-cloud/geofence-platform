@@ -1794,6 +1794,8 @@ const Quest = {
       if(this.onStatus) this.onStatus({ok:true, acc:fix.acc, t:fix.t, offsite:true});
       return;   // off the run network: no corridor ticks, no fog reveal, no sharing
     }
+    // A fix after a GPS gap (> 3 s) announces nothing: the filter's position is a guess there.
+    this._narrAfterGap = QuestNarration.afterGap(this._lastNarrFixT, fix.t); this._lastNarrFixT = fix.t;
     // Armed isolation: a run next to an armed chute ignores GPS (refreshIgnoredCorridors).
     this.corridors.forEach(corridor=>{ if(!this.ignoredCorridors.has(corridor.zoneId)) this._tick(corridor, p, this.selectedActivity); });
     try{ this._settlePasses(false); }catch(e){}   // one descent, one chute: release passes whose rivals finished
@@ -1975,7 +1977,7 @@ const Quest = {
     if(this._inRunFix !== p){ this._inRunFix = p; this._inRunNow = QuestNarration.insideRun([p.lat,p.lon], this.corridors || [corridor]); }
     const myName = RQNames.get(corridor.zoneId);   // the rider's own name replaces the line in the voice
     const nr = QuestNarration.step(st, corridor, [p.lat,p.lon], { line: myName ? "This is "+myName : null, inRun:this._inRunNow, narrOk,
-      onLift:!!this._liftRaw, now:Date.now(), canSay:!!this.onNarrate, canPrefetch:!!this.onPrefetch });
+      onLift:!!this._liftRaw, now:Date.now(), canSay:!!this.onNarrate, canPrefetch:!!this.onPrefetch, afterGap:!!this._narrAfterGap });
     nr.prefetch.forEach(t=>this.onPrefetch(t));
     if(nr.say) this.onNarrate(nr.say, corridor.zoneId);
 

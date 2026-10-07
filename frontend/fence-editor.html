@@ -7330,7 +7330,7 @@ function questSimNarrOk(c){
 const QuestSim={
   states:{}, corridors:[], cache:new Map(), gen:0, el:null,
   load(bundle){
-    this.states={};
+    this.states={}; this.lastT=null;
     this.corridors=(bundle.zones||[]).map(z=>{
       const tl=(z.layers||[]).find(l=>l.kind==="target"), g=tl&&tl.geometry;
       if(!g || g.type!=="corridor" || z.movingAudio || !Array.isArray(g.path) || g.path.length<2) return null;
@@ -7338,14 +7338,19 @@ const QuestSim={
                say:(z.triggers||[]).map(t=>t.say).find(Boolean)||null };
     }).filter(Boolean);
   },
-  tick(sm){
+  // pos = the avatar's EXACT position (raw), not the EKF-smoothed one (2026-10-06): a mouse can
+  // jump 180 m after a 6 s pause, and the filter's coasting estimate passed Lou's Huckle Berry on
+  // the way and named it. Same reason Corridor Guard uses raw here (CLAUDE.md, Corridor Guard
+  // lesson 2). The rules (QuestNarration.step, incl. afterGap) are still exactly live's.
+  tick(pos){
     if(!_questOn || typeof QuestNarration==='undefined') return;
     const onLift=!!(typeof ChuteGuard!=='undefined' && ChuteGuard.isOnLift && ChuteGuard.isOnLift());
     const now=Date.now();
-    const inRun=QuestNarration.insideRun([sm.lat,sm.lon], this.corridors);
+    const afterGap=QuestNarration.afterGap(this.lastT, now); this.lastT=now;
+    const inRun=QuestNarration.insideRun([pos.lat,pos.lon], this.corridors);
     this.corridors.forEach(c=>{
       const st=this.states[c.zoneId]||(this.states[c.zoneId]={});
-      const nr=QuestNarration.step(st, c, [sm.lat,sm.lon], { inRun, narrOk:questSimNarrOk(c), onLift, now, canSay:true, canPrefetch:true });
+      const nr=QuestNarration.step(st, c, [pos.lat,pos.lon], { inRun, narrOk:questSimNarrOk(c), onLift, now, canSay:true, canPrefetch:true, afterGap });
       nr.prefetch.forEach(text=>{ this.audio(text).catch(()=>{}); });
       if(nr.say) this.say(nr.say);
     });
@@ -7443,7 +7448,7 @@ function feedSim(lat,lon,acc,t,bleFix){
   }
   const active=SimFencer.update(raw,simPrevRaw,t);
   // Ridge Quest workspace: speak corridor lines exactly like the live app (see QuestSim).
-  try{ QuestSim.tick(sm); }catch(e){ simLogEv("sev-warn","QuestSim: "+(e&&e.message)); }
+  try{ QuestSim.tick(raw); }catch(e){ simLogEv("sev-warn","QuestSim: "+(e&&e.message)); }
   simPrevRaw=raw;
   simPrev=p;
   // Global functions (Code Objects dropped on the map, not a stop) run on
