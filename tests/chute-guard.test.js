@@ -37,7 +37,7 @@ const START = [51.3, -117.0];
 // A straight corridor running due north (bearing 0) for lenM, sampled every
 // 20m — chute-guard.js resamples internally anyway, this is just enough
 // resolution for nearestOnPath() to behave like a real straight line.
-function makeCorridor(id, { lenM = 400, widthM = 10, runType = "chute", activityType = null } = {}) {
+function makeCorridor(id, { lenM = 400, widthM = 10, runType = "run", activityType = null } = {}) {
   const path = [START];
   const steps = Math.ceil(lenM / 20);
   for (let i = 1; i <= steps; i++) path.push(destPoint(START, 0, Math.min(i * 20, lenM)));
@@ -1283,6 +1283,57 @@ function biasSetup() {
   plain(0); plain(0); plain(0);
   for (let i = 0; i < 8; i++) plain(3.4);
   assert(cg.getActiveAlarm() !== null, "without fix.velE/velN nothing is learned or cancelled: a constant 3.4 m offset keeps alarming, exactly as before");
+})();
+
+// ============================================================
+// Drop-in gate (2026-10-07, user: "guard tone ... only after 10 % of the runs vertical from top
+// has been skied. crossing a chute midway should not sound the guard tone"). Chutes only.
+// The fixture chute runs north from START (its top) for 400 m: top zone = first 40 m, 10 % = 40 m.
+// ============================================================
+(function testChuteDropInGate() {
+  const down = (from, to, lat = 0, t0 = 0) => { const st = []; for (let f = from, i = 0; f <= to; f += 5, i++) st.push({ forwardM: f, lateralM: lat, speed: 5, t: t0 + i * 1000 }); return st; };
+  const out = (fwd, t0) => [8, 12, 16].map((lat, i) => ({ forwardM: fwd + i * 5, lateralM: lat, speed: 5, t: t0 + i * 1000 }));
+  const chute = o => makeCorridor("d1", Object.assign({ runType: "chute", lenM: 400, widthM: 10 }, o));
+  const T = freshChuteGuard().TUNING;
+  assert(T.DROPIN_PCT === 0.10 && T.DROPIN_RUN_TYPES.length === 1 && T.DROPIN_RUN_TYPES[0] === "chute", "drop-in gate: 10 %, chutes only");
+
+  let cg = freshChuteGuard();
+  let ev = drive(cg, chute(), down(0, 60).concat(out(65, 13000)));
+  assert(ev.warn.length > 0, "dropped in at the top and skied past 10 %: leaving the chute sounds the tone");
+
+  cg = freshChuteGuard();
+  ev = drive(cg, chute(), down(0, 30).concat(out(35, 7000)));
+  assert(ev.warn.length === 0, "left before 10 % from the top: no tone");
+
+  cg = freshChuteGuard();
+  const cross = [-30, -20, -10, 0, 10, 20, 30].map((lat, i) => ({ forwardM: 200, lateralM: lat, speed: 5, headingDeg: 90, t: i * 1000 }));
+  ev = drive(cg, chute(), cross);
+  assert(ev.warn.length === 0 && cg.getActiveAlarm() === null, "crossing a chute midway: no tone");
+  assert(ev.debug.some(d => d.everInside && d.dropIn === "no"), "the debug line shows why (dropIn: no)");
+
+  cg = freshChuteGuard();
+  ev = drive(cg, chute(), down(200, 300).concat(out(305, 21000)));
+  assert(ev.warn.length === 0, "joining a chute midway and skiing down it: still no tone on that pass");
+
+  cg = freshChuteGuard();
+  ev = drive(cg, makeCorridor("r1", { runType: "run", lenM: 400, widthM: 10 }), cross);
+  assert(ev.warn.length > 0, "a run crossed midway alerts as before (the gate is chutes only)");
+
+  // drawn bottom-to-top: the top is the END of the line (forward 400)
+  const up = () => { const c = chute(); Object.assign(c.layers[0].geometry, { climbM: 300, descentM: 0 }); return c; };
+  const desc = (from, to) => { const st = []; for (let f = from, i = 0; f >= to; f -= 5, i++) st.push({ forwardM: f, lateralM: 0, speed: 5, headingDeg: 180, t: i * 1000 }); return st; };
+  cg = freshChuteGuard();
+  ev = drive(cg, up(), desc(400, 340).concat(out(330, 13000)));
+  assert(ev.warn.length > 0, "chute drawn bottom-to-top: dropping in at its high end arms the tone");
+  cg = freshChuteGuard();
+  ev = drive(cg, up(), down(0, 60).concat(out(65, 13000)));
+  assert(ev.warn.length === 0, "...and its low end does not");
+
+  // going away resets it: the next pass must drop in again
+  cg = freshChuteGuard();
+  const away = [{ forwardM: 100, lateralM: 300, speed: 5, t: 20000 }];
+  ev = drive(cg, chute(), down(0, 60).concat(away, cross.map(s => Object.assign({}, s, { t: s.t + 30000 }))));
+  assert(ev.warn.length === 0, "after leaving the area, a later midway crossing is silent again");
 })();
 
 console.log("\n" + pass + " passed, " + fail + " failed");

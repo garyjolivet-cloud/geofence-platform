@@ -43,6 +43,17 @@
 // as a false alarm rather than a helpful heads-up. Simpler and safer: no
 // alert at all until you've genuinely been inside at least once.
 //
+// Drop-in gate, chutes only (2026-10-07, user: "the guard tone needs to only
+// apply when you commit to a chute ... only after 10 % of the runs vertical
+// from top has been skied. crossing a chute midway should not sound the guard
+// tone"): a runType:"chute" corridor alerts only after the rider has been
+// inside its top zone (DROPIN_TOP_*) and then inside it at DROPIN_PCT or more
+// down from the top (st.sawTop -> st.topSkied, see dropInStep()). A chute
+// entered from the side lower down never alerts on that pass. The bundle has
+// no per-point elevation, so "10 % of the vertical" is measured as 10 % of the
+// line's length from its top end (top = the drawn start unless the corridor's
+// climbM > descentM). Runs, boot packs and every other corridor are unchanged.
+//
 // Committed-exit detection: while alerting, this module also tracks whether
 // the player's distance from the corridor is trending back down (a real
 // correction attempt) or growing steadily with no narrowing in between
@@ -91,6 +102,10 @@
     MAX_ALERT_DURATION_MS: 15000, // ...or the alarm has simply been sounding this long with no return inside at all (holding at a roughly constant excess, neither growing nor narrowing) -> any of the three conclude "not coming back, stop nagging"
 
     COMMIT_JITTER_M: 0.5,        // a change in excess smaller than this between fixes counts as neither growth nor a correction (GPS noise floor)
+    DROPIN_RUN_TYPES: ["chute"], // corridors that need a drop-in from the top before any tone (see the "Drop-in gate" header note)
+    DROPIN_PCT: 0.10,            // tone only once the rider is this fraction of the line down from its top...
+    DROPIN_TOP_MIN_M: 40,        // ...having first been inside the top zone: the top DROPIN_PCT, at least this many m (a 1 Hz fix at ski speed can skip a 10 m zone)
+    DROPIN_TOP_MAX_PCT: 0.25,    // ...but never more than this fraction of the line, so "midway" is always outside it
     SAMPLE_STEP_M: 20,           // corridor resampling step for the coverage gate
     NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
     MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while the player is somewhere else entirely
@@ -166,7 +181,7 @@
   // dependency on which page loads it.
   function nearestOnPath(latLon, pathLatLon, ref){
     const P=toXY(latLon, ref);
-    let bestD=Infinity, bestI=0;
+    let bestD=Infinity, bestI=0, bestT=0;
     for(let i=1;i<pathLatLon.length;i++){
       const A=toXY(pathLatLon[i-1],ref), B=toXY(pathLatLon[i],ref);
       const vx=B.x-A.x, vy=B.y-A.y, wx=P.x-A.x, wy=P.y-A.y;
@@ -175,9 +190,23 @@
       t=Math.max(0,Math.min(1,t));
       const qx=A.x+t*vx, qy=A.y+t*vy;
       const d=Math.hypot(P.x-qx, P.y-qy);
-      if(d<bestD){ bestD=d; bestI=i-1; }
+      if(d<bestD){ bestD=d; bestI=i-1; bestT=t; }
     }
-    return { distM:bestD, segIdx:bestI };
+    return { distM:bestD, segIdx:bestI, segT:bestT };
+  }
+  // Drop-in gate bookkeeping for one fix (see the "Drop-in gate" header note).
+  // fracFromTop: 0 at the corridor's top end, 1 at its bottom, along the line.
+  function fracFromTop(c, near){
+    if(!(c.lenM>0)) return 0;
+    const along = c.cum[near.segIdx] + near.segT*(c.cum[near.segIdx+1]-c.cum[near.segIdx]);
+    return c.topAtStart ? along/c.lenM : 1-along/c.lenM;
+  }
+  function dropInStep(c, st, near, inside){
+    if(!c.needsDropIn || st.topSkied || !inside) return;
+    const f = fracFromTop(c, near);
+    const topZone = Math.min(Math.max(TUNING.DROPIN_PCT, TUNING.DROPIN_TOP_MIN_M/c.lenM), TUNING.DROPIN_TOP_MAX_PCT);
+    if(f <= topZone) st.sawTop = true;
+    if(st.sawTop && f >= TUNING.DROPIN_PCT) st.topSkied = true;
   }
   // Signed perpendicular distance from P to the INFINITE line through A,B —
   // sign indicates which side of the line P is on, magnitude is the true
@@ -364,7 +393,7 @@
     return {
       level:0, firstAlertAt:null, excessAtFirstAlert:0,
       maxExcessM:0, prevExcessM:null, growthStreakStartAt:null, committed:false,
-      alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false, lastOutsideNow:null
+      alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false, sawTop:false, topSkied:false, lastOutsideNow:null
     };
   }
 
@@ -381,12 +410,18 @@
       const w = Number(target.geometry.widthM);
       const widthM = (isFinite(w) && w>0) ? w : 10;
       const sig = z.id+":"+path.length+":"+widthM;
+      const cum=[0]; for(let i=1;i<path.length;i++) cum.push(cum[i-1]+haversineM(path[i-1],path[i]));
+      const g = target.geometry;
       const prev = prevById.get(z.id);
       const reuse = prev && prev.sig===sig;
       return {
         id: z.id, name: z.name || "corridor", sig, path, widthM,
         activityType: z.activityType || null,
         runType: z.runType || null,
+        // Drop-in gate: the line's top end is its drawn start unless the elevation says it was drawn bottom-to-top.
+        cum, lenM: cum[cum.length-1],
+        topAtStart: !(g.climbM!=null && g.descentM!=null && g.climbM > g.descentM),
+        needsDropIn: TUNING.DROPIN_RUN_TYPES.indexOf(z.runType)>=0,
         samples: reuse ? prev.samples : resample(path, TUNING.SAMPLE_STEP_M),
         covered: reuse ? prev.covered : new Set(),
         minSpeed: TUNING.ENGAGE_MIN_SPEED_BY_ACTIVITY[z.activityType] ?? TUNING.ENGAGE_MIN_SPEED_MPS
@@ -550,6 +585,7 @@
       // and only cleared when the player leaves relevant range entirely
       // (a genuine "gone away," not just "currently between the true edge
       // and the buffer/relevant-range boundary").
+      dropInStep(c, st, near, near.distM <= halfW);
       if(near.distM <= halfW) st.everInside = true; // gates whether an alert can ever start at all — see the "no approach ping" doc comment at the top of the file
       // "Hard line in space" requirement, 2026-09-19: the user explicitly
       // asked for the corridor's edge to be a pure function of CURRENT
@@ -608,7 +644,7 @@
       if(cb.onDebug && (outsideNowChanged || (near.distM<=maxRelevantM && now-(st.lastDebugAt||0)>=500))){
         st.lastDebugAt=now;
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
-          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside,
+          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside, dropIn:c.needsDropIn ? (st.topSkied?"ok":st.sawTop?"top":"no") : null,
           headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed,
           lat:latLon[0], lon:latLon[1], responsive, biasM:near.biasM||0, crossing:outsideNowChanged }); // raw position + a "crossing" flag marking the exact tick outsideNow flipped
       }
@@ -623,7 +659,7 @@
         const wasActive = st.level>0;
         const backInside = excessM<=0 || crossedOppositeSide;
         const outOfRelevantRange = near.distM > maxRelevantM;
-        const everInside = st.everInside;
+        const everInside = st.everInside, sawTop = st.sawTop, topSkied = st.topSkied;
         // Field bug found 2026-09-19 (real Test Mode report: "tone never
         // turned off, had to exit Test Mode to kill it" — the excursion had
         // walked straight past a corridor's END, well beyond maxRelevantM):
@@ -649,7 +685,7 @@
         // pre-entry within relevant range) keeps whatever entry status it
         // already had.
         if(!outOfRelevantRange){
-          st.everInside = everInside;
+          st.everInside = everInside; st.sawTop = sawTop; st.topSkied = topSkied;
           // Also preserve lastOutsideNow (same reasoning) — without this,
           // it gets wiped to null on EVERY tick while genuinely inside
           // (this branch runs every such tick), so by the time the player
@@ -676,7 +712,8 @@
 
       if(excessM > st.maxExcessM) st.maxExcessM = excessM;
 
-      if(!st.everInside){
+      if(!st.everInside || (c.needsDropIn && !st.topSkied)){
+        // Not dropped in from the top (chutes, 2026-10-07): crossed or joined lower down, no tone.
         // No approach ping (2026-09-20) — a corridor the player has never
         // once actually been inside never alerts, full stop. See the "no
         // approach ping" doc comment at the top of the file. maxExcessM
@@ -839,7 +876,7 @@
         // outsideNow again and re-emits onWarn, resuming the alarm.
         audible = !(predExcessM!=null && predExcessM <= -drMargin);
         level = st.level;
-      }else if(st.everInside){
+      }else if(st.everInside && (!c.needsDropIn || st.topSkied)){
         // Real fixes say this corridor is currently quiet, but the player
         // HAS been inside it before (just not right now — e.g. reset after
         // going out of relevant range, or mid-approach again). DR can start

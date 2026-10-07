@@ -2444,7 +2444,7 @@ async function loadSkiedToday(playerId){
 // re-wrap, not a re-fetch or a re-derivation.
 function chuteGuardZonesFor(corridors){
   return (corridors||[]).map(c=>({ id:c.zoneId, name:c.name, runType:c.runType, activityType:c.activityType,
-    layers:[{ geometry:{ type:"corridor", path:c.path, widthM:c.widthM } }] }));
+    layers:[{ geometry:{ type:"corridor", path:c.path, widthM:c.widthM, descentM:c.descentM, climbM:c.climbM } }] }));   // descentM/climbM: which end is the top (ChuteGuard drop-in gate)
 }
 // Corridor Guard audio — a continuous alarm while the player is outside a
 // corridor, not a one-shot blip. See chute-guard.js for the detection state
