@@ -106,6 +106,10 @@
     DROPIN_PCT: 0.10,            // tone only once the rider is this fraction of the line down from its top...
     DROPIN_TOP_MIN_M: 40,        // ...having first been inside the top zone: the top DROPIN_PCT, at least this many m (a 1 Hz fix at ski speed can skip a 10 m zone)
     DROPIN_TOP_MAX_PCT: 0.25,    // ...but never more than this fraction of the line, so "midway" is always outside it
+    LIFT_RIDE_UP_M: 30,          // riding a lift = this many m of progress UP its line while in its band... (see liftRideStep)
+    LIFT_RIDE_MIN_MPS: 1.5,      // ...at this average pace or more (a boot pack beside the line is slower)...
+    LIFT_RIDE_WINDOW_S: 30,      // ...measured over at most this long
+    LIFT_RIDE_DOWN_M: 30,        // a ride ends after this many m back DOWN the line (skiing off the top under the lift), or on leaving the band
     SAMPLE_STEP_M: 20,           // corridor resampling step for the coverage gate
     NEAR_PAD_M: 10,              // GPS-jitter pad when marking a resampled point "covered"
     MAX_RELEVANT_PAD_M: 60,      // beyond half-width+buffer+this, treat as "not near this corridor at all" rather than "way outside it" — prevents a stale/previously-covered corridor from warning while the player is somewhere else entirely
@@ -321,6 +325,7 @@
   }
 
   let corridors=[];             // [{id,name,sig,path,widthM,activityType,runType,minSpeed,samples,covered:Set<int>}]
+  let liftRide=new Map();       // lift id -> {riding, anchorUp, anchorT, maxUp}; kept across load() (Ridge Quest reloads on every Home render, mid-ride too)
   let liftCorridors=[];         // [{id,path,widthM}] — runType:"lift" zones, kept separately (not alertable themselves, see load()) purely so nearAnyLift() can suppress OTHER corridors' alerts while a lift line is being ridden
   let stateByCorridor=new Map();
   let cb={};
@@ -443,7 +448,11 @@
       if(!path || path.length<2) return null;
       const w = Number(target.geometry.widthM);
       const widthM = (isFinite(w) && w>0) ? w : 10;
-      return { id:z.id, path, widthM };
+      // Which way is up: only known when the bundle carries the line's elevation (climbM/descentM).
+      const g = target.geometry, cum=[0];
+      for(let i=1;i<path.length;i++) cum.push(cum[i-1]+haversineM(path[i-1],path[i]));
+      const upAlong = (g.climbM!=null && g.descentM!=null && g.climbM!==g.descentM) ? g.climbM > g.descentM : null;
+      return { id:z.id, path, widthM, cum, lenM:cum[cum.length-1], upAlong };
     }).filter(Boolean);
 
     // Reuse a corridor's live excursion state across a reload of the SAME
@@ -459,7 +468,7 @@
     }));
   }
 
-  function unload(){ corridors=[]; liftCorridors=[]; stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; fused=null; biasByCorridor=new Map(); currentlyOnLift=false; }
+  function unload(){ corridors=[]; liftCorridors=[]; liftRide=new Map(); stateByCorridor=new Map(); cb={}; lastTickAtWall=0; prevFixLatLon=null; lastRealFix=null; fused=null; biasByCorridor=new Map(); currentlyOnLift=false; }
 
   // Whether the most recent tick() found the fix on/near a recorded lift
   // corridor — see nearAnyLift() and tick()'s own lift gate. Exposed so a
@@ -469,12 +478,42 @@
 
   // True if latLon is currently within suppression range of ANY recorded
   // lift corridor — see LIFT_SUPPRESS_PAD_M's comment and tick()'s lift gate.
-  function nearAnyLift(latLon){
+  //
+  // RIDING, not just near (2026-10-07, user: "runs under lifts have to have voice and guards. the
+  // lift is canceling out voice"): 34 of Kicking Horse's 137 runs/chutes lie partly inside a
+  // lift's band (Pioneer, Show Off and Ridemption Ridge Speedway almost entirely), and "near the
+  // line" silenced the voice and the guard on all of them. A lift whose uphill direction is known
+  // (climbM/descentM in the bundle) now only counts while the rider is being carried UP it —
+  // liftRideStep(). Skiing down or across under it is not a ride. A lift with no elevation keeps
+  // the old rule (near = on it), since nothing tells a ride from a descent there.
+  function nearAnyLift(latLon, t){
+    let on=false;
     for(const lc of liftCorridors){
       const near = nearestOnPath(latLon, lc.path, lc.path[0]);
-      if(near.distM <= lc.widthM/2 + TUNING.LIFT_SUPPRESS_PAD_M) return true;
+      const inBand = near.distM <= lc.widthM/2 + TUNING.LIFT_SUPPRESS_PAD_M;
+      if(lc.upAlong==null){ if(inBand) on=true; continue; }
+      if(!inBand){ liftRide.delete(lc.id); continue; }
+      const along = lc.cum[near.segIdx] + near.segT*(lc.cum[near.segIdx+1]-lc.cum[near.segIdx]);
+      if(liftRideStep(lc, lc.upAlong ? along : lc.lenM-along, t)) on=true;
     }
-    return false;
+    return on;
+  }
+  // One fix inside lift lc's band. up = metres up the line from its bottom, t = fix time (ms).
+  // Returns true while riding. The anchor is where the current climb started: it moves to the
+  // rider whenever they go down the line, or when LIFT_RIDE_WINDOW_S passes without a ride.
+  function liftRideStep(lc, up, t){
+    let r = liftRide.get(lc.id);
+    if(!r){ r={ riding:false, anchorUp:up, anchorT:t, maxUp:up }; liftRide.set(lc.id, r); return false; }
+    if(r.riding){
+      if(up > r.maxUp) r.maxUp = up;
+      if(up <= r.maxUp - TUNING.LIFT_RIDE_DOWN_M){ r.riding=false; r.anchorUp=up; r.anchorT=t; }
+      return r.riding;
+    }
+    const dUp = up - r.anchorUp, dtS = (t - r.anchorT)/1000;
+    if(dUp < 0 || dtS < 0){ r.anchorUp=up; r.anchorT=t; }
+    else if(dUp >= TUNING.LIFT_RIDE_UP_M && dtS > 0 && dUp/dtS >= TUNING.LIFT_RIDE_MIN_MPS){ r.riding=true; r.maxUp=up; }
+    else if(dtS > TUNING.LIFT_RIDE_WINDOW_S){ r.anchorUp=up; r.anchorT=t; }
+    return r.riding;
   }
 
   function emitWarn(c, st, now, excessM){
@@ -507,7 +546,7 @@
     // shouldn't depend on there being anything else for this module to
     // guard. See isOnLift()'s own comment for why a host reads this instead
     // of re-deriving it from Quest.corridors' own lift entries.
-    currentlyOnLift = nearAnyLift(latLon);
+    currentlyOnLift = nearAnyLift(latLon, fix.t || Date.now());
     if(!corridors.length) return;
     lastTickAtWall = Date.now(); // real wall clock, independent of fix.t — see getActiveAlarm()
     lastRealFix = { lat:latLon[0], lon:latLon[1], speed:fix.speed, headingDeg, tWall:lastTickAtWall, responsive, velE:responsive?fix.velE:null, velN:responsive?fix.velN:null }; // see predictNow()

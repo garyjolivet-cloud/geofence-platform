@@ -1357,5 +1357,62 @@ function biasSetup() {
   assert(ev.warn.length === 0, "after leaving the area, a later midway crossing is silent again");
 })();
 
+// ============================================================
+// Riding a lift vs skiing under it (2026-10-07, user: "runs under lifts have to have voice and
+// guards. the lift is canceling out voice"). A lift whose uphill direction is known only counts
+// while the rider is carried UP it. The fixture lift lies on the chute's own line and is drawn
+// top-to-bottom (descentM > climbM), so up the lift = toward START = forwardM falling.
+// ============================================================
+(function testRidingALiftVsSkiingUnderIt() {
+  const liftOver = () => { const l = makeCorridor("lift1", { lenM: 400, widthM: 10, runType: "lift" });
+    Object.assign(l.layers[0].geometry, { climbM: 0, descentM: 300 }); return l; };
+  const setup = () => { const g = freshChuteGuard(), warn = [];
+    g.load([makeCorridor("c1", { runType: "chute", lenM: 400, widthM: 10 }), liftOver()], { onWarn: id => warn.push(id) });
+    let t = 1700000000000;
+    const go = (fwd, lat, speed, dtS) => { const p = trackPoint(fwd, lat); t += (dtS || 1) * 1000; g.tick({ lat: p[0], lon: p[1], acc: 5, speed, t }, 0); return g.isOnLift(); };
+    return { g, warn, go }; };
+
+  // skiing the chute under the lift, top to bottom, then leaving it sideways
+  let s = setup(), everOn = false;
+  for (let f = 0; f <= 200; f += 8) everOn = s.go(f, 0, 8) || everOn;
+  assert(!everOn, "skiing down under a lift is not a lift ride");
+  [8, 14, 20].forEach((lat, i) => s.go(208 + i * 8, lat, 8));
+  assert(s.warn.length > 0 && s.g.getActiveAlarm() !== null, "a chute under a lift keeps its guard tone");
+
+  // riding up the lift over the chute
+  s = setup(); let onAt = null;
+  for (let f = 300; f >= 100; f -= 5) { if (s.go(f, 0, 5) && onAt == null) onAt = 300 - f; }
+  assert(onAt !== null && onAt >= 30 && onAt <= 40, "carried up the lift: on the lift after ~30 m, got " + onAt);
+  assert(s.warn.length === 0 && s.g.getActiveAlarm() === null, "riding the lift over a chute: no tone");
+  // ...the lift stops for a minute: still on it
+  assert(s.go(100, 0, 0, 60) === true, "a stopped lift is still a lift ride");
+  // ...then skiing back down under it ends the ride after 30 m
+  let offAt = null;
+  for (let f = 105; f <= 160; f += 5) { if (!s.go(f, 0, 5) && offAt == null) offAt = f - 100; }
+  assert(offAt >= 30 && offAt <= 35, "~30 m back down the line ends the ride, got " + offAt);
+
+  // leaving the lift's band ends the ride at once
+  s = setup();
+  for (let f = 300; f >= 200; f -= 5) s.go(f, 0, 5);
+  assert(s.g.isOnLift() === true && s.go(195, 80, 5) === false, "leaving the lift line ends the ride");
+
+  // walking up beside the lift (a boot pack pace) is not a ride
+  s = setup(); everOn = false;
+  for (let f = 300; f >= 200; f -= 1) everOn = s.go(f, 0, 1) || everOn;
+  assert(!everOn, "climbing at walking pace under a lift is not a lift ride");
+
+  // a lift with no elevation in the bundle keeps the old rule: near it = on it
+  const g = freshChuteGuard();
+  g.load([makeCorridor("c1", { lenM: 400 }), makeCorridor("lift1", { lenM: 400, runType: "lift" })], {});
+  const p = trackPoint(100, 0); g.tick({ lat: p[0], lon: p[1], acc: 5, speed: 8, t: 1700000000000 }, 0);
+  assert(g.isOnLift() === true, "lift with unknown direction: near = on (unchanged)");
+
+  // a reload mid-ride (Ridge Quest reloads on every Home render) keeps the ride
+  s = setup();
+  for (let f = 300; f >= 200; f -= 5) s.go(f, 0, 5);
+  s.g.load([makeCorridor("c1", { runType: "chute", lenM: 400, widthM: 10 }), liftOver()], {});
+  assert(s.go(195, 0, 5) === true, "load() mid-ride keeps the ride");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
