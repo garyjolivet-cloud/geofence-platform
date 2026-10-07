@@ -590,6 +590,11 @@ async function renderProjectPicker(appId, appName){
         // app, it has to be cleared and re-authed under the new one.
         const s = getSession();
         if(s && s.player && s.player.appId !== appId) clearSession();
+        // A different map: forget the old one's runs and camera NOW (2026-10-07, Gary: "when i change
+        // resort from kicking horse to jolivet walk the map remains the chutes of kicking horse").
+        // The old runs stayed in memory until the new bundle arrived, so Home's picture was drawn
+        // (and kept all day) with Kicking Horse's runs, and My map opened on the old splash camera.
+        if(RQ_PROJECT_ID !== btn.dataset.id){ Quest.forgetProject(); _splashEndCamera = null; }
         RQ_APP_ID = appId; RQ_PROJECT_ID = btn.dataset.id;
         setWorkspace(appId, appName, btn.dataset.id, btn.dataset.name);
         boot();
@@ -1577,9 +1582,19 @@ const Quest = {
     return this.chuteGuardMaster;
   },
 
+  // Drop everything loaded for the previous resort/map (the picker calls this on a switch).
+  forgetProject(){
+    this.corridors=[]; this.checkpoints=[]; this.resortFullVerticalM=0; this.ref=null; this.corridorsProject=null;
+    this.defaultOffCorridors=new Set(); this.skiedToday=new Set();
+    try{ this.refreshIgnoredCorridors(); }catch(e){}
+  },
+
   async loadCorridors(){
+    const forProject = RQ_PROJECT_ID;
     try{
-      const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(RQ_PROJECT_ID)+"/bundle")).json();
+      const bundle = await (await fetch(API+"/api/projects/"+encodeURIComponent(forProject)+"/bundle")).json();
+      if(forProject !== RQ_PROJECT_ID) return;   // the rider picked another map while this was loading
+      this.corridorsProject = forProject;
       if(bundle.error){ this.corridors=[]; this.checkpoints=[]; this.resortFullVerticalM=0; return; }
       const ref = bundle.ref || [0,0];
       this.ref = ref;
@@ -2876,6 +2891,8 @@ function socialDayCtx(s){
   const now=new Date();
   return {
     playerId:s.player.id, rider:s.player.displayName||"", corridors:Quest.corridors||[],
+    // the resort picked in the app (the image used to say "Kicking Horse" everywhere) + the map's centre
+    resort:((getWorkspace()||{}).appName)||"", ref:Quest.ref||null,
     track: RQTrack ? RQTrack.segments() : [],
     dayKey: iso=>questDateBucketClient(new Date(iso)), today: questDateBucketClient(now),
     seasonId: questSeasonIdClient(now),
@@ -2995,8 +3012,14 @@ async function heroRefresh(s, reason){
   if(typeof RQHero==="undefined" || !s || !s.player) return;
   // The run network must be loaded first — on the first Home open it often isn't yet, and a
   // render with no runs used to fall back to the drawn-mountain art and keep it all day.
-  if(!(Quest.corridors||[]).length){ try{ await Quest.loadCorridors(); }catch(e){} }
-  return RQHero.refresh(s.player.id, reason, async()=>renderMyMapPicture(RQHero.W, RQHero.H, await heroTodayData(s)), questDateBucketClient(new Date()));
+  // Also when the runs in memory belong to another resort (2026-10-07): the picture is tagged with
+  // its project, and one made for another project is never shown (paintHero).
+  if(!(Quest.corridors||[]).length || Quest.corridorsProject !== RQ_PROJECT_ID){ try{ await Quest.loadCorridors(); }catch(e){} }
+  const forProject = RQ_PROJECT_ID;
+  return RQHero.refresh(s.player.id, reason, async()=>{
+    const c = await renderMyMapPicture(RQHero.W, RQHero.H, await heroTodayData(s));
+    return forProject === RQ_PROJECT_ID ? c : null;   // switched map mid-render: don't keep it
+  }, questDateBucketClient(new Date()), forProject);
 }
 // Shows the saved picture at once; draws the first one of the day (or a stale one) if needed.
 // Otherwise Home never redraws it — only boarding the gondola (Quest.onGondolaBoard) and finishing a
@@ -3016,9 +3039,10 @@ function paintHero(s){
         : "updates after each chute and when you board the gondola";
     }
   };
-  const cached=RQHero.load(s.player.id);
+  let cached=RQHero.load(s.player.id);
+  if(cached && cached.project !== RQ_PROJECT_ID) cached=null;   // another resort's picture (or one saved before pictures were tagged)
   if(cached) show(cached);
-  RQHero.state.onUpdated=show;
+  RQHero.state.onUpdated=v=>{ if(v && v.project === RQ_PROJECT_ID) show(v); };
   if(!RQHero.isFreshFor(cached, questDateBucketClient(new Date()))) heroRefresh(s, cached && cached.stale ? "stale" : "first");
 }
 Quest.onGondolaBoard = ()=>{ heroRefresh(getSession(), "gondola"); };
@@ -3501,6 +3525,8 @@ async function renderSocialExport(){
     const status=t=>{ const el=$("seStatus"); if(el) el.textContent=t; };
     try{
       status("Gathering your "+(kind==="day"?"day":"season")+"…");
+      // the runs of THIS map (not none yet, and not another resort's) before the picture is framed on them
+      if(!(Quest.corridors||[]).length || Quest.corridorsProject !== RQ_PROJECT_ID){ try{ await Quest.loadCorridors(); }catch(e){} }
       const ctx=socialDayCtx(s);   // shared with Home's 3D picture
       const data = kind==="day" ? await SocialCard.collectDay(api, ctx) : await SocialCard.collectSeason(api, ctx);
       made = await SocialCard.make(data, format, { onProgress: status });

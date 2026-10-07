@@ -259,3 +259,29 @@ test("the social preview fits on one screen with Save / Share under it", () => {
   assert.ok(/el\.scrollIntoView\(\{ block:"start" \}\)/.test(body) && /if\(img\.complete\) toTop\(\); else img\.onload=toTop;/.test(body), "scrolled (once the image has its height) so it starts at the top");
   assert.ok(/function socialPreviewMaxPx\(\)\{\n  return Math\.max\(240, Math\.floor\(window\.innerHeight - 34 - 64 - 16\)\);/.test(rqh));
 });
+
+// 2026-10-07: "when making the multimedia simple graphics not map image is created in jolivet walk"
+// — a map with no chutes or lifts had nothing to frame the picture on, so it fell to the drawn art.
+test("a map without chutes or lifts still gets the real map, named after its own resort", async () => {
+  const walk = [
+    { zoneId: "a", name: "Street", runType: "run", path: [L(51.3028, -117.0548), L(51.3023, -117.0546)], descentM: 3 },
+    { zoneId: "b", name: "Trail", runType: "hike", path: [L(51.3021, -117.0555), L(51.3028, -117.0557)], climbM: 5 }
+  ];
+  const api = async () => ({});
+  const ctx = { playerId: "p", rider: "G", corridors: walk, track: [], dayKey: () => "d", today: "d", seasonId: "s", dateLabel: "x", seasonLabel: "y", resort: "jolivetTest", ref: [51.3024, -117.0551] };
+  const day = await SC.collectDay(api, ctx), season = await SC.collectSeason(api, ctx);
+  assert.strictEqual(day.resort, "jolivetTest");
+  assert.strictEqual(season.resort, "jolivetTest");
+  assert.strictEqual(day.geo.network.chutes.length, 0);
+  assert.strictEqual(day.geo.network.others.length, 2, "its other lines are what the picture is framed on");
+  assert.deepStrictEqual(Array.from(day.geo.ref), [51.3024, -117.0551]);
+  assert.strictEqual((await SC.collectDay(api, Object.assign({}, ctx, { resort: "" }))).resort, "Kicking Horse", "older callers unchanged");
+  const hero = src.slice(src.indexOf("function renderHeroMap(geo, w, h) {"), src.indexOf("// True when a copied map frame"));
+  assert.ok(/if \(!focus\.length\) focus = \[\]\.concat\(net\.others \|\| \[\]\);/.test(hero), "other lines");
+  assert.ok(/if \(!b && geo\.ref && \(geo\.ref\[0\] \|\| geo\.ref\[1\]\)\) b = /.test(hero), "then the project's centre");
+  assert.ok(/data: fc\(noChutes \? \(net\.others \|\| \[\]\) : \[\]\)/.test(hero), "a ski map's picture is unchanged (other lines only drawn without chutes)");
+  assert.ok(/zoom: Math\.min\(17, /.test(hero) && /finish\(null\); \}, 25000\);/.test(hero));
+  const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
+  assert.ok(/resort:\(\(getWorkspace\(\)\|\|\{\}\)\.appName\)\|\|"", ref:Quest\.ref\|\|null,/.test(rq));
+  assert.ok(/Quest\.corridorsProject !== RQ_PROJECT_ID\)\{ try\{ await Quest\.loadCorridors\(\); \}catch\(e\)\{\} \}\s*const ctx=socialDayCtx\(s\);/.test(rq), "this map's runs are loaded before the image is made");
+});

@@ -67,21 +67,23 @@
   // Render now (or remember to). render() -> Promise<canvas | null> (the host's My-map picture). A null
   // (no WebGL, no runs loaded, a blank frame) is never saved: the old picture stays and the next
   // Home open tries again.
-  async function refresh(pid, reason, render, day) {
+  // project (2026-10-07): which resort map the picture shows; saved with it so the host never shows
+  // one resort's picture after the rider switches to another.
+  async function refresh(pid, reason, render, day, project) {
     state.pid = pid;
     var now = Date.now();
     if (reason === "gondola" && now - state.lastAt < MIN_GAP_MS) return "skipped";
     state.lastAt = now;
     if (root.document && root.document.hidden) {           // locked phone: do it when Home is next opened
-      var c = load(pid); if (c) { c.stale = true; save(pid, c); } else save(pid, { stale: true, day: day });
+      var c = load(pid); if (c) { c.stale = true; save(pid, c); } else save(pid, { stale: true, day: day, project: project });
       return "stale";
     }
-    if (busy) { again = [pid, reason, render, day]; return "busy"; }
+    if (busy) { again = [pid, reason, render, day, project]; return "busy"; }
     busy = true;
     try {
       var canvas = await render();
       if (!canvas) { state.lastAt = 0; return "failed"; }   // keep the old picture; try again next time
-      var v = { img: canvas.toDataURL("image/jpeg", 0.82), at: now, day: day, reason: reason };
+      var v = { img: canvas.toDataURL("image/jpeg", 0.82), at: now, day: day, reason: reason, project: project };
       save(pid, v);
       if (state.onUpdated) state.onUpdated(v);
       return "done";
@@ -89,7 +91,7 @@
       return "failed";
     } finally {
       busy = false;
-      if (again) { var a = again; again = null; state.lastAt = 0; setTimeout(function () { refresh(a[0], a[1], a[2], a[3]); }, 0); }
+      if (again) { var a = again; again = null; state.lastAt = 0; setTimeout(function () { refresh(a[0], a[1], a[2], a[3], a[4]); }, 0); }
     }
   }
 

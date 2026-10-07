@@ -96,7 +96,28 @@ test("the picture is drawn with My map's own pieces, and only once the runs are 
   assert.ok(/const todayIds=new Set\(\[\.\.\.today\.skied, \.\.\.\(today\.bootPacks\|\|\[\]\)\]\);/.test(r), "today's chutes and boot packs both glow");
   assert.ok(/canvasContextAttributes:\{ preserveDrawingBuffer:true/.test(r) && /SocialCard\.isBlank/.test(r), "iPhone black-frame guard");
   const h = rq.slice(rq.indexOf("async function heroRefresh(s, reason){"));
-  assert.ok(/if\(!\(Quest\.corridors\|\|\[\]\)\.length\)\{ try\{ await Quest\.loadCorridors\(\); \}catch\(e\)\{\} \}/.test(h.slice(0, 600)), "waits for the runs (the drawn-mountain bug)");
+  assert.ok(/if\(!\(Quest\.corridors\|\|\[\]\)\.length \|\| Quest\.corridorsProject !== RQ_PROJECT_ID\)\{ try\{ await Quest\.loadCorridors\(\); \}catch\(e\)\{\} \}/.test(h.slice(0, 900)), "waits for THIS map's runs (the drawn-mountain bug; another resort's runs)");
+});
+
+// 2026-10-07: "when i change resort from kicking horse to jolivet walk the map remains the chutes of
+// kicking horse" — the old resort's runs stayed in memory and Home's picture was drawn from them.
+test("switching resort forgets the old runs, camera and picture", async () => {
+  const pick = rq.slice(rq.indexOf("async function renderProjectPicker(appId, appName){"), rq.indexOf("/* ============================= AUTH VIEW"));
+  assert.ok(/if\(RQ_PROJECT_ID !== btn\.dataset\.id\)\{ Quest\.forgetProject\(\); _splashEndCamera = null; \}\s*RQ_APP_ID = appId; RQ_PROJECT_ID = btn\.dataset\.id;/.test(pick), "before the new project id is set");
+  const fp = rq.slice(rq.indexOf("  forgetProject(){"), rq.indexOf("  async loadCorridors(){"));
+  assert.ok(/this\.corridors=\[\];/.test(fp) && /this\.ref=null;/.test(fp) && /this\.corridorsProject=null;/.test(fp) && /this\.skiedToday=new Set\(\);/.test(fp));
+  const lc = rq.slice(rq.indexOf("  async loadCorridors(){"), rq.indexOf("const ref = bundle.ref || [0,0];"));
+  assert.ok(/const forProject = RQ_PROJECT_ID;/.test(lc) && /if\(forProject !== RQ_PROJECT_ID\) return;/.test(lc) && /this\.corridorsProject = forProject;/.test(lc), "a late answer for another map is ignored");
+  const paint = rq.slice(rq.indexOf("function paintHero(s){"), rq.indexOf("Quest.onGondolaBoard = "));
+  assert.ok(/if\(cached && cached\.project !== RQ_PROJECT_ID\) cached=null;/.test(paint), "another resort's picture is never shown");
+  // the picture is saved with its project
+  const store = {};
+  global.localStorage = { getItem: k => store[k] || null, setItem: (k, v) => { store[k] = v; } };
+  global.document = { hidden: false };
+  H.state.lastAt = 0;
+  assert.strictEqual(await H.refresh("p9", "first", async () => ({ toDataURL: () => "data:x" }), "2026-12-01", "proj-a"), "done");
+  assert.strictEqual(JSON.parse(store["rq.hero.v2.p9"]).project, "proj-a");
+  delete global.document; delete global.localStorage;
 });
 
 // 2026-10-06: "take the this season block with vertical chutes day streak and build a personal
