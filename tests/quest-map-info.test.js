@@ -28,3 +28,12 @@ test("the logging strategy states the real rules", () => {
   assert.ok(/STATIONARY_LOCK_MS: 10\*60000,/.test(rq) && /sits still for 10 minutes/.test(info), "lunch lock");
   assert.ok(!/speed|fast|turns/i.test(info.replace(/fastest/g, "")), "never about speed or turns");
 });
+
+// 2026-10-06, Gary: "where is home that shows no signal runs. i cant see it anywhere" — the note
+// was hidden whenever nothing was waiting. It now always shows on Home.
+test("Home always shows the outbox line: waiting runs, or all sent", () => {
+  const f = rq.slice(rq.indexOf("function paintOutboxNote(){"), rq.indexOf("/* ===================== OFFLINE OUTBOX"));
+  assert.ok(/if\(!items\.length\)\{ el\.textContent = "✓ All runs sent"; el\.style\.display=""; return; \}/.test(f));
+  assert.ok(/saved on your phone — will send when you have signal/.test(f));
+  assert.ok(/✓ All runs sent/.test(info), "the map tip names both states");
+});

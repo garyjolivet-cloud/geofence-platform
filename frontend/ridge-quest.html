@@ -491,7 +491,9 @@ function paintOutboxNote(){
   const el = document.getElementById("outboxNote"); if(!el) return;
   const items = RQOut ? RQOut.pending() : [];
   const runs = items.filter(x=>x.kind==="run").length, lines = items.length - runs;
-  if(!items.length){ el.style.display="none"; el.textContent=""; return; }
+  // Always shown (2026-10-06, Gary couldn't find it): "all sent" when nothing waits, so the rider
+  // can see the outbox is there and working.
+  if(!items.length){ el.textContent = "✓ All runs sent"; el.style.display=""; return; }
   const parts = [];
   if(runs) parts.push(runs+" run"+(runs===1?"":"s"));
   if(lines) parts.push(lines+" chute line"+(lines===1?"":"s"));
@@ -4381,7 +4383,7 @@ function openMapInfo(){
       +'<li><b>Want one particular chute?</b> Guard OFF, hold it to arm it. Runs within about 10 m of an armed one are ignored (not logged), so disarm when you move on.</li>'
       +'<li>It logs <b>when you reach the bottom</b>: “Chute 7 of 64” and a gold flash. Not counted? Home says why under Start tracking.</li>'
       +'<li><b>Lift rides</b> log riding up a lift line. Climbing a chute isn’t logged; only routes marked boot pack count as boot packs.</li>'
-      +'<li><b>No signal?</b> Runs are saved on your phone and sent later — Home shows “📶 saved on your phone”.</li>'
+      +'<li><b>No signal?</b> Runs are saved on your phone and sent when you have signal. Under Start tracking, Home shows “📶 N runs saved on your phone” while any are waiting, and “✓ All runs sent” when none are.</li>'
       +'<li>If the phone sits still for 10 minutes (lunch), it may lock and tracking pauses. <b>Open the app again before your next run.</b></li>'
       +'<li>Use <b>Season</b> to see which chutes you haven’t skied yet.</li>'
     +'</ol>'
