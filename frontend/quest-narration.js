@@ -11,7 +11,8 @@
  *    line for a day was removed ("remove code for right and left detection").
  *  - A chute / run / boot pack with no authored line says "This is <name>" (user: "make it
  *    automatic"). A lift with no line stays silent.
- *  - Lifts: announced on entering the band (Schmitt-trigger hysteresis, see step()).
+ *  - Lifts: announced on entering the band (Schmitt-trigger hysteresis, see step()), and only
+ *    within LIFT_FIRST_M of the boarding end (user 2026-10-07: "only ... the first 10m").
  *  - Quiet while the rider is on a lift (chutes under the gondola), except the lift itself.
  *  - Re-armed only after the rider is REARM_M from the band (GPS wander can't repeat it).
  *  - The line is prefetched at PREFETCH_M.
@@ -28,6 +29,7 @@
     REARM_M: 40,             // re-arm beyond this many m from the band (= Ridge Quest REC_HOLD_M)
     PREFETCH_M: 200,         // fetch the audio this far out (first /api/tts took 1762 ms)
     COOLDOWN_MS: 4000,       // lift band: no re-entry within this after leaving
+    LIFT_FIRST_M: 10,        // lift: spoken only when entered within this many m of its boarding end (2026-10-07)
     QUEUE_MAX: 3,            // speech queue: lines waiting behind the one playing
     QUEUE_MAX_WAIT_MS: 12000,// a line that waited longer than this is skipped (rider has moved on)
     QUEUE_WATCHDOG_MS: 20000,// a line that never reports its end lets the next start after this
@@ -55,6 +57,27 @@
     return best - (corridor.widthM || 10) / 2;
   }
 
+  // Metres along a lift from its boarding (bottom) end to the point on the line nearest pt. The
+  // bottom end comes from the corridor's elevation, like Ridge Quest's lift-ride rule: drawn
+  // bottom-to-top when climbM > descentM; with no elevation the drawn start is the boarding end.
+  function liftAlongM(pt, corridor) {
+    var path = corridor.path || [];
+    if (path.length < 2) return Infinity;
+    var ref = corridor.ref || path[0];
+    var P = toXY(pt, ref), best = Infinity, bestAlong = 0, total = 0;
+    for (var i = 1; i < path.length; i++) {
+      var A = toXY(path[i - 1], ref), B = toXY(path[i], ref);
+      var vx = B.x - A.x, vy = B.y - A.y, len2 = vx * vx + vy * vy, len = Math.sqrt(len2);
+      var t = len2 > 0 ? ((P.x - A.x) * vx + (P.y - A.y) * vy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      var d = Math.hypot(A.x + t * vx - P.x, A.y + t * vy - P.y);
+      if (d < best) { best = d; bestAlong = total + t * len; }
+      total += len;
+    }
+    var upAlong = corridor.climbM != null && corridor.descentM != null ? corridor.climbM > corridor.descentM : true;
+    return upAlong ? bestAlong : total - bestAlong;
+  }
+
   // True when pt is inside any chute or run (the gate for passing announcements).
   function insideRun(pt, corridors) {
     for (var i = 0; i < corridors.length; i++) {
@@ -79,7 +102,7 @@
   function afterGap(prevT, t) { return prevT != null && t != null && t - prevT > TUNING.GAP_QUIET_MS; }
 
   // One fix for one corridor. st = per-corridor state object (kept by the host, starts {}).
-  // corridor = { runType, widthM, say, name, path, ref? }. ctx = { inRun, narrOk,
+  // corridor = { runType, widthM, say, name, path, ref?, climbM?, descentM? }. ctx = { inRun, narrOk,
   // onLift, now, canSay, canPrefetch, afterGap } (inRun: insideRun() for this fix; canSay/canPrefetch:
   // the host has somewhere to send them; afterGap: afterGap() for this fix — announce nothing). Returns { say: text | null, prefetch: [texts] }.
   function step(st, corridor, pt, ctx) {
@@ -114,7 +137,10 @@
     if (st.phase === "idle" && inBand && !quiet) {          // entering waits for a real fix
       if (now >= st.narrCooldownUntil) {
         st.phase = "inRun";
-        if (isLift && ctx.narrOk && say && ctx.canSay && st.narrArmed !== false) {
+        // Only at the boarding end: crossing or joining the line higher up says nothing
+        // (user 2026-10-07: "only use voice for lifts if its the first 10m").
+        if (isLift && ctx.narrOk && say && ctx.canSay && st.narrArmed !== false
+            && liftAlongM(pt, corridor) <= TUNING.LIFT_FIRST_M) {
           st.narrArmed = false;
           out.say = say;
         }
@@ -160,7 +186,7 @@
     };
   }
 
-  var api = { TUNING: TUNING, bandDist: bandDist, insideRun: insideRun, lineFor: lineFor, afterGap: afterGap, step: step, makeSayQueue: makeSayQueue };
+  var api = { TUNING: TUNING, bandDist: bandDist, liftAlongM: liftAlongM, insideRun: insideRun, lineFor: lineFor, afterGap: afterGap, step: step, makeSayQueue: makeSayQueue };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.QuestNarration = api;
 })(typeof window !== "undefined" ? window : this);

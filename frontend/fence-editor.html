@@ -7335,6 +7335,7 @@ const QuestSim={
       const tl=(z.layers||[]).find(l=>l.kind==="target"), g=tl&&tl.geometry;
       if(!g || g.type!=="corridor" || z.movingAudio || !Array.isArray(g.path) || g.path.length<2) return null;
       return { zoneId:z.id, name:z.name, runType:z.runType||"run", widthM:g.widthM||10, path:g.path,
+               climbM:g.climbM!=null?g.climbM:null, descentM:g.descentM!=null?g.descentM:null,   // a lift's boarding end (QuestNarration.liftAlongM)
                say:(z.triggers||[]).map(t=>t.say).find(Boolean)||null };
     }).filter(Boolean);
   },

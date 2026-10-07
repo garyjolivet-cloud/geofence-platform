@@ -643,6 +643,8 @@ const tEnd = a => (last(a).t - BASE) / 1000;
 // are announced when passed, see the passing tests below) ----
 
 function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAndLog() { return false; } }; }
+// A lift is only spoken within its first 10 m (QuestNarration.TUNING.LIFT_FIRST_M, 2026-10-07): these stand ~5.6 m up the line.
+const LIFT_BOARD_LAT = 51.30995;
 
 (function testTickNarratesOnNarrowCorridor() {
   const narrow = { zoneId: "nc1", name: "Test Lift", say: "test chute", runType: "lift", widthM: 4,
@@ -650,7 +652,7 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
   const self = makeNarrationThis();
   let narrated = null;
   self.onNarrate = (text, zoneId) => { narrated = { text, zoneId }; };
-  tickFn.call(self, narrow, { lat: 51.305, lon: -117.05, t: BASE, acc: 8 }, "ski", QGeo, QUEST_TUNING);
+  tickFn.call(self, narrow, { lat: LIFT_BOARD_LAT, lon: -117.05, t: BASE, acc: 8 }, "ski", QGeo, QUEST_TUNING);
   assert(narrated !== null, "standing on a 4m-wide corridor's centerline fires narration (old fixed 3m margin made this impossible)");
   assert(narrated && narrated.text === "test chute", "narration receives the corridor's own say text");
 })();
@@ -663,12 +665,12 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
   let barelyNarrated = false;
   barely.onNarrate = () => { barelyNarrated = true; };
   const nearEdgeLon = -117.05 + (halfW - 1) / (111320 * Math.cos(51.305 * Math.PI / 180));
-  tickFn.call(barely, wide, { lat: 51.305, lon: nearEdgeLon, t: BASE, acc: 8 }, "hike", QGeo, QUEST_TUNING);
+  tickFn.call(barely, wide, { lat: LIFT_BOARD_LAT, lon: nearEdgeLon, t: BASE, acc: 8 }, "hike", QGeo, QUEST_TUNING);
   assert(!barelyNarrated, "barely inside the true edge (less than the margin) does not yet count as entering");
   const clearly = makeNarrationThis();
   let clearlyNarrated = false;
   clearly.onNarrate = () => { clearlyNarrated = true; };
-  tickFn.call(clearly, wide, { lat: 51.305, lon: -117.05, t: BASE, acc: 8 }, "hike", QGeo, QUEST_TUNING);
+  tickFn.call(clearly, wide, { lat: LIFT_BOARD_LAT, lon: -117.05, t: BASE, acc: 8 }, "hike", QGeo, QUEST_TUNING);
   assert(clearlyNarrated, "clearly inside (past the margin) counts as entering and narrates");
 })();
 
@@ -678,11 +680,11 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
   const self = makeNarrationThis();
   let narrateCount = 0;
   self.onNarrate = () => { narrateCount++; };
-  tickFn.call(self, narrow, { lat: 51.305, lon: -117.05, t: BASE, acc: 8 }, "ski", QGeo, QUEST_TUNING);
+  tickFn.call(self, narrow, { lat: LIFT_BOARD_LAT, lon: -117.05, t: BASE, acc: 8 }, "ski", QGeo, QUEST_TUNING);
   assert(narrateCount === 1, "entered once");
   const justOutsideLon = -117.05 + 2.5 / (111320 * Math.cos(51.305 * Math.PI / 180));
-  tickFn.call(self, narrow, { lat: 51.305, lon: justOutsideLon, t: BASE + 1000, acc: 8 }, "ski", QGeo, QUEST_TUNING);
-  tickFn.call(self, narrow, { lat: 51.305, lon: -117.05, t: BASE + 2000, acc: 8 }, "ski", QGeo, QUEST_TUNING);
+  tickFn.call(self, narrow, { lat: LIFT_BOARD_LAT, lon: justOutsideLon, t: BASE + 1000, acc: 8 }, "ski", QGeo, QUEST_TUNING);
+  tickFn.call(self, narrow, { lat: LIFT_BOARD_LAT, lon: -117.05, t: BASE + 2000, acc: 8 }, "ski", QGeo, QUEST_TUNING);
   assert(narrateCount === 1, "a small excursion under the exit margin doesn't flip phase, so no spurious re-narration on return");
 })();
 
@@ -690,7 +692,7 @@ function makeNarrationThis() { return { states: {}, onNarrate: null, _classifyAn
 (function testNarrationOnlyForGuardedCorridors() {
   const mk = (zoneId, runType) => ({ zoneId, name: "C", say: "say " + zoneId, runType, widthM: 4,
     path: [[51.310, -117.05], [51.300, -117.05]], ref: [51.305, -117.05] });
-  const on = { lat: 51.305, lon: -117.05, t: BASE, acc: 8 };
+  const on = { lat: LIFT_BOARD_LAT, lon: -117.05, t: BASE, acc: 8 };
   function run(corridor, opts) {
     const self = Object.assign(makeNarrationThis(), opts);
     let said = 0, prefetched = 0;

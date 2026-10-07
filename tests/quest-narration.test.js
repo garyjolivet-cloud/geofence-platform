@@ -18,6 +18,8 @@ function assert(cond, msg) { if (cond) pass++; else { fail++; console.log("FAIL:
 const LAT = 51.305, mLon = m => -117.05 + m / (111320 * Math.cos(LAT * Math.PI / 180));
 const chute = (extra) => Object.assign({ runType: "chute", widthM: 10, say: "This is Big Dumper",
   path: [[51.310, -117.05], [51.300, -117.05]] }, extra);
+// A lift is only spoken within its first 10 m: alongLat(m) = m metres along the fixture line from its drawn start.
+const alongLat = m => 51.310 - m / 111320, BOARD = alongLat(5);
 // inRun: true = the rider is skiing inside some chute or run (the host works it out per fix).
 const ctx = (o) => Object.assign({ inRun: true, narrOk: true, onLift: false, now: 1e12, canSay: true, canPrefetch: true }, o);
 
@@ -56,8 +58,22 @@ const ctx = (o) => Object.assign({ inRun: true, narrOk: true, onLift: false, now
   const lift = chute({ runType: "lift", say: "Gondola" });
   let r = QN.step({}, lift, [LAT, mLon(8)], ctx());
   assert(r.say === null, "a lift is not announced when passed beside it");
-  r = QN.step({}, lift, [LAT, mLon(0)], ctx({ inRun: false }));
-  assert(r.say === "Gondola", "a lift is announced on entering it, plain (no run needed)");
+  r = QN.step({}, lift, [BOARD, mLon(0)], ctx({ inRun: false }));
+  assert(r.say === "Gondola", "a lift is announced on entering it at the bottom, plain (no run needed)");
+  // user 2026-10-07: "only use voice for lifts if its the first 10m"
+  assert(QN.TUNING.LIFT_FIRST_M === 10, "lift voice: first 10 m only");
+  assert(QN.step({}, lift, [LAT, mLon(0)], ctx({ inRun: false })).say === null, "a lift entered half way up says nothing");
+  assert(QN.step({}, lift, [alongLat(9), mLon(0)], ctx({ inRun: false })).say === "Gondola", "9 m up the lift: spoken");
+  assert(QN.step({}, lift, [alongLat(12), mLon(0)], ctx({ inRun: false })).say === null, "12 m up the lift: silent");
+  const mid = {};
+  QN.step(mid, lift, [LAT, mLon(0)], ctx({ inRun: false }));
+  assert(mid.phase === "inRun" && mid.narrArmed !== false, "a silent mid-line entry still enters the band and stays armed");
+  // drawn top-to-bottom (descent > climb): the boarding end is the END of the path
+  const down = chute({ runType: "lift", say: "Chair", climbM: 0, descentM: 400 });
+  assert(QN.step({}, down, [51.300 + 5 / 111320, mLon(0)], ctx({ inRun: false })).say === "Chair", "lift drawn top-to-bottom: spoken at its bottom end");
+  assert(QN.step({}, down, [BOARD, mLon(0)], ctx({ inRun: false })).say === null, "...and silent at its top end");
+  const up = chute({ runType: "lift", say: "Chair", climbM: 400, descentM: 0 });
+  assert(QN.step({}, up, [BOARD, mLon(0)], ctx({ inRun: false })).say === "Chair", "lift drawn bottom-to-top: spoken at the drawn start");
   assert(QN.step({}, chute(), [LAT, mLon(9)], ctx({ onLift: true })).say === null, "on a lift => chutes quiet");
   assert(QN.step({}, chute(), [LAT, mLon(9)], ctx({ narrOk: false })).say === null, "narrOk false => quiet");
   const p = QN.step({}, chute(), [LAT, mLon(150)], ctx());
@@ -170,9 +186,9 @@ const fnSrc = tag => { const s = ed.slice(ed.indexOf(tag)); return s.slice(0, s.
   const c = chute({ say: null, name: "Lou's Huckle Berry" }), on = [LAT, mLon(0)], st = {};
   assert(QN.step(st, c, on, ctx({ afterGap: true })).say === null, "the fix after a gap says nothing");
   assert(QN.step(st, c, on, ctx({ afterGap: false })).say === "This is Lou's Huckle Berry", "really there: named on the next fix");
-  const lift = chute({ runType: "lift", say: "Golden Eagle" }), ls = {};
-  assert(QN.step(ls, lift, on, ctx({ inRun: false, afterGap: true })).say === null, "a lift isn't entered on a gap fix");
-  assert(QN.step(ls, lift, on, ctx({ inRun: false, afterGap: false })).say === "Golden Eagle", "...but is on the next");
+  const lift = chute({ runType: "lift", say: "Golden Eagle" }), ls = {}, base = [BOARD, mLon(0)];
+  assert(QN.step(ls, lift, base, ctx({ inRun: false, afterGap: true })).say === null, "a lift isn't entered on a gap fix");
+  assert(QN.step(ls, lift, base, ctx({ inRun: false, afterGap: false })).say === "Golden Eagle", "...but is on the next");
 })();
 
 (function testHostsPassAfterGapAndTestModeUsesRaw() {
