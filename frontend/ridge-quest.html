@@ -130,8 +130,9 @@
   .statusBox p:empty{display:none}
   .strip{background:var(--slate);border:1px solid var(--rim);border-radius:14px;padding:10px 12px 12px;margin:12px 0 0}
   .strip h3{margin:0 0 6px;font-family:"Barlow Condensed";font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fog)}
-  .stripRow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .stripRow{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px}
   .stripRow .m{text-align:center;min-width:0}
+  .stripRow button.m{background:rgba(255,255,255,.06);border:1px solid var(--rim);border-radius:10px;color:var(--snow);padding:4px 2px;margin:0;font:inherit;cursor:pointer}
   .stripRow b{display:block;font-family:"Black Han Sans";font-weight:400;font-size:20px;line-height:1.2;white-space:nowrap}
   .stripRow span{font-family:"Barlow Condensed";font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ice)}
   .exploreGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0 0}
@@ -2345,7 +2346,7 @@ async function refreshClimbTiles(playerId){
     api("/api/players/"+playerId+"/lifts/daily").catch(()=>null)
   ]);
   // (no boot pack numbers on Home since 2026-10-06 — boot packs only feed the vertical below)
-  if(lf) set("liftTodayN", (lf.today&&lf.today.count)||0);
+  if(lf){ set("liftTodayN", (lf.today&&lf.today.count)||0); set("liftSeasonN", (lf.season&&lf.season.count)||0); }
   if(bp && lf){
     set("vertToday", m(((bp.today&&bp.today.verticalM)||0) + ((lf.today&&lf.today.verticalM)||0)));
     set("vertSeason", m(((bp.season&&bp.season.verticalM)||0) + ((lf.season&&lf.season.verticalM)||0)));
@@ -2991,8 +2992,8 @@ function renderHome(){
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
     // (This season — vertical, chutes, day streak — moved to the Leaderboard's "You" section 2026-10-06)
     +'<div class="exploreGrid">'
-      +tile("btnMap","🗺","My map")+tile("btnChutes","◆","Your chutes")
-      +tile("btnLifts","🚡","Lift rides")+tile("btnLeaderboard","🏆","Leaderboard")
+      // (Your chutes + Lift rides open from the Leaderboard's "You" box since 2026-10-06)
+      +tile("btnMap","🗺","My map")+tile("btnLeaderboard","🏆","Leaderboard")
       +tile("btnFriends","👥","Friends")+tile("btnSocial","📸","Social export")
       +tile("btnConditions","❄","Conditions","wide")
     +'</div>'
@@ -3163,8 +3164,6 @@ function renderHome(){
   }
   document.getElementById("btnMap").onclick=()=>renderFogMap();
   document.getElementById("btnLeaderboard").onclick=()=>renderLeaderboard();
-  document.getElementById("btnChutes").onclick=()=>renderYourChutes();
-  document.getElementById("btnLifts").onclick=()=>renderLifts();
   document.getElementById("btnFriends").onclick=()=>renderFriends();
   // "Share my location with friends today" — POST /api/share sets/clears
   // share_until server-side; RQ_SHARE_UNTIL mirrors it so the label + the
@@ -3222,12 +3221,17 @@ async function renderLeaderboard(mode, activityFilter){
   mode = mode || "daily";
   const s=getSession();
   // "You" (2026-10-06, moved off Home to simplify it): the rider's own season vertical (lifts +
-  // boot packs), chutes n/total and day streak, filled by refreshStats like Home's numbers.
-  const mini = (id, label)=>'<div class="m"><b id="'+id+'">—</b><span>'+label+'</span></div>';
+  // boot packs), chutes n/total, lift rides and day streak, filled by refreshStats like Home's
+  // numbers. Chutes and Lift rides are buttons into their screens (no separate Home tiles).
+  const mini = (id, label, btn)=>btn
+    ? '<button class="m" id="'+btn+'"><b id="'+id+'">—</b><span>'+label+' ›</span></button>'
+    : '<div class="m"><b id="'+id+'">—</b><span>'+label+'</span></div>';
   app.innerHTML =
     '<div class="card">'
     +'<h2>Leaderboard</h2>'
-    +'<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — this season</h3><div class="stripRow">'+mini("vertSeason","Vertical")+mini("chutesSeason","Chutes")+mini("statsStreak","Day streak")+'</div></div>'
+    +'<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — this season</h3><div class="stripRow">'
+      +mini("vertSeason","Vertical")+mini("chutesSeason","Chutes","lbChutes")+mini("liftSeasonN","Lifts","lbLifts")+mini("statsStreak","Streak")
+    +'</div></div>'
     +'<div style="display:flex;gap:10px;margin-bottom:10px">'
       +'<button class="ghost" id="lbDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
       +'<button class="ghost" id="lbSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
@@ -3242,6 +3246,8 @@ async function renderLeaderboard(mode, activityFilter){
     +'<button class="ghost" id="lbBack">← Back</button>'
     +'</div>';
   document.getElementById("lbBack").onclick=renderHome;
+  document.getElementById("lbChutes").onclick=()=>renderYourChutes("season");
+  document.getElementById("lbLifts").onclick=()=>renderLifts("season");
   document.getElementById("lbDailyBtn").onclick=()=>renderLeaderboard("daily", activityFilter);
   document.getElementById("lbSeasonBtn").onclick=()=>renderLeaderboard("season", activityFilter);
   document.querySelectorAll("button[data-act]").forEach(btn=>{
@@ -3424,7 +3430,7 @@ async function renderYourChutes(mode){
     +(RQNames.map.size ? '<button class="ghost" id="chResetNames" title="Your own names show only to you; this puts every chute, run, boot pack and lift back to the resort’s name.">↩ Use the resort’s names again ('+RQNames.map.size+' renamed)</button>' : '')
     +'<button class="ghost" id="chBack">← Back</button>'
     +'</div>';
-  document.getElementById("chBack").onclick=renderHome;
+  document.getElementById("chBack").onclick=()=>renderLeaderboard();
   const resetBtn=document.getElementById("chResetNames");
   if(resetBtn) resetBtn.onclick=async()=>{
     if(!confirm("Put all "+RQNames.map.size+" of your names back to the resort’s names?")) return;
@@ -3496,7 +3502,7 @@ async function renderTally(kind, mode){
     +'<div id="tlList"><div class="empty">Loading…</div></div>'
     +'<button class="ghost" id="tlBack">← Back</button>'
     +'</div>';
-  document.getElementById("tlBack").onclick=renderHome;
+  document.getElementById("tlBack").onclick=()=>renderLeaderboard();
   document.getElementById("tlDailyBtn").onclick=()=>renderTally(kind, "daily");
   document.getElementById("tlSeasonBtn").onclick=()=>renderTally(kind, "season");
   const listEl=document.getElementById("tlList"), totEl=document.getElementById("tlTotals");

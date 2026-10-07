@@ -105,7 +105,11 @@ test("This season (vertical, chutes, day streak) is on the Leaderboard, not Home
   const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
   assert.ok(!/vertSeason|chutesSeason|statsStreak/.test(home), "gone from Home");
   const lb = rq.slice(rq.indexOf("async function renderLeaderboard(mode, activityFilter){"), rq.indexOf("const listEl=document.getElementById(\"lbList\");"));
-  assert.ok(/id="lbYou"/.test(lb) && /mini\("vertSeason","Vertical"\)\+mini\("chutesSeason","Chutes"\)\+mini\("statsStreak","Day streak"\)/.test(lb));
+  assert.ok(/id="lbYou"/.test(lb) && /mini\("vertSeason","Vertical"\)\+mini\("chutesSeason","Chutes","lbChutes"\)\+mini\("liftSeasonN","Lifts","lbLifts"\)\+mini\("statsStreak","Streak"\)/.test(lb));
+  // Your chutes + Lift rides open from that box, not Home tiles, and come back to the Leaderboard
+  assert.ok(!/btnChutes|btnLifts/.test(home), "no Home tiles");
+  assert.ok(/lbChutes"\)\.onclick=\(\)=>renderYourChutes\("season"\)/.test(rq));
+  assert.ok(/chBack"\)\.onclick=\(\)=>renderLeaderboard\(\)/.test(rq) && /tlBack"\)\.onclick=\(\)=>renderLeaderboard\(\)/.test(rq));
   assert.ok(lb.indexOf('id="lbYou"') < lb.indexOf('id="lbList"'), "above the board");
   assert.ok(/refreshStats\(s\.player\.id\)/.test(lb), "filled on open");
   const rs = rq.slice(rq.indexOf("async function refreshStats(playerId){"), rq.indexOf("async function refreshClimbTiles("));
