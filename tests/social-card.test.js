@@ -249,3 +249,13 @@ test("the export tells riders how to send to WhatsApp", () => {
   const body = rq.slice(rq.indexOf("async function renderSocialExport(){"), rq.indexOf("async function renderYourChutes(mode){"));
   assert.ok(/\$\("seShare"\)\.style\.display=""; \$\("seTip"\)\.style\.display="";/.test(body), "shown with the Save / Share button");
 });
+
+// 2026-10-06: "make sure social media list of chutes and runs does not push ridge quest off bottom
+// of screen" — the preview is sized to the screen (status + image + Save / Share) and scrolled to.
+test("the social preview fits on one screen with Save / Share under it", () => {
+  const rqh = require("fs").readFileSync(require("path").join(__dirname, "../frontend/ridge-quest.html"), "utf8").replace(/\r/g, "");
+  const body = rqh.slice(rqh.indexOf("async function renderSocialExport(){"), rqh.indexOf("async function renderYourChutes(mode){"));
+  assert.ok(/max-height:"\+socialPreviewMaxPx\(\)\+"px/.test(body) && !/max-height:60vh/.test(body));
+  assert.ok(/el\.scrollIntoView\(\{ block:"start" \}\)/.test(body) && /if\(img\.complete\) toTop\(\); else img\.onload=toTop;/.test(body), "scrolled (once the image has its height) so it starts at the top");
+  assert.ok(/function socialPreviewMaxPx\(\)\{\n  return Math\.max\(240, Math\.floor\(window\.innerHeight - 34 - 64 - 16\)\);/.test(rqh));
+});

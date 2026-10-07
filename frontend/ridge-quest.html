@@ -3418,6 +3418,11 @@ function bindChuteFolders(listEl, playerId){
    Facebook — drawn by frontend/social-card.js. Two steps on purpose: "Make image" (a tap)
    builds it, then "Save / Share" (a second tap) opens the share sheet, because phones only
    allow sharing from a fresh tap and the image takes a few seconds to draw. */
+// Height for the social preview: the screen less the status line above it and the Save / Share
+// button + a little room under it, never under 240 px.
+function socialPreviewMaxPx(){
+  return Math.max(240, Math.floor(window.innerHeight - 34 - 64 - 16));
+}
 async function renderSocialExport(){
   const s=getSession();
   if(typeof SocialCard==="undefined"){ rqToast("Social export isn't available — reload the page."); return; }
@@ -3468,10 +3473,17 @@ async function renderSocialExport(){
       made = await SocialCard.make(data, format, { onProgress: status });
       if(!document.getElementById("sePreview")) return;   // navigated away
       const img=new Image(); img.src=URL.createObjectURL(made.blob);
-      img.style.cssText="max-width:100%;max-height:60vh;border-radius:12px;border:1px solid var(--rim)";
+      // The whole image fits on screen with Save / Share under it (2026-10-06, Gary: "make sure social
+      // media list of chutes and runs does not push ridge quest off bottom of screen" — at 60vh below
+      // the buttons, a Story preview's Ridge Quest footer sat under the screen edge). The preview is
+      // scrolled to the top of the screen and capped at the height left above the Save button.
+      img.style.cssText="display:block;margin:0 auto;max-width:100%;max-height:"+socialPreviewMaxPx()+"px;border-radius:12px;border:1px solid var(--rim)";
       $("sePreview").appendChild(img);
       status(made.hero ? "Ready." : "Ready (no signal for the map, so it uses the mountain art).");
       $("seShare").style.display=""; $("seTip").style.display="";
+      // after the image has its height, or there is nothing below to scroll to yet
+      const toTop=()=>{ try{ const el=$("seStatus"); if(el) el.scrollIntoView({ block:"start" }); }catch(e){} };
+      if(img.complete) toTop(); else img.onload=toTop;
     }catch(e){ status("Couldn't make the image: "+(e && e.message)); }
     finally{ btn.disabled=false; }
   };
