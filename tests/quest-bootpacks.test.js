@@ -74,7 +74,7 @@ test("lift rides are tallied per lift, with a Home tile and their own screen", (
   assert.ok(/hs\("liftTodayN","Lift rides"\)/.test(html) && /"\/lifts\/daily"/.test(extract(html, "async function refreshClimbTiles(playerId){")), "Lift rides today tile");
   assert.ok(/vertical_m/.test(worker.match(/const LIFTS_SQL = "([^"]+)"/)[1]), "lift rides carry their vertical");
   assert.ok(/b\.activity === "lift" \? 0 : Math\.abs\(verticalM \|\| 0\)/.test(worker), "lift vertical stays out of the scored day vertical_m");
-  assert.ok(/mini\("liftSeasonN","Lifts","lbLifts"\)/.test(html) && /lbLifts"\)\.onclick=\(\)=>renderLifts\("season"\)/.test(html), "Leaderboard's You box opens Lift rides");
+  assert.ok(/mini\("liftSeasonN","Lifts","lbLifts"\)/.test(html) && /lbLifts"\)\.onclick=\(\)=>renderLifts\(mode\)/.test(html), "Leaderboard's You box opens Lift rides");
   const day = r => r.slice(0, 10);
   const rows = [
     { zone_id: "gondola", run_name: "Golden Eagle Express", started_at: "2026-09-30T10:00:00Z" },

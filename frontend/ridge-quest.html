@@ -147,7 +147,8 @@
   .trackBtn.tracking{background:var(--hazard);color:#2a0f14}
   .runlist{margin-top:16px}
   /* Today's runs scroll in their own box (2026-10-06) so Account stays on screen; sized by sizeRunList(). */
-  #todayRuns{overflow-y:auto;overscroll-behavior:contain;border-radius:10px}
+  #todayRuns, [data-fitlist]{overflow-y:auto;overscroll-behavior:contain;border-radius:10px}
+  button.ghost.stickyBack{position:sticky;bottom:0;z-index:2;background:var(--slate);box-shadow:0 -8px 14px var(--night)}
   .runlist h3{font-family:"Barlow Condensed";font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--fog);margin:18px 0 8px}
   .runrow{display:flex;align-items:center;gap:10px;background:var(--night);border:1px solid var(--rim);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13.5px}
   .runrow .badge{flex:0 0 auto;font-family:"Barlow Condensed";font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:3px 8px;border-radius:6px;background:var(--rim);color:var(--snow)}
@@ -2331,7 +2332,7 @@ async function refreshRuns(playerId){
 // Fills whichever of those elements are on screen; best-effort: a failed fetch leaves its dashes.
 async function refreshStats(playerId){
   const streakEl=document.getElementById("statsStreak");
-  if(!document.getElementById("chutesTodayNum") && !streakEl) return;   // neither Home nor Leaderboard
+  if(!document.getElementById("chutesTodayNum") && !streakEl) return;   // neither Home nor the Leaderboard (today / season)
   const ct=document.getElementById("chutesTodayNum"); if(ct) ct.textContent=Quest.skiedToday.size;
   refreshClimbTiles(playerId);
   // Season chutes: n of the resort's chutes skied this season.
@@ -3010,8 +3011,20 @@ function sizeRunList(){
   const avail = Math.floor(window.innerHeight - top - acctH - 12);    // 12 px breathing room under Account
   list.style.maxHeight = Math.max(RUNLIST_MIN_PX, avail) + "px";
 }
-window.addEventListener("resize", ()=>sizeRunList());
-window.addEventListener("orientationchange", ()=>setTimeout(sizeRunList, 300));
+// Same idea for the Leaderboard, Your chutes and Lift rides screens (2026-10-06, Gary: "make a
+// scrolling window like on home screen so chutes and runs dont push the back button off the
+// screen"): the screen's [data-fitlist] box gets the height left between its top and whatever
+// follows it in the card (Back, a reset button, the card's padding); Back is sticky at the bottom.
+function sizeScreenList(){
+  const list = document.querySelector("[data-fitlist]"); if(!list || !list.parentElement) return;
+  const MIN_PX = 140;
+  const r = list.getBoundingClientRect(), card = list.parentElement.getBoundingClientRect();
+  const after = Math.max(0, card.bottom - r.bottom);                  // everything under the box in its card
+  const top = r.top + window.scrollY;
+  list.style.maxHeight = Math.max(MIN_PX, Math.floor(window.innerHeight - top - after - 12)) + "px";
+}
+window.addEventListener("resize", ()=>{ sizeRunList(); sizeScreenList(); });
+window.addEventListener("orientationchange", ()=>setTimeout(()=>{ sizeRunList(); sizeScreenList(); }, 300));
 function renderHome(){
   const s=getSession();
   // Home (2026-10-06 redesign): the 3D today picture (rq-hero.js) with the day's big numbers over
@@ -3269,7 +3282,7 @@ function leaderboardRowHtml(row, meId, rank, activityFilter){
     +'<span class="name">'+esc(row.name)+(mine?' (you)':'')+'</span>'
     +'<span class="meta">'+esc(parts.join(' · '))+'</span></div>';
 }
-async function renderLeaderboard(mode, activityFilter){
+async function renderLeaderboard(mode){
   mode = mode || "daily";
   const s=getSession();
   // "You" (2026-10-06, moved off Home to simplify it): the rider's own season vertical (lifts +
@@ -3281,39 +3294,40 @@ async function renderLeaderboard(mode, activityFilter){
   app.innerHTML =
     '<div class="card">'
     +'<h2>Leaderboard</h2>'
-    +'<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — this season</h3><div class="stripRow">'
-      +mini("vertSeason","Vertical")+mini("chutesSeason","Chutes","lbChutes")+mini("liftSeasonN","Lifts","lbLifts")+mini("statsStreak","Streak")
+    // Follows Today / Season (2026-10-06, Gary: "today should show vertical today ... chutes today and
+    // lifts today. no streak for today. the heading should say you today"). Today reuses Home's ids,
+    // so refreshStats / refreshClimbTiles / loadSkiedToday fill it as they do Home.
+    +(mode==="daily"
+      ? '<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — today</h3><div class="stripRow">'
+        +mini("vertToday","Vertical")+mini("chutesTodayNum","Chutes","lbChutes")+mini("liftTodayN","Lifts","lbLifts")
+      : '<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — this season</h3><div class="stripRow">'
+        +mini("vertSeason","Vertical")+mini("chutesSeason","Chutes","lbChutes")+mini("liftSeasonN","Lifts","lbLifts")+mini("statsStreak","Streak"))
     +'</div></div>'
-    +'<div style="display:flex;gap:10px;margin-bottom:10px">'
+    +'<div style="display:flex;gap:10px;margin-bottom:14px">'
       +'<button class="ghost" id="lbDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
       +'<button class="ghost" id="lbSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
     +'</div>'
-    // Optional per-activity view, reusing R6's ?activity= filter: All (the
-    // combined board, default) · Ski · Boot pack (stored as "hike").
-    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">'
-      +[{key:"",label:"All"}].concat(QUEST_ACTIVITIES)
-        .map(a=>'<button class="ghost" data-act="'+a.key+'" style="margin:0;font-size:12px;padding:6px 10px;'+((activityFilter||"")===a.key?"border-color:var(--coral)":"")+'">'+a.label+'</button>').join('')
-    +'</div>'
-    +'<div id="lbList"><div class="empty">Loading…</div></div>'
-    +'<button class="ghost" id="lbBack">← Back</button>'
+    // (No All / Ski buttons since 2026-10-06, Gary: "the today and season button should be enough" —
+    // the board is the combined one; the ?activity= filter is still served by the worker.)
+    +'<div id="lbList" data-fitlist><div class="empty">Loading…</div></div>'
+    +'<button class="ghost stickyBack" id="lbBack">← Back</button>'
     +'</div>';
+  sizeScreenList();
   document.getElementById("lbBack").onclick=renderHome;
-  document.getElementById("lbChutes").onclick=()=>renderYourChutes("season");
-  document.getElementById("lbLifts").onclick=()=>renderLifts("season");
-  document.getElementById("lbDailyBtn").onclick=()=>renderLeaderboard("daily", activityFilter);
-  document.getElementById("lbSeasonBtn").onclick=()=>renderLeaderboard("season", activityFilter);
-  document.querySelectorAll("button[data-act]").forEach(btn=>{
-    btn.onclick=()=>renderLeaderboard(mode, btn.dataset.act || null);
-  });
+  document.getElementById("lbChutes").onclick=()=>renderYourChutes(mode);
+  document.getElementById("lbLifts").onclick=()=>renderLifts(mode);
+  document.getElementById("lbDailyBtn").onclick=()=>renderLeaderboard("daily");
+  document.getElementById("lbSeasonBtn").onclick=()=>renderLeaderboard("season");
   if(!(Quest.corridors||[]).length) Quest.loadCorridors().catch(()=>{}).finally(()=>refreshStats(s.player.id));   // chutes n/total needs the total
   else refreshStats(s.player.id);
+  if(mode==="daily") loadSkiedToday(s.player.id);   // today's chutes, if Home hasn't loaded them yet
   const listEl=document.getElementById("lbList");
   try{
     const base = mode==="daily" ? "/api/leaderboard/daily" : "/api/leaderboard/season";
-    const j = await api(activityFilter ? base+"?activity="+encodeURIComponent(activityFilter) : base);
+    const j = await api(base);
     const board = j.board||[];
     listEl.innerHTML = board.length
-      ? board.map((row,i)=>leaderboardRowHtml(row, s.player.id, i+1, activityFilter)).join("")
+      ? board.map((row,i)=>leaderboardRowHtml(row, s.player.id, i+1)).join("")
       : '<div class="empty">No runs logged yet '+(mode==="daily"?"today":"this season")+'.</div>';
   }catch(e){
     listEl.innerHTML = '<div class="empty">Couldn’t load the leaderboard.</div>';
@@ -3478,10 +3492,11 @@ async function renderYourChutes(mode){
       +'<button class="ghost" id="chDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
       +'<button class="ghost" id="chSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
     +'</div>'
-    +'<div id="chList"><div class="empty">Loading…</div></div>'
+    +'<div id="chList" data-fitlist><div class="empty">Loading…</div></div>'
     +(RQNames.map.size ? '<button class="ghost" id="chResetNames" title="Your own names show only to you; this puts every chute, run, boot pack and lift back to the resort’s name.">↩ Use the resort’s names again ('+RQNames.map.size+' renamed)</button>' : '')
-    +'<button class="ghost" id="chBack">← Back</button>'
+    +'<button class="ghost stickyBack" id="chBack">← Back</button>'
     +'</div>';
+  sizeScreenList();
   document.getElementById("chBack").onclick=()=>renderLeaderboard();
   const resetBtn=document.getElementById("chResetNames");
   if(resetBtn) resetBtn.onclick=async()=>{
@@ -3551,9 +3566,10 @@ async function renderTally(kind, mode){
       +'<button class="ghost" id="tlSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
     +'</div>'
     +'<div class="now" id="tlTotals"></div>'
-    +'<div id="tlList"><div class="empty">Loading…</div></div>'
-    +'<button class="ghost" id="tlBack">← Back</button>'
+    +'<div id="tlList" data-fitlist><div class="empty">Loading…</div></div>'
+    +'<button class="ghost stickyBack" id="tlBack">← Back</button>'
     +'</div>';
+  sizeScreenList();
   document.getElementById("tlBack").onclick=()=>renderLeaderboard();
   document.getElementById("tlDailyBtn").onclick=()=>renderTally(kind, "daily");
   document.getElementById("tlSeasonBtn").onclick=()=>renderTally(kind, "season");

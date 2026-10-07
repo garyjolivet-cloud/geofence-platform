@@ -104,11 +104,14 @@ test("the picture is drawn with My map's own pieces, and only once the runs are 
 test("This season (vertical, chutes, day streak) is on the Leaderboard, not Home", () => {
   const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
   assert.ok(!/vertSeason|chutesSeason|statsStreak/.test(home), "gone from Home");
-  const lb = rq.slice(rq.indexOf("async function renderLeaderboard(mode, activityFilter){"), rq.indexOf("const listEl=document.getElementById(\"lbList\");"));
+  const lb = rq.slice(rq.indexOf("async function renderLeaderboard(mode){"), rq.indexOf("const listEl=document.getElementById(\"lbList\");"));
   assert.ok(/id="lbYou"/.test(lb) && /mini\("vertSeason","Vertical"\)\+mini\("chutesSeason","Chutes","lbChutes"\)\+mini\("liftSeasonN","Lifts","lbLifts"\)\+mini\("statsStreak","Streak"\)/.test(lb));
+  // Today (2026-10-06): "You — today" with today's vertical, chutes, lifts and no streak
+  assert.ok(/<h3>You — today<\/h3>/.test(lb) && /mini\("vertToday","Vertical"\)\+mini\("chutesTodayNum","Chutes","lbChutes"\)\+mini\("liftTodayN","Lifts","lbLifts"\)\s*:/.test(lb));
+  assert.ok(/lbChutes"\)\.onclick=\(\)=>renderYourChutes\(mode\)/.test(rq) && /lbLifts"\)\.onclick=\(\)=>renderLifts\(mode\)/.test(rq), "opens on the same Today / Season");
   // Your chutes + Lift rides open from that box, not Home tiles, and come back to the Leaderboard
   assert.ok(!/btnChutes|btnLifts/.test(home), "no Home tiles");
-  assert.ok(/lbChutes"\)\.onclick=\(\)=>renderYourChutes\("season"\)/.test(rq));
+
   assert.ok(/chBack"\)\.onclick=\(\)=>renderLeaderboard\(\)/.test(rq) && /tlBack"\)\.onclick=\(\)=>renderLeaderboard\(\)/.test(rq));
   assert.ok(lb.indexOf('id="lbYou"') < lb.indexOf('id="lbList"'), "above the board");
   assert.ok(/refreshStats\(s\.player\.id\)/.test(lb), "filled on open");
@@ -129,14 +132,14 @@ test("a failed render is never saved as the picture", async () => {
 // 2026-10-06: "for todays runs on home screen create a scroll window so account information will
 // never be pushed off bottom of screen. make it max size yet keep account info button at bottom"
 test("today's runs scroll in their own box sized to the screen; Account stays at the bottom", () => {
-  assert.ok(/#todayRuns\{overflow-y:auto;/.test(rq), "the list scrolls on its own");
+  assert.ok(/#todayRuns, \[data-fitlist\]\{overflow-y:auto;/.test(rq), "the list scrolls on its own");
   const f = rq.slice(rq.indexOf("function sizeRunList(){"), rq.indexOf("function renderHome(){"));
   assert.ok(/window\.innerHeight - top - acctH - 12/.test(f) && /list\.style\.maxHeight = Math\.max\(RUNLIST_MIN_PX, avail\)/.test(f), "fills the space down to Account");
   assert.ok(/const RUNLIST_MIN_PX = 140;/.test(f), "function-local: renderHome may run before a top-level const is initialised");
   assert.ok(/details\.acct\{[^}]*\n?\s*position:sticky;bottom:0;/.test(rq), "Account pinned to the bottom even on a short phone");
   const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
   assert.ok(/sizeRunList\(\);/.test(home) && /new ResizeObserver\(\(\)=>sizeRunList\(\)\)/.test(home), "sized on render and when anything above changes");
-  assert.ok(/addEventListener\("resize", \(\)=>sizeRunList\(\)\)/.test(rq), "and on resize");
+  assert.ok(/addEventListener\("resize", \(\)=>\{ sizeRunList\(\); sizeScreenList\(\); \}\)/.test(rq), "and on resize");
 });
 
 // 2026-10-06: "redraw after each chute is complete. also replace points on home screen with runs.
@@ -167,4 +170,18 @@ test("the picture redraws after each chute (and a chute finished mid-render isn'
   assert.strictEqual(JSON.parse(store["rq.hero.v2.p3"]).reason, "chute");
   assert.strictEqual(await H.refresh("p3", "chute", async () => canvas, "2026-12-01"), "done", "chutes are not rate-limited");
   delete global.document; delete global.localStorage;
+});
+
+// 2026-10-06: "on the leader board remove all and ski. the today and season button should be enough.
+// make a scrolling window like on home screen so chutes and runs dont push the back button off"
+test("Leaderboard: Today / Season only; the board, Your chutes and Lift rides scroll with Back pinned", () => {
+  const lb = rq.slice(rq.indexOf("async function renderLeaderboard(mode){"), rq.indexOf("/* ============================ YOUR CHUTES"));
+  assert.ok(!/data-act|QUEST_ACTIVITIES/.test(lb) && /const j = await api\(base\);/.test(lb), "no All / Ski buttons, combined board only");
+  assert.ok(/id="lbDailyBtn"/.test(lb) && /id="lbSeasonBtn"/.test(lb));
+  ["lbList", "chList", "tlList"].forEach(id => assert.ok(new RegExp('id="' + id + '" data-fitlist').test(rq), id + " is a scroll box"));
+  ["lbBack", "chBack", "tlBack"].forEach(id => assert.ok(new RegExp('class="ghost stickyBack" id="' + id + '"').test(rq), id + " pinned"));
+  assert.ok(/button\.ghost\.stickyBack\{position:sticky;bottom:0;/.test(rq));
+  assert.ok((rq.match(/\n  sizeScreenList\(\);/g) || []).length >= 3, "sized when each screen draws");
+  const f = rq.slice(rq.indexOf("function sizeScreenList(){"), rq.indexOf("function renderHome(){"));
+  assert.ok(/card\.bottom - r\.bottom/.test(f) && /window\.innerHeight - top - after - 12/.test(f), "fills down to what follows it");
 });
