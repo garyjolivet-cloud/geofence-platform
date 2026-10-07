@@ -2305,12 +2305,11 @@ async function refreshRuns(playerId){
 // rides today. Points + streak come from GET /api/players/:id/stats; the vertical and the
 // boot-pack / lift numbers from /bootpacks and /lifts. The tiles are drawn first with dashes,
 // so a failing request blanks only its own numbers, never the whole row.
-// Home's numbers (2026-10-06 layout: the picture overlay + the This season strip). The
-// elements are part of renderHome's markup; this only fills them. Best-effort: a failed fetch
-// leaves its dashes.
+// Home's picture numbers + the Leaderboard's "You — this season" strip (moved there 2026-10-06).
+// Fills whichever of those elements are on screen; best-effort: a failed fetch leaves its dashes.
 async function refreshStats(playerId){
   const streakEl=document.getElementById("statsStreak");
-  if(!document.getElementById("ptsToday")) return;   // not on Home
+  if(!document.getElementById("ptsToday") && !streakEl) return;   // neither Home nor Leaderboard
   const ct=document.getElementById("chutesTodayNum"); if(ct) ct.textContent=Quest.skiedToday.size;
   refreshClimbTiles(playerId);
   // Season chutes: n of the resort's chutes skied this season.
@@ -2975,7 +2974,6 @@ function renderHome(){
   // The Corridor Guard switch is on My map only. Element ids are unchanged where code fills them.
   const ws = getWorkspace() || {};
   const hs = (id, label, cls)=>'<div class="hs '+(cls||'')+'"><b id="'+id+'">—</b><span>'+label+'</span></div>';
-  const mini = (id, label)=>'<div class="m"><b id="'+id+'">—</b><span>'+label+'</span></div>';
   const tile = (id, ico, label, cls)=>'<button class="ghost '+(cls||'')+'" id="'+id+'"><span class="ico">'+ico+'</span><span class="lbl">'+label+'</span></button>';
   app.innerHTML =
     '<div class="home">'
@@ -2991,7 +2989,7 @@ function renderHome(){
     +'<button class="primary trackBtn" id="btnTrack" style="margin-top:0">Start tracking</button>'
     +'<div class="statusBox"><p id="gpsStatus"></p><p id="coverageStatus"></p><p id="outboxNote" style="display:none"></p><p id="cgDebug" style="font-size:11px;opacity:.7"></p></div>'
     +(IS_SIM_MODE ? '<button class="ghost" id="btnSim">Simulate walk (test mode)</button>' : '')
-    +'<div class="strip"><h3>This season</h3><div class="stripRow">'+mini("vertSeason","Vertical")+mini("chutesSeason","Chutes")+mini("statsStreak","Day streak")+'</div></div>'
+    // (This season — vertical, chutes, day streak — moved to the Leaderboard's "You" section 2026-10-06)
     +'<div class="exploreGrid">'
       +tile("btnMap","🗺","My map")+tile("btnChutes","◆","Your chutes")
       +tile("btnLifts","🚡","Lift rides")+tile("btnLeaderboard","🏆","Leaderboard")
@@ -3223,9 +3221,13 @@ function leaderboardRowHtml(row, meId, rank, activityFilter){
 async function renderLeaderboard(mode, activityFilter){
   mode = mode || "daily";
   const s=getSession();
+  // "You" (2026-10-06, moved off Home to simplify it): the rider's own season vertical (lifts +
+  // boot packs), chutes n/total and day streak, filled by refreshStats like Home's numbers.
+  const mini = (id, label)=>'<div class="m"><b id="'+id+'">—</b><span>'+label+'</span></div>';
   app.innerHTML =
     '<div class="card">'
     +'<h2>Leaderboard</h2>'
+    +'<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — this season</h3><div class="stripRow">'+mini("vertSeason","Vertical")+mini("chutesSeason","Chutes")+mini("statsStreak","Day streak")+'</div></div>'
     +'<div style="display:flex;gap:10px;margin-bottom:10px">'
       +'<button class="ghost" id="lbDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'
       +'<button class="ghost" id="lbSeasonBtn" style="margin:0;'+(mode==="season"?"border-color:var(--coral)":"")+'">Season</button>'
@@ -3245,6 +3247,8 @@ async function renderLeaderboard(mode, activityFilter){
   document.querySelectorAll("button[data-act]").forEach(btn=>{
     btn.onclick=()=>renderLeaderboard(mode, btn.dataset.act || null);
   });
+  if(!(Quest.corridors||[]).length) Quest.loadCorridors().catch(()=>{}).finally(()=>refreshStats(s.player.id));   // chutes n/total needs the total
+  else refreshStats(s.player.id);
   const listEl=document.getElementById("lbList");
   try{
     const base = mode==="daily" ? "/api/leaderboard/daily" : "/api/leaderboard/season";

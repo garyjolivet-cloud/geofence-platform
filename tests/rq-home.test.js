@@ -49,7 +49,7 @@ test("refresh: at most one gondola redraw per 10 minutes; a locked phone marks i
 test("Home: picture on top, Start tracking under it, strips, grid, account folded; no Guard button", () => {
   const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
   // (the Today strip went 2026-10-06 with the boot pack stats; points moved onto the picture)
-  const order = ['id="heroBox"', 'id="btnTrack"', '<h3>This season</h3>', 'class="exploreGrid"', 'id="todayRuns"', 'details class="acct"'];
+  const order = ['id="heroBox"', 'id="btnTrack"', 'class="exploreGrid"', 'id="todayRuns"', 'details class="acct"'];
   let last = -1;
   order.forEach(k => { const i = home.indexOf(k); assert.ok(i > last, k + " in order"); last = i; });
   assert.ok(!/btnGuard/.test(home), "Guard switch is on My map only");
@@ -97,6 +97,19 @@ test("the picture is drawn with My map's own pieces, and only once the runs are 
   assert.ok(/canvasContextAttributes:\{ preserveDrawingBuffer:true/.test(r) && /SocialCard\.isBlank/.test(r), "iPhone black-frame guard");
   const h = rq.slice(rq.indexOf("async function heroRefresh(s, reason){"));
   assert.ok(/if\(!\(Quest\.corridors\|\|\[\]\)\.length\)\{ try\{ await Quest\.loadCorridors\(\); \}catch\(e\)\{\} \}/.test(h.slice(0, 600)), "waits for the runs (the drawn-mountain bug)");
+});
+
+// 2026-10-06: "take the this season block with vertical chutes day streak and build a personal
+// section into leader board. trying to simplify main screen."
+test("This season (vertical, chutes, day streak) is on the Leaderboard, not Home", () => {
+  const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
+  assert.ok(!/vertSeason|chutesSeason|statsStreak/.test(home), "gone from Home");
+  const lb = rq.slice(rq.indexOf("async function renderLeaderboard(mode, activityFilter){"), rq.indexOf("const listEl=document.getElementById(\"lbList\");"));
+  assert.ok(/id="lbYou"/.test(lb) && /mini\("vertSeason","Vertical"\)\+mini\("chutesSeason","Chutes"\)\+mini\("statsStreak","Day streak"\)/.test(lb));
+  assert.ok(lb.indexOf('id="lbYou"') < lb.indexOf('id="lbList"'), "above the board");
+  assert.ok(/refreshStats\(s\.player\.id\)/.test(lb), "filled on open");
+  const rs = rq.slice(rq.indexOf("async function refreshStats(playerId){"), rq.indexOf("async function refreshClimbTiles("));
+  assert.ok(/if\(!document\.getElementById\("ptsToday"\) && !streakEl\) return;/.test(rs), "fills the Leaderboard too");
 });
 
 test("a failed render is never saved as the picture", async () => {
