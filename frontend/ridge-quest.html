@@ -194,7 +194,17 @@
      rules' solid background and white text were silently overridden: the buttons rendered
      transparent with faint text and were hard to read. Re-assert with enough specificity to win.
      Text is 15:1 even over pure-white imagery, up from ~2:1 (tests/quest-button-contrast.test.js pins this). */
-  button.fogMapBack, button.fogMapTilt, button.fogMapRecenter, button.fogMapBattery{
+  .fogMapInfo{position:absolute;top:14px;left:108px;z-index:2;width:44px;height:40px;margin:0;padding:0;border-radius:10px;font-size:20px;line-height:1}
+  .mapInfo{position:absolute;inset:0;z-index:5;overflow-y:auto;background:rgba(10,16,24,.97);color:var(--snow);padding:0 16px 40px;font-size:14px;line-height:1.45}
+  .mapInfo .miHead{display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:rgb(10,16,24);padding:14px 0 8px}
+  .mapInfo h2{margin:0;font-family:"Black Han Sans";font-weight:400;font-size:24px}
+  .mapInfo .miHead button{width:auto;margin:0;padding:8px 14px}
+  .mapInfo h3{margin:18px 0 6px;font-family:"Barlow Condensed";font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--fog)}
+  .mapInfo .miRow{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--rim)}
+  .mapInfo .miBtn{flex:0 0 78px;font-weight:700;color:var(--ice)}
+  .mapInfo .miList{margin:0;padding-left:20px} .mapInfo .miList li{margin:0 0 8px}
+  .mapInfo .miNote{font-size:12.5px;color:var(--fog);margin:6px 0}
+  button.fogMapBack, button.fogMapTilt, button.fogMapRecenter, button.fogMapBattery, button.fogMapInfo{
     background:rgba(10,16,24,.94);border:1px solid rgba(238,244,251,.55);color:var(--snow);
     font-weight:700;box-shadow:0 2px 10px rgba(0,0,0,.55)}
   button.fogMapGuard{box-shadow:0 2px 10px rgba(0,0,0,.55)}
@@ -4336,6 +4346,49 @@ function drawAllRuns(map){
   }
 }
 
+// My map info (2026-10-06, Gary: "create an info screen for the map. explain each button. give
+// strategy for logging runs, chutes ... a button that goes to info"). A panel OVER the map — not
+// a page change — so the map, tracking, Guard and the voice keep running underneath. The
+// numbers in it are the real rules (QUEST_TUNING full-run verification, LongPress holdMs 2000).
+function openMapInfo(){
+  const host = document.querySelector(".fogMapOverlay"); if(!host) return;
+  const old = document.getElementById("mapInfo"); if(old){ old.remove(); return; }
+  const row = (btn, txt)=>'<div class="miRow"><span class="miBtn">'+btn+'</span><span>'+txt+'</span></div>';
+  const el = document.createElement("div");
+  el.id = "mapInfo"; el.className = "mapInfo"; el.setAttribute("role","dialog"); el.setAttribute("aria-label","Map info");
+  el.innerHTML =
+    '<div class="miHead"><h2>My map</h2><button class="ghost" id="mapInfoClose" aria-label="Close">✕</button></div>'
+    +'<p class="miNote">Tracking, Guard and the voice keep running while this is open.</p>'
+    +'<h3>Buttons</h3>'
+    +row('← Back','Back to Home. Tracking keeps going.')
+    +row('ⓘ','This screen.')
+    +(Quest.threeDEnabled ? row('3D','Tilts the map into 3D terrain, or back to flat. Tilting the phone also tilts the map.') : '')
+    +row('⌖','Shows up once you move the map yourself. Tap to go back to following your position and compass.')
+    +row('🔋 Auto','Battery Saver. <b>Auto</b>: on a lift it pauses 3D and the compass, and while tracking the screen goes black after 30 s untouched (tap to wake; tracking carries on). <b>On</b>: saving all day. <b>Off</b>: never.')
+    +row('🛡 Guard','Corridor Guard. A guarded chute or run has a yellow boundary line; drift outside it and you hear a tone, and the voice names guarded runs. <b>ON</b>: every run guarded. <b>OFF</b>: only the runs you arm.')
+    +row('Skied','Your day: a light stripe down each chute finished today and a thin line where you skied (lift rides aren’t drawn).')
+    +row('Lines','Your saved line down each guarded chute (newest 3 per chute). Turn single lines on or off in Leaderboard → Chutes.')
+    +row('Season','Chutes skied this season out of the total. On: skied ones gold, not yet grey — find what’s left.')
+    +'<h3>On the map</h3>'
+    +row('Tap a run','Name, difficulty and length, and ✏️ Rename (only you see your names).')
+    +row('Hold 2 s','Guard ON: mutes that run (greyed, no line). Guard OFF: arms just that run. Hold again to undo.')
+    +row('Colours','Green, blue, black (◆) and double black (◆◆) runs; dashed lines are lifts; yellow lines are the Guard edge.')
+    +'<h3>Getting runs and chutes logged</h3>'
+    +'<ol class="miList">'
+      +'<li><b>Start tracking before your first lift</b> and keep the app open. A pocket is fine; a black screen is fine. Don’t close the tab.</li>'
+      +'<li><b>Ski the whole chute, top to bottom.</b> Drop in near its top, finish at its bottom, and cover about 80% of it going down. Cutting in halfway, bailing out the side or skiing across it doesn’t count.</li>'
+      +'<li><b>Stay near the middle of the line.</b> Where chutes overlap, one descent counts once — for the chute whose middle you were closest to.</li>'
+      +'<li><b>Want one particular chute?</b> Guard OFF, hold it to arm it. Runs within about 10 m of an armed one are ignored (not logged), so disarm when you move on.</li>'
+      +'<li>It logs <b>when you reach the bottom</b>: “Chute 7 of 64” and a gold flash. Not counted? Home says why under Start tracking.</li>'
+      +'<li><b>Lift rides</b> log riding up a lift line. Climbing a chute isn’t logged; only routes marked boot pack count as boot packs.</li>'
+      +'<li><b>No signal?</b> Runs are saved on your phone and sent later — Home shows “📶 saved on your phone”.</li>'
+      +'<li>If the phone sits still for 10 minutes (lunch), it may lock and tracking pauses. <b>Open the app again before your next run.</b></li>'
+      +'<li>Use <b>Season</b> to see which chutes you haven’t skied yet.</li>'
+    +'</ol>'
+    +'<p class="miNote">Only look at the map when you’re stopped, off to the side of the run.</p>';
+  host.appendChild(el);
+  document.getElementById("mapInfoClose").onclick = ()=>el.remove();
+}
 function renderFogMap(){
   if(!Quest.ref){
     app.innerHTML =
@@ -4362,6 +4415,7 @@ function renderFogMap(){
   app.innerHTML =
     '<div class="fogMapOverlay"><div id="fogMap"></div>'
     +'<button class="ghost fogMapBack" id="fogBack">← Back</button>'
+    +'<button class="ghost fogMapInfo" id="fogInfo" title="What each button does, and how to get your runs and chutes logged" aria-label="Map info">ⓘ</button>'
     +(use3D ? '<button class="ghost fogMapTilt" id="fogTilt">3D</button>' : '')
     +'<button class="ghost fogMapRecenter" id="fogRecenter" style="top:'+(use3D?102:58)+'px;display:none" title="Recenter map on your location">⌖</button>'
     +'<button class="ghost fogMapBattery" id="fogBattery" title="Battery Saver — pauses 3D/compass while riding a lift, and blacks out the screen after 30 s untouched while tracking (tap the screen to wake). Tap to cycle Auto/On/Off.">🔋 Auto</button>'
@@ -4388,6 +4442,7 @@ function renderFogMap(){
     if(mapInstance){ try{ mapInstance.remove(); }catch(e){} mapInstance=null; }
     renderHome();
   };
+  document.getElementById("fogInfo").onclick=()=>openMapInfo();
   try{
     // If the splash just played, open exactly where its flyby ended
     // instead of the usual whole-network framing below — otherwise "My
