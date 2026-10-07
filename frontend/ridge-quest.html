@@ -1463,6 +1463,7 @@ const Quest = {
   onSkiedChanged: null, // callback(zoneId|null, justCompleted) — set by drawAllRuns() while "My map" is open; nulled on #fogBack
   onPosition: null,     // callback(p) — p = GPSFilter.push() output ({lon,lat,headingTravel,acc,…}); fired every fix so an open map can draw the live "you are here" avatar
   onShare: null,        // callback(p) — same p as onPosition; set by renderHome to POST /api/presence (throttled) while sharing-with-friends is on. Independent of onPosition so it survives Home<->Map navigation.
+  onChuteComplete: null, // callback() — a chute descent just logged (2026-10-06, Gary: "redraw after each chute is complete"); redraws Home's 3D picture
   onGondolaBoard: null, // callback() — the rider just got on the main lift at its bottom station; redraws Home's 3D picture (set once, page-level, next to paintHero)
   onStatus: null,       // callback({ok,acc,t}|{ok:false,message}) — fired on every real fix AND on a geolocation error, so Home can show something other than silence when tracking "does nothing" (e.g. permission denied)
   onCoverage: null,     // callback(corridorName, pct, passed, reason) — fired when a run is logged (passed:true) or when the player leaves a corridor having covered a meaningful part without completing it / a genuine pass is rejected (passed:false, reason = player-facing why), so a partial/rejected pass isn't silent. A plain traverse (little covered) stays silent.
@@ -2017,6 +2018,7 @@ const Quest = {
       RidgeVisuals.celebrate(document, c);
       if(navigator.vibrate) navigator.vibrate(40);
       if(this.onSkiedChanged) this.onSkiedChanged(skiedChute ? run.zoneId : null, true);
+      if(skiedChute && this.onChuteComplete) this.onChuteComplete();
     }catch(e){ console.warn("celebrate:", e && e.message); }
   },
   // Chute lines (2026-09-24): after a logged chute DESCENT, save the verified pass's own
@@ -2307,6 +2309,10 @@ async function refreshRuns(playerId){
     const j = await api("/api/players/"+playerId+"/runs");
     const today = new Date().toDateString();
     const todays = (j.runs||[]).filter(r=>new Date(r.started_at).toDateString()===today);
+    // Home's "Runs" number (2026-10-06, replaced Points): runs skied today that aren't chutes
+    // (chutes have their own number), every descent counted — a run lapped 3 times is 3.
+    const rn=document.getElementById("runsTodayN");
+    if(rn) rn.textContent = todays.filter(r=>r.activity==="ski" && r.run_type!=="chute").length;
     const grouped = groupRuns(todays);
     listEl.innerHTML = grouped.length
       ? grouped.map(groupedRunRowHtml).join("")
@@ -2325,7 +2331,7 @@ async function refreshRuns(playerId){
 // Fills whichever of those elements are on screen; best-effort: a failed fetch leaves its dashes.
 async function refreshStats(playerId){
   const streakEl=document.getElementById("statsStreak");
-  if(!document.getElementById("ptsToday") && !streakEl) return;   // neither Home nor Leaderboard
+  if(!document.getElementById("chutesTodayNum") && !streakEl) return;   // neither Home nor Leaderboard
   const ct=document.getElementById("chutesTodayNum"); if(ct) ct.textContent=Quest.skiedToday.size;
   refreshClimbTiles(playerId);
   // Season chutes: n of the resort's chutes skied this season.
@@ -2335,11 +2341,11 @@ async function refreshStats(playerId){
     const n=(j.chutes||[]).length;
     el.textContent = total ? n+"/"+total : String(n);
   }).catch(()=>{});
+  if(!streakEl) return;   // the day streak is the only thing /stats feeds now (no points on Home since 2026-10-06)
   try{
     const j = await api("/api/players/"+playerId+"/stats");
     const days = j.days||[];
     const byDate = {}; days.forEach(d=>{ byDate[d.date]=d; });
-    const today = byDate[questDateBucketClient(new Date())] || { points:0 };
     let streak=0, cursor=new Date();
     for(;;){
       const row = byDate[questDateBucketClient(cursor)];
@@ -2347,7 +2353,6 @@ async function refreshStats(playerId){
       streak++;
       cursor = new Date(cursor.getTime()-24*3600000);
     }
-    const el=document.getElementById("ptsToday"); if(el) el.textContent=Math.round(today.points||0);
     if(streakEl) streakEl.textContent = String(streak);
   }catch(e){}
 }
@@ -2963,7 +2968,8 @@ async function heroRefresh(s, reason){
   return RQHero.refresh(s.player.id, reason, async()=>renderMyMapPicture(RQHero.W, RQHero.H, await heroTodayData(s)), questDateBucketClient(new Date()));
 }
 // Shows the saved picture at once; draws the first one of the day (or a stale one) if needed.
-// Otherwise Home never redraws it — only boarding the gondola does (Quest.onGondolaBoard).
+// Otherwise Home never redraws it — only boarding the gondola (Quest.onGondolaBoard) and finishing a
+// chute (Quest.onChuteComplete, 2026-10-06) do.
 function paintHero(s){
   const dateEl=document.getElementById("heroDate");
   if(dateEl) dateEl.textContent=new Date().toLocaleDateString("en-US",{ weekday:"short", month:"short", day:"numeric" });
@@ -2974,7 +2980,9 @@ function paintHero(s){
     const w=document.getElementById("heroWhen");
     if(w){
       const t=new Date(v.at).toLocaleTimeString([], { hour:"numeric", minute:"2-digit" });
-      w.textContent = v.reason==="gondola" ? "updated "+t+" at the gondola" : "updates each time you board the gondola";
+      w.textContent = v.reason==="gondola" ? "updated "+t+" at the gondola"
+        : v.reason==="chute" ? "updated "+t+" after your last chute"
+        : "updates after each chute and when you board the gondola";
     }
   };
   const cached=RQHero.load(s.player.id);
@@ -2983,6 +2991,7 @@ function paintHero(s){
   if(!RQHero.isFreshFor(cached, questDateBucketClient(new Date()))) heroRefresh(s, cached && cached.stale ? "stale" : "first");
 }
 Quest.onGondolaBoard = ()=>{ heroRefresh(getSession(), "gondola"); };
+Quest.onChuteComplete = ()=>{ heroRefresh(getSession(), "chute"); };
 // Today's runs box (2026-10-06, Gary: "create a scroll window so account information will never be
 // pushed off bottom of screen. make it max size yet keep account info button at bottom"): the
 // list gets the screen height left between its top and the folded Account row, so a long day
@@ -3018,7 +3027,7 @@ function renderHome(){
       +'<div class="heroTop"><span class="r">'+esc(ws.appName||"Ridge Quest")+'</span><span class="d" id="heroDate"></span></div>'
       // No boot pack numbers (2026-10-06): boot packs only feed Vertical (lifts + boot packs).
       +'<div class="heroStats">'
-        +hs("vertToday","Vertical","ice")+hs("chutesTodayNum","Chutes","gold")+hs("liftTodayN","Lift rides")+hs("ptsToday","Points")
+        +hs("vertToday","Vertical","ice")+hs("chutesTodayNum","Chutes","gold")+hs("runsTodayN","Runs")+hs("liftTodayN","Lift rides")
       +'</div>'
       +'<div class="heroWhen" id="heroWhen"></div>'
     +'</div>'

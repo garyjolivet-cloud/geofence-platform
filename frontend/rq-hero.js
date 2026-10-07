@@ -12,6 +12,9 @@
    When it is redrawn:
      - reason "gondola": the host (ridge-quest.html Quest._onFix) calls refresh() when the rider gets
        on the main lift at its bottom station (see isMainLiftBoarding);
+     - reason "chute" (2026-10-06, Gary: "redraw after each chute is complete"): the host calls
+       refresh() when a chute descent logs (Quest._celebrate -> Quest.onChuteComplete); not
+       rate-limited, and one asked for while a render is running is done right after it;
      - reason "first": Home opens and there is no picture for today yet;
      - a refresh asked for while the page is hidden (phone locked) is remembered (stale) and done the
        next time Home opens.
@@ -58,7 +61,7 @@
     return !!(m && pos && hav(pos, m.bottom) <= BOARD_RADIUS_M);
   }
 
-  var busy = false;
+  var busy = false, again = null;          // again: a refresh asked for mid-render, run once it ends
   var state = { pid: null, lastAt: 0, onUpdated: null };
 
   // Render now (or remember to). render() -> Promise<canvas | null> (the host's My-map picture). A null
@@ -73,7 +76,7 @@
       var c = load(pid); if (c) { c.stale = true; save(pid, c); } else save(pid, { stale: true, day: day });
       return "stale";
     }
-    if (busy) return "busy";
+    if (busy) { again = [pid, reason, render, day]; return "busy"; }
     busy = true;
     try {
       var canvas = await render();
@@ -84,7 +87,10 @@
       return "done";
     } catch (e) {
       return "failed";
-    } finally { busy = false; }
+    } finally {
+      busy = false;
+      if (again) { var a = again; again = null; state.lastAt = 0; setTimeout(function () { refresh(a[0], a[1], a[2], a[3]); }, 0); }
+    }
   }
 
   var api = { W: W, H: H, MIN_GAP_MS: MIN_GAP_MS, BOARD_RADIUS_M: BOARD_RADIUS_M,

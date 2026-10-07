@@ -113,7 +113,7 @@ test("This season (vertical, chutes, day streak) is on the Leaderboard, not Home
   assert.ok(lb.indexOf('id="lbYou"') < lb.indexOf('id="lbList"'), "above the board");
   assert.ok(/refreshStats\(s\.player\.id\)/.test(lb), "filled on open");
   const rs = rq.slice(rq.indexOf("async function refreshStats(playerId){"), rq.indexOf("async function refreshClimbTiles("));
-  assert.ok(/if\(!document\.getElementById\("ptsToday"\) && !streakEl\) return;/.test(rs), "fills the Leaderboard too");
+  assert.ok(/if\(!document\.getElementById\("chutesTodayNum"\) && !streakEl\) return;/.test(rs), "fills the Leaderboard too");
 });
 
 test("a failed render is never saved as the picture", async () => {
@@ -137,4 +137,34 @@ test("today's runs scroll in their own box sized to the screen; Account stays at
   const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
   assert.ok(/sizeRunList\(\);/.test(home) && /new ResizeObserver\(\(\)=>sizeRunList\(\)\)/.test(home), "sized on render and when anything above changes");
   assert.ok(/addEventListener\("resize", \(\)=>sizeRunList\(\)\)/.test(rq), "and on resize");
+});
+
+// 2026-10-06: "redraw after each chute is complete. also replace points on home screen with runs.
+// the home screen should only show todays vertical, chutes, runs, lift rides."
+test("Home shows only Vertical, Chutes, Runs, Lift rides (no points)", () => {
+  const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
+  assert.ok(/<div class="heroStats">'\s*\+hs\("vertToday","Vertical","ice"\)\+hs\("chutesTodayNum","Chutes","gold"\)\+hs\("runsTodayN","Runs"\)\+hs\("liftTodayN","Lift rides"\)\s*\+'<\/div>'/.test(home));
+  assert.ok(!/ptsToday|Points/.test(home), "no points on Home");
+  const rr = rq.slice(rq.indexOf("async function refreshRuns(playerId){"), rq.indexOf("async function refreshStats("));
+  assert.ok(/todays\.filter\(r=>r\.activity==="ski" && r\.run_type!=="chute"\)\.length/.test(rr), "runs = today's ski runs that aren't chutes");
+});
+
+test("the picture redraws after each chute (and a chute finished mid-render isn't lost)", async () => {
+  assert.ok(/if\(skiedChute && this\.onChuteComplete\) this\.onChuteComplete\(\);/.test(rq), "fired from _celebrate for a skied chute only");
+  assert.ok(/Quest\.onChuteComplete = \(\)=>\{ heroRefresh\(getSession\(\), "chute"\); \};/.test(rq));
+  const store = {};
+  global.localStorage = { getItem: k => store[k] || null, setItem: (k, v) => { store[k] = v; } };
+  global.document = { hidden: false };
+  H.state.lastAt = 0;
+  let renders = 0, release;
+  const canvas = { toDataURL: () => "data:image/jpeg;base64,x" };
+  const slow = () => { renders++; return new Promise(r => { release = () => r(canvas); }); };
+  const first = H.refresh("p3", "chute", slow, "2026-12-01");
+  assert.strictEqual(await H.refresh("p3", "chute", async () => { renders++; return canvas; }, "2026-12-01"), "busy");
+  release(); assert.strictEqual(await first, "done");
+  await new Promise(r => setTimeout(r, 10));
+  assert.strictEqual(renders, 2, "the second chute's redraw ran after the first finished");
+  assert.strictEqual(JSON.parse(store["rq.hero.v2.p3"]).reason, "chute");
+  assert.strictEqual(await H.refresh("p3", "chute", async () => canvas, "2026-12-01"), "done", "chutes are not rate-limited");
+  delete global.document; delete global.localStorage;
 });
