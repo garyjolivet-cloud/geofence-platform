@@ -1317,7 +1317,28 @@ function biasSetup() {
 
   cg = freshChuteGuard();
   ev = drive(cg, makeCorridor("r1", { runType: "run", lenM: 400, widthM: 10 }), cross);
-  assert(ev.warn.length > 0, "a run crossed midway alerts as before (the gate is chutes only)");
+  assert(ev.warn.length > 0, "a run crossed midway alerts as before in a host that doesn't ask (walking / biking corridors)");
+
+  // Ridge Quest asks for runs too (2026-10-07, user: "do runs also"): load(..., { dropInRuns:true })
+  const driveRuns = (corridor, steps) => {
+    const g = freshChuteGuard(), warn = [];
+    g.load([corridor], { onWarn: (id) => warn.push(id) }, { dropInRuns: true });
+    steps.forEach(s => { const p = trackPoint(s.forwardM, s.lateralM);
+      g.tick({ lat: p[0], lon: p[1], acc: 5, speed: s.speed, t: 1700000000000 + s.t }, s.headingDeg !== undefined ? s.headingDeg : 0); });
+    return { warn, alarm: g.getActiveAlarm() };
+  };
+  const run = () => makeCorridor("r2", { runType: "run", lenM: 400, widthM: 10 });
+  let rr = driveRuns(run(), cross);
+  assert(rr.warn.length === 0 && rr.alarm === null, "Ridge Quest: a run crossed midway is silent too");
+  rr = driveRuns(run(), down(0, 60).concat(out(65, 13000)));
+  assert(rr.warn.length > 0, "Ridge Quest: a run skied from the top past 10 % alerts when left");
+  rr = driveRuns(makeCorridor("h1", { runType: "hike", lenM: 400, widthM: 10 }), cross);
+  assert(rr.warn.length > 0, "Ridge Quest: a boot pack is not gated");
+  const rqSrc = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
+  const feSrc = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html"), "utf8");
+  assert(/ChuteGuard\.load\(chuteGuardZonesFor\(Quest\.corridors\), chuteGuardCallbacks\(\), \{ dropInRuns:true \}\)/.test(rqSrc), "ridge-quest.html asks for runs too");
+  assert((feSrc.match(/ChuteGuard\.load\(simBundle\.zones, chuteGuardCallbacks\(\), \{ dropInRuns:_questOn \}\)/g) || []).length === 3
+    && !/ChuteGuard\.load\(simBundle\.zones, chuteGuardCallbacks\(\)\)/.test(feSrc), "Test Mode asks for runs too in a Ridge Quest workspace (all 3 load sites)");
 
   // drawn bottom-to-top: the top is the END of the line (forward 400)
   const up = () => { const c = chute(); Object.assign(c.layers[0].geometry, { climbM: 300, descentM: 0 }); return c; };

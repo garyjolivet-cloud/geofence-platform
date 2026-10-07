@@ -43,7 +43,7 @@
 // as a false alarm rather than a helpful heads-up. Simpler and safer: no
 // alert at all until you've genuinely been inside at least once.
 //
-// Drop-in gate, chutes only (2026-10-07, user: "the guard tone needs to only
+// Drop-in gate, chutes — and runs when the host asks, load(..., {dropInRuns:true}) (2026-10-07, user: "the guard tone needs to only
 // apply when you commit to a chute ... only after 10 % of the runs vertical
 // from top has been skied. crossing a chute midway should not sound the guard
 // tone"): a runType:"chute" corridor alerts only after the rider has been
@@ -52,7 +52,7 @@
 // entered from the side lower down never alerts on that pass. The bundle has
 // no per-point elevation, so "10 % of the vertical" is measured as 10 % of the
 // line's length from its top end (top = the drawn start unless the corridor's
-// climbM > descentM). Runs, boot packs and every other corridor are unchanged.
+// climbM > descentM). Boot packs, and runs in hosts that don't ask, are unchanged.
 //
 // Committed-exit detection: while alerting, this module also tracks whether
 // the player's distance from the corridor is trending back down (a real
@@ -397,8 +397,12 @@
     };
   }
 
-  function load(zones, callbacks){
+  // opts.dropInRuns (Ridge Quest and its Test Mode, 2026-10-07 "do runs also"): runType "run" needs the
+  // drop-in from the top too. Opt-in, because every corridor is a "run" by default and the other
+  // hosts' walking / biking corridors must keep alerting however they are joined.
+  function load(zones, callbacks, opts){
     cb = callbacks || {};
+    const dropInTypes = TUNING.DROPIN_RUN_TYPES.concat(opts && opts.dropInRuns ? ["run"] : []);
     const prevById = new Map(corridors.map(c=>[c.id, c]));
     const prevStateBy = stateByCorridor;
 
@@ -421,7 +425,7 @@
         // Drop-in gate: the line's top end is its drawn start unless the elevation says it was drawn bottom-to-top.
         cum, lenM: cum[cum.length-1],
         topAtStart: !(g.climbM!=null && g.descentM!=null && g.climbM > g.descentM),
-        needsDropIn: TUNING.DROPIN_RUN_TYPES.indexOf(z.runType)>=0,
+        needsDropIn: dropInTypes.indexOf(z.runType || "run")>=0,
         samples: reuse ? prev.samples : resample(path, TUNING.SAMPLE_STEP_M),
         covered: reuse ? prev.covered : new Set(),
         minSpeed: TUNING.ENGAGE_MIN_SPEED_BY_ACTIVITY[z.activityType] ?? TUNING.ENGAGE_MIN_SPEED_MPS

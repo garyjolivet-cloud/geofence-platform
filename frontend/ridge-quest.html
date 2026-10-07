@@ -3151,7 +3151,7 @@ function renderHome(){
     // gates the actual alarm sound/toast/log at their own call sites (see
     // syncCgAlarm() and chuteGuardCallbacks() below) so a workspace with it
     // off still gets exactly the same silence as before.
-    if(typeof ChuteGuard!=="undefined") ChuteGuard.load(chuteGuardZonesFor(Quest.corridors), chuteGuardCallbacks());
+    if(typeof ChuteGuard!=="undefined") ChuteGuard.load(chuteGuardZonesFor(Quest.corridors), chuteGuardCallbacks(), { dropInRuns:true });   // tone only after dropping in from the top, runs too
     // The workspace flag is only known now, so this is when the yellow button
     // can be shown (it stays hidden for a workspace with no Corridor Guard).
     paintGuardButtons();

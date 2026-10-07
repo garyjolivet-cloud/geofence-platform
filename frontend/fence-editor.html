@@ -7760,7 +7760,7 @@ function enterTestMode(){
   simBundle=editorToSimBundle();
   _cgGuardedIds = new Set(); _cgMutedIds = new Set(); _cgOnIds = new Set(); _cgTestMaster = true; // fresh each entry, Guard ON like live
   paintSimGuardBtn();
-  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
+  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks(), { dropInRuns:_questOn });
   QuestSim.load(simBundle); _cgLoadDefaults();
   if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said; lifts on entry"
     +(questSimNarrOk({runType:"chute",zoneId:null})?"":". Guard OFF: only ARMED runs speak — press and hold a run to arm it"));
@@ -8316,7 +8316,7 @@ document.getElementById("advToggle").onclick=()=>{
 document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterTestMode();
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
-  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
+  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks(), { dropInRuns:_questOn });
   QuestSim.load(simBundle); _cgLoadDefaults();
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
@@ -8361,7 +8361,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   const _gr=map.getSource("guidance-arrow"); if(_gr) _gr.setData(fc([]));
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();
-  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks());
+  if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks(), { dropInRuns:_questOn });
   QuestSim.load(simBundle); _cgLoadDefaults();
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   _arNearState={};
