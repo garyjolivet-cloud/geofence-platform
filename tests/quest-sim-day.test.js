@@ -76,7 +76,7 @@ test("the social image's day: same shape as the phone's, today only, no season",
   assert.strictEqual(d.resort, "Kicking Horse");
   assert.strictEqual(d.verticalM, 2196);
   assert.strictEqual(d.points, 1944);
-  assert.strictEqual(d.runs, 4, "ski descents");
+  assert.strictEqual(d.runs, 1, "ski descents that are not chutes: a chute is never also a run");
   assert.deepStrictEqual(d.chutes, [{ name: "Main Dumper", difficulty: "double-black", count: 2, zoneId: "c1" }, { name: "Big Dumper", difficulty: "black", count: 1, zoneId: "c2" }]);
   assert.strictEqual(d.chuteCount, 2);
   assert.strictEqual(d.liftRides, 2);
@@ -96,4 +96,30 @@ test("the phone's own collectDay still maps weather the same way (shared weather
     { snow24: 12, tempC: -8, windKph: 15, windDir: "W" });
   assert.strictEqual(SocialCard.weatherFrom({ error: "x" }, []), null);
   assert.strictEqual(SocialCard.weatherFrom(null, null), null);
+});
+
+// 2026-10-08, Gary: "why when i log one chute do i get 1 run and 1 chute" -- the share image's Runs
+// tile follows Home: a chute is counted as a chute, never also as a run. Phone (collectDay /
+// collectSeason) and simulator alike.
+test("one chute logged = 1 chute, 0 runs on the share image (phone day, phone season, simulated day)", async () => {
+  const today = "2026-10-08";
+  const api = async p => {
+    if (/\/runs\?/.test(p)) return { runs: [
+      { activity: "ski", run_type: "chute", zone_id: "c1", started_at: "2026-10-08T15:00:00Z", points: 517 },
+      { activity: "ski", run_type: "run", zone_id: "r1", started_at: "2026-10-08T16:00:00Z", points: 300 },
+      { activity: "lift", run_type: "lift", zone_id: "l1", started_at: "2026-10-08T14:00:00Z", points: 0 }] };
+    if (/\/chutes\/(daily|season)/.test(p)) return { chutes: [{ name: "Main Dumper", difficulty: "double-black", count: 3, zoneId: "c1" }] };
+    if (/\/stats/.test(p)) return { days: [{ season_id: "2026-2027", runs_count: 5, points: 900, lift_rides: 1, hikes: 0 }] };
+    return {};
+  };
+  const ctx = { playerId: "p1", corridors, dayKey: iso => iso.slice(0, 10), today, seasonId: "2026-2027", dateLabel: "x", seasonLabel: "y" };
+  const day = await SocialCard.collectDay(api, ctx);
+  assert.strictEqual(day.runs, 1, "phone day: the chute is not also a run");
+  assert.strictEqual(day.chuteCount, 1);
+  const season = await SocialCard.collectSeason(api, ctx);
+  assert.strictEqual(season.runs, 2, "phone season: 5 ski descents less 3 chute laps");
+  const sim = QuestSimDay.create({ rider: "G", corridors });
+  sim.addRun(run("c1", "ski", -123), 517);
+  const d = sim.socialDay({});
+  assert.deepStrictEqual([d.chuteCount, d.runs], [1, 0], "simulated day: 1 chute, 0 runs");
 });

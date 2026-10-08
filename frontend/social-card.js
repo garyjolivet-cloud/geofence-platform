@@ -81,7 +81,8 @@
   // {
   //   kind: "day" | "season", dateLabel, resort, rider,
   //   verticalM (lifts + boot packs), points,
-  //   runs: n ski runs, chutes: [{name, difficulty, count}], chuteCount,
+  //   runs: n ski descents that are NOT chutes (Home's rule; chutes have their own number -- 2026-10-08,
+  //         Gary: "why when i log one chute do i get 1 run and 1 chute"), chutes: [{name, difficulty, count}], chuteCount,
   //   bootPacks: {count, verticalM, routes:[{name,count,verticalM}]},
   //   lifts: [{name, count, verticalM}], liftRides,
   //   weather: {snow24, tempC, windKph, windDir} | null,
@@ -151,7 +152,7 @@
       kind: "day", dateLabel: ctx.dateLabel, resort: ctx.resort || RESORT, rider: ctx.rider || "",
       verticalM: ((bp.today && bp.today.verticalM) || 0) + ((lf.today && lf.today.verticalM) || 0),
       points: runs.reduce(function (s, r) { return s + (r.points || 0); }, 0),
-      runs: ski.length,
+      runs: ski.filter(function (r) { return r.run_type !== "chute"; }).length,   // a chute is a chute, not also a run
       chutes: chutes, chuteCount: chutes.length,
       bootPacks: { count: (bp.today && bp.today.count) || 0, verticalM: (bp.today && bp.today.verticalM) || 0, routes: bp.routes || [] },
       lifts: liftList(lf.routes), liftRides: (lf.today && lf.today.count) || 0,
@@ -199,7 +200,7 @@
       resort: ctx.resort || RESORT, rider: ctx.rider || "",
       verticalM: Math.round(sum(bp) + sum(lf)),
       points: all.reduce(function (s, r) { return s + (r.points || 0); }, 0),
-      runs: ski.length,
+      runs: ski.filter(function (r) { return r.runType !== "chute"; }).length,   // a chute is a chute, not also a run
       chutes: chutes.map(function (c) { return { name: c.name, difficulty: c.difficulty, count: c.count, zoneId: c.zoneId }; }), chuteCount: chutes.length,
       bootPacks: { count: cnt(bp), verticalM: Math.round(sum(bp)), routes: bp.map(function (r) { return { name: r.name, count: r.count, verticalM: Math.round(r.verticalM), zoneId: r.zoneId }; }) },
       lifts: liftList(lf), liftRides: cnt(lf),
@@ -233,7 +234,8 @@
       kind: "season", dateLabel: ctx.seasonLabel, resort: ctx.resort || RESORT, rider: ctx.rider || "",
       verticalM: ((bp.season && bp.season.verticalM) || 0) + ((lf.season && lf.season.verticalM) || 0),
       points: seasonDays.reduce(function (s, d) { return s + (d.points || 0); }, 0),
-      runs: seasonDays.reduce(function (s, d) { return s + (d.runs_count || 0); }, 0),
+      // the day rows count every ski descent; take the chute laps out so a chute is not also a run
+      runs: Math.max(0, seasonDays.reduce(function (s, d) { return s + (d.runs_count || 0); }, 0) - chutes.reduce(function (s, c) { return s + (c.count || 0); }, 0)),
       days: seasonDays.filter(function (d) { return d.runs_count > 0 || d.lift_rides > 0 || d.hikes > 0; }).length,
       chutes: chutes, chuteCount: chutes.length,
       bootPacks: { count: (bp.season && bp.season.count) || 0, verticalM: (bp.season && bp.season.verticalM) || 0, routes: bp.routes || [] },
@@ -301,7 +303,7 @@
       dateLabel: d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }),
       resort: RESORT, rider: opts.rider || "Gary J.",
       verticalM: liftV + bpV, points: Math.round(points),
-      runs: skied.length, chutes: chutes, chuteCount: chutes.length,
+      runs: skied.filter(function (c) { return c.runType !== "chute"; }).length, chutes: chutes, chuteCount: chutes.length,
       bootPacks: { count: routes.length, verticalM: bpV, routes: routes.map(function (r) { return { name: r.name, count: r.count, verticalM: r.verticalM }; }) },
       lifts: liftRows.map(function (r) { return { name: r.name, count: r.count, verticalM: r.verticalM }; }),
       liftRides: liftRows.reduce(function (s, r) { return s + r.count; }, 0),

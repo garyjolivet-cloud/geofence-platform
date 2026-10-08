@@ -37,7 +37,8 @@ test("the test day is 10 gondola + 10 Stairway rides and 3 boot packs, from real
   assert.strictEqual(d.bootPacks.count, 3);
   assert.deepStrictEqual(d.bootPacks.routes.map(r => [r.name, r.verticalM]), [["T1 Hike", 95], ["Guts Hike", 73], ["Midle Ridge Hike", 61]]);
   assert.strictEqual(d.verticalM, 10 * 1068 + 10 * 357 + 229, "total vertical = lifts + boot packs = 14,479 m");
-  assert.strictEqual(d.runs, 20, "one descent after every lift ride");
+  // 20 descents (one after every lift ride); Runs counts only the ones that are not chutes (2026-10-08).
+  assert.strictEqual(d.runs + d.chutes.reduce((s, c) => s + c.count, 0), 20, "one descent after every lift ride");
   assert.ok(d.chutes.every(c => ids.has(c.zoneId)), "chutes are real corridors");
   assert.ok(d.chutes.length >= 1 && d.points > 0 && d.weather && d.season);
   assert.ok(d.geo.track.length === 23 && d.geo.lifts.length === 2 && d.geo.bootPacks.length === 3, "geometry for the map");
