@@ -2435,7 +2435,7 @@ map.on("mousemove",e=>{ document.getElementById("status").textContent=
 
 // hover cursor on zone fills and lines
 ["fence-fill","fence-line","trip-hit"].forEach(lid=>{
-  map.on("mouseenter",lid,()=>{ if(!tool) map.getCanvas().style.cursor="grab"; });
+  map.on("mouseenter",lid,()=>{ if(!tool&&!simMode) map.getCanvas().style.cursor="grab"; });
   map.on("mouseleave",lid,()=>{ if(!tool&&!_zoneDrag) map.getCanvas().style.cursor=""; });
 });
 
@@ -2444,6 +2444,7 @@ let _zoneDrag=null;
 // mousedown on a zone: prepare to either select or drag it
 function _zoneMousedown(e){
   if(tool) return;
+  if(stopsLocked()) return;   // Test Mode: a press on a stop pans the map / moves the avatar like anywhere else
   const feat=e.features&&e.features[0]; if(!feat) return;
   const zIdx=feat.properties.zIdx; if(zIdx==null||!zones[zIdx]) return;
   e.preventDefault();
@@ -2675,6 +2676,7 @@ function _setLbl(el,txt){ const lb=el.querySelector(".mh-lbl"); if(lb) lb.textCo
 function refreshHandles(z){
   clearHandles();
   if(!z||sel<0) return;
+  if(stopsLocked()) return;   // no drag handles in Test Mode
   const c=zoneCenterLonLat(z); // [lon,lat]
 
   // Corridor stops get NO geometry handles — no vertex handles, no width
@@ -2795,6 +2797,7 @@ function applySelRowHighlight(){
 // still runs here: `sel` drives the selected corridor's rings and the
 // on-map highlight colour.
 function selectZone(i){
+  if(i>=0 && stopsLocked()) return;   // nothing to select in Test Mode: the property panel is hidden and handles are off
   sel=i;
   renderSources();
   applySelRowHighlight();
@@ -3045,6 +3048,7 @@ function renderGlobalCodeObjectsChips(){
         const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
         const best=_nearestZone(pt);
         if(best!=null){
+          if(stopsLocked(true)) return;
           if(CodeObjects.attach(zones[best],codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
             if(sel===best) updateCodeObjectsSummary(zones[best]);
             render();
@@ -3068,6 +3072,7 @@ function renderGlobalCodeObjectsChips(){
       const pt=map.unproject([e.clientX-rect.left,e.clientY-rect.top]);
       const best=_nearestZone(pt);
       if(best==null)return;
+      if(stopsLocked(true)) return;
       zones[best][zoneAudioField(zones[best])]=audioUrl;
       if(sel===best){
         updateVaSummary(zones[best]);
@@ -3084,6 +3089,7 @@ function _makeZoneRowDroppable(rowEl, zoneIdx){
   rowEl.ondragover=e=>{ if(e.dataTransfer.types.includes("audiourl")||e.dataTransfer.types.includes("codeobjectid")||e.dataTransfer.types.includes("application/x-asset-object-json")){e.preventDefault();rowEl.style.background="rgba(255,106,61,.12)";}};
   rowEl.ondragleave=()=>rowEl.style.background="";
   rowEl.ondrop=e=>{ e.preventDefault();rowEl.style.background="";
+    if(stopsLocked(true)) return;
     const codeObjectId=e.dataTransfer.getData("codeobjectid");
     if(codeObjectId){
       if(CodeObjects.attach(zones[zoneIdx],codeObjectId,CodeObjects.latestVersion(codeObjectId),{})){
@@ -3279,6 +3285,7 @@ document.getElementById("pArFadeOutPreview").onclick=()=>{
 
 function attachArObjectToZone(zoneIdx,asset){
   if(zoneIdx<0||!zones[zoneIdx])return;
+  if(stopsLocked(true)) return;
   const z=zones[zoneIdx];
   z.arObjects=z.arObjects||[];
   const newObj={
@@ -3722,6 +3729,7 @@ function _gdShowPair(za, zb){
   }
 }
 function openGuardDefaults(){
+  if(stopsLocked(true)) return;
   if(typeof GuardOverlap==="undefined"){ alert("Guard defaults couldn't load — reload the page."); return; }
   const byId=new Map(zones.map(z=>[z.id,z]));
   const pairs=GuardOverlap.pairs(zones.filter(z=>z.shape&&z.shape.type==="corridor").map(z=>({
@@ -4198,7 +4206,7 @@ const gpxTree=CorridorTree.mount(document.getElementById("gpxTreeHost"),{
   dropTarget:()=>map.getCanvas()
 });
 document.getElementById("gpxRefresh").onclick=()=>gpxTree.refresh({appId:afAppId()});
-document.getElementById("gpxPullShapes").onclick=()=>reconcileLinkedCorridors();
+document.getElementById("gpxPullShapes").onclick=()=>{ if(stopsLocked(true)) return; reconcileLinkedCorridors(); };
 
 /* ---- AR/3D Asset Palette: same floating-panel behavior as Audio Palette
    (drag header, resize corner, minimize, shrink/grow-to-fit), full CRUD
@@ -4602,6 +4610,7 @@ function chuteBearingFromLine(z){
   return true;
 }
 async function importCorridorFromLibrary(corridorId){
+  if(stopsLocked(true)) return;
   // Already in this project? Select it -- a second stop on the same corridor logs every pass twice in Ridge Quest.
   const have=zones.findIndex(z=>z.corridorId===corridorId);
   if(have>=0){ sel=have; render(); refreshProps(); toast("“"+(zones[have].name||"Corridor")+"” is already in this project — selected it.","warn"); return; }
@@ -4655,6 +4664,8 @@ async function _appCorridorRows(appId, opts){
 // the same z.shape with a user-triggered refresh.
 let _corrReconcileBusy=false;
 async function reconcileLinkedCorridors(){
+  // Test Mode: the pull would rewrite stops' shapes/names/widths, so it waits for Exit test.
+  if(stopsLocked()){ _corrReconcilePending=true; return; }
   if(_corrReconcileBusy) return;
   const appId=afAppId();
   if(!appId) return;
@@ -4664,6 +4675,7 @@ async function reconcileLinkedCorridors(){
   try{
     const rows=await _appCorridorRows(appId,{withPoints:true}); // one request, all geometry + metadata
     if(rows===null) return;
+    if(stopsLocked()){ _corrReconcilePending=true; return; }   // Test Mode started while the list was loading
     const byId=new Map(rows.map(x=>[x.id,x]));
     _corrCenterCache.clear();
     let changed=false;
@@ -4701,7 +4713,7 @@ async function reconcileLinkedCorridors(){
 }
 // Per-stop "Refresh shape from library" button.
 async function refreshCorridorShapeFromLibrary(z){
-  if(!z || !z.shape || z.shape.type!=="corridor" || !z.corridorId || _corrReconcileBusy) return;
+  if(!z || !z.shape || z.shape.type!=="corridor" || !z.corridorId || _corrReconcileBusy || stopsLocked(true)) return;
   _corrReconcileBusy=true;
   try{
     const r=await fetch("/api/corridor/"+encodeURIComponent(z.corridorId),{headers:{authorization:"Bearer "+getToken()}});
@@ -4839,6 +4851,7 @@ function reassignZoneFolder(zoneId,folderId){
 // (not the row's index i) at click time, since indices shift on delete/
 // reorder and the menu can stay open across a re-render.
 function openZoneMenu(anchorBtn,zoneId){
+  if(stopsLocked(true)) return;   // rename / copy / move / delete
   openPortalMenu(anchorBtn, "", menu=>{
     const mkItem=(label,fn)=>{ const b=document.createElement("button"); b.className="sf-menu-item"; b.type="button"; b.textContent=label; b.onclick=ev=>{ ev.stopPropagation(); closeStopFolderMenus(); fn(); }; menu.appendChild(b); };
     mkItem("✎ Rename",()=>renameZone(zoneId));
@@ -6566,6 +6579,15 @@ const SimAmbient={
 let simMode=false, simAvatar=null, simBundle=null, simPrev=null, simPrevRaw=null;
 let simPath=[], simPlaying=false, simDist=0, simTimer=null, simDir=1; // simDir: 1 = forward along simPath, -1 = backward
 let simAmbientMarkers={}, simAmbientTimer=null;
+// Test Mode is read-only for every stop (Gary, 2026-10-08: "no moving or updating parameters of
+// stops"): no drag, no handles, no rename/copy/delete menu, no attach by drop, no library pull.
+// stopsLocked(true) also tells the author why nothing happened (at most once every 3 s).
+let _stopsLockToldAt=0, _corrReconcilePending=false;
+function stopsLocked(tell){
+  if(!simMode) return false;
+  if(tell && Date.now()-_stopsLockToldAt>3000){ _stopsLockToldAt=Date.now(); toast("Test Mode: stops are read-only — Exit test to edit.","warn"); }
+  return true;
+}
 // Test Mode: render every corridor zone with the SAME "piste glow" graphic
 // the live Ridge Quest run map draws (drawAllRuns() in ridge-quest.html) —
 // difficulty-coloured glowing line + midpoint name label + ◆/◆◆ start badge
@@ -7767,6 +7789,9 @@ function enterTestMode(){
   // cancel any edit in progress
   if(tool){draft=[];tool=null;resetShapePickerBtn();updateDrawUiVisibility(null);render();}
   selectZone(-1);
+  // Stops are read-only from here (stopsLocked): shut the two editors that live outside the hidden panel.
+  document.getElementById("guardDefaultsOverlay")?.remove(); _gdClearHighlight();
+  closeStopFolderMenus();
   simBundle=editorToSimBundle();
   _cgGuardedIds = new Set(); _cgMutedIds = new Set(); _cgOnIds = new Set(); _cgTestMaster = true; // fresh each entry, Guard ON like live
   paintSimGuardBtn();
@@ -7902,6 +7927,8 @@ function exitTestMode(){
   document.getElementById("simPanel").style.display="none";
   document.getElementById("testModeBtn").textContent="▶ Test";
   document.getElementById("testModeBtn").classList.remove("on");
+  // A library pull that was held back while stops were read-only runs now.
+  if(_corrReconcilePending){ _corrReconcilePending=false; reconcileLinkedCorridors(); }
 }
 
 /* ---- path playback ---- */
@@ -8467,6 +8494,7 @@ if(typeof CodeObjects!=="undefined"){
     getProjectId:()=>afProjectId(),
     getToken:getToken,
     getTargets:()=>{
+      if(stopsLocked()) return [];   // Test Mode: a card click attaches to / detaches from no stop
       if(coBulkMode && coBulkSel.size) return [...coBulkSel].map(id=>zones.find(z=>z.id===id)).filter(Boolean);
       if(sel>=0 && zones[sel]) return [zones[sel]];
       return [];

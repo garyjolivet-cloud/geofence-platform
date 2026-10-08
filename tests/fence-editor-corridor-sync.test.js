@@ -26,6 +26,7 @@ function extract(startTag) {
   return html.slice(s, i + 1);
 }
 const SRC = "const _corrAddsInFlight=new Set();\n" + [
+  "function stopsLocked(tell){",
   "function thisIsLine(z){",
   "function setStopName(z, name){",
   "function bearingTo(a,b){",
@@ -70,8 +71,10 @@ function harness(zonesIn, rows) {
   // zones/sel/_corrReconcileBusy are module-level `let`s in the page; mirror that here.
   // eslint-disable-next-line no-new-func
   const api = new Function(...Object.keys(env).filter(k => k !== "zones" && k !== "rows"),
-    "let zones = arguments[arguments.length-1].zones; let sel = -1; let _corrReconcileBusy = false;\n" + SRC +
-    "\nreturn { importCorridorFromLibrary, reconcileLinkedCorridors, refreshCorridorShapeFromLibrary, duplicateCorridorStops, get sel(){ return sel; }, get zones(){ return zones; } };")
+    "let zones = arguments[arguments.length-1].zones; let sel = -1; let _corrReconcileBusy = false;\n" +
+    "let simMode = false, _stopsLockToldAt = 0, _corrReconcilePending = false;\n" + SRC +
+    "\nreturn { importCorridorFromLibrary, reconcileLinkedCorridors, refreshCorridorShapeFromLibrary, duplicateCorridorStops, get sel(){ return sel; }, get zones(){ return zones; }," +
+    " set simMode(v){ simMode = v; }, get pending(){ return _corrReconcilePending; } };")
     (...Object.keys(env).filter(k => k !== "zones" && k !== "rows").map(k => env[k]), env);
   return { api, toasts, renders };
 }
@@ -149,6 +152,38 @@ test("a failed add can be retried", async () => {
   rows.push(row("late", "Late"));
   await h.api.importCorridorFromLibrary("late");
   assert.strictEqual(h.api.zones.length, 1, "the in-flight mark was cleared after the failure");
+});
+
+// 2026-10-08 (Gary): "in test mode stops of all types are read only".
+test("Test Mode: the library pull changes no stop and waits for Exit test; nothing can be added", async () => {
+  const z = corrZone("pioneer", "Pioneer", "ec5b");
+  const h = harness([z], [row("ec5b", "Porcupine", { widthM: 44 }), row("new1", "Big Dumper")]);
+  const before = JSON.stringify(z);
+  h.api.simMode = true;
+  await h.api.reconcileLinkedCorridors();
+  await h.api.refreshCorridorShapeFromLibrary(z);
+  await h.api.importCorridorFromLibrary("new1");
+  await h.api.importCorridorFromLibrary("ec5b");
+  assert.strictEqual(JSON.stringify(z), before, "the stop is untouched");
+  assert.strictEqual(h.api.zones.length, 1, "no stop added");
+  assert.strictEqual(h.api.sel, -1, "nothing selected");
+  assert.strictEqual(h.renders.length, 0, "no redraw / autosave");
+  assert.strictEqual(h.api.pending, true, "the pull is remembered for Exit test");
+  assert.ok(h.toasts.some(t => /read-only/.test(t.m)), "the author is told why");
+  h.api.simMode = false;
+  await h.api.reconcileLinkedCorridors();
+  assert.strictEqual(z.name, "Porcupine", "after Exit test the pull runs as before");
+  assert.strictEqual(z.shape.widthM, 44);
+});
+
+test("Test Mode starting while the library list is still loading: the pull is dropped, not applied", async () => {
+  const z = corrZone("pioneer", "Pioneer", "ec5b");
+  const h = harness([z], [row("ec5b", "Porcupine")]);
+  const p = h.api.reconcileLinkedCorridors();   // suspended at the list fetch
+  h.api.simMode = true;
+  await p;
+  assert.strictEqual(z.name, "Pioneer");
+  assert.strictEqual(h.api.pending, true);
 });
 
 test("Copy refuses a library-linked corridor; Publish asks before publishing duplicates", () => {
