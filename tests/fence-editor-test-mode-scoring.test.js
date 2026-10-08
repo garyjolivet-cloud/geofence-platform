@@ -229,7 +229,25 @@ test("▶ on a tapped line travels it the way that scores: lifts up, chutes and 
   assert.ok(click.includes('id="simRideBtn"') && click.includes("simRideLine(p.id)"), "the button is in the tapped line's popup");
   // Gary: "no ride up button" -- with a mouse the popup was opened on mouse-up and closed by the map click that
   // follows (Popup closeOnClick). It is now shown just after the tap. Found with a real mouse tap in a headless browser.
-  assert.ok(fe.includes("onTap(feature,lngLat){ if(feature) setTimeout(()=>{ if(simMode) _simRunClick({features:[feature],lngLat}); }, 80); },"), "the popup opens after the tap's own click");
+  assert.ok(fe.includes("onTap(feature,lngLat){ if(feature) setTimeout(()=>{ if(simMode) _simRunClick({features:_simRunsAt(lngLat, feature),lngLat}); }, 80); },"), "the popup opens after the tap's own click, for every line under the tap");
+  // Gary: "golden express gondi is not showing ride the gondi button" -- a tap on the gondola came back as "Its a 10",
+  // the run under it (one 30 px hit band). The popup now lists every line there, lifts first, each with its own ▶.
+  const picked = [];
+  const many = new Function("QuestRunSim", "simRidePlan", "simRideLine", "esc", "maplibregl", "map",
+    extract(fe, "function _simRunClick(e){") + "\n" + extract(fe, "function _simRunPopupMany(list, lngLat){") + "\nreturn _simRunClick;");
+  let html = "", btns = [];
+  const Popup = function () { return { setLngLat() { return this; }, setHTML(h) { html = h; btns = (h.match(/class="simRideBtn" data-i="\d+"/g) || []).map(m => ({ dataset: { i: m.match(/\d+/)[0] } })); return this; }, addTo() { return this; }, remove() {},
+    getElement() { return { querySelector: () => null, querySelectorAll: () => btns }; } }; };
+  const plan = id => ({ label: id === "gondi" ? "Ride up at 30 km/h" : "Ski down at 40 km/h" });
+  const tap = many({}, plan, id => picked.push(id), s => String(s), { Popup }, {});
+  const f = (id, name, runType) => ({ properties: { id, name, runType, lengthM: 100, difficulty: null } });
+  tap({ features: [f("its-a-10", "Its a 10", "run"), f("gondi", "Golden Eagle Express Gondi", "lift"), f("its-a-10", "Its a 10", "run")], lngLat: {} });
+  assert.ok(html.includes("2 lines here") && html.indexOf("Golden Eagle Express Gondi") < html.indexOf("Its a 10"), "both lines, the lift first, duplicates dropped");
+  assert.strictEqual(btns.length, 2, "a ▶ button for each");
+  btns[0].onclick(); btns[1].onclick();
+  assert.deepStrictEqual(picked, ["gondi", "its-a-10"], "each button rides its own line");
+  html = ""; tap({ features: [f("gondi", "Golden Eagle Express Gondi", "lift")], lngLat: {} });
+  assert.ok(html.includes('id="simRideBtn"') && !html.includes("lines here"), "one line: the single popup as before");
   const go = extract(fe, "function simRideLine(zoneId){");
   assert.ok(go.includes("simPath=[lead(pts[0],pts[1],20)]") && go.includes("simDist=0; simDir=1;") && go.includes("slider.value=plan.kmh") && go.includes("simPlay();"), "it plays that one line from its start at that pace");
 });

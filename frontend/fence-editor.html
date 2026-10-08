@@ -6645,7 +6645,15 @@ function simRunStyleFor(c){
   return{col:s.col,halo:s.halo,dash:"",tier:s.tier};
 }
 function _simRunClick(e){
-  const p=e.features&&e.features[0]&&e.features[0].properties; if(!p) return;
+  // Every line under the tap, not just the top one (2026-10-08, Gary: "golden express gondi is not
+  // showing ride the gondi button"): a lift and the runs beneath it share the same 30 px hit band, so
+  // a tap on the gondola came back as "Its a 10", the run under it. Lifts are listed first.
+  const seen=new Set(), list=[];
+  (e.features||[]).forEach(f=>{ const q=f&&f.properties; if(q && !seen.has(q.id)){ seen.add(q.id); list.push(q); } });
+  if(!list.length) return;
+  list.sort((a,b)=>(b.runType==="lift")-(a.runType==="lift"));
+  if(list.length>1){ _simRunPopupMany(list, e.lngLat); return; }
+  const p=list[0];
   const act=p.activityType||(p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
   // ▶ Ride / Ski this line (2026-10-08, Gary dragged up Stairway Chair twice and nothing logged: too
   // fast, then past the top station): one tap sends the avatar along THIS line, the right way, at a
@@ -6659,6 +6667,28 @@ function _simRunClick(e){
     .addTo(map);
   const btn=ride && pop.getElement() && pop.getElement().querySelector("#simRideBtn");
   if(btn) btn.onclick=()=>{ pop.remove(); simRideLine(p.id); };
+}
+// Several lines under one tap: one block per line, each with its own ▶ button.
+function _simRunPopupMany(list, lngLat){
+  const rows=list.slice(0,6).map((p,i)=>{
+    const act=p.runType==="lift"?"lift":(p.runType==="hike"?"boot pack":(p.runType||"run"));
+    const ride=QuestRunSim ? simRidePlan(p.id) : null;
+    return '<div style="'+(i?'margin-top:8px;padding-top:8px;border-top:1px solid #d5dde6':'')+'">'
+      +'<div style="font:600 13px/1.35 system-ui,sans-serif;color:#0a1018">'+esc(p.name)+'</div>'
+      +'<div style="font:12px system-ui,sans-serif;color:#5b7088">'+[p.difficulty&&esc(p.difficulty),esc(act),p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>'
+      +(ride?'<button class="simRideBtn" data-i="'+i+'" style="margin-top:4px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:#ff6a3d;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer">▶ '+esc(ride.label)+'</button>':'')
+      +'</div>';
+  }).join("");
+  const pop=new maplibregl.Popup({closeButton:true,offset:8,maxWidth:"260px"}).setLngLat(lngLat)
+    .setHTML('<div style="font:11px system-ui,sans-serif;color:#5b7088;margin-bottom:6px">'+list.length+' lines here — pick one</div>'+rows).addTo(map);
+  const el=pop.getElement();
+  if(el) el.querySelectorAll(".simRideBtn").forEach(b=>{ b.onclick=()=>{ const p=list[+b.dataset.i]; pop.remove(); simRideLine(p.id); }; });
+}
+// The lines under a tapped point (the same invisible 30 px hit band the tap itself used).
+function _simRunsAt(lngLat, first){
+  let fs=[];
+  try{ fs=map.queryRenderedFeatures(map.project(lngLat),{layers:["runLines-hit"]})||[]; }catch(e){}
+  return (first && !fs.some(f=>f.properties && first.properties && f.properties.id===first.properties.id)) ? [first].concat(fs) : (fs.length?fs:(first?[first]:[]));
 }
 // Which way and how fast a line is travelled so that it scores, by the run engine's own rules
 // (quest-core.js _classifyAndLog): a lift only UP it (uphill end from its elevation, else against
@@ -6852,7 +6882,7 @@ function refreshSimCorridorLabels(){
       // Shown a moment AFTER the tap (2026-10-08, Gary: "no ride up button"): onTap fires on mouse-up,
       // and the map's own click that follows closed the popup at once (Popup closeOnClick) -- with a
       // mouse the name popup, and so the ▶ button in it, never stayed on screen.
-      onTap(feature,lngLat){ if(feature) setTimeout(()=>{ if(simMode) _simRunClick({features:[feature],lngLat}); }, 80); },
+      onTap(feature,lngLat){ if(feature) setTimeout(()=>{ if(simMode) _simRunClick({features:_simRunsAt(lngLat, feature),lngLat}); }, 80); },
       onLongPress:_simRunLongPressHandler
     });
   }else{
