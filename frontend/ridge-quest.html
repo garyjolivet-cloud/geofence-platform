@@ -354,8 +354,34 @@ function releaseWakeLock(){
 const SLEEP_TUNING = {
   IDLE_MS: 30000,
   STATIONARY_LOCK_MS: 10*60000,
-  STATIONARY_RADIUS_M: 30      // indoor GPS wanders 30-60 m at a desk; widened by the fix's own accuracy below
+  STATIONARY_RADIUS_M: 30,     // indoor GPS wanders 30-60 m at a desk; widened by the fix's own accuracy below
+  // --- Eyes up (2026-10-08, Gary: "Screen need to go black when mobile is not stationary. A warning
+  // screen can be displayed telling danger of looking at screen while moving"). While the rider is
+  // moving the screen is black at once, and a touch shows a warning instead of waking it. Not on a
+  // lift (riders read the map there), not off the run network (a passenger on the road in).
+  MOVE_ON_MPS: 2.5,            // ~9 km/h, the engine's own "skiing" pace (SKI_SPEED_MIN_MPS): a walk to the lift doesn't black the screen
+  MOVE_ON_MS: 2000,            // ...held this long (three 1 Hz fixes), so one noisy speed reading can't do it
+  MOVE_OFF_MPS: 1.0,           // stopped = slower than a slow walk...
+  MOVE_OFF_MS: 4000,           // ...for this long: a pause mid-turn doesn't light the screen
+  MOVE_ACC_MAX_M: 40,          // a fix worse than this can't START "moving" (indoor GPS makes up speed)
+  MOVE_STALE_MS: 10000,        // no fix this long = speed unknown = not moving (never stuck black with GPS gone)
+  MOVE_WARN_MS: 4000           // how long the warning stays up after a touch while moving
 };
+// Pure — the moving / stopped latch with hysteresis. m = { moving, since } (since = when the pending
+// change of state began, in fix time); s = { speedMps, acc, t }. An unknown speed changes nothing.
+function movingStep(m, s){
+  m = m || { moving:false, since:null };
+  const T = SLEEP_TUNING, v = s.speedMps;
+  if(v==null || !isFinite(v)) return m;
+  if(!m.moving){
+    if(v < T.MOVE_ON_MPS || (s.acc!=null && s.acc > T.MOVE_ACC_MAX_M)) return { moving:false, since:null };
+    const since = m.since==null ? s.t : m.since;
+    return (s.t - since >= T.MOVE_ON_MS) ? { moving:true, since:null } : { moving:false, since };
+  }
+  if(v >= T.MOVE_OFF_MPS) return { moving:true, since:null };
+  const since = m.since==null ? s.t : m.since;
+  return (s.t - since >= T.MOVE_OFF_MS) ? { moving:false, since:null } : { moving:true, since };
+}
 // Pure — the anchor is where the current stationary stretch began; it only
 // moves when a fix lands farther away than max(radius, that fix's accuracy).
 function stationaryStep(anchor, fix, distFn){
@@ -367,8 +393,12 @@ function stationaryStep(anchor, fix, distFn){
 }
 // Pure — "awake" | "dim" | "dim-release". Lift always wins over stationary and
 // never releases the lock. saverOff = Battery Saver "Always Off".
+// "moving" (s.moving: the rider is skiing, not on a lift, on the run network) beats everything,
+// Battery Saver "Always Off" included -- it is a safety blackout, not a battery one -- and never
+// releases the wake lock.
 function sleepDecision(s){
   const T = SLEEP_TUNING;
+  if(s.moving) return "moving";
   if(s.saverOff) return "awake";
   const idle = s.now - s.lastTouchAt;
   if(idle < T.IDLE_MS) return "awake";
@@ -377,12 +407,13 @@ function sleepDecision(s){
 }
 const ScreenSleep = {
   el:null, timer:null, anchor:null, lastTouchAt:Date.now(), dimmed:false, lockReleased:false, _onTouch:null,
+  move:null, lastSpeedAt:0, mode:"dim", _warnTimer:null, _appliedMoving:false,   // eyes up: the moving latch, when speed was last known, what the overlay says
   // callback(dimmed) — set by "My map" to pause the compass, avatar moves and
   // friend polling behind the black overlay (nothing visible, no redraws).
   onDimChange:null,
   start(){
     this.stop();
-    this.lastTouchAt = Date.now(); this.anchor = null;
+    this.lastTouchAt = Date.now(); this.anchor = null; this.move = null; this.lastSpeedAt = 0; this._appliedMoving = false;
     this._onTouch = ()=>this.touch();
     ["pointerdown","touchstart","keydown"].forEach(ev=>document.addEventListener(ev, this._onTouch, {capture:true, passive:true}));
     // Wall-clock timer, not fix-driven: indoors fixes can be sparse or stop.
@@ -406,40 +437,86 @@ const ScreenSleep = {
     // from the 2nd fix on and killed _onFix (no avatar, no corridor ticks).
     this.anchor = stationaryStep(this.anchor, { lat:fix.lat, lon:fix.lon, acc:fix.acc, at:Date.now() }, (a,b)=>QGeo.haversineM(a,b));
   },
+  // Eyes up: every fix's speed (the phone's own Doppler speed when it gives one, else the filter's).
+  // A change of state is applied at once, not on the next 5 s timer tick.
+  noteSpeed(speedMps, fix){
+    this.move = movingStep(this.move, { speedMps, acc:fix && fix.acc, t:(fix && fix.t) || Date.now() });
+    if(speedMps!=null && isFinite(speedMps)) this.lastSpeedAt = Date.now();
+    // Compared with what was last APPLIED, not recomputed: getting off a lift changes isMoving()
+    // between two fixes without the latch itself changing.
+    const moving = this.isMoving();
+    if(moving !== this._appliedMoving){ this._appliedMoving = moving; if(this.timer) this._tick(); }
+  },
+  // Skiing right now? Not on a lift (riders read the map there), not off the run network, and only
+  // while the speed is fresh -- with GPS gone the screen must never be stuck black.
+  isMoving(){
+    return !!(this.move && this.move.moving) && (Date.now() - this.lastSpeedAt < SLEEP_TUNING.MOVE_STALE_MS)
+      && !Quest._liftRaw && !Quest._offsite;
+  },
   // Unlocking the phone is itself a deliberate touch (the visibilitychange
   // handler below re-acquires the wake lock on the same event).
-  onVisible(){ this.lastTouchAt = Date.now(); this.lockReleased = false; this._hide(); },
+  onVisible(){ this.lastTouchAt = Date.now(); this.lockReleased = false; if(!this.isMoving()) this._hide(); },
   _tick(){
     if(!Quest.active()){ this.stop(); return; }
     const now = Date.now();
-    const d = sleepDecision({ now, lastTouchAt:this.lastTouchAt, liftModeActive:Quest.liftModeActive,
+    const d = sleepDecision({ now, lastTouchAt:this.lastTouchAt, liftModeActive:Quest.liftModeActive, moving:this.isMoving(),
       saverOff:Quest.liftModeOverride==="off", stationaryForMs: this.anchor ? now - this.anchor.at : 0 });
     if(d==="awake"){
       if(this.dimmed) this._hide();
       if(this.lockReleased){ this.lockReleased = false; acquireWakeLock(); }
       return;
     }
-    if(!this.dimmed) this._show();
+    if(d==="moving"){
+      if(this.lockReleased){ this.lockReleased = false; acquireWakeLock(); }
+      if(!this.dimmed || this.mode==="dim") this._show("moving");
+      return;
+    }
+    if(!this.dimmed || this.mode!=="dim") this._show("dim");
     if(d==="dim-release" && !this.lockReleased){ this.lockReleased = true; releaseWakeLock(); }
   },
-  _show(){
+  // What the black screen says. "dim": the faint battery line. "moving": the same, saying why.
+  // "warn": after a touch while moving -- the one bright thing on it, then back to black.
+  _paint(mode){
+    this.mode = mode;
+    if(this._warnTimer){ clearTimeout(this._warnTimer); this._warnTimer = null; }
+    const faint = t=>'<span style="color:#2b2b2b;font:12px/1.4 system-ui,sans-serif;letter-spacing:.06em">'+t+'</span>';
+    if(mode==="warn"){
+      this.el.innerHTML = '<div style="text-align:center;padding:0 28px;max-width:420px">'
+        +'<div style="font:800 34px/1.1 system-ui,sans-serif;color:#ffd23f;letter-spacing:.02em">⚠ EYES UP</div>'
+        +'<div style="font:600 18px/1.35 system-ui,sans-serif;color:#fff;margin-top:14px">Looking at your phone while you are moving is dangerous.</div>'
+        +'<div style="font:15px/1.4 system-ui,sans-serif;color:#9fb2c8;margin-top:10px">Stop somewhere safe and the screen comes back. Tracking, the guard tone and the voice are still on.</div></div>';
+      this.el.setAttribute("aria-label","Warning: looking at your phone while moving is dangerous. Stop somewhere safe and the screen comes back. Tracking is still on.");
+      this._warnTimer = setTimeout(()=>{ this._warnTimer = null; if(this.dimmed && this.mode==="warn") this._paint("moving"); }, SLEEP_TUNING.MOVE_WARN_MS);
+    } else if(mode==="moving"){
+      this.el.innerHTML = faint("MOVING · SCREEN OFF · STILL TRACKING");
+      this.el.setAttribute("aria-label","Screen off while you are moving. Stop somewhere safe to use it. Tracking is still on.");
+    } else {
+      this.el.innerHTML = faint("TAP TO WAKE · STILL TRACKING");
+      this.el.setAttribute("aria-label","Screen dimmed to save battery. Tap to wake. Tracking is still on.");
+    }
+  },
+  _show(mode){
     if(!this.el){
       const el = document.createElement("div");
       el.id = "rqSleep";
       el.setAttribute("role","button");
-      el.setAttribute("aria-label","Screen dimmed to save battery. Tap to wake. Tracking is still on.");
       el.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483000;background:#000;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none";
-      el.innerHTML = '<span style="color:#2b2b2b;font:12px/1.4 system-ui,sans-serif;letter-spacing:.06em">TAP TO WAKE · STILL TRACKING</span>';
-      // Consume the waking tap here so it can't fall through to whatever button sits underneath.
-      el.onclick = e=>{ e.preventDefault(); e.stopPropagation(); this.touch(); this._hide(); };
+      // Consume the tap here so it can't fall through to whatever button sits underneath. Stopped: it
+      // wakes the screen. Moving: it shows the warning and the screen stays black.
+      el.onclick = e=>{
+        e.preventDefault(); e.stopPropagation(); this.touch();
+        if(this.isMoving()) this._paint("warn"); else this._hide();
+      };
       document.body.appendChild(el);
       this.el = el;
     }
+    this._paint(mode || "dim");
     const was = this.dimmed;
     this.el.style.display = "flex"; this.dimmed = true;
     if(!was) this._notify();
   },
   _hide(){
+    if(this._warnTimer){ clearTimeout(this._warnTimer); this._warnTimer = null; }
     const was = this.dimmed;
     if(this.el) this.el.style.display = "none"; this.dimmed = false;
     if(was) this._notify();
@@ -1431,6 +1508,8 @@ const Quest = {
     // Isolated on purpose — this is only a battery nicety, and an exception here once
     // took the whole fix handler (avatar, corridor ticks, Corridor Guard) down with it.
     try{ ScreenSleep.noteFix(fix); }catch(e){}
+    // Eyes up: black the screen while skiing. Isolated like noteFix -- it must never break tracking.
+    try{ ScreenSleep.noteSpeed((c.speed!=null && isFinite(c.speed)) ? c.speed : p.speed, fix); }catch(e){}
     // Feed the avatar FIRST — its site gate flips Quest._offsite and keeps
     // re-evaluating the boundary so tracking resumes on return.
     if(this.onPosition) this.onPosition(p);   // live avatar on an open map
@@ -3941,6 +4020,7 @@ function openMapInfo(){
     +(Quest.threeDEnabled ? row('3D','Tilts the map into 3D terrain, or back to flat. Tilting the phone also tilts the map.') : '')
     +row('⌖','Shows up once you move the map yourself. Tap to go back to following your position and compass.')
     +row('🔋 Auto','Battery Saver. <b>Auto</b>: on a lift it pauses 3D and the compass, and while tracking the screen goes black after 30 s untouched (tap to wake; tracking carries on). <b>On</b>: saving all day. <b>Off</b>: never.')
+    +row('⚠ Eyes up','While you are skiing the screen is black, whatever Battery Saver is set to. Touch it and you get a warning, not the map. Stop somewhere safe and it comes back. Not on a lift. Tracking, the Guard tone and the voice carry on.')
     +row('🛡 Guard','Corridor Guard. A guarded chute or run has a yellow boundary line; drift outside it and you hear a tone, and the voice names guarded runs. <b>ON</b>: every run guarded. <b>OFF</b>: only the runs you arm.')
     +row('Skied','Your day: a light stripe down each chute finished today and a thin line where you skied (lift rides aren’t drawn).')
     +row('Lines','Your saved line down each guarded chute (newest 3 per chute). Turn single lines on or off in Leaderboard → Chutes.')
