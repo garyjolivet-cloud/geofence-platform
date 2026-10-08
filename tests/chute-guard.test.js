@@ -1414,5 +1414,86 @@ function biasSetup() {
   assert(s.go(195, 0, 5) === true, "load() mid-ride keeps the ride");
 })();
 
+// ============================================================
+// Finished at 80 % (2026-10-08, user: "when a skier has completed from top to bottom 80% of a chute
+// or run sound a victory chime and stop the guard warning for that chute allowing skier to exit
+// chute with no warning"). The fixture runs north from START (its top) for 400 m: 80 % = 320 m.
+// ============================================================
+(function testFinishedAt80PctChimesAndStopsTheGuard() {
+  const T = freshChuteGuard().TUNING;
+  assert(T.FINISH_PCT === 0.80, "finished = 80 % down from the top");
+  const setup = (runType, opts) => { const g = freshChuteGuard(), warn = [], done = [], dbg = [];
+    g.load([makeCorridor("f1", { runType, lenM: 400, widthM: 10 })],
+      { onWarn: id => warn.push(id), onComplete: (id, name, info) => done.push(Object.assign({ id, name }, info)), onDebug: (id, n, d) => dbg.push(d) }, opts);
+    let t = 1700000000000;
+    const go = (fwd, lat) => { const p = trackPoint(fwd, lat || 0); t += 1000; g.tick({ lat: p[0], lon: p[1], acc: 5, speed: 5, t }, 0); };
+    const down = (from, to) => { for (let f = from; f <= to; f += 5) go(f, 0); };
+    const exit = fwd => [8, 12, 16, 20].forEach((lat, i) => go(fwd + i * 5, lat));
+    return { g, warn, done, dbg, go, down, exit }; };
+
+  // top to 80 %: one chime, then leaving sideways is silent
+  let s = setup("chute");
+  s.down(0, 315);
+  assert(s.done.length === 0, "no chime at 79 %");
+  s.down(320, 330);
+  assert(s.done.length === 1 && s.done[0].id === "f1" && s.done[0].pct === 0.80, "one chime on reaching 80 %, got " + s.done.length);
+  s.exit(335);
+  assert(s.warn.length === 0 && s.g.getActiveAlarm() === null, "finished: leaving the chute sounds no tone");
+  assert(s.dbg.some(d => d.dropIn === "done"), "the debug line says done");
+  s.go(360, 0); s.go(380, 0); s.exit(385);
+  assert(s.done.length === 1 && s.warn.length === 0, "back in and out again on the same pass: still one chime, still silent");
+
+  // leaving before 80 % still warns
+  s = setup("chute");
+  s.down(0, 300); s.exit(305);
+  assert(s.done.length === 0 && s.warn.length > 0 && s.g.getActiveAlarm() !== null, "left at 75 %: tone as before, no chime");
+  // ...and coming back in to finish it still earns the chime and ends the tone
+  s.down(320, 325);
+  assert(s.done.length === 1 && s.g.getActiveAlarm() === null, "back inside past 80 %: chime, tone over");
+
+  // not skied from the top: no chime
+  s = setup("chute");
+  s.down(200, 380);
+  assert(s.done.length === 0, "joined midway and skied to the bottom: not a top-to-bottom pass, no chime");
+  s = setup("chute");
+  [-30, -20, -10, 0, 10, 20, 30].forEach(lat => s.go(350, lat));
+  assert(s.done.length === 0, "crossing the bottom of a chute: no chime");
+
+  // the next lap is guarded again
+  s = setup("chute");
+  s.down(0, 330); s.go(330, 300);            // away (out of relevant range)
+  s.down(0, 100); s.exit(105);
+  assert(s.done.length === 1 && s.warn.length > 0, "after leaving the area the next pass is guarded again");
+
+  // runs: Ridge Quest only (same opt-in as the drop-in gate); other hosts unchanged; boot packs never
+  s = setup("run", { dropInRuns: true });
+  s.down(0, 330); s.exit(335);
+  assert(s.done.length === 1 && s.warn.length === 0, "Ridge Quest: a run finishes the same way");
+  s = setup("run");
+  s.down(0, 330); s.exit(335);
+  assert(s.done.length === 0 && s.warn.length > 0, "a run in a host that didn't ask: no chime, guard to the end");
+  s = setup("hike", { dropInRuns: true });
+  s.down(0, 330); s.exit(335);
+  assert(s.done.length === 0 && s.warn.length > 0, "a boot pack never finishes this way");
+
+  // the chime: four rising notes on the host's context, none on a warning-tone pitch
+  const notes = [];
+  const ctx = { currentTime: 0, destination: {},
+    createOscillator: () => { const o = { frequency: { value: 0 }, connect() {}, start() {}, stop() {} }; notes.push(o); return o; },
+    createGain: () => ({ gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }) };
+  const cg = freshChuteGuard();
+  assert(cg.playChime(ctx, ctx.destination, 0.5) === true && notes.length === 4, "chime = 4 notes");
+  const f = notes.map(n => n.frequency.value);
+  assert(f.every((x, i) => i === 0 || x > f[i - 1]) && !f.includes(740) && !f.includes(1046), "rising, and not the warning pitches: " + f.join(","));
+  assert(cg.playChime(null) === false, "no audio context: no throw");
+
+  // both hosts play it, only for a guarded chute/run
+  const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
+  const fe = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html"), "utf8");
+  assert(/onComplete\(corridorId, name, info\)\{\s*if\(!Quest\.isGuarded\(corridorId\)\) return;[\s\S]{0,400}playCgChime\(\);/.test(rq), "ridge-quest.html: chime for a guarded chute/run");
+  assert(/ChuteGuard\.playChime\(_cgAc, _cgMaster\|\|_cgAc\.destination/.test(rq), "ridge-quest.html plays the shared chime on the primed context");
+  assert(/onComplete\(corridorId,name,info\)\{\s*if\(!_cgTestGuarded\(corridorId\)\) return;[\s\S]{0,200}ChuteGuard\.playChime\(SimVoice\.ctx/.test(fe), "Test Mode plays the same chime");
+})();
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

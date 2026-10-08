@@ -72,6 +72,7 @@
 //     onWarn(corridorId, name, info) {...},       // still outside — info: {level, levelChanged, alertCount, excessM, maxExcessM, msOutside, widthM, t}
 //     onClear(corridorId, name) {...},             // back inside the width band
 //     onDisengage(corridorId, name, info) {...},   // concluded they left on purpose — info: {level, maxExcessM, excessM, widthM, t}
+//     onComplete(corridorId, name, info) {...},    // optional: dropped in from the top and skied FINISH_PCT of it — once per pass, no tone after (see finishStep)
 //     onDebug(corridorId, name, info) {...}        // optional, diagnostic only
 //   });
 //   // once per GPS fix, after GPSFilter.push()/TravelHeading.update():
@@ -105,6 +106,7 @@
     DROPIN_RUN_TYPES: ["chute"], // corridors that need a drop-in from the top before any tone (see the "Drop-in gate" header note)
     DROPIN_PCT: 0.10,            // tone only once the rider is this fraction of the line down from its top...
     DROPIN_TOP_MIN_M: 40,        // ...having first been inside the top zone: the top DROPIN_PCT, at least this many m (a 1 Hz fix at ski speed can skip a 10 m zone)
+    FINISH_PCT: 0.80,            // a dropped-in chute/run skied this far down from its top is finished: onComplete once, then no tone for it (see finishStep)
     DROPIN_TOP_MAX_PCT: 0.25,    // ...but never more than this fraction of the line, so "midway" is always outside it
     LIFT_RIDE_UP_M: 30,          // riding a lift = this many m of progress UP its line while in its band... (see liftRideStep)
     LIFT_RIDE_MIN_MPS: 1.5,      // ...at this average pace or more (a boot pack beside the line is slower)...
@@ -211,6 +213,38 @@
     const topZone = Math.min(Math.max(TUNING.DROPIN_PCT, TUNING.DROPIN_TOP_MIN_M/c.lenM), TUNING.DROPIN_TOP_MAX_PCT);
     if(f <= topZone) st.sawTop = true;
     if(st.sawTop && f >= TUNING.DROPIN_PCT) st.topSkied = true;
+  }
+  // Finished (2026-10-08, Gary: "when a skier has completed from top to bottom 80% of a chute or run
+  // sound a victory chime and stop the guard warning for that chute allowing skier to exit chute with
+  // no warning"). Same corridors as the drop-in gate, and it needs that drop-in from the top: once the
+  // rider is inside the trigger edge at FINISH_PCT or more down the line, st.done latches, the host is
+  // told once (onComplete -> its chime) and neither tick() nor getActiveAlarm() alerts for this corridor
+  // again until the state resets (out of relevant range, or on a lift) -- so the next lap is guarded.
+  function finishStep(c, st, near, inside, now){
+    if(!c.needsDropIn || st.done || !st.topSkied || !inside) return;
+    if(fracFromTop(c, near) < TUNING.FINISH_PCT) return;
+    st.done = true;
+    if(cb.onComplete) cb.onComplete(c.id, c.name, { pct:TUNING.FINISH_PCT, t:now });
+  }
+  // The victory chime itself, for hosts: four quick rising notes on the host's own AudioContext.
+  // Kept clear of the warning tones (740 / 1046 Hz steady) so it can't be mistaken for one.
+  const CHIME_NOTES = [784, 988, 1175, 1568];   // G5 B5 D6 G6
+  function playChime(ctx, dest, gain){
+    if(!ctx) return false;
+    try{
+      const t0 = ctx.currentTime + 0.02, peak = gain || 0.5;
+      CHIME_NOTES.forEach((f, i)=>{
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        const t = t0 + i*0.11, len = i===CHIME_NOTES.length-1 ? 0.55 : 0.16;
+        o.type = "triangle"; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(peak, t+0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, t+len);
+        o.connect(g); g.connect(dest || ctx.destination);
+        o.start(t); o.stop(t+len+0.03);
+      });
+      return true;
+    }catch(e){ return false; }
   }
   // Signed perpendicular distance from P to the INFINITE line through A,B —
   // sign indicates which side of the line P is on, magnitude is the true
@@ -398,7 +432,7 @@
     return {
       level:0, firstAlertAt:null, excessAtFirstAlert:0,
       maxExcessM:0, prevExcessM:null, growthStreakStartAt:null, committed:false,
-      alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false, sawTop:false, topSkied:false, lastOutsideNow:null
+      alertCount:0, lastDebugAt:0, lastEmittedLevel:0, everInside:false, sawTop:false, topSkied:false, done:false, lastOutsideNow:null
     };
   }
 
@@ -629,6 +663,7 @@
       // (a genuine "gone away," not just "currently between the true edge
       // and the buffer/relevant-range boundary").
       dropInStep(c, st, near, near.distM <= halfW);
+      finishStep(c, st, near, excessM <= 0, now);
       if(near.distM <= halfW) st.everInside = true; // gates whether an alert can ever start at all — see the "no approach ping" doc comment at the top of the file
       // "Hard line in space" requirement, 2026-09-19: the user explicitly
       // asked for the corridor's edge to be a pure function of CURRENT
@@ -687,7 +722,7 @@
       if(cb.onDebug && (outsideNowChanged || (near.distM<=maxRelevantM && now-(st.lastDebugAt||0)>=500))){
         st.lastDebugAt=now;
         cb.onDebug(c.id, c.name, { coverage, engaged, distM:near.distM, halfW,
-          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside, dropIn:c.needsDropIn ? (st.topSkied?"ok":st.sawTop?"top":"no") : null,
+          bufferM:TUNING.OUTSIDE_BUFFER_M, maxRelevantM, everInside:st.everInside, dropIn:c.needsDropIn ? (st.done?"done":st.topSkied?"ok":st.sawTop?"top":"no") : null,
           headingDeg, speed:fix.speed, excessM, level:st.level, committed:st.committed,
           lat:latLon[0], lon:latLon[1], responsive, biasM:near.biasM||0, crossing:outsideNowChanged }); // raw position + a "crossing" flag marking the exact tick outsideNow flipped
       }
@@ -702,7 +737,7 @@
         const wasActive = st.level>0;
         const backInside = excessM<=0 || crossedOppositeSide;
         const outOfRelevantRange = near.distM > maxRelevantM;
-        const everInside = st.everInside, sawTop = st.sawTop, topSkied = st.topSkied;
+        const everInside = st.everInside, sawTop = st.sawTop, topSkied = st.topSkied, done = st.done;
         // Field bug found 2026-09-19 (real Test Mode report: "tone never
         // turned off, had to exit Test Mode to kill it" — the excursion had
         // walked straight past a corridor's END, well beyond maxRelevantM):
@@ -728,7 +763,7 @@
         // pre-entry within relevant range) keeps whatever entry status it
         // already had.
         if(!outOfRelevantRange){
-          st.everInside = everInside; st.sawTop = sawTop; st.topSkied = topSkied;
+          st.everInside = everInside; st.sawTop = sawTop; st.topSkied = topSkied; st.done = done;
           // Also preserve lastOutsideNow (same reasoning) — without this,
           // it gets wiped to null on EVERY tick while genuinely inside
           // (this branch runs every such tick), so by the time the player
@@ -742,6 +777,12 @@
         }else if(wasActive && outOfRelevantRange && !wasCommitted && cb.onDisengage){
           cb.onDisengage(c.id, c.name, {level:levelAtReset, maxExcessM:maxExcessAtReset, excessM, widthM:c.widthM, t:now});
         }
+        continue;
+      }
+
+      if(st.done){
+        // Finished (see finishStep): the rider may leave anywhere without a tone.
+        st.prevExcessM = excessM;
         continue;
       }
 
@@ -904,7 +945,7 @@
     for(const c of corridors){
       if(isEligible && !isEligible(c.id)) continue;
       const st = stateByCorridor.get(c.id);
-      if(!st || st.committed) continue;
+      if(!st || st.committed || st.done) continue;
       const predExcessM = predicted!=null ? predictedExcessM(c, predicted) : null;
       let audible, level;
       if(st.level>0){
@@ -968,5 +1009,5 @@
     return Math.min(lvl, TUNING.MAX_LEVEL);
   }
 
-  window.ChuteGuard = { load, tick, unload, getActiveAlarm, isOnLift, TUNING };
+  window.ChuteGuard = { load, tick, unload, getActiveAlarm, isOnLift, playChime, TUNING };
 })();

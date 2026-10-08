@@ -2617,6 +2617,17 @@ function startCgAlarm(corridorId, level){
     if("vibrate" in navigator){ try{ navigator.vibrate(CG_VIBE[level-1]); }catch(e){} }
   }catch(e){}
 }
+// Victory chime (2026-10-08): the notes live in chute-guard.js (ChuteGuard.playChime) so Test Mode
+// plays the same sound; here it goes through the context primed by the Start-tracking tap.
+function playCgChime(){
+  try{
+    if(!_cgAc) chuteGuardPrimeAudio();
+    if(_cgAc.state==="suspended") _cgAc.resume();
+    const ok = ChuteGuard.playChime(_cgAc, _cgMaster||_cgAc.destination, 0.6);
+    cgLog("CHIME "+(ok?"played":"failed")+" (ctx "+_cgAc.state+")");
+    if("vibrate" in navigator){ try{ navigator.vibrate([60,60,60,60,160]); }catch(e){} }
+  }catch(e){}
+}
 function updateCgAlarmLevel(level){
   if(!_cgAlarm) return;
   cgLog("TONE level L"+_cgAlarm.level+" -> L"+level);
@@ -2760,6 +2771,15 @@ function chuteGuardCallbacks(){
       cgLog("CLEAR \""+(name||"corridor")+"\"");
       _cgLastToastLevel = 0;
       rqToast("✓ back on \""+(name||"corridor")+"\"");
+    },
+    // Dropped in from the top and skied 80 % of it (chute-guard.js finishStep): victory chime, and
+    // the guard is quiet for this chute/run from here, so the rider can leave it anywhere.
+    onComplete(corridorId, name, info){
+      if(!Quest.isGuarded(corridorId)) return;   // no guard on it = no warning to lift, no chime
+      cgLog("COMPLETE \""+(name||"corridor")+"\" "+Math.round(((info&&info.pct)||0)*100)+"% from the top — guard quiet for it");
+      _cgLastToastLevel = 0;
+      playCgChime();
+      rqToast("🎉 \""+(name||"corridor")+"\" skied — guard off for it, exit when you like");
     },
     onDisengage(corridorId, name, info){
       if(!Quest.isGuarded(corridorId)) return;

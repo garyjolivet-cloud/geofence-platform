@@ -7323,6 +7323,13 @@ function chuteGuardCallbacks(){
       if(!_cgTestGuarded(corridorId)) return;
       simLogEv("sev-sys","back inside \""+(name||"corridor")+"\"");
     },
+    // Same as live: dropped in from the top + 80 % skied -> chime, then no tone for it.
+    onComplete(corridorId,name,info){
+      if(!_cgTestGuarded(corridorId)) return;
+      const played = simSoundOn && SimVoice.ctx && ChuteGuard.playChime(SimVoice.ctx, SimVoice.ctx.destination, 0.6);
+      simLogEv("sev-sys","🎉 completed \""+(name||"corridor")+"\" — "+Math.round(((info&&info.pct)||0)*100)+"% from the top"
+        +(played?", chime":", chime skipped (sound off)")+" — guard quiet for it until you leave");
+    },
     onDisengage(corridorId,name,info){
       if(!_cgTestGuarded(corridorId)) return;
       simLogEv("sev-sys","left \""+(name||"corridor")+"\" on purpose (max +"+((info&&info.maxExcessM)||0).toFixed(1)+"m) — guard silenced");
