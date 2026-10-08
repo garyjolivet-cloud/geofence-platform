@@ -6,7 +6,8 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
 const path = require("path");
-const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8").replace(/\r/g, "");
+// QUEST_TUNING moved to quest-core.js on 2026-10-08; both are read as one source.
+const rq = (fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8") + fs.readFileSync(path.join(__dirname, "../frontend/quest-core.js"), "utf8")).replace(/\r/g, "");
 const info = rq.slice(rq.indexOf("function openMapInfo(){"), rq.indexOf("function renderFogMap(){"));
 
 test("My map has an info button that opens the panel over the map (no page change)", () => {

@@ -17,7 +17,8 @@ const path = require("path");
 let pass = 0, fail = 0;
 function assert(cond, msg) { if (cond) pass++; else { fail++; console.log("FAIL:", msg); } }
 
-const html = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
+// The run engine (QUEST_TUNING, QGeo, _classifyAndLog, ...) moved to quest-core.js on 2026-10-08; both are read as one source.
+const html = (fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8") + "\n" + fs.readFileSync(path.join(__dirname, "../frontend/quest-core.js"), "utf8"));
 
 const tuningM = html.match(/const SLEEP_TUNING = \{[\s\S]*?\n\};/);
 if (!tuningM) { console.log("FAIL: could not extract SLEEP_TUNING from ridge-quest.html"); process.exit(1); }

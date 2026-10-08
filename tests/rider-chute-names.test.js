@@ -12,7 +12,8 @@ const path = require("path");
 
 const root = path.join(__dirname, "..");
 const worker = fs.readFileSync(path.join(root, "backend/worker.js"), "utf8").replace(/\r/g, "");
-const rq = fs.readFileSync(path.join(root, "frontend/ridge-quest.html"), "utf8").replace(/\r/g, "");
+// The run engine moved to quest-core.js on 2026-10-08; both are read as one source.
+const rq = (fs.readFileSync(path.join(root, "frontend/ridge-quest.html"), "utf8") + fs.readFileSync(path.join(root, "frontend/quest-core.js"), "utf8")).replace(/\r/g, "");
 const social = fs.readFileSync(path.join(root, "frontend/social-card.js"), "utf8");
 const QN = require("../frontend/quest-narration.js");
 

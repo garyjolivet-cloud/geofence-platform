@@ -13,7 +13,8 @@ const assert = require("node:assert");
 const fs = require("fs");
 const path = require("path");
 
-const html = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8").replace(/\r/g, "");
+// The run engine (QUEST_TUNING, QGeo, _classifyAndLog, ...) moved to quest-core.js on 2026-10-08; both are read as one source.
+const html = (fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8") + "\n" + fs.readFileSync(path.join(__dirname, "../frontend/quest-core.js"), "utf8")).replace(/\r/g, "");
 function extractFrom(src, tag) {
   const s = src.indexOf(tag);
   assert.ok(s >= 0, "found " + tag);
@@ -38,7 +39,7 @@ function makeQuest(opts) {
   const Q = new Function("QGeo", "QUEST_TUNING", "passesOverlap", "Date", "setTimeout", "cgLog",
     "return {" + methods + "};")(QGeo, QUEST_TUNING, passesOverlap, Date, setTimeout, () => {});
   Object.assign(Q, {
-    _passes: [], states: {}, corridors: opts.corridors || [],
+    _passes: [], states: {}, corridors: opts.corridors || [], riderName: (zoneId, official) => official,
     onCoverage: (name, cov, ok, why) => said.push({ name, ok, why }),
     _postRun: (c, run) => posted.push(c.name),
   });

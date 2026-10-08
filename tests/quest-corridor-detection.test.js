@@ -23,6 +23,8 @@
 "use strict";
 // ridge-quest.html shows a rider's own chute names via rqName / RQNames (2026-10-03); none are set in these tests.
 global.rqName = (zoneId, official) => official;
+// Since 2026-10-08 the run engine (quest-core.js) asks its host: this.riderName(zoneId, official).
+global.riderName = (zoneId, official) => official;
 global.RQNames = { get: () => null, map: new Map() };
 const fs = require("fs");
 const path = require("path");
@@ -30,7 +32,8 @@ const path = require("path");
 let pass = 0, fail = 0;
 function assert(cond, msg) { if (cond) pass++; else { fail++; console.log("FAIL:", msg); } }
 
-const html = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
+// The run engine (QUEST_TUNING, QGeo, _classifyAndLog, ...) moved to quest-core.js on 2026-10-08; both are read as one source.
+const html = (fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8") + "\n" + fs.readFileSync(path.join(__dirname, "../frontend/quest-core.js"), "utf8"));
 
 // ---- extract QGeo + QUEST_TUNING ----
 const qgeoM = html.match(/const QGeo = \{[\s\S]*?\n\};/);
@@ -55,6 +58,7 @@ const classifyRaw = new Function("corridor", "buffer", "selectedActivity", "isFi
 // Old call shape (corridor, buffer, activity, QGeo, QUEST_TUNING), as a
 // player who has LEFT the corridor (isFinal). Returns the run, or undefined.
 function classify(corridor, buffer, sel, QG, QT) {
+  if (this && !this.riderName) this.riderName = (zoneId, official) => official;
   const r = classifyRaw.call(this, corridor, buffer, sel, true, QG, QT);
   return (r && typeof r === "object") ? r : undefined;
 }
@@ -73,14 +77,26 @@ function extractMethodBody(tag) {
 // _tick's narration is the shared frontend/quest-narration.js (2026-10-02) — the real module.
 const QuestNarration = require("../frontend/quest-narration.js");
 // eslint-disable-next-line no-new-func
-const tickFn = new Function("QuestNarration", "return function(corridor, p, selectedActivity, QGeo, QUEST_TUNING){" +
+const tickRaw = new Function("QuestNarration", "return function(corridor, p, selectedActivity, QGeo, QUEST_TUNING){" +
   extractMethodBody("_tick(corridor, p, selectedActivity){") + "};")(QuestNarration);
+// The recorder half of _tick is QuestCore.runMethods._record (quest-core.js) -- the real one.
+// eslint-disable-next-line no-new-func
+const recordFn = new Function("return function(corridor, p, selectedActivity, st, halfW, dist, QGeo, QUEST_TUNING){" +
+  extractMethodBody("_record(corridor, p, selectedActivity, st, halfW, dist){") + "};")();
+// Every stand-in host gets the real recorder and the name hook, as Object.assign(Quest, QuestCore.runMethods) gives the page.
+const tickFn = { call(host, corridor, p, sel, QG, QT) {
+  if (host && !host._record) host._record = function (c, pp, s, st, halfW, dist) { return recordFn.call(this, c, pp, s, st, halfW, dist, QG, QT); };
+  if (host && !host.riderName) host.riderName = (zoneId, official) => official;
+  return tickRaw.call(host, corridor, p, sel, QG, QT);
+} };
 
 // A Quest stand-in wired to the REAL _tick and REAL _classifyAndLog.
 function makeQuest(corridors) {
   const logged = [], feedback = [];
   const Q = {
     states: {}, corridors, selectedActivity: "ski", onNarrate: null,
+    riderName: (zoneId, official) => official,
+    _record(c, p, sel, st, halfW, dist) { return recordFn.call(Q, c, p, sel, st, halfW, dist, QGeo, QUEST_TUNING); },
     onCoverage: (name, pct, passed, reason) => feedback.push({ name, pct, passed, reason }),
     _classifyAndLog(c, b, s, isFinal) {
       const r = classifyRaw.call(Q, c, b, s, isFinal, QGeo, QUEST_TUNING);

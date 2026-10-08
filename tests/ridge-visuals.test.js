@@ -15,7 +15,8 @@ const assert = require("node:assert");
 const modSrc = fs.readFileSync(path.join(__dirname, "../frontend/ridge-visuals.js"), "utf8");
 require("../frontend/ridge-visuals.js");
 const V = globalThis.RidgeVisuals;
-const html = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8").replace(/\r/g, "");
+// The run engine (QUEST_TUNING, QGeo, _classifyAndLog, ...) moved to quest-core.js on 2026-10-08; both are read as one source.
+const html = (fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8") + "\n" + fs.readFileSync(path.join(__dirname, "../frontend/quest-core.js"), "utf8")).replace(/\r/g, "");
 
 function extract(startTag) {
   const startIdx = html.indexOf(startTag);
