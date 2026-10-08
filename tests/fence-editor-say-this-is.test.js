@@ -49,5 +49,26 @@ const setAll = new Function(extractFunction("function thisIsLine(z){") + "\n" +
   assert(/render\(\);/.test(body), "render() autosaves the draft; Publish sends it");
 })();
 
+// 2026-10-07: "i renamed crystal bowl right and it still uses old name in test even after publishing"
+(function testRenameCarriesTheAutomaticLine() {
+  // eslint-disable-next-line no-new-func
+  const setStopName = new Function(extractFunction("function thisIsLine(z){") + "\n" +
+    extractFunction("function setStopName(z, name){") + "\nreturn setStopName;")();
+  let z = { name: "Right Crysal Right", say: "This is Right Crysal Right" };
+  setStopName(z, "Crystal Bowl right");
+  assert(z.name === "Crystal Bowl right" && z.say === "This is Crystal Bowl right", "the automatic line follows a rename, got " + z.say);
+  z = { name: "PW", say: "This is Peee Double U" };
+  setStopName(z, "P W");
+  assert(z.say === "This is Peee Double U", "a line the author wrote is left alone");
+  z = { name: "Bat Man" };
+  setStopName(z, "Batman");
+  assert(z.say === undefined, "a stop with no line gets none");
+  z = { name: "Bat Man", say: "This is Bat Man" };
+  setStopName(z, "");
+  assert(z.say === "This is Bat Man", "clearing the name keeps the line");
+  assert(!/[^.\w]z\.name\s*=\s*(row\.name|j\.name|document)/.test(html) && (html.match(/setStopName\(z, /g) || []).length === 5,   // 4 calls + the definition
+    "all four rename paths (name field, ⋯ menu, library reconcile, ⟳ refresh) go through setStopName");
+})();
+
 console.log(pass + " passed, " + fail + " failed");
 if (fail > 0) process.exit(1);

@@ -3331,7 +3331,8 @@ document.getElementById("pAudioPlay").addEventListener("click",pAudioTogglePlay)
 function bindProp(id,fn){ document.getElementById(id).addEventListener("input",()=>{ if(sel<0)return; fn(zones[sel]); render(); }); }
 bindProp("pName",z=>{
   const oldId=z.id;
-  z.name=document.getElementById("pName").value; z.id=uniqueZoneId(slug(z.name),z);
+  setStopName(z, document.getElementById("pName").value); z.id=uniqueZoneId(slug(z.name),z);
+  document.getElementById("pSay").value=z.say||"";   // the automatic "This is <name>" line follows the rename
   // coBulkSel (bulk-assign checkboxes) is a Set of zone ids — rename
   // changes z.id (it's slug-derived from the name), so without this the
   // stop silently unchecks itself on the next render and any subsequent
@@ -4677,7 +4678,7 @@ async function reconcileLinkedCorridors(){
       if(!row || !Array.isArray(row.points) || row.points.length<2) continue;
       // Names are authored in the GPX Editor too (library wins). The stop's id is kept, so a
       // rider's run/chute-line history stays attached to it after a rename.
-      if(row.name && row.name!==z.name){ z.name=row.name; changed=true; }
+      if(row.name && row.name!==z.name){ setStopName(z, row.name); changed=true; }
       const newCoords=_c6(_strideCorridor(row.points));
       if(JSON.stringify(newCoords)!==JSON.stringify(_c6(z.shape.coords))){ z.shape.coords=newCoords; changed=true; }
       const nw=row.widthM||10; if(nw!==z.shape.widthM){ z.shape.widthM=nw; changed=true; }
@@ -4709,7 +4710,7 @@ async function refreshCorridorShapeFromLibrary(z){
     const j=await r.json();
     const coords=_c6(_strideCorridor(j.points||[]));
     if(coords.length>=2) z.shape.coords=coords;
-    if(j.name) z.name=j.name;   // library name wins; the stop id is kept
+    if(j.name) setStopName(z, j.name);   // library name wins; the stop id is kept
     z.shape.widthM=j.widthM||10;
     z.difficulty=j.difficulty||null; z.runType=j.runType||"run"; z.activityType=j.activityType||"hike";
     z.descentM=j.elevLossM!=null?Math.round(j.elevLossM):null;
@@ -4854,7 +4855,7 @@ function renameZone(zoneId){
   const name=(prompt("Rename stop:",z.name)||"").trim();
   if(!name||name===z.name) return;
   const oldId=z.id;
-  z.name=name; z.id=uniqueZoneId(slug(z.name),z);
+  setStopName(z, name); z.id=uniqueZoneId(slug(z.name),z);
   // Same coBulkSel id-swap as the pName field binding above — this is the
   // other of the two places a zone gets renamed (⋯ menu vs. typing in the
   // properties panel), and both change z.id the same way.
@@ -5052,8 +5053,17 @@ document.getElementById("coBulkToggle").onclick=()=>{
 };
 document.getElementById("coBulkMove").onclick=bulkMoveSelectedStops;
 // Every stop's spoken line (the TTS "say", not a pipeline) = "This is " + its name
-// (user, 2026-10-02). One-shot: later renames don't rewrite it. Returns the stops changed.
+// (user, 2026-10-02). Returns the stops changed.
 function thisIsLine(z){ const n=(z.name||"").trim(); return n ? "This is "+n : null; }
+// Every rename goes through here (typing the name, the ⋯ menu, a library rename pulled by
+// reconcile / ⟳): a stop whose line is still the automatic "This is <old name>" gets
+// "This is <new name>"; a line the author wrote themselves is left alone. 2026-10-07: Crystal
+// Bowl right was renamed in the library and Test Mode / the phone kept saying the old name.
+function setStopName(z, name){
+  const was=thisIsLine(z);
+  z.name=name;
+  if(was && z.say===was) z.say=thisIsLine(z)||z.say;
+}
 function setAllStopLinesThisIs(list){
   let changed=0;
   list.forEach(z=>{ const line=thisIsLine(z); if(line && z.say!==line){ z.say=line; changed++; } });

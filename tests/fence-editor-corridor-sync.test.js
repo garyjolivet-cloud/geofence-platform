@@ -26,6 +26,8 @@ function extract(startTag) {
   return html.slice(s, i + 1);
 }
 const SRC = "const _corrAddsInFlight=new Set();\n" + [
+  "function thisIsLine(z){",
+  "function setStopName(z, name){",
   "function bearingTo(a,b){",
   "function chuteBearingFromLine(z){",
   "function duplicateCorridorStops(){",
@@ -81,6 +83,16 @@ test("a rename in the GPX Editor reaches the linked stop on load; its id is kept
   assert.strictEqual(z.name, "Porcupine");
   assert.strictEqual(z.id, "pioneer", "the stop id (what rider history is keyed on) never changes");
   assert.ok(h.renders.length >= 1, "the editor redraws with the new name");
+});
+
+test("a library rename carries the automatic spoken line; an authored line is kept (2026-10-07)", async () => {
+  const z = Object.assign(corrZone("crystal", "Right Crysal Right", "d59b"), { say: "This is Right Crysal Right" });
+  const own = Object.assign(corrZone("pw", "PW", "pw01"), { say: "This is Peee Double U" });
+  const h = harness([z, own], [row("d59b", "Crystal Bowl right"), row("pw01", "P W")]);
+  await h.api.reconcileLinkedCorridors();
+  assert.strictEqual(z.say, "This is Crystal Bowl right");
+  assert.strictEqual(own.name, "P W");
+  assert.strictEqual(own.say, "This is Peee Double U");
 });
 
 test("the per-stop refresh button also pulls the new name", async () => {
