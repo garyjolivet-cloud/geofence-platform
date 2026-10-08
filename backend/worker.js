@@ -1362,6 +1362,22 @@ async function api(request, env, url) {
     return json({ ok: true, id: lid, visible: b.visible }, 200, AC);
   }
 
+  // Score a run WITHOUT saving it (2026-10-08, the Fence Editor's Test Mode simulator; later the
+  // rider's own simulator): the same questPoints() + snow bonus /api/quest-runs uses, so there is
+  // one formula and no client copy. Reads the day's snow, writes nothing, needs no sign-in.
+  if (path === "/api/quest-score" && method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    if (!["ski", "lift", "hike", "bike", "drive", "xcski"].includes(b.activity))
+      return json({ error: "activity must be ski, lift, hike, bike, drive, or xcski" }, 400, AC);
+    const startedAt = (typeof b.startedAt === "string" && !isNaN(Date.parse(b.startedAt))) ? b.startedAt : new Date().toISOString();
+    const verticalM = (typeof b.verticalM === "number" && isFinite(b.verticalM)) ? b.verticalM : null;
+    const distanceM = (typeof b.distanceM === "number" && isFinite(b.distanceM)) ? b.distanceM : null;
+    const snowRow = env.DB ? await env.DB.prepare("SELECT hn24_cm FROM snow_history WHERE snapshot_date=?").bind(questDateBucket(startedAt)).first().catch(() => null) : null;
+    const snowBonusRaw = questSnowBonus(snowRow ? snowRow.hn24_cm : null);
+    const snowBonus = (b.activity === "ski" || b.activity === "hike") ? snowBonusRaw : 1;
+    return json({ ok: true, points: questPoints(b.activity, b.difficulty, b.runType, verticalM, distanceM, snowBonus), snowBonus }, 200, AC);
+  }
+
   if (path === "/api/quest-runs" && method === "POST") {
     const P = await playerAuth(request, env);
     if (!P) return json({ error: "not authenticated" }, 401, AC);

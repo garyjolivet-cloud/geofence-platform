@@ -115,6 +115,16 @@
     return function (ids) { return ids.map(function (id) { return byId[id]; }).filter(Boolean); };
   }
 
+  // The image's weather line from GET /api/weather + GET /api/snow-history (null when neither answered).
+  function weatherFrom(w, snow) {
+    return (w && !w.error) || (snow && snow.length) ? {
+      snow24: snow && snow.length ? snow[0].hn24_cm : null,
+      tempC: w && w.ww_temp_c != null ? w.ww_temp_c : null,
+      windKph: w && w.ww_wind_spd_kph != null ? Math.round(w.ww_wind_spd_kph) : null,
+      windDir: w && w.ww_wind_dir_deg != null ? ["N", "E", "S", "W"][Math.round(w.ww_wind_dir_deg / 90) % 4] : null
+    } : null;
+  }
+
   // Real data, today. `ctx` = { playerId, rider, corridors, track (RQTrack.segments()), dayKey(isoString)->"YYYY-MM-DD", today:"YYYY-MM-DD" }
   async function collectDay(api, ctx) {
     var pid = encodeURIComponent(ctx.playerId);
@@ -145,12 +155,7 @@
       chutes: chutes, chuteCount: chutes.length,
       bootPacks: { count: (bp.today && bp.today.count) || 0, verticalM: (bp.today && bp.today.verticalM) || 0, routes: bp.routes || [] },
       lifts: liftList(lf.routes), liftRides: (lf.today && lf.today.count) || 0,
-      weather: (w && !w.error) || (snow && snow.length) ? {
-        snow24: snow && snow.length ? snow[0].hn24_cm : null,
-        tempC: w && w.ww_temp_c != null ? w.ww_temp_c : null,
-        windKph: w && w.ww_wind_spd_kph != null ? Math.round(w.ww_wind_spd_kph) : null,
-        windDir: w && w.ww_wind_dir_deg != null ? ["N", "E", "S", "W"][Math.round(w.ww_wind_dir_deg / 90) % 4] : null
-      } : null,
+      weather: weatherFrom(w, snow),
       season: { days: days, verticalM: seasonV },
       geo: {
         network: networkOf(ctx.corridors), ref: ctx.ref || null,
@@ -158,6 +163,54 @@
         chutes: pick(chutes.map(function (c) { return c.zoneId; })).map(function (c) { return lonlat(c.path); }),
         lifts: pick((lf.routes || []).map(function (r) { return r.zoneId; })).map(function (c) { return { name: shortLift(c.name), path: lonlat(c.path) }; }),
         bootPacks: pick((bp.routes || []).map(function (r) { return r.zoneId; })).map(function (c) { return lonlat(c.path); })
+      }
+    };
+  }
+
+  // A day built from runs held in memory -- the simulator (Fence Editor Test Mode 2026-10-08; later
+  // the rider's own). Same shape as collectDay, nothing fetched, no season. `runs` =
+  // [{zoneId, runName, difficulty, runType, activity:"ski"|"hike"|"lift", verticalM, points}];
+  // `ctx` = { rider, resort, corridors, track ([[lon,lat],...] segments), ref, dateLabel, weather }.
+  // Vertical is lift rides + boot packs, like Home and collectDay.
+  function dayFromRuns(runs, ctx) {
+    ctx = ctx || {};
+    var byZone = function (list) {
+      var map = {}, out = [];
+      list.forEach(function (r) {
+        var g = map[r.zoneId];
+        if (!g) { g = map[r.zoneId] = { zoneId: r.zoneId, name: r.runName || "Run", difficulty: r.difficulty || null, count: 0, verticalM: 0 }; out.push(g); }
+        g.count++; g.verticalM += Math.abs(r.verticalM || 0);
+      });
+      return out;
+    };
+    var all = runs || [];
+    var ski = all.filter(function (r) { return r.activity === "ski"; });
+    var chutes = byZone(ski.filter(function (r) { return r.runType === "chute"; }));
+    var bp = byZone(all.filter(function (r) { return r.activity === "hike"; }));
+    var lf = byZone(all.filter(function (r) { return r.activity === "lift"; }));
+    var sum = function (rows) { return rows.reduce(function (s, r) { return s + r.verticalM; }, 0); };
+    var cnt = function (rows) { return rows.reduce(function (s, r) { return s + r.count; }, 0); };
+    var pick = geoFor(ctx.corridors);
+    var ids = function (rows) { return rows.map(function (r) { return r.zoneId; }); };
+    var d = ctx.date || new Date();
+    return {
+      kind: "day", sim: true,
+      dateLabel: ctx.dateLabel || d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }),
+      resort: ctx.resort || RESORT, rider: ctx.rider || "",
+      verticalM: Math.round(sum(bp) + sum(lf)),
+      points: all.reduce(function (s, r) { return s + (r.points || 0); }, 0),
+      runs: ski.length,
+      chutes: chutes.map(function (c) { return { name: c.name, difficulty: c.difficulty, count: c.count, zoneId: c.zoneId }; }), chuteCount: chutes.length,
+      bootPacks: { count: cnt(bp), verticalM: Math.round(sum(bp)), routes: bp.map(function (r) { return { name: r.name, count: r.count, verticalM: Math.round(r.verticalM), zoneId: r.zoneId }; }) },
+      lifts: liftList(lf), liftRides: cnt(lf),
+      weather: ctx.weather || null,
+      season: null,
+      geo: {
+        network: networkOf(ctx.corridors), ref: ctx.ref || null,
+        track: (ctx.track || []).filter(function (s) { return s.length >= 2; }),
+        chutes: pick(ids(chutes)).map(function (c) { return lonlat(c.path); }),
+        lifts: pick(ids(lf)).map(function (c) { return { name: shortLift(c.name), path: lonlat(c.path) }; }),
+        bootPacks: pick(ids(bp)).map(function (c) { return lonlat(c.path); })
       }
     };
   }
@@ -809,6 +862,7 @@
     FORMATS: FORMATS, COL: COL,
     collectDay: collectDay, collectSeason: collectSeason,
     testDay: testDay, testSeason: testSeason,
+    dayFromRuns: dayFromRuns, weatherFrom: weatherFrom,
     renderHeroMap: renderHeroMap, drawFallbackHero: drawFallbackHero,
     isBlank: isBlank,   // also used by Home's My-map picture (ridge-quest.html renderMyMapPicture)
     draw: draw, drawStory: drawStory, drawWide: drawWide,

@@ -501,6 +501,10 @@
 <script src="/kalman-filter.js"></script>
 <script src="/chute-guard.js"></script>
 <script src="/quest-narration.js"></script>
+<!-- Ridge Quest run engine + one in-memory simulated day: Test Mode scores like the phone (see QuestRunSim). -->
+<script src="/quest-core.js"></script>
+<script src="/quest-sim-day.js"></script>
+<script src="/ridge-visuals.js"></script>
 <script src="/guard-overlap.js"></script>
 <script src="/long-press.js"></script>
 <script src="/ble-gps.js"></script>
@@ -593,7 +597,7 @@
 
 <!-- Social media export test screen — see #socialTestBtn / openSocialTest(). -->
 <div id="socialTestOverlay">
-  <div class="stBar"><h2>Social media export — test data</h2>
+  <div class="stBar"><h2 id="socialTestTitle">Social media export — test data</h2>
     <span id="socialTestStatus" style="font:12px Barlow;color:var(--fog)"></span>
     <button id="socialTestRegen">⟳ Regenerate</button>
     <button onclick="closeSocialTest()">✕ Close</button></div>
@@ -714,6 +718,15 @@
 
   <!-- SIM PANEL — visible in test mode only -->
   <div id="simPanel" style="display:none">
+    <!-- Ridge Quest workspaces only: the simulated day (quest-sim-day.js). Never saved; cleared each ▶ Test. -->
+    <div id="simToday" style="display:none">
+      <label class="k">today — <span id="simRider"></span> · test, not saved</label>
+      <div id="simTodayNums" style="font-family:'Barlow Condensed';font-size:14px;font-weight:600;color:var(--snow);margin:2px 0 4px"></div>
+      <div class="row" style="margin:0 0 6px">
+        <button id="simLeaderboard" class="ghost" style="flex:1" title="Today's leaderboard for this test (only the test rider; nothing is saved)">🏆 Leaderboard</button>
+        <button id="simSocial" class="ghost" style="flex:1" title="The share images for this test day, drawn by the same code as the phone">📸 Social media</button>
+      </div>
+    </div>
     <label class="k">zone states</label>
     <!-- Capped at ~8 rows with its own scrollbar (2026-10-03): RidgeQuest's 145 stops pushed the
          log, Walk, Guard, Sound and Reset below the bottom of the panel. -->
@@ -7419,6 +7432,110 @@ const QuestSim={
     this.q.say(text);
   }
 };
+// ---- Ridge Quest scoring in Test Mode: a true simulator (2026-10-08, Gary: "test needs to be a
+// true simulator. score chutes runs and social media need to be part of test") ----
+// The run engine is the phone's own (frontend/quest-core.js, mixed into this host exactly as it is
+// mixed into ridge-quest.html's Quest): same recorder, same end-to-end verification, same
+// classification, same one-descent-one-chute. Only _postRun differs: nothing is saved -- the run
+// is scored by POST /api/quest-score (the server's own formula, no write) and kept in an
+// in-memory day (frontend/quest-sim-day.js) under the admin's login name. The day is cleared
+// every time Test starts. Fed the avatar's exact position, like the guard and the voice here.
+// Not mirrored: armed isolation, chute lines, the rider's own chute names.
+let QuestRunSim=null, _simDay=null, _simTrack=[];
+function simRiderName(){
+  try{ const u=JSON.parse(localStorage.getItem("gp.user")||"null"); return (u&&(u.name||u.email))||"Test rider"; }catch(e){ return "Test rider"; }
+}
+function questRunSimCorridors(bundle){
+  const QG=QuestCore.QGeo, ref=bundle.ref||[0,0];
+  // Same mapping as ridge-quest.html's Quest.loadCorridors.
+  return (bundle.zones||[]).map(z=>{
+    const target=(z.layers||[]).find(l=>l.kind==="target" && l.geometry && l.geometry.type==="corridor");
+    if(!target || z.movingAudio || !Array.isArray(target.geometry.path) || target.geometry.path.length<2) return null;
+    const path=target.geometry.path;
+    let lengthM=0; for(let i=1;i<path.length;i++) lengthM+=QG.haversineM(path[i-1],path[i]);
+    return { zoneId:z.id, name:z.name||"Run", difficulty:z.difficulty||null, runType:z.runType||"run", activityType:z.activityType||null,
+             descentM:target.geometry.descentM!=null?target.geometry.descentM:null, climbM:target.geometry.climbM!=null?target.geometry.climbM:null,
+             widthM:target.geometry.widthM||10, path, lengthM, ref };
+  }).filter(Boolean);
+}
+// newDay=true only from enterTestMode(); Walk stops / Reset rebuild the engine and keep the day.
+function questRunSimLoad(bundle, newDay){
+  QuestRunSim=null;
+  const box=document.getElementById("simToday");
+  if(!_questOn || typeof QuestCore==="undefined" || typeof QuestSimDay==="undefined"){ if(box) box.style.display="none"; _simDay=null; return; }
+  const corridors=questRunSimCorridors(bundle);
+  if(newDay || !_simDay){ _simDay=QuestSimDay.create({ rider:simRiderName(), corridors }); _simTrack=[]; }
+  QuestRunSim=Object.assign({
+    states:{}, corridors, _passes:[],
+    onCoverage(name, pct, passed, reason){
+      if(!passed) simLogEv("sev-warn","RUN not counted: \""+name+"\" — "+(reason||"not a complete pass")+" ("+Math.round((pct||0)*100)+"% covered)");
+    },
+    riderName(zoneId, official){ return official; },
+    runLog(line){ simLogEv("sev-sys", line); },
+    _postRun(corridor, run){ simScoreRun(run); }
+  }, QuestCore.runMethods);
+  if(box) box.style.display="";
+  document.getElementById("simRider").textContent=_simDay.rider;
+  paintSimToday();
+}
+function questRunSimTick(raw, sm, t){
+  if(!QuestRunSim) return;
+  const p={ lat:raw.lat, lon:raw.lon, acc:raw.acc, t, speed:sm.speed, alt:raw.alt!=null?raw.alt:null };
+  QuestRunSim.corridors.forEach(c=>QuestRunSim._record(c, p, "ski"));
+  QuestRunSim._settlePasses(false);
+  // The day's track for the share image: a point every 8 m, a new piece after a jump (click-to-move).
+  const seg=_simTrack[_simTrack.length-1], last=seg&&seg[seg.length-1];
+  const d=last?QuestCore.QGeo.haversineM([last[1],last[0]],[raw.lat,raw.lon]):Infinity;
+  if(!last || d>150) _simTrack.push([[raw.lon,raw.lat]]);
+  else if(d>=8) seg.push([raw.lon,raw.lat]);
+}
+const SIM_ACTIVITY_WORD={ ski:"ski", hike:"boot pack", lift:"lift ride" };
+async function simScoreRun(run){
+  const day=_simDay; if(!day) return;
+  let points=null;
+  try{
+    const r=await fetch("/api/quest-score",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({ activity:run.activity, difficulty:run.difficulty, runType:run.runType, verticalM:run.verticalM, distanceM:run.distanceM, startedAt:run.startedAt })});
+    if(r.ok) points=(await r.json()).points;
+  }catch(e){}
+  if(day!==_simDay) return;   // Test was restarted while the score was on its way
+  let done=null;
+  try{ done=RidgeVisuals.completion(run, day.skiedSet(), QuestRunSim?QuestRunSim.corridors:[]); }catch(e){}
+  day.addRun(run, points||0);
+  const vert=run.verticalM!=null?Math.abs(Math.round(run.verticalM))+" m":"no vertical";
+  simLogEv("sev-enter","RUN logged \""+run.runName+"\" — "+(SIM_ACTIVITY_WORD[run.activity]||run.activity)+" · "+vert
+    +" · "+(points==null?"points unavailable (no connection)":"+"+points+" pts")+(done&&done.text?" — "+done.text:""));
+  if(done&&done.text) toast(done.text+(done.sub?" · "+done.sub:""),"ok");
+  paintSimToday();
+}
+function paintSimToday(){
+  const el=document.getElementById("simTodayNums"); if(!el || !_simDay) return;
+  const t=_simDay.totals();
+  el.textContent="Vertical "+t.verticalM.toLocaleString()+" m · Chutes "+t.chutes+"/"+t.chutesTotal+" · Runs "+t.runs+" · Lift rides "+t.liftRides+" · Points "+t.points.toLocaleString();
+}
+// 🏆 Today's leaderboard for the test: the test rider only (Gary's choice), same row as the phone.
+function closeSimLeaderboard(){ document.getElementById("simLeaderboardOverlay")?.remove(); }
+function openSimLeaderboard(){
+  if(!_simDay) return;
+  closeSimLeaderboard();
+  const t=_simDay.totals(), any=_simDay.runs().length>0, board=any?_simDay.board():[];
+  const box=document.createElement("div");
+  box.id="simLeaderboardOverlay";
+  box.style.cssText="position:fixed;top:64px;right:12px;width:400px;max-width:calc(100vw - 24px);z-index:5000;background:var(--slate);"
+    +"border:1px solid var(--rim);border-radius:12px;color:var(--snow);font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5);padding:12px 14px";
+  const cell=(n,l)=>'<div style="flex:1;text-align:center"><b style="font-family:\'Barlow Condensed\';font-size:20px">'+n+'</b><div style="color:var(--fog);font-size:11px">'+l+'</div></div>';
+  box.innerHTML='<div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px;flex:1">🏆 Leaderboard — today</b><button class="ghost" id="simLbClose" style="width:auto;padding:4px 10px">Close</button></div>'
+    +'<div style="color:var(--fog);margin:2px 0 10px">Test data — not saved, not on the real leaderboard.</div>'
+    +'<div style="font-weight:600;margin-bottom:4px">You — today</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:12px">'+cell(t.verticalM.toLocaleString()+" m","Vertical")+cell(t.chutes+"/"+t.chutesTotal,"Chutes")+cell(t.liftRides,"Lifts")+'</div>'
+    +(board.length ? board.map((row,i)=>'<div style="display:flex;align-items:center;gap:8px;border:1px solid var(--coral);border-radius:8px;padding:8px 10px">'
+        +'<span style="background:var(--rim);border-radius:6px;padding:2px 7px;font-weight:700">#'+(i+1)+'</span>'
+        +'<span style="flex:1;font-weight:600">'+escHtml(row.name)+' (you)</span>'
+        +'<span style="color:var(--fog)">'+Math.round(row.points).toLocaleString()+' pts</span></div>').join("")
+      : '<div class="hint">No runs logged yet today.</div>');
+  document.body.appendChild(box);
+  box.querySelector("#simLbClose").onclick=closeSimLeaderboard;
+}
 function feedSim(lat,lon,acc,t,bleFix){
   acc=acc||5; t=t||Date.now();
   // Altitude priority (3D-mode plan, Step 2, item D rescoped 2026-08-14):
@@ -7489,6 +7606,8 @@ function feedSim(lat,lon,acc,t,bleFix){
   const active=SimFencer.update(raw,simPrevRaw,t);
   // Ridge Quest workspace: speak corridor lines exactly like the live app (see QuestSim).
   try{ QuestSim.tick(raw); }catch(e){ simLogEv("sev-warn","QuestSim: "+(e&&e.message)); }
+  // ...and score the pass with the phone's own run engine (see QuestRunSim).
+  try{ questRunSimTick(raw, sm, t); }catch(e){ simLogEv("sev-warn","QuestRunSim: "+(e&&e.message)); }
   simPrevRaw=raw;
   simPrev=p;
   // Global functions (Code Objects dropped on the map, not a stop) run on
@@ -7804,6 +7923,8 @@ function enterTestMode(){
   paintSimGuardBtn();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks(), { dropInRuns:_questOn });
   QuestSim.load(simBundle); _cgLoadDefaults();
+  questRunSimLoad(simBundle, true);   // an empty simulated day each time Test starts
+  if(QuestRunSim) simLogEv("sev-sys","Ridge Quest simulator: runs, chutes, lift rides and boot packs are scored like the phone as "+_simDay.rider+" — today only, nothing saved");
   if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said; lifts on entry"
     +(questSimNarrOk({runType:"chute",zoneId:null})?"":". Guard OFF: only ARMED runs speak — press and hold a run to arm it"));
   chuteGuardStartSync();
@@ -7914,6 +8035,8 @@ function exitTestMode(){
   // genuinely fresh state instead of reusing anything.
   chuteGuardStopSync(); // stops the sync timer itself too, not just the tone
   if(typeof ChuteGuard!=="undefined") ChuteGuard.unload();
+  QuestRunSim=null; _simDay=null; _simTrack=[];   // the simulated day is never kept
+  closeSimLeaderboard(); if(_socialSimMode) closeSocialTest();
   if(simAmbientTimer){clearInterval(simAmbientTimer);simAmbientTimer=null;}
   Object.values(simAmbientMarkers).forEach(mk=>mk.remove());
   simAmbientMarkers={};
@@ -8318,13 +8441,14 @@ function _socialTestCorridors(){
     path:z.shape.coords.map(c=>[c[1],c[0]]), descentM:z.descentM!=null?z.descentM:null, climbM:z.climbM!=null?z.climbM:null
   }));
 }
-async function renderSocialTest(){
+// simDay (Test Mode's 📸 Social media): the simulated day's own data, Today only -- no season.
+async function renderSocialTest(simDay){
   const grid=document.getElementById("socialTestGrid"), st=document.getElementById("socialTestStatus");
   grid.innerHTML="";
   const cors=_socialTestCorridors();
-  if(!cors.length){ st.textContent="This project has no corridors to build test data from."; return; }
-  const day=SocialCard.testDay(cors,{ seed:_socialTestSeed }), season=SocialCard.testSeason(cors,{ seed:_socialTestSeed });
-  const jobs=[[day,"story"],[day,"wide"],[season,"story"],[season,"wide"]];
+  if(!simDay && !cors.length){ st.textContent="This project has no corridors to build test data from."; return; }
+  const day=simDay || SocialCard.testDay(cors,{ seed:_socialTestSeed }), season=simDay ? null : SocialCard.testSeason(cors,{ seed:_socialTestSeed });
+  const jobs=simDay ? [[day,"story"],[day,"wide"]] : [[day,"story"],[day,"wide"],[season,"story"],[season,"wide"]];
   for(let i=0;i<jobs.length;i++){
     const [d,fmt]=jobs[i];
     st.textContent="Drawing "+(i+1)+" of "+jobs.length+"…";
@@ -8339,15 +8463,42 @@ async function renderSocialTest(){
       fig.append(img, cap); grid.appendChild(fig);
     }catch(e){ console.warn("social test:", e); }
   }
-  st.textContent="Test day: "+day.lifts.map(l=>l.name+" ×"+l.count).join(", ")+", "+day.bootPacks.count+" boot packs — "+day.verticalM.toLocaleString()+" m";
+  st.textContent=simDay
+    ? day.rider+" — "+day.chuteCount+" chutes, "+day.runs+" ski descents, "+day.liftRides+" lift rides, "+day.bootPacks.count+" boot packs — "+day.verticalM.toLocaleString()+" m, "+day.points.toLocaleString()+" pts"
+    : "Test day: "+day.lifts.map(l=>l.name+" ×"+l.count).join(", ")+", "+day.bootPacks.count+" boot packs — "+day.verticalM.toLocaleString()+" m";
+}
+let _socialSimMode=false;
+function _socialTestChrome(sim){
+  _socialSimMode=sim;
+  document.getElementById("socialTestTitle").textContent=sim ? "Social media export — today's test (not saved)" : "Social media export — test data";
+  document.getElementById("socialTestRegen").style.display=sim ? "none" : "";
 }
 function openSocialTest(){
   if(typeof SocialCard==="undefined"){ alert("social-card.js didn't load"); return; }
+  _socialTestChrome(false);
   document.getElementById("socialTestOverlay").classList.add("open");
   renderSocialTest();
 }
+// Test Mode's 📸 Social media: the same drawing code, fed the simulated day (QuestSimDay.socialDay).
+async function openSimSocial(){
+  if(typeof SocialCard==="undefined"){ alert("social-card.js didn't load"); return; }
+  if(!_simDay || !QuestRunSim) return;
+  const day0=_simDay;
+  _socialTestChrome(true);
+  document.getElementById("socialTestOverlay").classList.add("open");
+  document.getElementById("socialTestGrid").innerHTML="";
+  document.getElementById("socialTestStatus").textContent="Reading the weather…";
+  const get=u=>fetch(u).then(r=>r.ok?r.json():null).catch(()=>null);
+  const [w, snow]=await Promise.all([get("/api/weather"), get("/api/snow-history")]);
+  if(day0!==_simDay) return;
+  // The resort name on the image is the workspace's name, as on the phone (getWorkspace().appName).
+  const app=(typeof _appsCache!=="undefined" && _appsCache || []).find(x=>x.id===afAppId()), ws=(app&&app.name)||"";
+  renderSocialTest(day0.socialDay({ resort:ws||projName(), ref:simBundle&&simBundle.ref||null, track:_simTrack.map(s=>s.slice()), weather:SocialCard.weatherFrom(w||{}, snow||[]) }));
+}
 function closeSocialTest(){ document.getElementById("socialTestOverlay").classList.remove("open"); }
 document.getElementById("socialTestBtn").onclick = openSocialTest;
+document.getElementById("simLeaderboard").onclick = openSimLeaderboard;
+document.getElementById("simSocial").onclick = openSimSocial;
 document.getElementById("socialTestRegen").onclick = ()=>{ _socialTestSeed++; renderSocialTest(); };
 document.getElementById("splashEditorOverlay").addEventListener("click", e => { if(e.target === e.currentTarget) closeSplashEditor(); });
 
@@ -8361,7 +8512,7 @@ document.getElementById("testModeBtn").onclick=()=>simMode?exitTestMode():enterT
 document.getElementById("simWalk").onclick=()=>{
   if(!simMode)return;simBundle=editorToSimBundle();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks(), { dropInRuns:_questOn });
-  QuestSim.load(simBundle); _cgLoadDefaults();
+  QuestSim.load(simBundle); _cgLoadDefaults(); questRunSimLoad(simBundle, false);
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;
   if(!buildSimStopsPath()){simLogEv("sev-warn","no stops with centers");return;}
   simDist=simDir>0?0:simPathTotal();
@@ -8406,7 +8557,7 @@ document.getElementById("simReset").onclick=()=>{simPause();SimVoice.stop();
   GPSFilter.reset();SimFencer.reset();simPrev=null;simPrevRaw=null;simDist=0;
   simBundle=editorToSimBundle();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks(), { dropInRuns:_questOn });
-  QuestSim.load(simBundle); _cgLoadDefaults();
+  QuestSim.load(simBundle); _cgLoadDefaults(); questRunSimLoad(simBundle, false);
   if(window.AssetPreviewLayer) window.AssetPreviewLayer.hideAll();
   _arNearState={};
   // Visited-stops/flags/counters are per-session tracking state just like
