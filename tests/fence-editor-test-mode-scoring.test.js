@@ -45,7 +45,7 @@ function editor(opts) {
   const names = Object.keys(env);
   // eslint-disable-next-line no-new-func
   const api = new Function(...names, "let _questOn = " + (opts.questOff ? "false" : "true") + ";\n" +
-    "let QuestRunSim=null, _simDay=null, _simTrack=[];\n" +
+    "let QuestRunSim=null, _simDay=null, _simTrack=[], _simFast={ last:null, n:0, toldAt:0 };\n" +
     ["function simRiderName(){", "function questRunSimCorridors(bundle){", "function questRunSimLoad(bundle, newDay){",
      "function questRunSimTick(raw, sm, t){", "async function simScoreRun(run){", "function paintSimToday(){"].map(t => extract(fe, t)).join("\n") +
     "\nconst SIM_ACTIVITY_WORD={ ski:\"ski\", hike:\"boot pack\", lift:\"lift ride\" };" +
@@ -170,7 +170,7 @@ test("Test Mode wiring: fed every simulated fix, buttons present, day cleared on
   assert.ok(!/\/api\/quest-runs|\/api\/chute-lines|\/api\/quest-day-vertical/.test(fe), "the editor never calls an endpoint that saves a run");
   const sim = fe.slice(fe.indexOf("let QuestRunSim=null"), fe.indexOf("function feedSim(lat,lon,acc,t,bleFix){"));
   assert.ok(!/localStorage\.setItem|sessionStorage\.setItem/.test(sim), "nothing persisted");
-  assert.ok(!/km\/h|avgSpeed|maxSpeed/.test(sim), "never shows speed");
+  assert.ok(!/avgSpeed|maxSpeed/.test(sim), "never shows a run's speed (the only km/h is the tester's own too-fast notice)");
 });
 
 test("POST /api/quest-score uses the run endpoint's own formula and writes nothing", () => {
@@ -197,4 +197,73 @@ test("silent outcomes say why in the Test log: a lift taken down its line, and a
   assert.strictEqual(e.api.day.runs().length, 0);
   assert.ok(e.log.some(l => /^RUN no pass: "Main Dumper" -- .+\(\d+% covered\)$/.test(l)), "log: " + e.log.join(" | "));
   assert.ok(!e.log.some(l => /^RUN not counted/.test(l)), "below the 40% the rider is told about, so no 'not counted' message");
+});
+
+// 2026-10-08: Gary dragged the avatar up Stairway Chair at 96 m/s, then at 57 m/s past the top
+// station, and nothing logged. Test Mode now (1) offers "▶ Ride up / Ski down / Boot pack up" on a
+// tapped line, travelling it the way and at a pace that scores, and (2) says "too fast to count"
+// while a drag is over the engine's limit.
+function ridePlanFor(corridor) {
+  const src = "const SIM_RIDE={ lift:{ kmh:30, verb:\"Ride up\" }, hike:{ kmh:5, verb:\"Boot pack up\" }, ski:{ kmh:40, verb:\"Ski down\" } };\n" +
+    extract(fe, "function simRidePlan(zoneId){") + "\nreturn simRidePlan;";
+  // eslint-disable-next-line no-new-func
+  return new Function("QuestRunSim", src)({ corridors: [corridor] })(corridor.zoneId);
+}
+test("▶ on a tapped line travels it the way that scores: lifts up, chutes and runs down the drawn line, boot packs up", () => {
+  assert.ok(fe.includes('const SIM_RIDE={ lift:{ kmh:30, verb:"Ride up" }, hike:{ kmh:5, verb:"Boot pack up" }, ski:{ kmh:40, verb:"Ski down" } };'), "the paces under test are the page's");
+  const P = [[51.31, -117.05], [51.305, -117.05], [51.30, -117.05]];
+  const c = (runType, climbM, descentM) => ({ zoneId: "z", name: "X", runType, climbM, descentM, path: P, lengthM: 1113 });
+  let r = ridePlanFor(c("lift", 357, 3));
+  assert.deepStrictEqual([r.kind, r.kmh, r.label, r.path[0]], ["lift", 30, "Ride up at 30 km/h", P[0]], "a lift drawn bottom -> top is ridden along it");
+  assert.deepStrictEqual(ridePlanFor(c("lift", 0, 300)).path[0], P[2], "a lift drawn top -> bottom is ridden against its line");
+  assert.deepStrictEqual(ridePlanFor(c("lift", null, null)).path[0], P[2], "no elevation: the engine's old rule, against the drawn line");
+  r = ridePlanFor(c("chute", 0, 123));
+  assert.deepStrictEqual([r.kind, r.kmh, r.label, r.path[0]], ["ski", 40, "Ski down at 40 km/h", P[0]], "a chute is skied along its drawn line");
+  assert.deepStrictEqual(ridePlanFor(c("run", 300, 0)).path[0], P[0], "a run too: the engine only counts the drawn direction");
+  r = ridePlanFor(c("hike", 60, 0));
+  assert.deepStrictEqual([r.kind, r.kmh, r.label, r.path[0]], ["hike", 5, "Boot pack up at 5 km/h", P[0]]);
+  assert.deepStrictEqual(ridePlanFor(c("hike", 0, 60)).path[0], P[2], "a boot pack drawn top -> bottom is climbed against its line");
+  const T = QuestCore.TUNING;
+  assert.ok(30 / 3.6 >= T.LIFT_SPEED_MIN_MPS && 40 / 3.6 >= T.SKI_SPEED_MIN_MPS && 5 / 3.6 <= T.HIKE_SPEED_MAX_MPS && 40 / 3.6 < T.MAX_ALONG_SPEED_MPS, "each pace is inside the engine's limits");
+  const click = extract(fe, "function _simRunClick(e){");
+  assert.ok(click.includes('id="simRideBtn"') && click.includes("simRideLine(p.id)"), "the button is in the tapped line's popup");
+  const go = extract(fe, "function simRideLine(zoneId){");
+  assert.ok(go.includes("simPath=[lead(pts[0],pts[1],20)]") && go.includes("simDist=0; simDir=1;") && go.includes("slider.value=plan.kmh") && go.includes("simPlay();"), "it plays that one line from its start at that pace");
+});
+
+test("the ridden line really scores: the engine logs the plan's path at the plan's pace, for a lift and a chute", async () => {
+  for (const [id, kind, activity] of [["gondi", "lift", "lift"], ["main-dumper", "ski", "ski"]]) {
+    const e = editor(); e.api.questRunSimLoad(bundle, true);
+    const plan = ridePlanFor(e.api.sim.corridors.find(c => c.zoneId === id));
+    assert.strictEqual(plan.kind, kind);
+    const step = plan.kmh / 3.6, pts = [];           // one fix per simulated second, like playback
+    for (let i = 1; i < plan.path.length; i++) { const a = plan.path[i - 1], b = plan.path[i], n = Math.max(1, Math.round(100 / step));
+      for (let k = 0; k < n; k++) pts.push({ lat: a[0] + (b[0] - a[0]) * k / n, lon: a[1] + (b[1] - a[1]) * k / n }); }
+    pts.push({ lat: plan.path[plan.path.length - 1][0], lon: plan.path[plan.path.length - 1][1] });
+    await drive(e, pts, step);
+    const runs = e.api.day.runs();
+    assert.strictEqual(runs.length, 1, id + ": " + JSON.stringify(e.log));
+    assert.strictEqual(runs[0].activity, activity);
+  }
+});
+
+test("playback shares one simulated clock with drags, and a too-fast drag is called out once", async () => {
+  // one running clock (feedSim adds _simTOffset), so two rides in a row can't overlap in time
+  assert.ok(extract(fe, "function feedSim(lat,lon,acc,t,bleFix){").includes("t=(t||Date.now())+_simTOffset;"), "every fix shares the simulated clock");
+  const play = extract(fe, "function simPlay(){");
+  assert.ok(play.includes("_simTOffset+=750;") && play.includes("feedSim(jLat,jLon,4,Date.now());") && !/\bvT\b/.test(play), "playback advances the shared clock");
+  assert.ok(extract(fe, "function enterTestMode(){").includes("_simTOffset=0;"), "reset each Test");
+  // 96 m/s up the lift, a fix every 30 ms like a mouse drag
+  const e = editor(); e.api.questRunSimLoad(bundle, true);
+  const realNow = Date.now; let t = 1760000000000;
+  try { for (let s = 400; s >= 0; s -= 2.9) { t += 30; Date.now = () => t; const p = at(s, 300); e.api.questRunSimTick({ lat: p.lat, lon: p.lon, acc: 5, alt: null }, { speed: 96 }, t); } } finally { Date.now = realNow; }
+  assert.strictEqual(e.api.day.runs().length, 0, "a 96 m/s drag is not a lift ride");
+  const told = e.log.filter(l => l.startsWith("Too fast to count — "));
+  assert.strictEqual(told.length, 1, "said so once, not on every fix: " + e.log.join(" | "));
+  assert.ok(told[0].includes("km/h (limit 162)") && told[0].includes("▶"), told[0]);
+  // a click-jump (one big step) and a normal drag say nothing
+  const e2 = editor(); e2.api.questRunSimLoad(bundle, true);
+  await drive(e2, [at(0, 300), at(390, 300), at(0, 300)], 8);
+  await drive(e2, down(0, 400, 8), 8);
+  assert.ok(!e2.log.some(l => l.startsWith("Too fast")), "no notice: " + e2.log.join(" | "));
 });

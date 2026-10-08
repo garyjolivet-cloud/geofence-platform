@@ -6647,11 +6647,49 @@ function simRunStyleFor(c){
 function _simRunClick(e){
   const p=e.features&&e.features[0]&&e.features[0].properties; if(!p) return;
   const act=p.activityType||(p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
-  new maplibregl.Popup({closeButton:true,offset:8}).setLngLat(e.lngLat)
+  // ▶ Ride / Ski this line (2026-10-08, Gary dragged up Stairway Chair twice and nothing logged: too
+  // fast, then past the top station): one tap sends the avatar along THIS line, the right way, at a
+  // pace that counts -- see simRideLine. Ridge Quest workspaces only (it exists to be scored).
+  const ride=QuestRunSim ? simRidePlan(p.id) : null;
+  const pop=new maplibregl.Popup({closeButton:true,offset:8}).setLngLat(e.lngLat)
     .setHTML('<div style="font:600 13px/1.35 system-ui,sans-serif;color:#0a1018">'+esc(p.name)+
       '</div><div style="font:12px system-ui,sans-serif;color:#5b7088">'+
-      [p.difficulty&&esc(p.difficulty),act&&esc(act),p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>')
+      [p.difficulty&&esc(p.difficulty),act&&esc(act),p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>'
+      +(ride?'<button id="simRideBtn" style="margin-top:6px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:#ff6a3d;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer">▶ '+esc(ride.label)+'</button>':''))
     .addTo(map);
+  const btn=ride && pop.getElement() && pop.getElement().querySelector("#simRideBtn");
+  if(btn) btn.onclick=()=>{ pop.remove(); simRideLine(p.id); };
+}
+// Which way and how fast a line is travelled so that it scores, by the run engine's own rules
+// (quest-core.js _classifyAndLog): a lift only UP it (uphill end from its elevation, else against
+// the drawn line); a chute / run only along the drawn line (that is "down"); a boot pack either
+// way -- taken the way it climbs. Speeds sit inside each type's limits: lift >= 1.8 m/s, ski run
+// >= 2.5 m/s, boot pack <= 5 m/s, everything < 45 m/s along the line.
+const SIM_RIDE={ lift:{ kmh:30, verb:"Ride up" }, hike:{ kmh:5, verb:"Boot pack up" }, ski:{ kmh:40, verb:"Ski down" } };
+function simRidePlan(zoneId){
+  const c=QuestRunSim && QuestRunSim.corridors.find(x=>x.zoneId===zoneId);
+  if(!c || !c.path || c.path.length<2) return null;
+  const known=c.climbM!=null && c.descentM!=null;
+  let kind="ski", along=true;
+  if(c.runType==="lift"){ kind="lift"; along=known ? c.climbM>c.descentM : (c.descentM!=null ? c.descentM<10 : false); }
+  else if(c.runType==="hike"){ kind="hike"; along=known ? c.climbM>=c.descentM : true; }
+  const r=SIM_RIDE[kind];
+  return { c, kind, kmh:r.kmh, path:along ? c.path.slice() : c.path.slice().reverse(), label:r.verb+" at "+r.kmh+" km/h" };
+}
+function simRideLine(zoneId){
+  const plan=simRidePlan(zoneId); if(!plan || !simMode) return;
+  if(simPlaying) simPause();
+  // 20 m of run-in and run-out so the pass starts before the first end zone and finishes past the last.
+  const lead=(a,b,m)=>{ const len=SimGeo.hav(b,a)||1, k=m/len; return [a[0]+(a[0]-b[0])*k, a[1]+(a[1]-b[1])*k]; };
+  const pts=plan.path, n=pts.length;
+  simPath=[lead(pts[0],pts[1],20)].concat(pts,[lead(pts[n-1],pts[n-2],20)]);
+  simDist=0; simDir=1;
+  const dirBtn=document.getElementById("simDirBtn"); if(dirBtn){ dirBtn.textContent="⏩"; dirBtn.title="Walk direction: forward"; }
+  const slider=document.getElementById("simSpd"); slider.value=plan.kmh; if(slider.oninput) slider.oninput();
+  GPSFilter.reset(); SimFencer.reset(); simPrev=null; simPrevRaw=null;
+  simAvatar.setLngLat([simPath[0][1], simPath[0][0]]);
+  simLogEv("sev-sys","▶ "+plan.label+": \""+plan.c.name+"\" ("+Math.round(plan.c.lengthM)+" m) — ⏸ stops it");
+  simPlay();
 }
 function _simRunCursor(on){ return ()=>{ map.getCanvas().style.cursor=on?"pointer":""; }; }
 const _simRunEnter=_simRunCursor(true), _simRunLeave=_simRunCursor(false);
@@ -7442,6 +7480,8 @@ const QuestSim={
 // every time Test starts. Fed the avatar's exact position, like the guard and the voice here.
 // Not mirrored: armed isolation, chute lines, the rider's own chute names.
 let QuestRunSim=null, _simDay=null, _simTrack=[];
+let _simTOffset=0;                       // see feedSim
+let _simFast={ last:null, n:0, toldAt:0 };   // "too fast to count" notice, see questRunSimTick
 function simRiderName(){
   try{ const u=JSON.parse(localStorage.getItem("gp.user")||"null"); return (u&&(u.name||u.email))||"Test rider"; }catch(e){ return "Test rider"; }
 }
@@ -7483,6 +7523,21 @@ function questRunSimTick(raw, sm, t){
   const p={ lat:raw.lat, lon:raw.lon, acc:raw.acc, t, speed:sm.speed, alt:raw.alt!=null?raw.alt:null };
   QuestRunSim.corridors.forEach(c=>QuestRunSim._record(c, p, "ski"));
   QuestRunSim._settlePasses(false);
+  // Too fast to count (Gary's Stairway Chair drags: 96 m/s, then 57): the engine throws out anything
+  // faster than MAX_ALONG_SPEED_MPS along a line as a GPS jump, silently. Say so while it is happening --
+  // only while a line is being recorded, after 5 fast fixes in a row (a click-jump is one), every 6 s.
+  const F=_simFast, lim=QuestCore.TUNING.MAX_ALONG_SPEED_MPS;
+  if(F.last){
+    const dM=QuestCore.QGeo.haversineM([F.last.lat,F.last.lon],[raw.lat,raw.lon]), dT=(t-F.last.t)/1000;
+    const v=dT>0 ? dM/dT : 0;
+    F.n = (dM<150 && v>lim) ? F.n+1 : 0;
+    if(F.n>=5 && Date.now()-F.toldAt>6000 && Object.keys(QuestRunSim.states).some(k=>QuestRunSim.states[k].rec)){
+      F.toldAt=Date.now();
+      const msg="Too fast to count — "+Math.round(v*3.6)+" km/h (limit "+Math.round(lim*3.6)+"). Tap a line and use ▶ to ride or ski it.";
+      simLogEv("sev-warn",msg); toast(msg,"warn");
+    }
+  }
+  F.last={ lat:raw.lat, lon:raw.lon, t };
   // The day's track for the share image: a point every 8 m, a new piece after a jump (click-to-move).
   const seg=_simTrack[_simTrack.length-1], last=seg&&seg[seg.length-1];
   const d=last?QuestCore.QGeo.haversineM([last[1],last[0]],[raw.lat,raw.lon]):Infinity;
@@ -7537,7 +7592,11 @@ function openSimLeaderboard(){
   box.querySelector("#simLbClose").onclick=closeSimLeaderboard;
 }
 function feedSim(lat,lon,acc,t,bleFix){
-  acc=acc||5; t=t||Date.now();
+  // _simTOffset: playback runs 4x (one simulated second every 250 ms), so its fixes are stamped
+  // ahead of the wall clock. Every fix (drag, click, play, dongle) gets the same running offset, so
+  // simulated time never steps backwards after a play -- two rides one after the other used to
+  // overlap in time and the second could be dropped as "the same descent" (one descent, one chute).
+  acc=acc||5; t=(t||Date.now())+_simTOffset;
   // Altitude priority (3D-mode plan, Step 2, item D rescoped 2026-08-14):
   // a real connected BLE dongle's barometric reading (bleFix, from
   // BleGPS.init() below) wins when present, letting Test Mode validate
@@ -7923,6 +7982,7 @@ function enterTestMode(){
   paintSimGuardBtn();
   if(typeof ChuteGuard!=='undefined') ChuteGuard.load(simBundle.zones, chuteGuardCallbacks(), { dropInRuns:_questOn });
   QuestSim.load(simBundle); _cgLoadDefaults();
+  _simTOffset=0;
   questRunSimLoad(simBundle, true);   // an empty simulated day each time Test starts
   if(QuestRunSim) simLogEv("sev-sys","Ridge Quest simulator: runs, chutes, lift rides and boot packs are scored like the phone as "+_simDay.rider+" — today only, nothing saved");
   if(_questOn) simLogEv("sev-sys","Ridge Quest voice, as live: "+QuestSim.corridors.filter(c=>QuestNarration.lineFor(c)).length+" corridor lines ("+QuestSim.corridors.filter(c=>c.say).length+" their own, the rest “This is <name>”). While you are in a chute or run, ones passed within "+QuestNarration.TUNING.PASS_ANNOUNCE_M+" m are said; lifts on entry"
@@ -8134,17 +8194,16 @@ function simPlay(){
   simPlaying=true;
   document.getElementById("simPlay").textContent="⏸";
   document.getElementById("simPlay").classList.add("on");
-  let vT=Date.now();
   simTimer=setInterval(()=>{
     // simSpd's value is real km/h (see the input's comment in the HTML) —
     // convert to m/s since simDist advances in meters per simulated second.
     const speedMps=(+document.getElementById("simSpd").value)/3.6,total=simPathTotal();
-    simDist=Math.max(0,Math.min(simDist+speedMps*simDir,total));vT+=1000;
+    simDist=Math.max(0,Math.min(simDist+speedMps*simDir,total));_simTOffset+=750;   // 250 ms of wall time + 750 = one simulated second
     const ended=simDir>0?simDist>=total:simDist<=0;
     const pt=simPathPointAt(simDist);
     const jLat=pt[0]+(Math.random()-.5)*3/111320,jLon=pt[1]+(Math.random()-.5)*3/111320;
     simAvatar.setLngLat([jLon,jLat]);
-    feedSim(jLat,jLon,4,vT);
+    feedSim(jLat,jLon,4,Date.now());
     if(ended){simPause();simLogEv("sev-sys","walk complete");}
   },250);}
 function simPause(){simPlaying=false;if(simTimer){clearInterval(simTimer);simTimer=null;}
