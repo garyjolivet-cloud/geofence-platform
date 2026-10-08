@@ -182,3 +182,19 @@ test("POST /api/quest-score uses the run endpoint's own formula and writes nothi
   assert.ok(!/INSERT|UPDATE|DELETE|\.batch\(|\.run\(\)/.test(h), "no write");
   assert.ok(!/playerAuth|requireAuth|authed\(/.test(h), "no sign-in needed (the editor has no rider session)");
 });
+
+// 2026-10-08, Gary: "i moved up the stairway chair yet no vertical was recorded" -- several outcomes
+// were silent by design for the rider (riding a lift line downhill, a pass too small to mention).
+// They now leave a line in the host's log (log only: nothing is counted or toasted differently).
+test("silent outcomes say why in the Test log: a lift taken down its line, and a small partial pass", async () => {
+  let e = editor(); e.api.questRunSimLoad(bundle, true);
+  await drive(e, down(0, 400, 5, 300), 5);          // the fixture lift's ride direction is against its line; this goes along it
+  assert.strictEqual(e.api.day.runs().length, 0, "not a lift ride");
+  assert.ok(e.log.some(l => /^RUN ignored: "Gondi" -- a lift counts only when ridden UP it/.test(l)), "log: " + e.log.join(" | "));
+  e = editor(); e.api.questRunSimLoad(bundle, true);
+  // a quarter of the chute, then away; the engine judges an unfinished pass REC_GRACE_S (15 s) after the rider left
+  await drive(e, down(100, 200, 8).concat([at(200, 200), at(200, 400)], Array.from({ length: 20 }, (_, i) => at(200, 600 + i * 8))), 8);
+  assert.strictEqual(e.api.day.runs().length, 0);
+  assert.ok(e.log.some(l => /^RUN no pass: "Main Dumper" -- .+\(\d+% covered\)$/.test(l)), "log: " + e.log.join(" | "));
+  assert.ok(!e.log.some(l => /^RUN not counted/.test(l)), "below the 40% the rider is told about, so no 'not counted' message");
+});

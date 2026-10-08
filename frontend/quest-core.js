@@ -466,6 +466,11 @@ const runMethods = {
     const trip = QGeo.evaluateTraversal(corridor, buffer, S);
     if(!trip.ok){
       if(isFinal && this.onCoverage && trip.coverage >= S.FEEDBACK_MIN_COVERAGE) this.onCoverage(corridor.name, trip.coverage, false, trip.reason);
+      // Log only (2026-10-08, Gary in Test Mode: "i moved up the stairway chair yet no vertical was
+      // recorded"): a pass that covered a little and is too small to tell the rider about still gets
+      // a line in the host's log (Test Mode's log, the phone's guard log), so "nothing happened" can
+      // be read. Never a toast, never a change to what counts.
+      else if(isFinal && this && this.runLog && trip.coverage >= 0.1) this.runLog("RUN no pass: \""+corridor.name+"\" -- "+trip.reason+" ("+Math.round(trip.coverage*100)+"% covered)");
       return false;
     }
     const coverage = trip.coverage, durationS = trip.durationS;
@@ -502,7 +507,10 @@ const runMethods = {
       const uphillAlong = corridor.climbM!=null && corridor.descentM!=null ? corridor.climbM > corridor.descentM
         : corridor.descentM!=null ? corridor.descentM < 10
         : false;
-      if(uphillAlong ? !descending : !ascending) return "rejected"; // downhill lift-line foot traffic isn't a lift ride (silent, as before)
+      if(uphillAlong ? !descending : !ascending){   // downhill lift-line foot traffic isn't a lift ride (silent for the rider, as before)
+        if(this && this.runLog) this.runLog("RUN ignored: \""+corridor.name+"\" -- a lift counts only when ridden UP it; this pass went down the line");
+        return "rejected";
+      }
       activity="lift";
     } else if(corridor.runType==="hike"){
       // Only a corridor the author marked as a boot pack counts as a boot pack (2026-10-01).
@@ -510,12 +518,12 @@ const runMethods = {
     } else if(corridor.runType==="chute"){
       // Going UP a chute is ignored -- not a boot pack, not a run (2026-10-01; it used to log
       // as a boot pack). Silent, like downhill foot traffic on a lift line.
-      if(!descending) return "rejected";
+      if(!descending){ if(this && this.runLog) this.runLog("RUN ignored: \""+corridor.name+"\" -- went UP a chute (only a descent counts)"); return "rejected"; }
       activity = "ski";
     } else {
       // Any other run: ski when descended at ski pace. Climbing it is ignored (silent); a
       // descent too slow to be skiing it is not counted, and the rider is told why.
-      if(!descending) return "rejected";
+      if(!descending){ if(this && this.runLog) this.runLog("RUN ignored: \""+corridor.name+"\" -- went UP a run (only a descent counts)"); return "rejected"; }
       if(avgSpeedMps < S.SKI_SPEED_MIN_MPS) return reject("too slow to count as skiing it");
       activity = "ski";
     }
