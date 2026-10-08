@@ -6849,7 +6849,10 @@ function refreshSimCorridorLabels(){
       onDebug(event,info){
         simLogEv("sev-sys","longpress "+event+" +"+info.elapsedMs+"ms"+(info.driftPx!=null?" drift="+info.driftPx+"px":""));
       },
-      onTap(feature,lngLat){ if(feature) _simRunClick({features:[feature],lngLat}); },
+      // Shown a moment AFTER the tap (2026-10-08, Gary: "no ride up button"): onTap fires on mouse-up,
+      // and the map's own click that follows closed the popup at once (Popup closeOnClick) -- with a
+      // mouse the name popup, and so the ▶ button in it, never stayed on screen.
+      onTap(feature,lngLat){ if(feature) setTimeout(()=>{ if(simMode) _simRunClick({features:[feature],lngLat}); }, 80); },
       onLongPress:_simRunLongPressHandler
     });
   }else{

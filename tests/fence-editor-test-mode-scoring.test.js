@@ -227,6 +227,9 @@ test("▶ on a tapped line travels it the way that scores: lifts up, chutes and 
   assert.ok(30 / 3.6 >= T.LIFT_SPEED_MIN_MPS && 40 / 3.6 >= T.SKI_SPEED_MIN_MPS && 5 / 3.6 <= T.HIKE_SPEED_MAX_MPS && 40 / 3.6 < T.MAX_ALONG_SPEED_MPS, "each pace is inside the engine's limits");
   const click = extract(fe, "function _simRunClick(e){");
   assert.ok(click.includes('id="simRideBtn"') && click.includes("simRideLine(p.id)"), "the button is in the tapped line's popup");
+  // Gary: "no ride up button" -- with a mouse the popup was opened on mouse-up and closed by the map click that
+  // follows (Popup closeOnClick). It is now shown just after the tap. Found with a real mouse tap in a headless browser.
+  assert.ok(fe.includes("onTap(feature,lngLat){ if(feature) setTimeout(()=>{ if(simMode) _simRunClick({features:[feature],lngLat}); }, 80); },"), "the popup opens after the tap's own click");
   const go = extract(fe, "function simRideLine(zoneId){");
   assert.ok(go.includes("simPath=[lead(pts[0],pts[1],20)]") && go.includes("simDist=0; simDir=1;") && go.includes("slider.value=plan.kmh") && go.includes("simPlay();"), "it plays that one line from its start at that pace");
 });
