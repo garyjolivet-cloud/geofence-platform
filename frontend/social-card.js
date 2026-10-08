@@ -116,6 +116,18 @@
     return function (ids) { return ids.map(function (id) { return byId[id]; }).filter(Boolean); };
   }
 
+  // The runs (not chutes) skied, one row per run with its lap count -- listed on the image under the
+  // chutes (2026-10-08, Gary: "runs need to be listed on social media page. chutes and runs not just chutes").
+  function groupRuns(rows) {
+    var map = {}, out = [];
+    (rows || []).forEach(function (r) {
+      var k = r.zoneId || r.name, g = map[k];
+      if (!g) { g = map[k] = { name: r.name || "Run", difficulty: r.difficulty || null, count: 0, zoneId: r.zoneId || null }; out.push(g); }
+      g.count++;
+    });
+    return out;
+  }
+
   // The image's weather line from GET /api/weather + GET /api/snow-history (null when neither answered).
   function weatherFrom(w, snow) {
     return (w && !w.error) || (snow && snow.length) ? {
@@ -153,6 +165,7 @@
       verticalM: ((bp.today && bp.today.verticalM) || 0) + ((lf.today && lf.today.verticalM) || 0),
       points: runs.reduce(function (s, r) { return s + (r.points || 0); }, 0),
       runs: ski.filter(function (r) { return r.run_type !== "chute"; }).length,   // a chute is a chute, not also a run
+      runList: groupRuns(ski.filter(function (r) { return r.run_type !== "chute"; }).map(function (r) { return { zoneId: r.zone_id, name: r.run_name, difficulty: r.difficulty }; })),
       chutes: chutes, chuteCount: chutes.length,
       bootPacks: { count: (bp.today && bp.today.count) || 0, verticalM: (bp.today && bp.today.verticalM) || 0, routes: bp.routes || [] },
       lifts: liftList(lf.routes), liftRides: (lf.today && lf.today.count) || 0,
@@ -201,6 +214,7 @@
       verticalM: Math.round(sum(bp) + sum(lf)),
       points: all.reduce(function (s, r) { return s + (r.points || 0); }, 0),
       runs: ski.filter(function (r) { return r.runType !== "chute"; }).length,   // a chute is a chute, not also a run
+      runList: groupRuns(ski.filter(function (r) { return r.runType !== "chute"; }).map(function (r) { return { zoneId: r.zoneId, name: r.runName, difficulty: r.difficulty }; })),
       chutes: chutes.map(function (c) { return { name: c.name, difficulty: c.difficulty, count: c.count, zoneId: c.zoneId }; }), chuteCount: chutes.length,
       bootPacks: { count: cnt(bp), verticalM: Math.round(sum(bp)), routes: bp.map(function (r) { return { name: r.name, count: r.count, verticalM: Math.round(r.verticalM), zoneId: r.zoneId }; }) },
       lifts: liftList(lf), liftRides: cnt(lf),
@@ -304,6 +318,7 @@
       resort: RESORT, rider: opts.rider || "Gary J.",
       verticalM: liftV + bpV, points: Math.round(points),
       runs: skied.filter(function (c) { return c.runType !== "chute"; }).length, chutes: chutes, chuteCount: chutes.length,
+      runList: groupRuns(skied.filter(function (c) { return c.runType !== "chute"; }).map(function (c) { return { zoneId: c.zoneId, name: c.name, difficulty: c.difficulty }; })),
       bootPacks: { count: routes.length, verticalM: bpV, routes: routes.map(function (r) { return { name: r.name, count: r.count, verticalM: r.verticalM }; }) },
       lifts: liftRows.map(function (r) { return { name: r.name, count: r.count, verticalM: r.verticalM }; }),
       liftRides: liftRows.reduce(function (s, r) { return s + r.count; }, 0),
@@ -604,11 +619,11 @@
       ly += 100;
     }
     // chutes: up to 20 names, two columns of 10, hardest first (season: most skied first)
-    var all = sortedChutes(d);
+    var all = listedLines(d);
     var list = all.slice(0, STORY_CHUTES_MAX);
     if (list.length) {
       var more = all.length - list.length;
-      text(ctx, (d.kind === "season" ? "MOST SKIED CHUTES" : "CHUTES") + (more > 0 ? "  ·  +" + more + " MORE" : ""), P, ly, { size: 28, weight: "700", color: COL.gold });
+      text(ctx, listHeading(d) + (more > 0 ? "  ·  +" + more + " MORE" : ""), P, ly, { size: 28, weight: "700", color: COL.gold });
       var colW = (W - 2 * P - 28) / 2, rowH = 40, perCol = 10, top = ly + 44;
       list.forEach(function (c, i) {
         var col = Math.floor(i / perCol), row = i % perCol;
@@ -632,6 +647,16 @@
   // the top-left over the map, the four tiles sit in one row, and the freed space holds a
   // two-column chute list (up to 12 names, "+N MORE" beyond).
   var WIDE_CHUTES_MAX = 12;
+  // What the image lists by name: the chutes (as before), then the runs, each group hardest first.
+  function listedLines(d) {
+    var byRank = function (a, b) { return (DIFF_RANK[b.difficulty] || 0) - (DIFF_RANK[a.difficulty] || 0) || b.count - a.count; };
+    return sortedChutes(d).concat((d.runList || []).slice().sort(byRank));
+  }
+  function listHeading(d) {
+    var c = (d.chutes || []).length, r = (d.runList || []).length;
+    if (d.kind === "season") return r ? "MOST SKIED CHUTES & RUNS" : "MOST SKIED CHUTES";
+    return c && r ? "CHUTES & RUNS" : r ? "RUNS" : "CHUTES";
+  }
   function sortedChutes(d) {
     return (d.chutes || []).slice().sort(function (a, b) {
       return d.kind === "season" ? b.count - a.count : (DIFF_RANK[b.difficulty] || 0) - (DIFF_RANK[a.difficulty] || 0) || b.count - a.count;
@@ -662,10 +687,10 @@
     var ly = cy + ch + 32;
     if (d.lifts && d.lifts.length) { text(ctx, liftLine(d), X, ly, { size: 21, weight: "600", color: COL.ice, maxW: RW, min: 13 }); ly += 30; }
     // chutes: two columns of 6
-    var all = sortedChutes(d), list = all.slice(0, WIDE_CHUTES_MAX);
+    var all = listedLines(d), list = all.slice(0, WIDE_CHUTES_MAX);
     if (list.length) {
       var more = all.length - list.length;
-      text(ctx, (d.kind === "season" ? "MOST SKIED CHUTES" : "CHUTES") + (more > 0 ? "  ·  +" + more + " MORE" : ""), X, ly + 4, { size: 18, weight: "700", color: COL.gold });
+      text(ctx, listHeading(d) + (more > 0 ? "  ·  +" + more + " MORE" : ""), X, ly + 4, { size: 18, weight: "700", color: COL.gold });
       var colW = (RW - 16) / 2, rowH = 24, perCol = 6, top = ly + 30;
       list.forEach(function (c, i) {
         var col = Math.floor(i / perCol), row = i % perCol;
@@ -864,7 +889,7 @@
     FORMATS: FORMATS, COL: COL,
     collectDay: collectDay, collectSeason: collectSeason,
     testDay: testDay, testSeason: testSeason,
-    dayFromRuns: dayFromRuns, weatherFrom: weatherFrom,
+    dayFromRuns: dayFromRuns, weatherFrom: weatherFrom, listedLines: listedLines, listHeading: listHeading,
     renderHeroMap: renderHeroMap, drawFallbackHero: drawFallbackHero,
     isBlank: isBlank,   // also used by Home's My-map picture (ridge-quest.html renderMyMapPicture)
     draw: draw, drawStory: drawStory, drawWide: drawWide,

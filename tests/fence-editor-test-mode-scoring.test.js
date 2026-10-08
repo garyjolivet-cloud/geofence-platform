@@ -92,7 +92,7 @@ test("skiing a chute top to bottom in Test Mode logs it, scores it on the server
   assert.deepStrictEqual(Object.keys(e.scored[0].body).sort(), ["activity", "difficulty", "distanceM", "runType", "startedAt", "verticalM"]);
   assert.ok(e.log.some(l => /^RUN logged "Main Dumper" — ski · 1\d\d m · \+492 pts — Chute 1 of 1/.test(l)), "log line: " + e.log.join(" | "));
   assert.ok(e.toasts.some(t => /Chute 1 of 1/.test(t)), "the phone's completion text");
-  assert.match(e.el("simTodayNums").textContent, /^Vertical 0 m · Chutes 1\/1 · Runs 0 · Lift rides 0 · Points 492$/);
+  assert.match(e.el("simTodayNums").textContent, /^Vertical 0 m · Chutes 1\/1 · Runs 0\/0 · Lift rides 0 · Points 492$/);
   assert.ok(e.api.track.length === 1 && e.api.track[0].length > 20, "the day's track is kept for the share image");
 });
 
@@ -115,7 +115,7 @@ test("a lift ride counts toward vertical and lift rides; the rider name falls ba
   await drive(e, up, 5);
   const runs = e.api.day.runs();
   assert.strictEqual(runs.length, 1); assert.strictEqual(runs[0].activity, "lift");
-  assert.match(e.el("simTodayNums").textContent, /^Vertical (2\d\d|300) m · Chutes 0\/1 · Runs 0 · Lift rides 1 · /);   // the lift's climb x coverage
+  assert.match(e.el("simTodayNums").textContent, /^Vertical (2\d\d|300) m · Chutes 0\/1 · Runs 0\/0 · Lift rides 1 · /);   // the lift's climb x coverage
   assert.strictEqual(editor().api.simRiderName(), "Test rider");
   assert.strictEqual(editor({ user: "{not json" }).api.simRiderName(), "Test rider");
 });

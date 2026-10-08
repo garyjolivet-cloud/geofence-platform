@@ -7599,7 +7599,7 @@ async function simScoreRun(run){
 function paintSimToday(){
   const el=document.getElementById("simTodayNums"); if(!el || !_simDay) return;
   const t=_simDay.totals();
-  el.textContent="Vertical "+t.verticalM.toLocaleString()+" m · Chutes "+t.chutes+"/"+t.chutesTotal+" · Runs "+t.runs+" · Lift rides "+t.liftRides+" · Points "+t.points.toLocaleString();
+  el.textContent="Vertical "+t.verticalM.toLocaleString()+" m · Chutes "+t.chutes+"/"+t.chutesTotal+" · Runs "+t.runsSkied+"/"+t.runsTotal+" · Lift rides "+t.liftRides+" · Points "+t.points.toLocaleString();
 }
 // 🏆 Today's leaderboard for the test: the test rider only (Gary's choice), same row as the phone.
 function closeSimLeaderboard(){ document.getElementById("simLeaderboardOverlay")?.remove(); }
@@ -7615,7 +7615,7 @@ function openSimLeaderboard(){
   box.innerHTML='<div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px;flex:1">🏆 Leaderboard — today</b><button class="ghost" id="simLbClose" style="width:auto;padding:4px 10px">Close</button></div>'
     +'<div style="color:var(--fog);margin:2px 0 10px">Test data — not saved, not on the real leaderboard.</div>'
     +'<div style="font-weight:600;margin-bottom:4px">You — today</div>'
-    +'<div style="display:flex;gap:6px;margin-bottom:12px">'+cell(t.verticalM.toLocaleString()+" m","Vertical")+cell(t.chutes+"/"+t.chutesTotal,"Chutes")+cell(t.liftRides,"Lifts")+'</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:12px">'+cell(t.verticalM.toLocaleString()+" m","Vertical")+cell(t.chutes+"/"+t.chutesTotal,"Chutes")+cell(t.runsSkied+"/"+t.runsTotal,"Runs")+cell(t.liftRides,"Lifts")+'</div>'
     +(board.length ? board.map((row,i)=>'<div style="display:flex;align-items:center;gap:8px;border:1px solid var(--coral);border-radius:8px;padding:8px 10px">'
         +'<span style="background:var(--rim);border-radius:6px;padding:2px 7px;font-weight:700">#'+(i+1)+'</span>'
         +'<span style="flex:1;font-weight:600">'+escHtml(row.name)+' (you)</span>'

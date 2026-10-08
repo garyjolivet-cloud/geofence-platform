@@ -196,7 +196,7 @@ test("the Story fits 20 chute names (two columns), says how many more, and stays
   const d = SC.testDay(cors);
   const diffs = ["double-black", "black", "blue", "green"];
   d.chutes = Array.from({ length: 25 }, (_, i) => ({ name: "Chute Number " + (i + 1), difficulty: diffs[i % 4], count: 1 + (i % 3), zoneId: "c" + i }));
-  d.chuteCount = 25;
+  d.chuteCount = 25; d.runList = [];   // chutes only here; runs are listed after them (see quest-sim-day.test.js)
   const f = drawn(d, "story");
   const names = f.texts.filter(x => /^Chute Number /.test(x.t));
   assert.strictEqual(names.length, 20, "20 names drawn");
@@ -233,7 +233,7 @@ test("the Facebook image lists the chutes skied (2 columns, up to 12, +N more), 
   const d = SC.testDay(cors);
   const diffs = ["double-black", "black", "blue", "green"];
   d.chutes = Array.from({ length: 15 }, (_, i) => ({ name: "Chute Number " + (i + 1), difficulty: diffs[i % 4], count: 1 + (i % 2), zoneId: "c" + i }));
-  d.chuteCount = 15;
+  d.chuteCount = 15; d.runList = [];
   const f = drawn(d, "wide");
   const names = f.texts.filter(x => /^Chute Number /.test(x.t));
   assert.strictEqual(names.length, 12, "12 names on the Facebook image");

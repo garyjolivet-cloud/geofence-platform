@@ -39,12 +39,45 @@ function fullDay() {
 
 test("totals follow Home's rules: vertical = lift rides + boot packs, chutes n of total, runs = non-chute descents", () => {
   const t = fullDay().totals();
-  assert.deepStrictEqual(t, { verticalM: 1068 + 1068 + 60, chutes: 2, chutesTotal: 2, runs: 1, liftRides: 2, points: 492 + 492 + 450 + 450 + 60 });
+  assert.deepStrictEqual(t, { verticalM: 1068 + 1068 + 60, chutes: 2, chutesTotal: 2, runs: 1, liftRides: 2, points: 492 + 492 + 450 + 450 + 60, runsSkied: 1, runsTotal: 1 });
+});
+
+// 2026-10-08, Gary: "runs need to show in the leader board like chutes. also runs need to be listed on
+// social media page. chutes and runs not just chutes".
+test("runs count like chutes (different runs skied, of the map's runs) and are listed on the share image after the chutes", () => {
+  const two = corridors.concat([{ zoneId: "r2", name: "Home Run", runType: "run", difficulty: "green", path: P(51.29, 51.28), descentM: 134, climbM: 0 }]);
+  const d = QuestSimDay.create({ rider: "G", corridors: two });
+  const r2 = { zoneId: "r2", runName: "Home Run", difficulty: "green", runType: "run", activity: "ski", verticalM: -134, startedAt: "2026-10-08T15:00:00.000Z", endedAt: "2026-10-08T15:01:00.000Z" };
+  d.addRun(run("r1", "ski", -300), 450); d.addRun(run("r1", "ski", -300), 450); d.addRun(r2, 134); d.addRun(run("c1", "ski", -123), 492);
+  const t = d.totals();
+  assert.deepStrictEqual([t.runsSkied, t.runsTotal, t.runs, t.chutes], [2, 2, 3, 1], "2 of 2 runs (3 descents), 1 chute");
+  const day = d.socialDay({});
+  assert.deepStrictEqual(day.runList, [{ name: "Pioneer", difficulty: "blue", count: 2, zoneId: "r1" }, { name: "Home Run", difficulty: "green", count: 1, zoneId: "r2" }]);
+  assert.deepStrictEqual(SocialCard.listedLines(day).map(x => x.name), ["Main Dumper", "Pioneer", "Home Run"], "chutes first, then runs, each hardest first");
+  assert.strictEqual(SocialCard.listHeading(day), "CHUTES & RUNS");
+  assert.strictEqual(SocialCard.listHeading(Object.assign({}, day, { chutes: [] })), "RUNS");
+  assert.strictEqual(SocialCard.listHeading(Object.assign({}, day, { runList: [] })), "CHUTES", "chutes only: unchanged");
+  assert.strictEqual(SocialCard.listHeading({ kind: "season", chutes: [{}] }), "MOST SKIED CHUTES", "the season image is unchanged");
+});
+
+test("the phone's Today image lists runs too, from the same runs it already fetches", async () => {
+  const api = async p => {
+    if (/\/runs\?/.test(p)) return { runs: [
+      { activity: "ski", run_type: "run", zone_id: "r1", run_name: "Pioneer", difficulty: "blue", started_at: "2026-10-08T16:00:00Z", points: 300 },
+      { activity: "ski", run_type: "run", zone_id: "r1", run_name: "Pioneer", difficulty: "blue", started_at: "2026-10-08T17:00:00Z", points: 300 },
+      { activity: "ski", run_type: "chute", zone_id: "c1", run_name: "Main Dumper", difficulty: "double-black", started_at: "2026-10-08T15:00:00Z", points: 517 },
+      { activity: "ski", run_type: "run", zone_id: "r9", run_name: "Yesterday", difficulty: "green", started_at: "2026-10-07T15:00:00Z", points: 10 }] };
+    if (/\/chutes\/daily/.test(p)) return { chutes: [{ name: "Main Dumper", difficulty: "double-black", count: 1, zoneId: "c1" }] };
+    return {};
+  };
+  const day = await SocialCard.collectDay(api, { playerId: "p1", corridors, dayKey: iso => iso.slice(0, 10), today: "2026-10-08", seasonId: "2026-2027", dateLabel: "x" });
+  assert.deepStrictEqual(day.runList, [{ name: "Pioneer", difficulty: "blue", count: 2, zoneId: "r1" }], "today's runs, laps counted, chutes not repeated");
+  assert.deepStrictEqual(SocialCard.listedLines(day).map(x => x.name), ["Main Dumper", "Pioneer"]);
 });
 
 test("an empty day is all zeros and the rider defaults to a name", () => {
   const d = QuestSimDay.create({ corridors });
-  assert.deepStrictEqual(d.totals(), { verticalM: 0, chutes: 0, chutesTotal: 2, runs: 0, liftRides: 0, points: 0 });
+  assert.deepStrictEqual(d.totals(), { verticalM: 0, chutes: 0, chutesTotal: 2, runs: 0, liftRides: 0, points: 0, runsSkied: 0, runsTotal: 1 });
   assert.strictEqual(d.rider, "Test rider");
   assert.strictEqual(d.runs().length, 0);
 });
