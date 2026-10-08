@@ -8447,8 +8447,10 @@ async function renderSocialTest(simDay){
   grid.innerHTML="";
   const cors=_socialTestCorridors();
   if(!simDay && !cors.length){ st.textContent="This project has no corridors to build test data from."; return; }
-  const day=simDay || SocialCard.testDay(cors,{ seed:_socialTestSeed }), season=simDay ? null : SocialCard.testSeason(cors,{ seed:_socialTestSeed });
-  const jobs=simDay ? [[day,"story"],[day,"wide"]] : [[day,"story"],[day,"wide"],[season,"story"],[season,"wide"]];
+  // Today only, everywhere (2026-10-08, Gary: "the social media button has old test data for season.
+  // needs to be flushed"): the made-up season images and the sample day's "Season so far" line are gone.
+  const day=simDay || Object.assign(SocialCard.testDay(cors,{ seed:_socialTestSeed }), { season:null });
+  const jobs=[[day,"story"],[day,"wide"]];
   for(let i=0;i<jobs.length;i++){
     const [d,fmt]=jobs[i];
     st.textContent="Drawing "+(i+1)+" of "+jobs.length+"…";
@@ -8470,11 +8472,13 @@ async function renderSocialTest(simDay){
 let _socialSimMode=false;
 function _socialTestChrome(sim){
   _socialSimMode=sim;
-  document.getElementById("socialTestTitle").textContent=sim ? "Social media export — today's test (not saved)" : "Social media export — test data";
+  document.getElementById("socialTestTitle").textContent=sim ? "Social media export — today's test (not saved)" : "Social media export — sample day (start ▶ Test for your own)";
   document.getElementById("socialTestRegen").style.display=sim ? "none" : "";
 }
 function openSocialTest(){
   if(typeof SocialCard==="undefined"){ alert("social-card.js didn't load"); return; }
+  // In Test Mode the toolbar's 📸 Social shows the simulated day too, never the made-up sample.
+  if(simMode && _simDay && QuestRunSim){ openSimSocial(); return; }
   _socialTestChrome(false);
   document.getElementById("socialTestOverlay").classList.add("open");
   renderSocialTest();

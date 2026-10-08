@@ -165,7 +165,8 @@ test("Test Mode wiring: fed every simulated fix, buttons present, day cleared on
   assert.ok(/_simDay\.board\(\)/.test(lb) && /not saved, not on the real leaderboard/.test(lb) && !/fetch\(|\/api\/leaderboard/.test(lb), "the leaderboard is the test rider only, nothing fetched");
   const soc = extract(fe, "async function openSimSocial(){");
   assert.ok(/day0\.socialDay\(/.test(soc) && /renderSocialTest\(/.test(soc), "the share images are drawn from the simulated day");
-  assert.ok(/const jobs=simDay \? \[\[day,"story"\],\[day,"wide"\]\]/.test(fe), "today only: Story + Facebook, no season");
+  assert.ok(/const jobs=\[\[day,"story"\],\[day,"wide"\]\];/.test(fe) && !/testSeason\(/.test(fe), "today only: Story + Facebook, no season anywhere");
+  assert.ok(/if\(simMode && _simDay && QuestRunSim\)\{ openSimSocial\(\); return; \}/.test(extract(fe, "function openSocialTest(){")), "in Test Mode the toolbar's Social button shows the simulated day too");
   assert.ok(!/\/api\/quest-runs|\/api\/chute-lines|\/api\/quest-day-vertical/.test(fe), "the editor never calls an endpoint that saves a run");
   const sim = fe.slice(fe.indexOf("let QuestRunSim=null"), fe.indexOf("function feedSim(lat,lon,acc,t,bleFix){"));
   assert.ok(!/localStorage\.setItem|sessionStorage\.setItem/.test(sim), "nothing persisted");

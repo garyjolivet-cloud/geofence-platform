@@ -143,8 +143,9 @@ test("Ridge Quest: Social media export button, guard log kept as a small link, t
 test("Fence Editor: 📸 Social test screen renders all 4 images from test data", () => {
   assert.ok(fe.includes('<script src="/social-card.js"></script>'));
   assert.ok(/id="socialTestBtn"[^>]*>📸 Social</.test(fe) && /id="socialTestOverlay"/.test(fe));
-  assert.ok(/SocialCard\.testDay\(cors/.test(fe) && /SocialCard\.testSeason\(cors/.test(fe));
-  assert.ok(/\[\[day,"story"\],\[day,"wide"\],\[season,"story"\],\[season,"wide"\]\]/.test(fe));
+  // 2026-10-08 (Gary: "old test data for season ... needs to be flushed"): today only -- no season images, no "Season so far" line.
+  assert.ok(/SocialCard\.testDay\(cors/.test(fe) && !/SocialCard\.testSeason\(/.test(fe));
+  assert.ok(/const jobs=\[\[day,"story"\],\[day,"wide"\]\];/.test(fe) && /\{ season:null \}\)/.test(fe));
 });
 
 // 2026-10-01 field report: sharing to WhatsApp delivered no image. A share carrying title/text
