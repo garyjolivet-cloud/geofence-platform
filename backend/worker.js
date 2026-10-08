@@ -1537,6 +1537,21 @@ async function api(request, env, url) {
     const chutes = aggregateChuteCounts(results || [], questSeasonId, seasonId);
     return json({ seasonId, chutes }, 200, AC);
   }
+  // Runs (ski descents that are NOT chutes), counted like the chutes above: which runs, how many
+  // times -- GET /api/players/:id/skiruns/daily[?date=] | season[?seasonId=] (2026-10-08, Gary:
+  // "runs need to show in the leader board like chutes"). Feeds the Leaderboard's Runs n/total.
+  const SKI_RUN_LAPS_SQL = "SELECT zone_id,run_name,difficulty,started_at FROM quest_run WHERE player_id=? AND activity='ski' AND (run_type IS NULL OR run_type NOT IN ('chute','lift','hike')) ORDER BY started_at DESC LIMIT 2000";
+  const mpsr = path.match(/^\/api\/players\/([^/]+)\/skiruns\/(daily|season)$/);
+  if (mpsr && method === "GET") {
+    const P = await playerAuth(request, env);
+    if (!P || P.playerId !== decodeURIComponent(mpsr[1])) return json({ error: "not authenticated" }, 401, AC);
+    if (!env.DB) return json({ error: "D1 not bound" }, 500);
+    const daily = mpsr[2] === "daily", nowIso = new Date().toISOString();
+    const key = daily ? (url.searchParams.get("date") || questDateBucket(nowIso)) : (url.searchParams.get("seasonId") || questSeasonId(nowIso));
+    const { results } = await env.DB.prepare(SKI_RUN_LAPS_SQL).bind(P.playerId).all();
+    const runs = aggregateChuteCounts(results || [], daily ? questDateBucket : questSeasonId, key).map(r => ({ zoneId: r.zoneId, name: r.name === "Chute" ? "Run" : r.name, difficulty: r.difficulty, count: r.count, lastSkiedAt: r.lastSkiedAt }));
+    return json(daily ? { date: key, runs } : { seasonId: key, runs }, 200, AC);
+  }
   // Boot packs and lift rides, per route/lift: GET /api/players/:id/bootpacks|lifts/daily[?date=]
   // and .../season[?seasonId=]. Each answer carries the routes (name, times, vertical climbed
   // -- 0 for lifts) plus today's AND this season's totals, so Home needs one call each.

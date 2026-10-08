@@ -7615,7 +7615,10 @@ function openSimLeaderboard(){
   box.innerHTML='<div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px;flex:1">🏆 Leaderboard — today</b><button class="ghost" id="simLbClose" style="width:auto;padding:4px 10px">Close</button></div>'
     +'<div style="color:var(--fog);margin:2px 0 10px">Test data — not saved, not on the real leaderboard.</div>'
     +'<div style="font-weight:600;margin-bottom:4px">You — today</div>'
-    +'<div style="display:flex;gap:6px;margin-bottom:12px">'+cell(t.verticalM.toLocaleString()+" m","Vertical")+cell(t.chutes+"/"+t.chutesTotal,"Chutes")+cell(t.runsSkied+"/"+t.runsTotal,"Runs")+cell(t.liftRides,"Lifts")+'</div>'
+    // the phone's Leaderboard "You — today" box, cell for cell (Gary: "test and phone should be exact same"):
+    // Vertical on its own line, then Chutes n/total · Runs n/total · Lifts
+    +'<div style="display:flex;margin-bottom:6px">'+cell(Math.round(t.verticalM)+"m","Vertical")+'</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:12px">'+cell(t.chutes+"/"+t.chutesTotal,"Chutes")+cell(t.runsSkied+"/"+t.runsTotal,"Runs")+cell(t.liftRides,"Lifts")+'</div>'
     +(board.length ? board.map((row,i)=>'<div style="display:flex;align-items:center;gap:8px;border:1px solid var(--coral);border-radius:8px;padding:8px 10px">'
         +'<span style="background:var(--rim);border-radius:6px;padding:2px 7px;font-weight:700">#'+(i+1)+'</span>'
         +'<span style="flex:1;font-weight:600">'+escHtml(row.name)+' (you)</span>'

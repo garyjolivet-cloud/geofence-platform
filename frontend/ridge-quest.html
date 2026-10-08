@@ -134,6 +134,11 @@
   .strip h3{margin:0 0 6px;font-family:"Barlow Condensed";font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fog)}
   .stripRow{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px}
   .stripRow .m{text-align:center;min-width:0}
+  /* Leaderboard "You" box: Vertical on its own line, the counts (Chutes, Runs, Lifts[, Streak]) under it --
+     five cells in one row overlapped at phone width once Runs was added (2026-10-08). */
+  #lbYou .stripRow{grid-auto-flow:row;grid-template-columns:repeat(var(--n,3),1fr);row-gap:8px}
+  #lbYou .stripRow .m:first-child{grid-column:1/-1}
+  #lbYou .stripRow .m:not(:first-child) b{font-size:18px}
   .stripRow button.m{background:rgba(255,255,255,.06);border:1px solid var(--rim);border-radius:10px;color:var(--snow);padding:4px 2px;margin:0;font:inherit;cursor:pointer}
   .stripRow b{display:block;font-family:"Black Han Sans";font-weight:400;font-size:20px;line-height:1.2;white-space:nowrap}
   .stripRow span{font-family:"Barlow Condensed";font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ice)}
@@ -1779,17 +1784,32 @@ async function refreshRuns(playerId){
 // so a failing request blanks only its own numbers, never the whole row.
 // Home's picture numbers + the Leaderboard's "You — this season" strip (moved there 2026-10-06).
 // Fills whichever of those elements are on screen; best-effort: a failed fetch leaves its dashes.
+// "n/total" for the Leaderboard's You box: n different chutes / runs skied, of the map's (a corridor
+// with no type is a run, as everywhere). No corridors loaded yet -> just n.
+function nOfTotal(n, runType){
+  const total=(Quest.corridors||[]).filter(c=>(c.runType||"run")===runType).length;
+  return total ? n+"/"+total : String(n);
+}
+function paintLbChutesToday(){
+  const el=document.getElementById("lbChutesToday"); if(el) el.textContent=nOfTotal(Quest.skiedToday.size, "chute");
+}
 async function refreshStats(playerId){
   const streakEl=document.getElementById("statsStreak");
-  if(!document.getElementById("chutesTodayNum") && !streakEl) return;   // neither Home nor the Leaderboard (today / season)
+  if(!document.getElementById("chutesTodayNum") && !document.getElementById("lbChutesToday") && !streakEl) return;   // neither Home nor the Leaderboard (today / season)
   const ct=document.getElementById("chutesTodayNum"); if(ct) ct.textContent=Quest.skiedToday.size;
+  paintLbChutesToday();
   refreshClimbTiles(playerId);
+  // Leaderboard "You": Runs n/total, like chutes -- different runs skied (not chutes), of the map's runs.
+  [["lbRunsToday","daily"],["lbRunsSeason","season"]].forEach(([id, span])=>{
+    if(!document.getElementById(id)) return;
+    api("/api/players/"+playerId+"/skiruns/"+span).then(j=>{
+      const el=document.getElementById(id); if(el) el.textContent=nOfTotal((j.runs||[]).length, "run");
+    }).catch(()=>{});
+  });
   // Season chutes: n of the resort's chutes skied this season.
   api("/api/players/"+playerId+"/chutes/season").then(j=>{
     const el=document.getElementById("chutesSeason"); if(!el) return;
-    const total=(Quest.corridors||[]).filter(c=>c.runType==="chute").length;
-    const n=(j.chutes||[]).length;
-    el.textContent = total ? n+"/"+total : String(n);
+    el.textContent = nOfTotal((j.chutes||[]).length, "chute");
   }).catch(()=>{});
   if(!streakEl) return;   // the day streak is the only thing /stats feeds now (no points on Home since 2026-10-06)
   try{
@@ -1830,6 +1850,7 @@ async function loadSkiedToday(playerId){
     (j.chutes||[]).forEach(c=>Quest.skiedToday.add(c.zoneId));
     const el = document.getElementById("chutesTodayNum");
     if(el) el.textContent = Quest.skiedToday.size;
+    paintLbChutesToday();
     if(Quest.onSkiedChanged) Quest.onSkiedChanged(null, false);
   }catch(e){}
 }
@@ -2779,10 +2800,12 @@ async function renderLeaderboard(mode){
     // lifts today. no streak for today. the heading should say you today"). Today reuses Home's ids,
     // so refreshStats / refreshClimbTiles / loadSkiedToday fill it as they do Home.
     +(mode==="daily"
-      ? '<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — today</h3><div class="stripRow">'
-        +mini("vertToday","Vertical")+mini("chutesTodayNum","Chutes","lbChutes")+mini("liftTodayN","Lifts","lbLifts")
-      : '<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — this season</h3><div class="stripRow">'
-        +mini("vertSeason","Vertical")+mini("chutesSeason","Chutes","lbChutes")+mini("liftSeasonN","Lifts","lbLifts")+mini("statsStreak","Streak"))
+      ? '<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — today</h3><div class="stripRow" style="--n:3">'
+        // Chutes and Runs both read n/total here (2026-10-08, Gary: "runs need to show in the leader board
+        // like chutes" + "test and phone should be exact same" -- the Fence Editor's Test 🏆 box is this row).
+        +mini("vertToday","Vertical")+mini("lbChutesToday","Chutes","lbChutes")+mini("lbRunsToday","Runs")+mini("liftTodayN","Lifts","lbLifts")
+      : '<div class="strip" id="lbYou" style="margin:0 0 14px"><h3>You — this season</h3><div class="stripRow" style="--n:4">'
+        +mini("vertSeason","Vertical")+mini("chutesSeason","Chutes","lbChutes")+mini("lbRunsSeason","Runs")+mini("liftSeasonN","Lifts","lbLifts")+mini("statsStreak","Streak"))
     +'</div></div>'
     +'<div style="display:flex;gap:10px;margin-bottom:14px">'
       +'<button class="ghost" id="lbDailyBtn" style="margin:0;'+(mode==="daily"?"border-color:var(--coral)":"")+'">Today</button>'

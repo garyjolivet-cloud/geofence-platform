@@ -126,9 +126,10 @@ test("This season (vertical, chutes, day streak) is on the Leaderboard, not Home
   const home = rq.slice(rq.indexOf("function renderHome(){"), rq.indexOf("// The rider's own chute names (cached copy"));
   assert.ok(!/vertSeason|chutesSeason|statsStreak/.test(home), "gone from Home");
   const lb = rq.slice(rq.indexOf("async function renderLeaderboard(mode){"), rq.indexOf("const listEl=document.getElementById(\"lbList\");"));
-  assert.ok(/id="lbYou"/.test(lb) && /mini\("vertSeason","Vertical"\)\+mini\("chutesSeason","Chutes","lbChutes"\)\+mini\("liftSeasonN","Lifts","lbLifts"\)\+mini\("statsStreak","Streak"\)/.test(lb));
-  // Today (2026-10-06): "You — today" with today's vertical, chutes, lifts and no streak
-  assert.ok(/<h3>You — today<\/h3>/.test(lb) && /mini\("vertToday","Vertical"\)\+mini\("chutesTodayNum","Chutes","lbChutes"\)\+mini\("liftTodayN","Lifts","lbLifts"\)\s*:/.test(lb));
+  // Runs sit beside Chutes, both n/total (2026-10-08, Gary: "runs need to show in the leader board like chutes").
+  assert.ok(/id="lbYou"/.test(lb) && lb.includes('mini("vertSeason","Vertical")+mini("chutesSeason","Chutes","lbChutes")+mini("lbRunsSeason","Runs")+mini("liftSeasonN","Lifts","lbLifts")+mini("statsStreak","Streak")'));
+  // Today (2026-10-06): "You — today" with today's vertical, chutes, runs, lifts and no streak
+  assert.ok(/<h3>You — today<\/h3>/.test(lb) && lb.includes('mini("vertToday","Vertical")+mini("lbChutesToday","Chutes","lbChutes")+mini("lbRunsToday","Runs")+mini("liftTodayN","Lifts","lbLifts")'));
   assert.ok(/lbChutes"\)\.onclick=\(\)=>renderYourChutes\(mode\)/.test(rq) && /lbLifts"\)\.onclick=\(\)=>renderLifts\(mode\)/.test(rq), "opens on the same Today / Season");
   // Your chutes + Lift rides open from that box, not Home tiles, and come back to the Leaderboard
   assert.ok(!/btnChutes|btnLifts/.test(home), "no Home tiles");
@@ -137,7 +138,24 @@ test("This season (vertical, chutes, day streak) is on the Leaderboard, not Home
   assert.ok(lb.indexOf('id="lbYou"') < lb.indexOf('id="lbList"'), "above the board");
   assert.ok(/refreshStats\(s\.player\.id\)/.test(lb), "filled on open");
   const rs = rq.slice(rq.indexOf("async function refreshStats(playerId){"), rq.indexOf("async function refreshClimbTiles("));
-  assert.ok(/if\(!document\.getElementById\("chutesTodayNum"\) && !streakEl\) return;/.test(rs), "fills the Leaderboard too");
+  assert.ok(rs.includes('if(!document.getElementById("chutesTodayNum") && !document.getElementById("lbChutesToday") && !streakEl) return;'), "fills the Leaderboard too");
+  assert.ok(rs.includes('[["lbRunsToday","daily"],["lbRunsSeason","season"]]') && rs.includes('"/skiruns/"+span') && rs.includes('nOfTotal((j.runs||[]).length, "run")'), "Runs n/total from the runs-skied endpoint");
+  assert.ok(rs.includes('el.textContent = nOfTotal((j.chutes||[]).length, "chute");') && rq.includes('el.textContent=nOfTotal(Quest.skiedToday.size, "chute");'), "Chutes n/total, today and season");
+  // the pure formatter: different lines skied, of the map's lines of that type (no type = a run)
+  const src = rq.slice(rq.indexOf("function nOfTotal(n, runType){"), rq.indexOf("function paintLbChutesToday(){"));
+  // eslint-disable-next-line no-new-func
+  const nOfTotal = new Function("Quest", src + "\nreturn nOfTotal;")({ corridors: [{ runType: "chute" }, { runType: "chute" }, { runType: "run" }, {}, { runType: "lift" }] });
+  assert.deepStrictEqual([nOfTotal(1, "chute"), nOfTotal(2, "run"), nOfTotal(0, "run")], ["1/2", "2/2", "0/2"]);
+  assert.strictEqual(new Function("Quest", src + "\nreturn nOfTotal;")({ corridors: [] })(3, "run"), "3", "no map loaded yet: just the count");
+  // Test Mode's 🏆 box is the same row, same formats (Gary: "test and phone should be exact same")
+  const fe = fs.readFileSync(path.join(__dirname, "../frontend/fence-editor.html"), "utf8");
+  assert.ok(fe.includes('cell(Math.round(t.verticalM)+"m","Vertical")') && fe.includes('cell(t.chutes+"/"+t.chutesTotal,"Chutes")+cell(t.runsSkied+"/"+t.runsTotal,"Runs")+cell(t.liftRides,"Lifts")'), "Vertical Nm, then Chutes n/total · Runs n/total · Lifts");
+  // phone layout: Vertical on its own line, the counts under it (five cells in one row overlapped at 390 px)
+  assert.ok(rq.includes("#lbYou .stripRow .m:first-child{grid-column:1/-1}") && rq.includes('<div class="stripRow" style="--n:3">') && rq.includes('<div class="stripRow" style="--n:4">'));
+  // the endpoint: ski descents that are not chutes, same aggregation and day/season buckets as the chute counts
+  const wk = fs.readFileSync(path.join(__dirname, "../backend/worker.js"), "utf8");
+  assert.ok(wk.includes("activity='ski' AND (run_type IS NULL OR run_type NOT IN ('chute','lift','hike'))") && /skiruns\\\/\(daily\|season\)\$/.test(wk), "GET /api/players/:id/skiruns/daily|season");
+  assert.ok(/aggregateChuteCounts\(results \|\| \[\], daily \? questDateBucket : questSeasonId, key\)/.test(wk) && /P\.playerId !== decodeURIComponent\(mpsr\[1\]\)/.test(wk), "own rows only");
 });
 
 test("a failed render is never saved as the picture", async () => {
