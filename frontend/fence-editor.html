@@ -7323,7 +7323,7 @@ function chuteGuardCallbacks(){
       if(!_cgTestGuarded(corridorId)) return;
       simLogEv("sev-sys","back inside \""+(name||"corridor")+"\"");
     },
-    // Same as live: dropped in from the top + 80 % skied -> chime, then no tone for it.
+    // Same as live: dropped in from the top + 90 % skied (FINISH_PCT) -> chime, then no tone for it.
     onComplete(corridorId,name,info){
       if(!_cgTestGuarded(corridorId)) return;
       const played = simSoundOn && SimVoice.ctx && ChuteGuard.playChime(SimVoice.ctx, SimVoice.ctx.destination, 0.6);

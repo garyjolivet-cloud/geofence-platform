@@ -1415,13 +1415,13 @@ function biasSetup() {
 })();
 
 // ============================================================
-// Finished at 80 % (2026-10-08, user: "when a skier has completed from top to bottom 80% of a chute
+// Finished at 90 % (80 % at first, changed the same day: "change to 90% of run for chime") (2026-10-08, user: "when a skier has completed from top to bottom 80% of a chute
 // or run sound a victory chime and stop the guard warning for that chute allowing skier to exit
-// chute with no warning"). The fixture runs north from START (its top) for 400 m: 80 % = 320 m.
+// chute with no warning"). The fixture runs north from START (its top) for 400 m: 90 % = 360 m.
 // ============================================================
 (function testFinishedAt80PctChimesAndStopsTheGuard() {
   const T = freshChuteGuard().TUNING;
-  assert(T.FINISH_PCT === 0.80, "finished = 80 % down from the top");
+  assert(T.FINISH_PCT === 0.90, "finished = 90 % down from the top");
   const setup = (runType, opts) => { const g = freshChuteGuard(), warn = [], done = [], dbg = [];
     g.load([makeCorridor("f1", { runType, lenM: 400, widthM: 10 })],
       { onWarn: id => warn.push(id), onComplete: (id, name, info) => done.push(Object.assign({ id, name }, info)), onDebug: (id, n, d) => dbg.push(d) }, opts);
@@ -1431,43 +1431,43 @@ function biasSetup() {
     const exit = fwd => [8, 12, 16, 20].forEach((lat, i) => go(fwd + i * 5, lat));
     return { g, warn, done, dbg, go, down, exit }; };
 
-  // top to 80 %: one chime, then leaving sideways is silent
+  // top to 90 %: one chime, then leaving sideways is silent
   let s = setup("chute");
-  s.down(0, 315);
-  assert(s.done.length === 0, "no chime at 79 %");
-  s.down(320, 330);
-  assert(s.done.length === 1 && s.done[0].id === "f1" && s.done[0].pct === 0.80, "one chime on reaching 80 %, got " + s.done.length);
-  s.exit(335);
+  s.down(0, 355);
+  assert(s.done.length === 0, "no chime at 89 %");
+  s.down(360, 370);
+  assert(s.done.length === 1 && s.done[0].id === "f1" && s.done[0].pct === 0.90, "one chime on reaching 90 %, got " + s.done.length);
+  s.exit(375);
   assert(s.warn.length === 0 && s.g.getActiveAlarm() === null, "finished: leaving the chute sounds no tone");
   assert(s.dbg.some(d => d.dropIn === "done"), "the debug line says done");
-  s.go(360, 0); s.go(380, 0); s.exit(385);
+  s.go(380, 0); s.go(390, 0); s.exit(385);
   assert(s.done.length === 1 && s.warn.length === 0, "back in and out again on the same pass: still one chime, still silent");
 
-  // leaving before 80 % still warns
+  // leaving before 90 % still warns (80 % is no longer enough)
   s = setup("chute");
-  s.down(0, 300); s.exit(305);
-  assert(s.done.length === 0 && s.warn.length > 0 && s.g.getActiveAlarm() !== null, "left at 75 %: tone as before, no chime");
+  s.down(0, 330); s.exit(335);
+  assert(s.done.length === 0 && s.warn.length > 0 && s.g.getActiveAlarm() !== null, "left at 84 %: tone as before, no chime");
   // ...and coming back in to finish it still earns the chime and ends the tone
-  s.down(320, 325);
-  assert(s.done.length === 1 && s.g.getActiveAlarm() === null, "back inside past 80 %: chime, tone over");
+  s.down(360, 365);
+  assert(s.done.length === 1 && s.g.getActiveAlarm() === null, "back inside past 90 %: chime, tone over");
 
   // not skied from the top: no chime
   s = setup("chute");
   s.down(200, 380);
   assert(s.done.length === 0, "joined midway and skied to the bottom: not a top-to-bottom pass, no chime");
   s = setup("chute");
-  [-30, -20, -10, 0, 10, 20, 30].forEach(lat => s.go(350, lat));
+  [-30, -20, -10, 0, 10, 20, 30].forEach(lat => s.go(380, lat));
   assert(s.done.length === 0, "crossing the bottom of a chute: no chime");
 
   // the next lap is guarded again
   s = setup("chute");
-  s.down(0, 330); s.go(330, 300);            // away (out of relevant range)
+  s.down(0, 370); s.go(370, 300);            // away (out of relevant range)
   s.down(0, 100); s.exit(105);
   assert(s.done.length === 1 && s.warn.length > 0, "after leaving the area the next pass is guarded again");
 
   // runs: Ridge Quest only (same opt-in as the drop-in gate); other hosts unchanged; boot packs never
   s = setup("run", { dropInRuns: true });
-  s.down(0, 330); s.exit(335);
+  s.down(0, 370); s.exit(375);
   assert(s.done.length === 1 && s.warn.length === 0, "Ridge Quest: a run finishes the same way");
   s = setup("run");
   s.down(0, 330); s.exit(335);

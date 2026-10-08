@@ -2772,7 +2772,7 @@ function chuteGuardCallbacks(){
       _cgLastToastLevel = 0;
       rqToast("✓ back on \""+(name||"corridor")+"\"");
     },
-    // Dropped in from the top and skied 80 % of it (chute-guard.js finishStep): victory chime, and
+    // Dropped in from the top and skied 90 % of it (chute-guard.js finishStep, FINISH_PCT): victory chime, and
     // the guard is quiet for this chute/run from here, so the rider can leave it anywhere.
     onComplete(corridorId, name, info){
       if(!Quest.isGuarded(corridorId)) return;   // no guard on it = no warning to lift, no chime

@@ -106,7 +106,7 @@
     DROPIN_RUN_TYPES: ["chute"], // corridors that need a drop-in from the top before any tone (see the "Drop-in gate" header note)
     DROPIN_PCT: 0.10,            // tone only once the rider is this fraction of the line down from its top...
     DROPIN_TOP_MIN_M: 40,        // ...having first been inside the top zone: the top DROPIN_PCT, at least this many m (a 1 Hz fix at ski speed can skip a 10 m zone)
-    FINISH_PCT: 0.80,            // a dropped-in chute/run skied this far down from its top is finished: onComplete once, then no tone for it (see finishStep)
+    FINISH_PCT: 0.90,            // (0.80 at first; Gary the same day: "change to 90% of run for chime") a dropped-in chute/run skied this far down from its top is finished: onComplete once, then no tone for it (see finishStep)
     DROPIN_TOP_MAX_PCT: 0.25,    // ...but never more than this fraction of the line, so "midway" is always outside it
     LIFT_RIDE_UP_M: 30,          // riding a lift = this many m of progress UP its line while in its band... (see liftRideStep)
     LIFT_RIDE_MIN_MPS: 1.5,      // ...at this average pace or more (a boot pack beside the line is slower)...
@@ -214,7 +214,7 @@
     if(f <= topZone) st.sawTop = true;
     if(st.sawTop && f >= TUNING.DROPIN_PCT) st.topSkied = true;
   }
-  // Finished (2026-10-08, Gary: "when a skier has completed from top to bottom 80% of a chute or run
+  // Finished (2026-10-08, Gary: "when a skier has completed from top to bottom 80% [90 % since later that day] of a chute or run
   // sound a victory chime and stop the guard warning for that chute allowing skier to exit chute with
   // no warning"). Same corridors as the drop-in gate, and it needs that drop-in from the top: once the
   // rider is inside the trigger edge at FINISH_PCT or more down the line, st.done latches, the host is
