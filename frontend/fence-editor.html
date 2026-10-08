@@ -274,7 +274,7 @@
              font-family:"Barlow Condensed";font-size:12px;color:var(--ice);
              cursor:pointer;letter-spacing:.4px;display:flex;align-items:center;gap:5px}
   #mapKeyBtn:hover{border-color:var(--fog);color:var(--snow)}
-  #mapKeyOverlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);
+  #mapKeyOverlay{display:none;position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.55);
                  align-items:center;justify-content:center}
   #mapKeyOverlay.open{display:flex}
   #mapKeyBox{background:#151e2d;border:1px solid var(--rim);border-radius:16px;padding:18px 20px;
@@ -299,6 +299,8 @@
   .key-move-row{display:flex;align-items:flex-start;gap:10px;padding:5px 0;
                 border-top:1px solid rgba(46,63,88,.5)}
   .key-icon{flex-shrink:0;font-size:16px;margin-top:0px;width:14px;text-align:center}
+  #mapKeyTest .key-icon{width:22px;font-size:15px}
+  #mapKeyOverlay.test #mapKeyBox{width:460px}
   .maplibregl-popup-content{background:var(--slate);color:var(--snow);border:1px solid var(--rim);font-family:"Barlow Condensed"}
   /* Splash Flyby editor — a full-screen overlay hosting its OWN live
      MapLibre instance (not this page's main #map), built with the exact
@@ -531,6 +533,8 @@
 
 <div id="mapKeyOverlay">
   <div id="mapKeyBox">
+    <!-- Editing: the handle legend. In Test Mode the same button shows #mapKeyTest instead (see showMapKey). -->
+    <div id="mapKeyEdit">
     <h2>Map Handle Legend <button onclick="document.getElementById('mapKeyOverlay').classList.remove('open')">✕</button></h2>
 
     <div class="key-section">Zone interaction</div>
@@ -592,6 +596,100 @@
       <div class="key-icon" style="color:var(--fog)">↔</div>
       <div class="key-row-text"><b>While dragging</b><span>The label updates live (e.g. "radius: 45 m"). The panel number box updates too.</span></div>
     </div>
+    </div><!-- /mapKeyEdit -->
+
+    <!-- Test Mode guide (2026-10-08, Gary: "the info button in test need to be updated"). The numbers are the
+         real rules (quest-core.js QUEST_TUNING, chute-guard.js TUNING, SIM_RIDE) and tests/fence-editor-test-info.test.js
+         pins them -- update this text when a rule changes. -->
+    <div id="mapKeyTest" style="display:none">
+    <h2>Test Mode guide <button onclick="document.getElementById('mapKeyOverlay').classList.remove('open')">✕</button></h2>
+
+    <div class="key-section">Moving the avatar</div>
+    <div class="key-move-row">
+      <div class="key-icon">●</div>
+      <div class="key-row-text"><b>Drag the dot</b><span>Moves the rider. Judged like a real skier: keep it under 162 km/h along a line or the pass is thrown out as a GPS jump — a toast says “Too fast to count”.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">✥</div>
+      <div class="key-row-text"><b>Click the map</b><span>Jumps the rider to that spot. A jump is never a run or a ride.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">▶</div>
+      <div class="key-row-text"><b>Tap a line, then ▶</b><span>Ridge Quest workspaces. Tap a lift, run, chute or boot pack and press <strong style="color:var(--snow)">▶ Ride up</strong> (30 km/h), <strong style="color:var(--snow)">▶ Ski down</strong> (40 km/h) or <strong style="color:var(--snow)">▶ Boot pack up</strong> (5 km/h): the rider travels that one line the way and at a pace that scores. Several lines under the tap are all listed, lifts first. ⏸ stops it.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">⏩</div>
+      <div class="key-row-text"><b>▶ Walk stops · ▶ · speed buttons</b><span>Walk stops travels every stop and line in order at the chosen speed; ⏩ / ⏪ flips the direction; ▶ pauses and resumes. Playback runs four times faster than real time.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">🔒</div>
+      <div class="key-row-text"><b>Stops are read-only</b><span>In Test nothing can be moved, edited, renamed or deleted. Exit test to edit.</span></div>
+    </div>
+    <div class="key-section">Corridor Guard, chime and voice</div>
+    <div class="key-move-row">
+      <div class="key-icon">🛡</div>
+      <div class="key-row-text"><b>Guard ON / OFF</b><span>ON: every chute and run is guarded; press and hold a line for 2 seconds to mute it. OFF: nothing is guarded; hold a line to arm just that one. Guarded lines show the solid yellow edge.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">🔔</div>
+      <div class="key-row-text"><b>Tone</b><span>Sounds when the rider leaves a guarded chute or run past the yellow edge — only after dropping in at its top and skiing the first 10% of it. Crossing a line midway is silent.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">🎉</div>
+      <div class="key-row-text"><b>Victory chime</b><span>Skied from the top to 90% of a guarded chute or run: four rising notes, and the guard stays quiet for that line until the rider leaves the area or rides a lift.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">🗣</div>
+      <div class="key-row-text"><b>Voice</b><span>While inside a chute or run, the one you are in and any passed within 5 m are named. A lift is named only when boarded within its first 10 m. “Sound” mutes the tone, chime and voice.</span></div>
+    </div>
+    <div class="key-section">Scoring — Ridge Quest workspaces, same rules as the phone</div>
+    <div class="key-move-row">
+      <div class="key-icon">⛷</div>
+      <div class="key-row-text"><b>What counts</b><span>A chute or run counts when skied top to bottom along its drawn line, covering about 80% of it. A lift counts only ridden up it; a boot pack either way. Going up a chute or run, cutting in halfway or crossing it does not count.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">⏱</div>
+      <div class="key-row-text"><b>Pace</b><span>A run needs at least 9 km/h, a chute 2.5 km/h, a lift 6.5 km/h; a boot pack no more than 18 km/h; nothing over 162 km/h.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">↻</div>
+      <div class="key-row-text"><b>Timing</b><span>The same line counts again only 4 seconds after it was last logged. A pass can take up to 15 seconds to appear while another line under it is still being skied.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">▲</div>
+      <div class="key-row-text"><b>Vertical and points</b><span>Vertical is lift rides plus boot packs. Points come from the server’s own formula; lift rides score 0. Without a connection the run logs with “points unavailable”.</span></div>
+    </div>
+    <div class="key-section">Today, leaderboard and share images</div>
+    <div class="key-move-row">
+      <div class="key-icon">▤</div>
+      <div class="key-row-text"><b>Today line</b><span>Vertical · Chutes n/total · Runs n/total · Lift rides · Points, under your login name.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">🏆</div>
+      <div class="key-row-text"><b>Leaderboard</b><span>The phone’s “You — today” box and your one row. Test data only — not on the real leaderboard.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">📸</div>
+      <div class="key-row-text"><b>Social media</b><span>The Story and Facebook images for this test day, drawn by the same code as the phone: chutes and runs listed, your track, today’s weather.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">∅</div>
+      <div class="key-row-text"><b>Nothing is saved</b><span>The day starts empty every ▶ Test and is dropped on Exit test. Walk stops and Reset keep it.</span></div>
+    </div>
+    <div class="key-section">The log</div>
+    <div class="key-move-row">
+      <div class="key-icon">✓</div>
+      <div class="key-row-text"><b>RUN logged</b><span>A pass that counted: the line, what it was, its vertical and points.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">✕</div>
+      <div class="key-row-text"><b>RUN not counted · RUN no pass · RUN ignored</b><span>Why a pass did not count — the phone’s own reason. A partial pass is explained about 15 seconds after the rider has left the line.</span></div>
+    </div>
+    <div class="key-move-row">
+      <div class="key-icon">⬇</div>
+      <div class="key-row-text"><b>Export log</b><span>Saves the whole log as a text file. Reset clears the walk, the trail and the visited stops.</span></div>
+    </div>
+    </div><!-- /mapKeyTest -->
   </div>
 </div>
 
@@ -6660,8 +6758,8 @@ function _simRunClick(e){
   // pace that counts -- see simRideLine. Ridge Quest workspaces only (it exists to be scored).
   const ride=QuestRunSim ? simRidePlan(p.id) : null;
   const pop=new maplibregl.Popup({closeButton:true,offset:8}).setLngLat(e.lngLat)
-    .setHTML('<div style="font:600 13px/1.35 system-ui,sans-serif;color:#0a1018">'+esc(p.name)+
-      '</div><div style="font:12px system-ui,sans-serif;color:#5b7088">'+
+    .setHTML('<div style="font:600 13px/1.35 system-ui,sans-serif;color:var(--snow)">'+esc(p.name)+
+      '</div><div style="font:12px system-ui,sans-serif;color:var(--fog)">'+
       [p.difficulty&&esc(p.difficulty),act&&esc(act),p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>'
       +(ride?'<button id="simRideBtn" style="margin-top:6px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:#ff6a3d;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer">▶ '+esc(ride.label)+'</button>':''))
     .addTo(map);
@@ -6673,14 +6771,14 @@ function _simRunPopupMany(list, lngLat){
   const rows=list.slice(0,6).map((p,i)=>{
     const act=p.runType==="lift"?"lift":(p.runType==="hike"?"boot pack":(p.runType||"run"));
     const ride=QuestRunSim ? simRidePlan(p.id) : null;
-    return '<div style="'+(i?'margin-top:8px;padding-top:8px;border-top:1px solid #d5dde6':'')+'">'
-      +'<div style="font:600 13px/1.35 system-ui,sans-serif;color:#0a1018">'+esc(p.name)+'</div>'
-      +'<div style="font:12px system-ui,sans-serif;color:#5b7088">'+[p.difficulty&&esc(p.difficulty),esc(act),p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>'
+    return '<div style="'+(i?'margin-top:8px;padding-top:8px;border-top:1px solid var(--rim)':'')+'">'
+      +'<div style="font:600 13px/1.35 system-ui,sans-serif;color:var(--snow)">'+esc(p.name)+'</div>'
+      +'<div style="font:12px system-ui,sans-serif;color:var(--fog)">'+[p.difficulty&&esc(p.difficulty),esc(act),p.lengthM+' m'].filter(Boolean).join(' · ')+'</div>'
       +(ride?'<button class="simRideBtn" data-i="'+i+'" style="margin-top:4px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:#ff6a3d;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer">▶ '+esc(ride.label)+'</button>':'')
       +'</div>';
   }).join("");
   const pop=new maplibregl.Popup({closeButton:true,offset:8,maxWidth:"260px"}).setLngLat(lngLat)
-    .setHTML('<div style="font:11px system-ui,sans-serif;color:#5b7088;margin-bottom:6px">'+list.length+' lines here — pick one</div>'+rows).addTo(map);
+    .setHTML('<div style="font:11px system-ui,sans-serif;color:var(--fog);margin-bottom:6px">'+list.length+' lines here — pick one</div>'+rows).addTo(map);
   const el=pop.getElement();
   if(el) el.querySelectorAll(".simRideBtn").forEach(b=>{ b.onclick=()=>{ const p=list[+b.dataset.i]; pop.remove(); simRideLine(p.id); }; });
 }
@@ -8093,6 +8191,7 @@ function enterTestMode(){
   document.getElementById("audioPalette").style.display="none"; // no clip-assignment during a simulated walk
   document.getElementById("simPanel").style.display="flex";
   document.getElementById("testModeBtn").textContent="✕ Exit test";
+  paintMapKeyBtn(); document.getElementById("mapKeyOverlay").classList.remove("open");
   document.getElementById("testModeBtn").classList.add("on");
   // Phase 3 (trigger-based show/hide): nothing has been "entered" yet at
   // the start of a simulated walk — refreshArPreview() (startHidden:true
@@ -8153,6 +8252,7 @@ function exitTestMode(){
   document.getElementById("simPanel").style.display="none";
   document.getElementById("testModeBtn").textContent="▶ Test";
   document.getElementById("testModeBtn").classList.remove("on");
+  paintMapKeyBtn(); document.getElementById("mapKeyOverlay").classList.remove("open");
   // A library pull that was held back while stops were read-only runs now.
   if(_corrReconcilePending){ _corrReconcilePending=false; reconcileLinkedCorridors(); }
 }
@@ -8275,7 +8375,18 @@ document.getElementById("simBle").onclick=()=>{
 
 /* ---- UI wiring ---- */
 // visitorRadius oninput is wired above (with renderSources)
-document.getElementById("mapKeyBtn").onclick=()=>document.getElementById("mapKeyOverlay").classList.toggle("open");
+// One button, two guides: the handle legend while editing, the Test Mode guide while testing.
+function showMapKey(){
+  document.getElementById("mapKeyEdit").style.display=simMode?"none":"";
+  document.getElementById("mapKeyTest").style.display=simMode?"":"none";
+  document.getElementById("mapKeyOverlay").classList.toggle("test",simMode);
+}
+function paintMapKeyBtn(){
+  const b=document.getElementById("mapKeyBtn");
+  b.textContent=simMode?"ⓘ Test guide":"⬤ Key";
+  b.title=simMode?"How Test Mode works: moving the rider, guard, scoring, leaderboard, share images":"Map handle legend";
+}
+document.getElementById("mapKeyBtn").onclick=()=>{ showMapKey(); document.getElementById("mapKeyOverlay").classList.toggle("open"); };
 document.getElementById("mapKeyOverlay").addEventListener("click",e=>{ if(e.target===e.currentTarget) e.currentTarget.classList.remove("open"); });
 
 /* ---------------- Splash Flyby editor ----------------
