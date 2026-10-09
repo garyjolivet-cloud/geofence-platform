@@ -1730,7 +1730,9 @@ const Quest = {
       if(skiedChute) this.skiedToday.add(run.zoneId);
       RidgeVisuals.celebrate(document, c);
       if(navigator.vibrate) navigator.vibrate(40);
-      if(this.onSkiedChanged) this.onSkiedChanged(skiedChute ? run.zoneId : null, true);
+      // 3rd argument (2026-10-09): any chute OR run skied, for the Season colours on My map.
+      const skiedLine = run.activity==="ski" && ((run.runType||"run")==="chute" || (run.runType||"run")==="run");
+      if(this.onSkiedChanged) this.onSkiedChanged(skiedChute ? run.zoneId : null, true, skiedLine ? run.zoneId : null);
       if(skiedChute && this.onChuteComplete) this.onChuteComplete();
     }catch(e){ console.warn("celebrate:", e && e.message); }
   },
@@ -3707,14 +3709,15 @@ function setupRideVisuals(map, cors){
   setupChuteLines(map, host, b, ()=>down>0);
   setupCollection(map, host, cors);
 }
-// Chute collection (2026-10-04, user: "skied / not yet"): a "Season 38/70" switch under Skied /
-// Lines. On: every chute skied this season (GET /chutes/season) draws gold, every chute not yet
-// skied grey — feature-state `seasonSkied` on the runLines source (never setData). A chute
-// finished now turns gold at once (Quest.onSkiedChanged). Default off; remembered in
-// rq.showCollection.
+// Season collection (2026-10-04, user: "skied / not yet"): a "Season 38/132" switch under Skied /
+// Lines. On: every chute AND run skied this season (GET /chutes/season + /skiruns/season) draws
+// gold, every one not yet skied grey — feature-state `seasonSkied` on the runLines source (never
+// setData). One finished now turns gold at once (Quest.onSkiedChanged). Default off; remembered
+// in rq.showCollection. Runs added 2026-10-09 (Gary: "make season cover runs also" — four black
+// runs among the chutes never went grey); lifts and boot packs are never part of it.
 const COLLECTION_LAYER = {
   id:"runLines-collection", type:"line", source:"runLines",
-  filter:["==",["get","runType"],"chute"],
+  filter:["match",["coalesce",["get","runType"],"run"],["chute","run"],true,false],
   layout:{ "line-cap":"round", "line-join":"round" },
   paint:{
     "line-color":["case",["boolean",["feature-state","seasonSkied"],false],"#ffc94d","#8e9aa6"],
@@ -3725,7 +3728,7 @@ const COLLECTION_LAYER = {
 function setupCollection(map, host, cors){
   const KEY="rq.showCollection";
   let show = (()=>{ try{ return localStorage.getItem(KEY)==="1"; }catch(e){ return false; } })();
-  const chuteIds = cors.filter(c=>c.runType==="chute").map(c=>c.zoneId);
+  const chuteIds = cors.filter(c=>{ const t=c.runType||"run"; return t==="chute" || t==="run"; }).map(c=>c.zoneId);   // chutes + runs
   if(!chuteIds.length) return;
   const season = new Set();
   try{
@@ -3741,7 +3744,7 @@ function setupCollection(map, host, cors){
     const n = chuteIds.filter(id=>season.has(id)).length;
     b.textContent = "Season "+n+"/"+chuteIds.length+(show?" on":"");
     b.setAttribute("aria-pressed", show?"true":"false");
-    b.title = n+" of "+chuteIds.length+" chutes skied this season. On: skied ones gold, not yet grey.";
+    b.title = n+" of "+chuteIds.length+" chutes and runs skied this season. On: skied ones gold, not yet grey.";
   };
   const anchor = ()=>document.getElementById("fogLinesBtn") || document.getElementById("fogSkiedBtn");
   const place = ()=>{ const a = anchor(); b.style.top = (a && a.offsetHeight ? a.offsetTop + a.offsetHeight + 8 : 150)+"px"; };
@@ -3750,6 +3753,9 @@ function setupCollection(map, host, cors){
       const s = getSession(); if(!s || !s.player) return;
       api("/api/players/"+s.player.id+"/chutes/season").then(j=>{
         (j.chutes||[]).forEach(c=>season.add(c.zoneId)); apply(); paint();
+      }).catch(()=>{});
+      api("/api/players/"+s.player.id+"/skiruns/season").then(j=>{
+        (j.runs||[]).forEach(c=>season.add(c.zoneId)); apply(); paint();
       }).catch(()=>{});
     }catch(e){}   // offline / signed out: the button still works with what this session knows
   };
@@ -3760,7 +3766,7 @@ function setupCollection(map, host, cors){
     paint();
   };
   const prev = Quest.onSkiedChanged;
-  Quest.onSkiedChanged = (zoneId, justCompleted)=>{ if(prev) prev(zoneId, justCompleted); if(zoneId){ season.add(zoneId); apply(); paint(); } };
+  Quest.onSkiedChanged = (zoneId, justCompleted, lineId)=>{ if(prev) prev(zoneId, justCompleted); const id = lineId || zoneId; if(id){ season.add(id); apply(); paint(); } };
   paint(); host.appendChild(b); place(); load();
   try{ const a = anchor(); if(a && typeof ResizeObserver!=="undefined") new ResizeObserver(place).observe(a); }catch(e){}
 }
@@ -3902,7 +3908,7 @@ function drawAllRuns(map){
 
   function showRunPopup(feature, lngLat){
     const p = feature && feature.properties; if(!p) return;
-    const act = p.activityType || (p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
+    const act = QuestCore.lineKindLabel(p.runType, p.activityType);   // "run" / "chute" / "lift" / "boot pack" -- never the raw activity code
     // The rider's own name, if set (2026-10-03), with the resort's name under it; ✏️ renames it for
     // this rider only, ↩ goes back to the resort's name. Saved on their account.
     const mine = RQNames.get(p.id);
@@ -4032,7 +4038,7 @@ function openMapInfo(){
     +row('🛡 Guard','Corridor Guard. A guarded chute or run has a yellow boundary line; drift outside it and you hear a tone, and the voice names guarded runs. <b>ON</b>: every run guarded. <b>OFF</b>: only the runs you arm.')
     +row('Skied','Your day: a light stripe down each chute finished today and a thin line where you skied (lift rides aren’t drawn).')
     +row('Lines','Your saved line down each guarded chute (newest 3 per chute). Turn single lines on or off in Leaderboard → Chutes.')
-    +row('Season','Chutes skied this season out of the total. On: skied ones gold, not yet grey — find what’s left.')
+    +row('Season','Chutes and runs skied this season out of the total. On: skied ones gold, not yet grey — find what’s left.')
     +'<h3>On the map</h3>'
     +row('Tap a run','Name, difficulty and length, and ✏️ Rename (only you see your names).')
     +row('Hold 2 s','Guard ON: mutes that run (greyed, no line). Guard OFF: arms just that run. Hold again to undo.')
@@ -4047,7 +4053,7 @@ function openMapInfo(){
       +'<li><b>Lift rides</b> log riding up a lift line. Climbing a chute isn’t logged; only routes marked boot pack count as boot packs.</li>'
       +'<li><b>No signal?</b> Runs are saved on your phone and sent when you have signal. Under Start tracking, Home shows “📶 N runs saved on your phone” while any are waiting, and “✓ All runs sent” when none are.</li>'
       +'<li>If the phone sits still for 10 minutes (lunch), it may lock and tracking pauses. <b>Open the app again before your next run.</b></li>'
-      +'<li>Use <b>Season</b> to see which chutes you haven’t skied yet.</li>'
+      +'<li>Use <b>Season</b> to see which chutes and runs you haven’t skied yet.</li>'
     +'</ol>'
     +'<p class="miNote">Only look at the map when you’re stopped, off to the side of the run.</p>';
   host.appendChild(el);

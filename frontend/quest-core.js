@@ -647,5 +647,18 @@ const runMethods = {
   },
 };
 
-root.QuestCore = { TUNING: QUEST_TUNING, QGeo: QGeo, passesOverlap: passesOverlap, runMethods: runMethods };
+// What a tapped line is called in its popup, on the phone and in Test Mode (2026-10-09, Gary: Tear
+// Drop, a run, read "black - ski_chute - 173m": "if its a run dont call it a chute"). The word comes
+// from the line TYPE (runType); "ski_chute" is only the GPX Editor's code for the activity "Ski /
+// downhill" and is never shown. A run with a non-ski activity is named by that activity.
+var LINE_KIND_ACTIVITY = { bike:"bike", xcountry:"cross-country", walking_city:"walk", hike:"hike" };
+function lineKindLabel(runType, activityType){
+  var t = runType || "run";
+  if(t==="lift") return "lift";
+  if(t==="hike") return "boot pack";
+  if(t==="chute") return "chute";
+  return LINE_KIND_ACTIVITY[activityType] || "run";
+}
+
+root.QuestCore = { TUNING: QUEST_TUNING, QGeo: QGeo, passesOverlap: passesOverlap, runMethods: runMethods, lineKindLabel: lineKindLabel };
 })(typeof window !== "undefined" ? window : globalThis);

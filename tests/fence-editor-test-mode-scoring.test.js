@@ -233,13 +233,13 @@ test("▶ on a tapped line travels it the way that scores: lifts up, chutes and 
   // Gary: "golden express gondi is not showing ride the gondi button" -- a tap on the gondola came back as "Its a 10",
   // the run under it (one 30 px hit band). The popup now lists every line there, lifts first, each with its own ▶.
   const picked = [];
-  const many = new Function("QuestRunSim", "simRidePlan", "simRideLine", "esc", "maplibregl", "map",
+  const many = new Function("QuestCore", "QuestRunSim", "simRidePlan", "simRideLine", "esc", "maplibregl", "map",
     extract(fe, "function _simRunClick(e){") + "\n" + extract(fe, "function _simRunPopupMany(list, lngLat){") + "\nreturn _simRunClick;");
   let html = "", btns = [];
   const Popup = function () { return { setLngLat() { return this; }, setHTML(h) { html = h; btns = (h.match(/class="simRideBtn" data-i="\d+"/g) || []).map(m => ({ dataset: { i: m.match(/\d+/)[0] } })); return this; }, addTo() { return this; }, remove() {},
     getElement() { return { querySelector: () => null, querySelectorAll: () => btns }; } }; };
   const plan = id => ({ label: id === "gondi" ? "Ride up at 30 km/h" : "Ski down at 40 km/h" });
-  const tap = many({}, plan, id => picked.push(id), s => String(s), { Popup }, {});
+  const tap = many(QuestCore, {}, plan, id => picked.push(id), s => String(s), { Popup }, {});
   const f = (id, name, runType) => ({ properties: { id, name, runType, lengthM: 100, difficulty: null } });
   tap({ features: [f("its-a-10", "Its a 10", "run"), f("gondi", "Golden Eagle Express Gondi", "lift"), f("its-a-10", "Its a 10", "run")], lngLat: {} });
   assert.ok(html.includes("2 lines here") && html.indexOf("Golden Eagle Express Gondi") < html.indexOf("Its a 10"), "both lines, the lift first, duplicates dropped");

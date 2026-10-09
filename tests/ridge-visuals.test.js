@@ -229,7 +229,8 @@ test("finishing a chute flashes its stripe for ~2 s then clears it; repeats and 
   t.f();
   assert.strictEqual(r.states.c2.flash, false);
   assert.strictEqual(r.states.c2.skied, true, "the stripe stays");
-  assert.ok(!("r1" in r.states) && !("l1" in r.states));
+  // A run only ever carries the Season colour (2026-10-09); a lift carries nothing.
+  assert.ok(!(r.states.r1 && ("skied" in r.states.r1 || "flash" in r.states.r1)) && !("l1" in r.states));
 });
 
 test("the one Skied button hides/shows BOTH the stripe and the track, and remembers the choice", () => {
@@ -379,21 +380,37 @@ test("chute lines: a failed load leaves the map working", async () => {
   assert.deepStrictEqual(r.host.kids.map(b => b.id), ["fogSkiedBtn", "fogLinesBtn", "fogCollectionBtn"]);
 });
 
-/* ---------- season chute collection (2026-10-04, "skied / not yet") ---------- */
-test("collection: Season n/total button, gold for skied this season, grey for not yet, remembered", async () => {
+/* ---------- season collection (2026-10-04, "skied / not yet"; runs too since 2026-10-09) ---------- */
+test("collection: Season n/total button over chutes AND runs, gold for skied this season, grey for not yet, remembered", async () => {
   const reqs = [];
-  const r = runSetup({ api: p => { reqs.push(p); return Promise.resolve(p.endsWith("/chutes/season") ? { chutes: [{ zoneId: "c1" }] } : { lines: [] }); } });
+  const r = runSetup({ api: p => { reqs.push(p); return Promise.resolve(p.endsWith("/chutes/season") ? { chutes: [{ zoneId: "c1" }] } : p.endsWith("/skiruns/season") ? { runs: [{ zoneId: "r1" }] } : { lines: [] }); } });
   await flush();
   const btn = r.host.kids.find(b => b.id === "fogCollectionBtn");
-  assert.ok(reqs.includes("/api/players/p1/chutes/season"));
-  assert.strictEqual(btn.textContent, "Season 1/2", "1 of the 2 chutes (runs and lifts don't count)");
+  assert.ok(reqs.includes("/api/players/p1/chutes/season") && reqs.includes("/api/players/p1/skiruns/season"));
+  assert.strictEqual(btn.textContent, "Season 2/3", "2 of the 2 chutes + 1 run (the lift doesn't count)");
   assert.strictEqual(r.states.c1.seasonSkied, true);
   assert.strictEqual(r.states.c2.seasonSkied, false);
-  assert.ok(!("r1" in r.states && "seasonSkied" in r.states.r1), "only chutes");
+  assert.strictEqual(r.states.r1.seasonSkied, true, "a run skied this season is gold");
+  assert.ok(!("l1" in r.states && "seasonSkied" in r.states.l1), "never lifts");
+  const layer = r.layers.find(l => l.def.id === "runLines-collection").def;
+  assert.deepStrictEqual(layer.filter, ["match", ["coalesce", ["get", "runType"], "run"], ["chute", "run"], true, false], "the layer draws chutes and runs only");
   assert.strictEqual(r.calls.vis["runLines-collection"], "none", "default off");
   btn.onclick();
   assert.strictEqual(r.calls.vis["runLines-collection"], "visible");
   assert.strictEqual(r.scope.localStorage.getItem("rq.showCollection"), "1");
   assert.ok(/ on$/.test(btn.textContent));
   assert.strictEqual(r.calls.setData, 0, "feature-state only, never a source reload");
+});
+
+test("collection: a run finished now turns gold at once; the skied stripe still only hears about chutes", async () => {
+  const r = runSetup({ api: p => Promise.resolve(p.endsWith("/chutes/season") ? { chutes: [] } : p.endsWith("/skiruns/season") ? { runs: [] } : { lines: [] }) });
+  await flush();
+  const btn = r.host.kids.find(b => b.id === "fogCollectionBtn");
+  assert.strictEqual(btn.textContent, "Season 0/3");
+  r.scope.Quest.onSkiedChanged(null, true, "r1");      // what Quest._celebrate sends for a run
+  assert.strictEqual(r.states.r1.seasonSkied, true);
+  assert.ok(!r.states.r1.flash, "no chute flash on a run");
+  assert.strictEqual(btn.textContent, "Season 1/3");
+  const rq = fs.readFileSync(path.join(__dirname, "../frontend/ridge-quest.html"), "utf8");
+  assert.ok(rq.includes("this.onSkiedChanged(skiedChute ? run.zoneId : null, true, skiedLine ? run.zoneId : null)"));
 });

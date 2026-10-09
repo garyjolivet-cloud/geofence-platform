@@ -6752,7 +6752,7 @@ function _simRunClick(e){
   list.sort((a,b)=>(b.runType==="lift")-(a.runType==="lift"));
   if(list.length>1){ _simRunPopupMany(list, e.lngLat); return; }
   const p=list[0];
-  const act=p.activityType||(p.runType==="lift"?"lift":(p.runType==="hike"?"hike":""));
+  const act=QuestCore.lineKindLabel(p.runType, p.activityType);   // same words as the phone's popup
   // ▶ Ride / Ski this line (2026-10-08, Gary dragged up Stairway Chair twice and nothing logged: too
   // fast, then past the top station): one tap sends the avatar along THIS line, the right way, at a
   // pace that counts -- see simRideLine. Ridge Quest workspaces only (it exists to be scored).
@@ -6769,7 +6769,7 @@ function _simRunClick(e){
 // Several lines under one tap: one block per line, each with its own ▶ button.
 function _simRunPopupMany(list, lngLat){
   const rows=list.slice(0,6).map((p,i)=>{
-    const act=p.runType==="lift"?"lift":(p.runType==="hike"?"boot pack":(p.runType||"run"));
+    const act=QuestCore.lineKindLabel(p.runType, p.activityType);
     const ride=QuestRunSim ? simRidePlan(p.id) : null;
     return '<div style="'+(i?'margin-top:8px;padding-top:8px;border-top:1px solid var(--rim)':'')+'">'
       +'<div style="font:600 13px/1.35 system-ui,sans-serif;color:var(--snow)">'+esc(p.name)+'</div>'
