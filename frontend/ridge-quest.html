@@ -190,7 +190,15 @@
   .empty{color:var(--fog);font-size:13px;text-align:center;padding:10px 0}
   /* R2 — fog map screen: a full-viewport overlay, deliberately OUTSIDE
      .wrap's 520px max-width (a map needs the whole screen, not a card). */
-  .fogMapOverlay{position:fixed;inset:0;background:var(--night);z-index:1000}
+  /* touch-action (2026-10-09, Gary: "the on screen buttons get panned off the screen"): a pinch or
+     double-tap that started on a button (not on the map canvas, which MapLibre owns) zoomed the whole
+     PAGE, and the browser then panned the buttons off the screen. Nothing on this screen may zoom or
+     pan the page; the info panel keeps its own up/down scroll. */
+  .fogMapOverlay{position:fixed;inset:0;background:var(--night);z-index:1000;touch-action:none}
+  /* Opened with the page ALREADY zoomed (pinched on another screen): let the rider pinch it back from
+     anywhere, the map included, instead of being stuck zoomed — see watchPageZoom(). */
+  .fogMapOverlay.pageZoomed{touch-action:auto}
+  .fogMapOverlay.pageZoomed #fogMap{pointer-events:none}
   #fogMap{position:absolute;inset:0}
   .fogMapBack{position:absolute;top:14px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
   .fogMapTilt{position:absolute;top:58px;left:14px;z-index:2;width:auto;margin:0;padding:9px 16px;background:var(--slate);border:1px solid var(--rim);color:var(--snow);border-radius:10px}
@@ -211,7 +219,7 @@
      transparent with faint text and were hard to read. Re-assert with enough specificity to win.
      Text is 15:1 even over pure-white imagery, up from ~2:1 (tests/quest-button-contrast.test.js pins this). */
   .fogMapInfo{position:absolute;top:14px;left:108px;z-index:2;width:44px;height:40px;margin:0;padding:0;border-radius:10px;font-size:20px;line-height:1}
-  .mapInfo{position:absolute;inset:0;z-index:5;overflow-y:auto;background:rgba(10,16,24,.97);color:var(--snow);padding:0 16px 40px;font-size:14px;line-height:1.45}
+  .mapInfo{position:absolute;inset:0;z-index:5;overflow-y:auto;touch-action:pan-y;background:rgba(10,16,24,.97);color:var(--snow);padding:0 16px 40px;font-size:14px;line-height:1.45}
   .mapInfo .miHead{display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:rgb(10,16,24);padding:14px 0 8px}
   .mapInfo h2{margin:0;font-family:"Black Han Sans";font-weight:400;font-size:24px}
   .mapInfo .miHead button{width:auto;margin:0;padding:8px 14px}
@@ -4045,12 +4053,31 @@ function openMapInfo(){
   host.appendChild(el);
   document.getElementById("mapInfoClose").onclick = ()=>el.remove();
 }
+// The map screen never zooms the page (CSS touch-action on .fogMapOverlay). The one way to still be
+// zoomed here is to arrive zoomed; then the page pinch is left on (and the map held still) until the
+// rider has pinched back to normal size. Hands back the function that stops watching.
+function watchPageZoom(){
+  const ov = document.querySelector(".fogMapOverlay"), vv = window.visualViewport;
+  if(!ov || !vv) return function(){};
+  let told = false;
+  const sync = ()=>{
+    try{
+      const zoomed = vv.scale > 1.01;
+      ov.classList.toggle("pageZoomed", zoomed);
+      if(zoomed && !told){ told = true; rqToast("The page is zoomed in — pinch it back to normal size to use the map"); }
+    }catch(e){}
+  };
+  sync();
+  vv.addEventListener("resize", sync);
+  return ()=>{ try{ vv.removeEventListener("resize", sync); }catch(e){} };
+}
 function renderFogMap(){
   if(!Quest.ref){
     app.innerHTML =
       '<div class="fogMapOverlay"><button class="ghost fogMapBack" id="fogBack">← Back</button>'
       +'<div class="msg" style="padding-top:120px">Map isn’t available yet — this resort’s runs haven’t been configured.</div></div>';
-    document.getElementById("fogBack").onclick=()=>{ Quest.onPosition=null; renderHome(); };
+    const unwatch = watchPageZoom();
+    document.getElementById("fogBack").onclick=()=>{ unwatch(); Quest.onPosition=null; renderHome(); };
     return;
   }
   // Live friends layer state — the ≤RQ_MAX_TRACK checked in the Friends
@@ -4081,7 +4108,9 @@ function renderFogMap(){
   // load over a spotty connection, WebGL unavailable, etc.) — otherwise an
   // exception here aborts the script before the button's handler is ever
   // attached, leaving a dead "← Back" button with no way out of the map.
+  const unwatchPageZoom = watchPageZoom();
   document.getElementById("fogBack").onclick=()=>{
+    unwatchPageZoom();
     Quest.onPosition=null;
     Quest.onLiftModeChange=null; Quest.onGuardChanged=null; Quest.onSkiedChanged=null; Quest.onChuteLineSaved=null;
     ScreenSleep.onDimChange=null;
