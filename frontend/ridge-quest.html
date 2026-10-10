@@ -3966,6 +3966,7 @@ function drawAllRuns(map){
   // boundary-line look immediately, without rebuilding the runLines
   // source/layer stack (which drawAllRuns() only ever expects to build once
   // per map instance) and without reloading any data.
+  let _runTapAt = 0;
   if(typeof LongPress!=="undefined"){
     LongPress.bind(map,"runLines-hit",{
       // 2000ms per explicit request (revised down from an initial 3000ms —
@@ -3986,7 +3987,15 @@ function drawAllRuns(map){
       onDebug(event, info){
         cgLog("longpress "+event+" +"+info.elapsedMs+"ms"+(info.driftPx!=null?" drift="+info.driftPx+"px":""));
       },
-      onTap: showRunPopup,
+      // Shown a moment AFTER the tap (2026-10-10, Gary on a laptop: "left click does not bring the name
+      // up"): onTap fires on mouse-up / touch-end, and the map click that follows closed a popup opened
+      // right then (Popup closeOnClick) -- the same fault Test Mode had on 2026-10-08. A touch can also
+      // report twice (the touch, then the browser's stand-in mouse event): one popup per tap.
+      onTap(feature, lngLat){
+        if(!feature) return;
+        const now = Date.now(); if(now - _runTapAt < 400) return; _runTapAt = now;
+        setTimeout(()=>{ try{ showRunPopup(feature, lngLat); }catch(e){} }, 80);
+      },
       onLongPress(feature){
         const zoneId = feature && feature.properties && feature.properties.id;
         if(zoneId==null) return;

@@ -44,7 +44,13 @@ function extractBody(startTag) {
 (function testWhatMustStay() {
   const body = extractBody("function _rebuildRunBadges(map, cors){");
   assert(/runDiamond/.test(body) && /dblack/.test(body), "the ◆/◆◆ difficulty badges are still built");
-  assert(/function showRunPopup\(/.test(html) && /onTap:\s*showRunPopup/.test(html), "tapping a run still shows its name (showRunPopup)");
+  // 2026-10-10 (Gary on a laptop: "left click does not bring the name up"): the popup opens 80 ms AFTER the
+  // tap -- opened on mouse-up it was closed by the map click that follows -- and once per tap (a touch can
+  // report twice). Found with a real mouse click and touch tap in headless Chrome.
+  assert(/function showRunPopup\(/.test(html)
+    && html.includes("const now = Date.now(); if(now - _runTapAt < 400) return; _runTapAt = now;")
+    && html.includes("setTimeout(()=>{ try{ showRunPopup(feature, lngLat); }catch(e){} }, 80);")
+    && !/onTap:\s*showRunPopup/.test(html), "tapping a run still shows its name (showRunPopup), after the tap's own click");
   assert(/_rebuildRunBadges\(map,\s*cors\)/.test(html), "the badges are still rebuilt on the map");
   assert(/className\s*=\s*"peakLabel"/.test(html) && /function _rebuildPeakLabels\(/.test(html), "named-peak labels are untouched (they are mountains, not chutes)");
 })();
